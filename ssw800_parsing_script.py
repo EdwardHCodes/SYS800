@@ -15,8 +15,8 @@ Ruby	text/x-ruby
 Shell	text/x-shellscript
 XML	text/xml
 """
-from comment_parser import comment_parser
-
+import comment_parser
+"""
 #for files with c code
 comments = comment_parser.extract_comments('openwrt.c' , mime='text/x-c')
 F = open("openwrtoutput.txt", "a")
@@ -30,10 +30,10 @@ F = open("rockboxoutput.txt", "a")
 for comment in comments:
     F.write(str(comment))
 F.close()
-
+"""
 #for files with c code
-comments = comment_parser.extract_comments('mdpnp.java', mime='text/x-java-source')
-F = open("mdpnpoutput.txt", "a")
+comments = comment_parser.extract_comments(filename = 'mdpnp.java', mime='text/x-java-source')
+F = open(f"{filename}.txt", "a")
 for comment in comments:
     F.write(str(comment))
 F.close()

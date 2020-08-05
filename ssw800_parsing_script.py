@@ -16,9 +16,11 @@ Shell	text/x-shellscript
 XML	text/xml
 """
 import comment_parser
-"""
+
+user_input = input("Which file would you like to process?")
+
 #for files with c code
-comments = comment_parser.extract_comments('openwrt.c' , mime='text/x-c')
+comments = comment_parser.extract_comments(user_input , mime='text/x-c')
 F = open("openwrtoutput.txt", "a")
 for comment in comments:
     F.write(str(comment))
@@ -30,7 +32,7 @@ F = open("rockboxoutput.txt", "a")
 for comment in comments:
     F.write(str(comment))
 F.close()
-"""
+
 #for files with c code
 comments = comment_parser.extract_comments(filename = 'mdpnp.java', mime='text/x-java-source')
 F = open(f"{filename}.txt", "a")

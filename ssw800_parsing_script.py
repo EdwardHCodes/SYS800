@@ -16,42 +16,47 @@ Shell	text/x-shellscript
 XML	text/xml
 """
 from comment_parser import comment_parser
+import os
+dirName = r"C:\Users\Edward\Documents\GitHub\mdpnp"
+##First task is getting all files in the folder
+def getListOfFiles(dirName):
+    # create a list of file and sub directories
+    # names in the given directory
+    listOfFile = os.listdir(dirName)
+    allFiles = list()
+    # Iterate over all the entries
+    for entry in listOfFile:
+        # Create full path
+        fullPath = os.path.join(dirName, entry)
+        # If entry is a directory then get the list of files in this directory
+        if os.path.isdir(fullPath):
+            allFiles = allFiles + getListOfFiles(fullPath)
+        else:
+            allFiles.append(fullPath)
+    return allFiles
+allFiles = getListOfFiles(dirName)
 
-user_input = input("Which file would you like to process?\n")
-dirpath = input("Which folder would you like to search?\n")
-"""
-#for files with c code
-comments = comment_parser.extract_comments(user_input , mime='text/x-c')
-F = rstrip
-F = open(f"{user_input}.txt", "a")
-for comment in comments:
-    F.write(str(comment))
-for comment in comments:
-    print(str(comment))
-F.close()
-"""
+
+
+project = "MDPNP"
+output_directory = r"C:\Users\Edward\Documents\GitHub\SYS800\OUTPUT_FILES\\"
+##Second Task: We need to extract all the extensions for each file
 #For Multiple C-Files
-for files in dirpath:
-    comments = comment_parser.extract_comments(filename = user_input, mime='text/x-c')
-    F = open(f"{filename}.txt", "a")
-    for comment in comments:
-        F.write(str(comment))
-    for comment in comments:
-        print(str(comment))
-    F.close()
-"""
-#for files with c code
-comments = comment_parser.extract_comments('rockbox.c', mime='text/x-c')
-F = open("rockboxoutput.txt", "a")
-for comment in comments:
-    F.write(str(comment))
-F.close()
-
-#for files with c code
-comments = comment_parser.extract_comments(filename = 'mdpnp.java', mime='text/x-java-source')
-F = open(f"{filename}.txt", "a")
-for comment in comments:
-    F.write(str(comment))
-F.close()
-"""
+for fyle in allFiles:
+    if fyle.endswith(".java"):
+        comments = comment_parser.extract_comments(fyle, mime="text/x-java-source")
+        name = fyle.replace("\\", ".").replace(
+            "C:.Users.Edward.Documents.GitHub.", "")
+        output = output_directory + project + "\\" + name[:-5] + ".txt"
+        F = open(output, "a")
+        for comment in comments:
+            F.write(str(comment))
+        F.close()
+        ##F = open(f"{dirpath}-{fyle}.txt", "a")
+        ##F.close()
+    
+    
+##MAke sure the extracted comments are actually accurate, manually
+##Add Ifs for multiple filtypes
+##writer function to put comments into files
 

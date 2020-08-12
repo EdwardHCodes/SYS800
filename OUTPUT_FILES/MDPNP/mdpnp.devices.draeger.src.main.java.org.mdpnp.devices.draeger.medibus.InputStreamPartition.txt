@@ -1,0 +1,61 @@
+******************************************************************************
+ * Copyright (c) 2014, MD PnP Program
+ * All rights reserved.
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ ******************************************************************************
+ * demultiplexor that takes a single input stream and separates inbound data
+ * into separate InputStreams based on Filters
+ * 
+ * Upon creation this class spawns a daemon thread that reads from the source
+ * multiplexed data stream and delivers bytes, as they pass filters, to the
+ * InputStreams available through getInputStream(int).
+ * 
+ * Data for each demuxed stream is maintained in a circular buffer. Overflow
+ * behavior is currently undefined; data must be continuously drained from the
+ * demuxed InputStreams.
+ * 
+ * @author Jeff Plourde
+ * 
+ *
+     * Filter for evaluating the bytes of the muxed InputStream
+     * 
+     * @author Jeff Plourde
+     * 
+         private final byte[][] buffers;    private final boolean[] notifyBuffers;    private final int[] nextRead, nextWrite;    private class PartitionedInputStream extends java.io.InputStream {        private final int idx;        private long lastDrainedAt = System.currentTimeMillis();        public PartitionedInputStream(int idx) {            this.idx = idx;        }        @Override        public int read(byte[] bytes, int off, int len) throws IOException {            synchronized (buffers[idx]) {                while (nextRead[idx] >= nextWrite[idx]) {                    try {                        buffers[idx].wait();                    } catch (InterruptedException e) {                        log.error(e.getMessage(), e);                    }                }                if (nextRead[idx] < 0) {                    return -1;                }                int n = nextWrite[idx]-nextRead[idx];                n = n < len ? n : len;                System.arraycopy(buffers[idx], nextRead[idx], bytes, off, n);                nextRead[idx]+=n;                long now = System.currentTimeMillis();                if(nextRead[idx] >= nextWrite[idx]) {                    lastDrainedAt = now;                }                if(now-lastDrainedAt>1000L) {                    log.warn("PartitionedInputStream hasn't been drained for " + (now-lastDrainedAt)+"ms");                }                                System.arraycopy(buffers[idx], nextRead[idx], buffers[idx], 0, nextWrite[idx] - nextRead[idx]);                nextWrite[idx] -= nextRead[idx];                nextRead[idx] = 0;                buffers[idx].notify();                return n;            }        }        @Override        public int read() throws IOException {            synchronized (buffers[idx]) {                while (nextRead[idx] >= nextWrite[idx]) {                    try {                        buffers[idx].wait();                    } catch (InterruptedException e) {                        log.error(e.getMessage(), e);                    }                }                if (nextRead[idx] < 0) {                    return -1;                }                // TODO this won't actually pass through a -1                int b = 0xFF & buffers[idx][nextRead[idx]++];                                long now = System.currentTimeMillis();                if(nextRead[idx] >= nextWrite[idx]) {                    lastDrainedAt = now;                }                if(now-lastDrainedAt>1000L) {                    log.warn("PartitionedInputStream hasn't been drained for " + (now-lastDrainedAt)+"ms");                }                                // log.trace("from buffers["+idx+"] copying from src=" +                // nextRead[idx] +                // " to buffers["+idx+"] dst=0 sizeof="+(nextWrite[idx]-nextRead[idx]));                System.arraycopy(buffers[idx], nextRead[idx], buffers[idx], 0, nextWrite[idx] - nextRead[idx]);                nextWrite[idx] -= nextRead[idx];                nextRead[idx] = 0;                buffers[idx].notify();                return b;            }        }    }*
+     * Constructs an InputStream partition of the specified InputStream for the
+     * specified Filters.
+     * 
+     * Subsequent calls to getInputStream(int) will return the demuxed stream
+     * for each filter. This constructor spawns a daemon thread to handle the
+     * muxed InputStream.
+     * 
+     * @param filters
+     *            Each filter will create a demultiplexed InputStream that
+     *            receives only bytes that pass that filter
+     * @param in
+     *            The multiplexed InputStream source
+     * @throws IOException 
+             this.buffers = new byte[filters.length][];        this.notifyBuffers = new boolean[filters.length];        this.streams = new InputStream[filters.length];        this.nextRead = new int[filters.length];        this.nextWrite = new int[filters.length];        for (int i = 0; i < buffers.length; i++) {            buffers[i] = new byte[CAPACITY];            streams[i] = new PartitionedInputStream(i);        }*
+     * Returns the daemon thread that is reading the multiplexed InputStream.
+     * 
+     * @return
+     *
+     * Returns the demultiplexed InputStream for the i'th Filter passed to the
+     * constructor
+     * 
+     * @param i
+     * @return
+                     synchronized (buffers[i]) {                    nextRead[i] = -1;                    buffers[i].notifyAll();                }                        synchronized (buffers[j]) {                            long giveup = System.currentTimeMillis() + 5000L;                            while (nextWrite[j] >= buffers[j].length) {                                if (System.currentTimeMillis() >= giveup) {                                    throw new IllegalStateException("Refusing to overflow buffer that is not being drained");                                }                                log.warn("Buffer full (nextWrite[" + j + "]=" + nextWrite[j] + " and buffer[" + j + "].length=" + buffers[j].length                                        + "; clumsily hoping someone drains the buffer");                                try {                                    buffers[j].notify();                                    buffers[j].wait(200);                                } catch (InterruptedException e) {                                    e.printStackTrace();                                }                            }                            buffers[j][nextWrite[j]++] = (byte) manybytes[i];                            notifyBuffers[j] = true;                        }            for(int i = 0; i < notifyBuffers.length; i++) {                if(notifyBuffers[i]) {                    synchronized(buffers[i]) {                        buffers[i].notify();                    }                    notifyBuffers[i] = false;                }            }*
+     * Ends the multiplexed InputStream reading thread
+     *
+     * reads bytes from the multiplexed InputStream, deposits them into the
+     * buffer for the first matching demuxed InputStream, and notifies any
+     * caller currently blocked on a read of the demuxed InputStream.
+      I don't think we should continue on IOExceptions show love to those who are waiting for this defunct thread            for (int i = 0; i < buffers.length; i++) {                synchronized (buffers[i]) {                    nextRead[i] = -1;                    buffers[i].notifyAll();                }            }

@@ -38,25 +38,32 @@ allFiles = getListOfFiles(dirName)
 
 
 
-project = "MDPNP"
+project = "MDPNP", "OPENWRT", "ROCKBOX"
 output_directory = r"C:\Users\Edward\Documents\GitHub\SYS800\OUTPUT_FILES\\"
 ##Second Task: We need to extract all the extensions for each file
 #For Multiple C-Files
-for fyle in allFiles:
-    if fyle.endswith(".java"):
-        comments = comment_parser.extract_comments(fyle, mime="text/x-java-source")
-        name = fyle.replace("\\", ".").replace(
-            "C:.Users.Edward.Documents.GitHub.", "")
-        output = output_directory + project + "\\" + name[:-5] + ".txt"
-        F = open(output, "a")
-        for comment in comments:
-            F.write(str(comment))
-        F.close()
+def parse_project(project):
+    for fyle in allFiles:
+        if fyle.endswith(".java"):
+            comments = comment_parser.extract_comments(fyle, mime="text/x-java-source")
+            name = fyle.replace("\\", ".").replace(
+                "C:.Users.Edward.Documents.GitHub.", "")
+            output = output_directory + project + "\\" + name[:-5] + ".txt"
+            F = open(output, "a")
+            for comment in comments:
+                F.write(str(comment))
+            F.close()
         ##F = open(f"{dirpath}-{fyle}.txt", "a")
         ##F.close()
-    
-    
-##MAke sure the extracted comments are actually accurate, manually
-##Add Ifs for multiple filtypes
-##writer function to put comments into files
+        if fyle.endswith(".c"):
+            comments = comment_parser.extract_comments(fyle, mime="text/x-c")
+            name = fyle.replace("\\", ".").replace(
+                "C:.Users.Edward.Documents.GitHub.", "")
+            output = output_directory + project + "\\" + name[:-2] + ".txt"
+            F = open(output, "a")
+            for comment in comments:
+                F.write(str(comment))
+            F.close()
+
+parse_project("MDPNP")
 

@@ -1,0 +1,107 @@
+
+ * PCIe driver for PLX NAS782X SoCs
+ *
+ * Author: Ma Haijun <mahaijuns@gmail.com>
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
+  TODO sanity check mask & new_value = new_value  core config registers  inbound config registers  bits  outbound config registers, offset relative to PCIE_POM0_MEM_ADDR  seems all access are serialized, no lock required  Structure representing one PCIe interfaces  prefetchable  non-prefetchable  max available bus numbers  gpio pin, optional  hcsl pci enable bit  for pcie bus, actually the PLLB  Poll for PCIE link up  We won't have any inbound address translation. This allows PCI
+	 * devices to access anywhere in the AHB address map. Might be regarded
+	 * as a bit dangerous, but let's get things working before we worry
+	 * about that
+	 
+	 * Program outbound translation windows
+	 *
+	 * Outbound window is what is referred to as "PCI client" region in HRM
+	 *
+	 * Could use the larger alternative address space to get >>64M regions
+	 * for graphics cards etc., but will not bother at this point.
+	 *
+	 * IP bug means that AMBA window size must be a power of 2
+	 *
+	 * Set mem0 window for first 16MB of outbound window non-prefetchable
+	 * Set mem1 window for second 16MB of outbound window prefetchable
+	 * Set io window for next 16MB of outbound window
+	 * Set cfg0 for final 1MB of outbound window
+	 *
+	 * Ignore mem1, cfg1 and msg windows for now as no obvious use cases for
+	 * 820 that would need them
+	 *
+	 * Probably ideally want no offset between mem0 window start as seen by
+	 * ARM and as seen on PCI bus and get Linux to assign memory regions to
+	 * PCI devices using the same "PCI client" region start address as seen
+	 * by ARM
+	  Set PCIeA mem0 region to be 1st 16MB of the 64MB PCIeA window  Set PCIeA mem1 region to be 2nd 16MB of the 64MB PCIeA window  Set PCIeA io to be third 16M region of the 64MB PCIeA window Set PCIeA cgf0 to be last 16M region of the 64MB PCIeA window Enable outbound address translation 
+	 * Program PCIe command register for core to:
+	 *  enable memory space
+	 *  enable bus master
+	 *  enable io
+	  which is which 
+	 * We'll assume for now that the offset, function, slot, bus encoding
+	 * should map onto linear, contiguous addresses in PCIe config space,
+	 * albeit that the majority will be unused as only slot 0 is valid for
+	 * any PCIe bus and most devices have only function 0
+	 *
+	 * Could be that PCIe in fact works by not encoding the slot number into
+	 * the config space address as it's known that only slot 0 is valid.
+	 * We'll have to experiment if/when we get a PCIe switch connected to
+	 * the PCIe host
+	  PCI configuration space write function  Only a single device per bus for PCIe point-to-point links  it race with mem and io write, but the possibility is low, normally
+	 * all config writes happens at driver initialize stage, wont interleave
+	 * with others.
+	 * and many pcie cards use dword (4bytes) access mem/io access only,
+	 * so not bother to copy that ugly work-around now.  PCI configuration space read function  Only a single device per bus for PCIe point-to-point links  default one  do not use devm_ioremap_resource, it does not like cfg resource  I think use stack pointer is a bad idea though it is valid in this case  pass dev to maintain of tree, interrupt mapping rely on this  maybe we will call it when enter low power state  no cleanup needed  Get the I/O and memory ranges from DT  Get the bus range  reset PCIe cards use hard-wired gpio pin  must tri-state the pin to pull it up  ToDo: use phy power-on port...  core  Start PCIe core clocks  allow entry to L23 state  Set PCIe core into RootCore mode  Bring up the PCI core  if hw not found, haslink cleared  should we register our controller even when pcie->haslink is 0 ?  register the controller with framework 
+ * PCIe driver for PLX NAS782X SoCs
+ *
+ * Author: Ma Haijun <mahaijuns@gmail.com>
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
+  TODO sanity check mask & new_value = new_value  core config registers  inbound config registers  bits  outbound config registers, offset relative to PCIE_POM0_MEM_ADDR  seems all access are serialized, no lock required  Structure representing one PCIe interfaces  prefetchable  non-prefetchable  max available bus numbers  gpio pin, optional  hcsl pci enable bit  for pcie bus, actually the PLLB  Poll for PCIE link up  We won't have any inbound address translation. This allows PCI
+	 * devices to access anywhere in the AHB address map. Might be regarded
+	 * as a bit dangerous, but let's get things working before we worry
+	 * about that
+	 
+	 * Program outbound translation windows
+	 *
+	 * Outbound window is what is referred to as "PCI client" region in HRM
+	 *
+	 * Could use the larger alternative address space to get >>64M regions
+	 * for graphics cards etc., but will not bother at this point.
+	 *
+	 * IP bug means that AMBA window size must be a power of 2
+	 *
+	 * Set mem0 window for first 16MB of outbound window non-prefetchable
+	 * Set mem1 window for second 16MB of outbound window prefetchable
+	 * Set io window for next 16MB of outbound window
+	 * Set cfg0 for final 1MB of outbound window
+	 *
+	 * Ignore mem1, cfg1 and msg windows for now as no obvious use cases for
+	 * 820 that would need them
+	 *
+	 * Probably ideally want no offset between mem0 window start as seen by
+	 * ARM and as seen on PCI bus and get Linux to assign memory regions to
+	 * PCI devices using the same "PCI client" region start address as seen
+	 * by ARM
+	  Set PCIeA mem0 region to be 1st 16MB of the 64MB PCIeA window  Set PCIeA mem1 region to be 2nd 16MB of the 64MB PCIeA window  Set PCIeA io to be third 16M region of the 64MB PCIeA window Set PCIeA cgf0 to be last 16M region of the 64MB PCIeA window Enable outbound address translation 
+	 * Program PCIe command register for core to:
+	 *  enable memory space
+	 *  enable bus master
+	 *  enable io
+	  which is which 
+	 * We'll assume for now that the offset, function, slot, bus encoding
+	 * should map onto linear, contiguous addresses in PCIe config space,
+	 * albeit that the majority will be unused as only slot 0 is valid for
+	 * any PCIe bus and most devices have only function 0
+	 *
+	 * Could be that PCIe in fact works by not encoding the slot number into
+	 * the config space address as it's known that only slot 0 is valid.
+	 * We'll have to experiment if/when we get a PCIe switch connected to
+	 * the PCIe host
+	  PCI configuration space write function  Only a single device per bus for PCIe point-to-point links  it race with mem and io write, but the possibility is low, normally
+	 * all config writes happens at driver initialize stage, wont interleave
+	 * with others.
+	 * and many pcie cards use dword (4bytes) access mem/io access only,
+	 * so not bother to copy that ugly work-around now.  PCI configuration space read function  Only a single device per bus for PCIe point-to-point links  default one  do not use devm_ioremap_resource, it does not like cfg resource  I think use stack pointer is a bad idea though it is valid in this case  pass dev to maintain of tree, interrupt mapping rely on this  maybe we will call it when enter low power state  no cleanup needed  Get the I/O and memory ranges from DT  Get the bus range  reset PCIe cards use hard-wired gpio pin  must tri-state the pin to pull it up  ToDo: use phy power-on port...  core  Start PCIe core clocks  allow entry to L23 state  Set PCIe core into RootCore mode  Bring up the PCI core  if hw not found, haslink cleared  should we register our controller even when pcie->haslink is 0 ?  register the controller with framework 

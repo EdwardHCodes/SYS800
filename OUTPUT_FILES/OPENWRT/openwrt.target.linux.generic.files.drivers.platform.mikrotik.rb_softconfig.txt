@@ -1,0 +1,177 @@
+ SPDX-License-Identifier: GPL-2.0-only
+ * Driver for MikroTik RouterBoot soft config.
+ *
+ * Copyright (C) 2020 Thibaut VARÈNE <hacks+kernel@slashdirt.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
+ *
+ * This driver exposes the data encoded in the "soft_config" flash segment of
+ * MikroTik RouterBOARDs devices. It presents the data in a sysfs folder
+ * named "soft_config". The data is presented in a user/machine-friendly way
+ * with just as much parsing as can be generalized across mikrotik platforms
+ * (as inferred from reverse-engineering).
+ *
+ * The known soft_config tags are presented in the "soft_config" sysfs folder,
+ * with the addition of one specific file named "commit", which is only
+ * available if the driver supports writes to the mtd device: no modifications
+ * made to any of the other attributes are actually written back to flash media
+ * until a true value is input into this file (e.g. [Yy1]). This is to avoid
+ * unnecessary flash wear, and to permit to revert all changes by issuing a
+ * false value ([Nn0]). Reading the content of this file shows the current
+ * status of the driver: if the data in sysfs matches the content of the
+ * soft_config partition, the file will read "clean". Otherwise, it will read
+ * "dirty".
+ *
+ * The writeable sysfs files presented by this driver will accept only inputs
+ * which are in a valid range for the given tag. As a design choice, the driver
+ * will not assess whether the inputs are identical to the existing data.
+ *
+ * Note: PAGE_SIZE is assumed to be >= 4K, hence the device attribute show
+ * routines need not check for output overflow.
+ *
+ * Some constant defines extracted from rbcfg.h by Gabor Juhos
+ * <juhosg@openwrt.org>
+ 
+ * mtd operations before 4.17 are asynchronous, not handled by this code
+ * Also make the driver act read-only if 4K_SECTORS are not enabled, since they
+ * are require to handle partial erasing of the small soft_config partition.
+  ID values for software settings  u32*1 u32*1 u32*1 u32*1 u32*1 str u32*1 u32*1 u32*1 u32*1
+ * protected_routerboot seems to use tag 0x1F. It only works in combination with
+ * RouterOS, resulting in a wiped board otherwise, so it's not implemented here.
+ * The tag values are as follows:
+ * - off: 0x0
+ * - on: the lower halfword encodes the max value in s for the reset feature,
+ *	 the higher halfword encodes the min value in s for the reset feature.
+ * Default value when on: 0x00140258: 0x14 = 20s / 0x258= 600s
+ * See details here: https://wiki.mikrotik.com/wiki/Manual:RouterBOARD_settings#Protected_bootloader
+  Tag values  valid boot delay: 1 - 9s in 1s increment  "boot over Ethernet" "boot from NAND, if fail then Ethernet" (not available in rbcfg) "boot Ethernet once, then NAND" "boot from NAND only" "boot in flash configuration mode" "boot in flash configuration mode once, then NAND"
+ * ATH79 9xxx CPU frequency indices.
+ * It is unknown if they apply to all ATH79 RBs, and some do not seem to feature
+ * the upper levels (QCA955x), while F is presumably AR9344-only.
+  0x8 0x10 - factory freq for many devices 0x18 0x20 0x28 all devices support lowest setting stops at F stops at E stops at C stops at D ATH79 7xxx CPU frequency indices.  all devices support lowest setting stops at D stops at H - check if applies to all AR71xx devices located right after magic rw lock to sc_buf MUST be used with lock held  cpu-endian fallback to raw hex output if we can't handle the input pld aliases sc_buf pld aliases sc_buf cpu-endian pld aliases sc_buf cpu-endian pld aliases sc_buf
+ * While the defines are carried over from rbcfg, use strings that more clearly
+ * show the actual setting purpose (especially since the NAND* settings apply
+ * to both nand- and nor-based devices). "cfcard" was disabled in rbcfg: disable
+ * it here too.
+ RB_SC_TVS(RB_BOOT_DEVICE_CFCARD,	"cfcard"), cpu-endian pld aliases sc_buf cpu-endian pld aliases sc_buf Support CPU frequency accessors only when the tag format has been asserted  Use the same letter-based nomenclature as RouterBOOT  By default we only show the raw value to help with reverse-engineering  Array of known tags to publish in sysfs  sysfs tag show attribute. Must lock sc_buf when dereferencing pld  sysfs tag store attribute. Must lock sc_buf when dereferencing pld  pld aliases sc_buf -> lock! pld aliases sc_buf -> lock!
+ * Shows the current buffer status:
+ * "clean": the buffer is in sync with the mtd data
+ * "dirty": the buffer is out of sync with the mtd data
+ 
+ * Performs buffer flushing:
+ * This routine expects an input compatible with kstrtobool().
+ * - a "false" input discards the current changes and reads data back from mtd.
+ * - a "true" input commits the current changes to mtd.
+ * If there is no pending changes, this routine is a no-op.
+ * Handling failures is left as an exercise to userspace.
+  NO-OP TODO allow override reread crc32 + commit
+		 * CRC32 is computed on the entire buffer, excluding the CRC
+		 * value itself. CRC is already null when we reach this point,
+		 * so we can compute the CRC32 on the buffer as is.
+		 * The expected CRC32 is Ethernet FCS style, meaning the seed is
+		 * ~0 and the final result is also bitflipped.
+		 
+		 * The soft_config partition is assumed to be entirely contained
+		 * in a single eraseblock.
+		 
+		 * Handling mtd_write() failure here is a tricky situation. The
+		 * proposed approach is to let userspace deal with retrying,
+		 * with the caveat that it must try to flush the buffer again as
+		 * rereading the mtd contents could potentially read garbage.
+		 * The rationale is: even if we keep a shadow buffer of the
+		 * original content, there is no guarantee that we will ever be
+		 * able to write it anyway.
+		 * Regardless, it appears that RouterBOOT will ignore an invalid
+		 * soft_config (including a completely wiped segment) and will
+		 * write back factory defaults when it happens.
+		  mark buffer content as dirty/invalid TODO allow override Check we have what we expect  Skip magic and 32bit CRC located immediately after  Populate sysfs  Locate and publish all known tags  Account for skipped magic and crc32  Finally add the 'commit' attribute  required attribute SPDX-License-Identifier: GPL-2.0-only
+ * Driver for MikroTik RouterBoot soft config.
+ *
+ * Copyright (C) 2020 Thibaut VARÈNE <hacks+kernel@slashdirt.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
+ *
+ * This driver exposes the data encoded in the "soft_config" flash segment of
+ * MikroTik RouterBOARDs devices. It presents the data in a sysfs folder
+ * named "soft_config". The data is presented in a user/machine-friendly way
+ * with just as much parsing as can be generalized across mikrotik platforms
+ * (as inferred from reverse-engineering).
+ *
+ * The known soft_config tags are presented in the "soft_config" sysfs folder,
+ * with the addition of one specific file named "commit", which is only
+ * available if the driver supports writes to the mtd device: no modifications
+ * made to any of the other attributes are actually written back to flash media
+ * until a true value is input into this file (e.g. [Yy1]). This is to avoid
+ * unnecessary flash wear, and to permit to revert all changes by issuing a
+ * false value ([Nn0]). Reading the content of this file shows the current
+ * status of the driver: if the data in sysfs matches the content of the
+ * soft_config partition, the file will read "clean". Otherwise, it will read
+ * "dirty".
+ *
+ * The writeable sysfs files presented by this driver will accept only inputs
+ * which are in a valid range for the given tag. As a design choice, the driver
+ * will not assess whether the inputs are identical to the existing data.
+ *
+ * Note: PAGE_SIZE is assumed to be >= 4K, hence the device attribute show
+ * routines need not check for output overflow.
+ *
+ * Some constant defines extracted from rbcfg.h by Gabor Juhos
+ * <juhosg@openwrt.org>
+ 
+ * mtd operations before 4.17 are asynchronous, not handled by this code
+ * Also make the driver act read-only if 4K_SECTORS are not enabled, since they
+ * are require to handle partial erasing of the small soft_config partition.
+  ID values for software settings  u32*1 u32*1 u32*1 u32*1 u32*1 str u32*1 u32*1 u32*1 u32*1
+ * protected_routerboot seems to use tag 0x1F. It only works in combination with
+ * RouterOS, resulting in a wiped board otherwise, so it's not implemented here.
+ * The tag values are as follows:
+ * - off: 0x0
+ * - on: the lower halfword encodes the max value in s for the reset feature,
+ *	 the higher halfword encodes the min value in s for the reset feature.
+ * Default value when on: 0x00140258: 0x14 = 20s / 0x258= 600s
+ * See details here: https://wiki.mikrotik.com/wiki/Manual:RouterBOARD_settings#Protected_bootloader
+  Tag values  valid boot delay: 1 - 9s in 1s increment  "boot over Ethernet" "boot from NAND, if fail then Ethernet" (not available in rbcfg) "boot Ethernet once, then NAND" "boot from NAND only" "boot in flash configuration mode" "boot in flash configuration mode once, then NAND"
+ * ATH79 9xxx CPU frequency indices.
+ * It is unknown if they apply to all ATH79 RBs, and some do not seem to feature
+ * the upper levels (QCA955x), while F is presumably AR9344-only.
+  0x8 0x10 - factory freq for many devices 0x18 0x20 0x28 all devices support lowest setting stops at F stops at E stops at C stops at D ATH79 7xxx CPU frequency indices.  all devices support lowest setting stops at D stops at H - check if applies to all AR71xx devices located right after magic rw lock to sc_buf MUST be used with lock held  cpu-endian fallback to raw hex output if we can't handle the input pld aliases sc_buf pld aliases sc_buf cpu-endian pld aliases sc_buf cpu-endian pld aliases sc_buf
+ * While the defines are carried over from rbcfg, use strings that more clearly
+ * show the actual setting purpose (especially since the NAND* settings apply
+ * to both nand- and nor-based devices). "cfcard" was disabled in rbcfg: disable
+ * it here too.
+ RB_SC_TVS(RB_BOOT_DEVICE_CFCARD,	"cfcard"), cpu-endian pld aliases sc_buf cpu-endian pld aliases sc_buf Support CPU frequency accessors only when the tag format has been asserted  Use the same letter-based nomenclature as RouterBOOT  By default we only show the raw value to help with reverse-engineering  Array of known tags to publish in sysfs  sysfs tag show attribute. Must lock sc_buf when dereferencing pld  sysfs tag store attribute. Must lock sc_buf when dereferencing pld  pld aliases sc_buf -> lock! pld aliases sc_buf -> lock!
+ * Shows the current buffer status:
+ * "clean": the buffer is in sync with the mtd data
+ * "dirty": the buffer is out of sync with the mtd data
+ 
+ * Performs buffer flushing:
+ * This routine expects an input compatible with kstrtobool().
+ * - a "false" input discards the current changes and reads data back from mtd.
+ * - a "true" input commits the current changes to mtd.
+ * If there is no pending changes, this routine is a no-op.
+ * Handling failures is left as an exercise to userspace.
+  NO-OP TODO allow override reread crc32 + commit
+		 * CRC32 is computed on the entire buffer, excluding the CRC
+		 * value itself. CRC is already null when we reach this point,
+		 * so we can compute the CRC32 on the buffer as is.
+		 * The expected CRC32 is Ethernet FCS style, meaning the seed is
+		 * ~0 and the final result is also bitflipped.
+		 
+		 * The soft_config partition is assumed to be entirely contained
+		 * in a single eraseblock.
+		 
+		 * Handling mtd_write() failure here is a tricky situation. The
+		 * proposed approach is to let userspace deal with retrying,
+		 * with the caveat that it must try to flush the buffer again as
+		 * rereading the mtd contents could potentially read garbage.
+		 * The rationale is: even if we keep a shadow buffer of the
+		 * original content, there is no guarantee that we will ever be
+		 * able to write it anyway.
+		 * Regardless, it appears that RouterBOOT will ignore an invalid
+		 * soft_config (including a completely wiped segment) and will
+		 * write back factory defaults when it happens.
+		  mark buffer content as dirty/invalid TODO allow override Check we have what we expect  Skip magic and 32bit CRC located immediately after  Populate sysfs  Locate and publish all known tags  Account for skipped magic and crc32  Finally add the 'commit' attribute  required attribute

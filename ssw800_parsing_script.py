@@ -36,17 +36,17 @@ def getListOfFiles(dirName):
         else:
             allFiles.append(fullPath)
     return allFiles
-allFiles = getListOfFiles(dirName_mdpnp)
-allFiles = getListOfFiles(dirName_openwrt)
-allFiles = getListOfFiles(dirName_rockbox)
+mdpnpFiles = getListOfFiles(dirName_mdpnp)
+openwrtFiles = getListOfFiles(dirName_openwrt)
+rockboxFiles = getListOfFiles(dirName_rockbox)
 
 
 
-project = "MDPNP", "OPENWRT", "ROCKBOX"
+
 output_directory = r"C:\Users\Edward\Documents\GitHub\SYS800\OUTPUT_FILES\\"
 ##Second Task: We need to extract all the extensions for each file
 #For Multiple C-Files
-def parse_project(project):
+def parse_project(project, allFiles):
     for fyle in allFiles:
         if fyle.endswith(".java"):
             comments = comment_parser.extract_comments(fyle, mime="text/x-java-source")
@@ -60,16 +60,21 @@ def parse_project(project):
         ##F = open(f"{dirpath}-{fyle}.txt", "a")
         ##F.close()
         if fyle.endswith(".c"):
-            comments = comment_parser.extract_comments(fyle, mime="text/x-c")
-            name = fyle.replace("\\", ".").replace(
-                "C:.Users.Edward.Documents.GitHub.", "")
-            output = output_directory + project + "\\" + name[:-2] + ".txt"
-            F = open(output, "a")
-            for comment in comments:
-                F.write(str(comment))
-            F.close()
-
-parse_project("MDPNP")
-parse_project("OpenWRT")
-parse_project("Rockbox")
+            try:
+                print(fyle)
+                comments = comment_parser.extract_comments(fyle, mime="text/x-c")
+                name = fyle.replace("\\", ".").replace(
+                    "C:.Users.Edward.Documents.GitHub.", "")
+                output = output_directory + project + "\\" + name[:-2] + ".txt"
+                F = open(output, "a")
+                for comment in comments:
+                    F.write(str(comment))
+                F.close()
+            except UnicodeDecodeError:
+                print("Bad characters in files!")
+            except ValueError:
+                print("The file is empty!")
+#parse_project("MDPNP", mdpnpFiles)
+parse_project("OpenWRT", openwrtFiles)
+#parse_project("Rockbox", rockboxFiles)
 

@@ -1,0 +1,529 @@
+
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 
+ * Real Time Clock driver for WL-HDD
+ *
+ * Copyright (C) 2007 Andreas Engel
+ *
+ * Hacked together mostly by copying the relevant code parts from:
+ *   drivers/i2c/i2c-bcm5365.c
+ *   drivers/i2c/i2c-algo-bit.c
+ *   drivers/char/rtc.c
+ *
+ * Note 1:
+ * This module uses the standard char device (10,135), while the Asus module
+ * rtcdrv.o uses (12,0). So, both can coexist which might be handy during
+ * development (but see the comment in rtc_open()).
+ *
+ * Note 2:
+ * You might need to set the clock once after loading the driver the first
+ * time because the driver switches the chip into 24h mode if it is running
+ * in 12h mode.
+ *
+ * Usage:
+ * For compatibility reasons with the original asus driver, the time can be
+ * read and set via the /dev/rtc device entry. The only accepted data format
+ * is "YYYY:MM:DD:W:HH:MM:SS\n". See OpenWrt wiki for a script which handles
+ * this format.
+ *
+ * In addition, this driver supports the standard ioctl() calls for setting
+ * and reading the hardware clock, so the ordinary hwclock utility can also
+ * be used.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+ * TODO:
+ * - add a /proc/driver/rtc interface?
+ * - make the battery failure bit available through the /proc interface?
+ *
+ * $Id: rtc.c 7 2007-05-25 19:37:01Z ae $
+  Means /dev/rtc is in use.   Can be changed via a module parameter.   Bitmapped status byte.	 These settings are platform dependents.  
+ * Delay in microseconds for generating the pulses on the I2C bus. We use
+ * a rather conservative setting here.  See datasheet of the RTC chip.
+  Avoid spurious compiler warnings.   Test stolen from switch-adm.c.  
+ * We shouldn't simply set the SCL pin to high. Like SDA, the SCL line is
+ * bidirectional too. According to the I2C spec, the slave is allowed to
+ * pull down the SCL line to slow down the clock, so we need to check this.
+ * Generally, we'd need a timeout here, but in our case, we just check the
+ * line, assuming the RTC chip behaves well.
+  assert: scl is low  timed out  we don't want to block the net  read ack: SDA should be pulled down by slave  ack: sda is pulled low ->success.	  return 1 if device acked	  assert: scl is low (sda undef)  assert: scl is low  assert: scl is low  no gpio_control for EXTIF  ssb_gpio_control(&ssb, sda_mask | scl_mask, 0);
+	 * The following call is only necessary if we use both this driver and
+	 * the proprietary one from asus at the same time (which, b.t.w. only
+	 * makes sense during development). Otherwise, each access via the asus
+	 * driver will make access via this driver impossible.
+	  No need for locking here. 
+	 * Read date and time from the RTC. We use read method (3).
+	  Handle century bit  DST not known  set starting register to 0 (=seconds) 
+	 * For simplicity, the only acceptable format is:
+	 * YYYY:MM:DD:W:HH:MM:SS\n
+	  Savagely ripped from diag.c.   Based on "model_no".   WL700*  Either WL-300g or WL-HDD, do more extensive checks  not found 
+	 * Switch RTC to 24h mode
+	  start at address 0xE, transmission mode 4  RTC is running in 12h mode 
+ * Local Variables:
+ * indent-tabs-mode:t
+ * c-basic-offset:8
+ * End:
+ 

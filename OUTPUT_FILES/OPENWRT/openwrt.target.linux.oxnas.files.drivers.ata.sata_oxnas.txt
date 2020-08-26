@@ -1,0 +1,365 @@
+
+ * sata_oxnas
+ *      A driver to interface the 934 based sata core present in the ox820
+ *      with libata and scsi
+ * based on sata_oxnas driver by Ma Haijun <mahaijuns@gmail.com>
+ * based on ox820 sata code by:
+ *  Copyright (c) 2007 Oxford Semiconductor Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+  TODO sanity check mask & new_value = new_value  sgdma request structure  Controller information * The different Oxsemi SATA core version numbers | ATA_FLAG_NCQ
+ * SATA Port Registers
+ * sata host port register offsets * These registers allow access to the link layer registers
+	that reside in a different clock domain to the processor bus  window control * sata port register bits *
+	 * commands to issue in the master status to tell it to move shadow ,
+	 * registers to the actual device ,
+	 * interrupt bits * raw interrupt bits, unmaskable, but do not generate interrupts *
+	 * variables to write to the device control register to set the current
+	 * device, ie. master or slave.
+	  ATA SGDMA register offsets  DMA controller register offsets  see DMA core docs for the values. Out means from memory (bus A) out
+	 * to disk (bus B)  burst mode disabled when no micro code used  Final EOTs * SATA core register offsets  Sata core debug1 register bits * sata core control register bits  Interrupts direct from the ports  shift these left by port number  Interrupts from the RAID controller only  The bits in the IDLE_STATUS that, when set indicate an idle core  Data plane control error-mask mask and bit, these bit in the data
+	 * plane control mask out errors from the ports that prevent the SGDMA
+	 * care from sending an interrupt  enable jbod micro-code * Device Control register bits * oxsemi HW raid modes * OX820 specific HW-RAID register values  SATA PHY Registers  Link layer registers **************************************************************************
+* ASIC access
+************************************************************************** wait for an ack bit to be set *
+ * allows access to the link layer registers
+ * @param link_reg the link layer register to access (oxsemi indexing ie
+ *		00 = static config, 04 = phy ctrl)
+  accessed twice as a work around for a bug in the SATA abp bridge
+	 * hardware (bug 6828)  accessed twice as a work around for a bug in the SATA abp bridge
+	 * hardware (bug 6828) *
+ * sata_oxnas_irq_clear is called during probe just before the interrupt handler is
+ * registered, to be sure hardware is quiet. It clears and masks interrupt bits
+ * in the SATA core.
+ *
+ * @param ap hardware with the registers in
+  clear pending interrupts *
+ * qc_issue is used to make a command active, once the hardware and S/G tables
+ * have been prepared. IDE BMDMA drivers use the helper function
+ * ata_qc_issue_prot() for taskfile protocol-based dispatch. More advanced
+ * drivers roll their own ->qc_issue implementation, using this as the
+ * "issue new ATA command to hardware" hook.
+ * @param qc the queued command to issue
+  check the core is idle  CrazyDumpDebug();  enable passing of error signals to DMA sub-core by clearing the
+	 * appropriate bit  Disable all interrupts for ports and RAID controller  Disable all interrupts for core  Load the command settings into the orb registers  both pio and dma commands use dma  Start the DMA  enable End of command interrupt  Start the command *
+ * Will schedule the libATA error handler on the premise that there has
+ * been a hotplug event on the port specified
+ ************************************************************************ Locking                                                                *************************************************************************
+ * The underlying function that controls access to the sata core
+ *
+ * @return non-zero indicates that you have acquired exclusive access to the
+ *         sata core.
+  Can only allow access if from SCSI/SATA stack and if
+			 * reentrant access is allowed and this access is to the
+			 * same port for which the lock is current held
+			  Direct access attempting to acquire
+				 * non-contented lock
+				  Must have callback for direct access  Sanity check lock state  SCSI/SATA attempting to acquire
+				 * non-contented lock
+				  No callbacks for SCSI/SATA access  No callback args for SCSI/SATA access  Sanity check lock state  Core is locked and we're allowed to sleep, so wait to be
+		 * awoken when the core is unlocked
+		  We're going to use variables that will have
+				 * been changed by the waker prior to clearing
+				 * core_locked so we need to ensure we see
+				 * changes to all those variables
+				  Wake any other SCSI/SATA waiters so they can get reentrant
+		 * access to the same port if appropriate. This is because if
+		 * the SATA core is locked by fast access, or SCSI/SATA access
+		 * to other port, then can have >1 SCSI/SATA waiters on the wait
+		 * list so want to give reentrant accessors a chance to get
+		 * access ASAP
+		 
+ * ata_port operation to gain ownership of the SATA hardware prior to issuing
+ * a command against a SATA host. Allows any number of users of the port against
+ * which the lock was first acquired, thus enforcing that only one SATA core
+ * port may be operated on at once.
+ 
+ * operation to release ownership of the SATA hardware
+  Nobody holds the SATA lock  SCSI/SATA has released without holding the lock  Trap incorrect usage  CONFIG_SATA_OX820_DIRECT_HWRAID     if (released)
+	     ox820hwraid_restart_queue();
+	} *
+ * Turns on the cores clock and resets it
+  un-reset the PHY, then Link and Controller  tune for sata compatibility  each port in turn *
+ * Called after an identify device command has worked out what kind of device
+ * is on the port
+ *
+ * @param port The port to configure
+ * @param pdev The hardware associated with controlling the port
+  Set the bits to put the port into 28 or 48-bit node  if this is an ATA-6 disk, put port into ATA-5 auto translate mode *
+ * called to write a taskfile into the ORB registers
+ * @param ap hardware with the registers in
+ * @param tf taskfile to write to the registers
+  wait a maximum of 10ms for the core to be idle  check if the ctl register has interrupts disabled or enabled and
+	 * modify the interrupt enable registers on the ata core as required  interrupts disabled  write 48 or 28 bit tf parameters  set LBA bit as it's an address  write 28-bit lba  write values to registers  these micro-code programs _should_ include the version word  JBOD  Bi-Modal RAID-0/1  decide what needs to be done using the STD in my logbook  no need to reprogram everything if already in the right mode  reset micro-code processor  select micro-code  load micro code  set other mode dependent flags  clear JBOD mode  set the hardware up for RAID-1  clear JBOD mode  set the hardware up for RAID-1  enable jbod mode  start micro-code processor*
+ * sends a sync-escape if there is a link present
+  read the SSTATUS register and only send a sync escape if there is a
+	* link active  clears errors *
+ * Clears the error caused by the core's registers being accessed when the
+ * core is busy.
+ *
+ * Clean up all the state machines in the sata core.
+ * @return post cleanup action required
+  core not recovering, reset it  Perform any SATA core re-initialisation after reset post reset init
+	 * needs to be called for both ports as there's one reset for both
+	 * ports *
+ *  ata_qc_new - Request an available ATA command, for queueing
+ *  @ap: Port associated with device @dev
+ *  @return non zero will refuse a new command, zero will may grant on subject
+ *          to conditions elsewhere.
+ *
+ *
+ * releases the lock on the port the command used
+  If the core is busy here, make it idle *
+ * turn on the interrupts
+ *
+ * @param ap Hardware with the registers in
+  Clear pending interrupts  enable End of command interrupt * @return true if the port has a cable connected  Check for the cable present indicated by SCR status bit-0 set *
+ *	ata_std_postreset - standard postreset callback
+ *	@link: the target ata_link
+ *	@classes: classes of attached devices
+ *
+ *	This function is invoked after a successful reset. Note that
+ *	the device might have been reset more than once using
+ *	different reset methods before postreset is invoked.
+ *
+ *	LOCKING:
+ *	Kernel thread context (may sleep)
+  turn on phy error detection by removing the masks  bail out if no device is present  go through all the devices and configure them *
+ * Called to read the hardware registers / DMA buffers, to
+ * obtain the current set of taskfile register values.
+ * @param ap hardware with the registers in
+ * @param tf taskfile to read the registers into
+  read the orb registers  read common 28/48 bit tf parameters  read 48 or 28 bit tf parameters  feature ext and control are write only  read 28-bit lba *
+ * Read a result task-file from the sata core registers.
+  Read the most recently received FIS from the SATA core ORB registers
+	 and convert to an ATA taskfile *
+ * Reads the Status ATA shadow register from hardware.
+ *
+ * @return The status register
+  read byte 3 of Orb2 register  check for the drive going missing indicated by SCR status bits
+	 * 0-3 = 0  JBOD uCode  Turn the work around off as it may have been left on by any
+		 * HW-RAID code that we've been working with *
+ * Prepare as much as possible for a command without involving anything that is
+ * shared between ports.
+  if the port's not connected, complete now with an error  both pio and dma commands use dma  program the scatterlist into the prd table  point the sgdma controller at the dma request structure  setup the request table  tell it to wait  preallocated  force to load u-code only once after reset  turn on phy error detection by removing the masks  enable hotplug event detection  enable interrupts for ports  go through all the devices and configure them  clean up any remaining errors *
+ * host_stop() is called when the rmmod or hot unplug process begins. The
+ * hook must stop all hardware interrupts, DMA engines, etc.
+ *
+ * @param ap hardware with the registers in
+  If the core is busy here, make it idle  write value to register  command the core to send a control FIS  FIXME: flush  write value to register  command the core to send a control FIS  FIXME: flush  write value to register  command the core to send a control FIS  if link is occupied, -ENODEV too is an error  determine by signature whether we have ATA or ATAPI devices *
+ * Ref bug-6320
+ *
+ * This code is a work around for a DMA hardware bug that will repeat the
+ * penultimate 8-bytes on some reads. This code will check that the amount
+ * of data transferred is a multiple of 512 bytes, if not the in it will
+ * fetch the correct data from a buffer in the SATA core and copy it into
+ * memory.
+ *
+ * @param port SATA port to check and if necessary, correct.
+  Only want to apply fix to reads  Check for an incomplete transfer, i.e. not a multiple of 512 bytes
+	   transferred (datacount_port register counts quads transferred)  This port done an interrupt  record the port's interrupt  If there's no command associated with this IRQ, ignore it. We may get
+	 * spurious interrupts when cleaning-up after a failed command, ignore
+	 * these too.  get the status before any error cleanup  Pretend there has been a link error  tell libata we're done  maybe a hotplug event *
+ * irq_handler is the interrupt handling routine registered with the system,
+ * by libata.
+  loop until there are no more interrupts  clear any interrupt  Only need workaround_bug_6320 for single disk systems as dual
+		 * disk will use uCode which prevents this read underrun problem
+		 * from occurring.
+		 * All single disk systems will use port 0  check the raw end of command interrupt to see if the
+			 * port is done  this port had an interrupt, clear it  check for bug 6320 only if no microcode was loaded 
+ * scsi mid-layer and libata interface structures
+  .hardreset = sata_oxnas_hardreset,  .pmp_attach = sata_oxnas_pmp_attach,  .pmp_detach = sata_oxnas_pmp_detach,  allocate host structure  initialize core locking and queues  initialize host controller 
+	 * Now, register with libATA core, this will also initiate the
+	 * device discovery process, invoking our port_start() handler &
+	 * error_handler() to execute a dummy softreset EH session
+	  reset Controller, Link and PHY  Disable the clock to the SATA block 
+ * sata_oxnas
+ *      A driver to interface the 934 based sata core present in the ox820
+ *      with libata and scsi
+ * based on sata_oxnas driver by Ma Haijun <mahaijuns@gmail.com>
+ * based on ox820 sata code by:
+ *  Copyright (c) 2007 Oxford Semiconductor Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+  TODO sanity check mask & new_value = new_value  sgdma request structure  Controller information * The different Oxsemi SATA core version numbers | ATA_FLAG_NCQ
+ * SATA Port Registers
+ * sata host port register offsets * These registers allow access to the link layer registers
+	that reside in a different clock domain to the processor bus  window control * sata port register bits *
+	 * commands to issue in the master status to tell it to move shadow ,
+	 * registers to the actual device ,
+	 * interrupt bits * raw interrupt bits, unmaskable, but do not generate interrupts *
+	 * variables to write to the device control register to set the current
+	 * device, ie. master or slave.
+	  ATA SGDMA register offsets  DMA controller register offsets  see DMA core docs for the values. Out means from memory (bus A) out
+	 * to disk (bus B)  burst mode disabled when no micro code used  Final EOTs * SATA core register offsets  Sata core debug1 register bits * sata core control register bits  Interrupts direct from the ports  shift these left by port number  Interrupts from the RAID controller only  The bits in the IDLE_STATUS that, when set indicate an idle core  Data plane control error-mask mask and bit, these bit in the data
+	 * plane control mask out errors from the ports that prevent the SGDMA
+	 * care from sending an interrupt  enable jbod micro-code * Device Control register bits * oxsemi HW raid modes * OX820 specific HW-RAID register values  SATA PHY Registers  Link layer registers **************************************************************************
+* ASIC access
+************************************************************************** wait for an ack bit to be set *
+ * allows access to the link layer registers
+ * @param link_reg the link layer register to access (oxsemi indexing ie
+ *		00 = static config, 04 = phy ctrl)
+  accessed twice as a work around for a bug in the SATA abp bridge
+	 * hardware (bug 6828)  accessed twice as a work around for a bug in the SATA abp bridge
+	 * hardware (bug 6828) *
+ * sata_oxnas_irq_clear is called during probe just before the interrupt handler is
+ * registered, to be sure hardware is quiet. It clears and masks interrupt bits
+ * in the SATA core.
+ *
+ * @param ap hardware with the registers in
+  clear pending interrupts *
+ * qc_issue is used to make a command active, once the hardware and S/G tables
+ * have been prepared. IDE BMDMA drivers use the helper function
+ * ata_qc_issue_prot() for taskfile protocol-based dispatch. More advanced
+ * drivers roll their own ->qc_issue implementation, using this as the
+ * "issue new ATA command to hardware" hook.
+ * @param qc the queued command to issue
+  check the core is idle  CrazyDumpDebug();  enable passing of error signals to DMA sub-core by clearing the
+	 * appropriate bit  Disable all interrupts for ports and RAID controller  Disable all interrupts for core  Load the command settings into the orb registers  both pio and dma commands use dma  Start the DMA  enable End of command interrupt  Start the command *
+ * Will schedule the libATA error handler on the premise that there has
+ * been a hotplug event on the port specified
+ ************************************************************************ Locking                                                                *************************************************************************
+ * The underlying function that controls access to the sata core
+ *
+ * @return non-zero indicates that you have acquired exclusive access to the
+ *         sata core.
+  Can only allow access if from SCSI/SATA stack and if
+			 * reentrant access is allowed and this access is to the
+			 * same port for which the lock is current held
+			  Direct access attempting to acquire
+				 * non-contented lock
+				  Must have callback for direct access  Sanity check lock state  SCSI/SATA attempting to acquire
+				 * non-contented lock
+				  No callbacks for SCSI/SATA access  No callback args for SCSI/SATA access  Sanity check lock state  Core is locked and we're allowed to sleep, so wait to be
+		 * awoken when the core is unlocked
+		  We're going to use variables that will have
+				 * been changed by the waker prior to clearing
+				 * core_locked so we need to ensure we see
+				 * changes to all those variables
+				  Wake any other SCSI/SATA waiters so they can get reentrant
+		 * access to the same port if appropriate. This is because if
+		 * the SATA core is locked by fast access, or SCSI/SATA access
+		 * to other port, then can have >1 SCSI/SATA waiters on the wait
+		 * list so want to give reentrant accessors a chance to get
+		 * access ASAP
+		 
+ * ata_port operation to gain ownership of the SATA hardware prior to issuing
+ * a command against a SATA host. Allows any number of users of the port against
+ * which the lock was first acquired, thus enforcing that only one SATA core
+ * port may be operated on at once.
+ 
+ * operation to release ownership of the SATA hardware
+  Nobody holds the SATA lock  SCSI/SATA has released without holding the lock  Trap incorrect usage  CONFIG_SATA_OX820_DIRECT_HWRAID     if (released)
+	     ox820hwraid_restart_queue();
+	} *
+ * Turns on the cores clock and resets it
+  un-reset the PHY, then Link and Controller  tune for sata compatibility  each port in turn *
+ * Called after an identify device command has worked out what kind of device
+ * is on the port
+ *
+ * @param port The port to configure
+ * @param pdev The hardware associated with controlling the port
+  Set the bits to put the port into 28 or 48-bit node  if this is an ATA-6 disk, put port into ATA-5 auto translate mode *
+ * called to write a taskfile into the ORB registers
+ * @param ap hardware with the registers in
+ * @param tf taskfile to write to the registers
+  wait a maximum of 10ms for the core to be idle  check if the ctl register has interrupts disabled or enabled and
+	 * modify the interrupt enable registers on the ata core as required  interrupts disabled  write 48 or 28 bit tf parameters  set LBA bit as it's an address  write 28-bit lba  write values to registers  these micro-code programs _should_ include the version word  JBOD  Bi-Modal RAID-0/1  decide what needs to be done using the STD in my logbook  no need to reprogram everything if already in the right mode  reset micro-code processor  select micro-code  load micro code  set other mode dependent flags  clear JBOD mode  set the hardware up for RAID-1  clear JBOD mode  set the hardware up for RAID-1  enable jbod mode  start micro-code processor*
+ * sends a sync-escape if there is a link present
+  read the SSTATUS register and only send a sync escape if there is a
+	* link active  clears errors *
+ * Clears the error caused by the core's registers being accessed when the
+ * core is busy.
+ *
+ * Clean up all the state machines in the sata core.
+ * @return post cleanup action required
+  core not recovering, reset it  Perform any SATA core re-initialisation after reset post reset init
+	 * needs to be called for both ports as there's one reset for both
+	 * ports *
+ *  ata_qc_new - Request an available ATA command, for queueing
+ *  @ap: Port associated with device @dev
+ *  @return non zero will refuse a new command, zero will may grant on subject
+ *          to conditions elsewhere.
+ *
+ *
+ * releases the lock on the port the command used
+  If the core is busy here, make it idle *
+ * turn on the interrupts
+ *
+ * @param ap Hardware with the registers in
+  Clear pending interrupts  enable End of command interrupt * @return true if the port has a cable connected  Check for the cable present indicated by SCR status bit-0 set *
+ *	ata_std_postreset - standard postreset callback
+ *	@link: the target ata_link
+ *	@classes: classes of attached devices
+ *
+ *	This function is invoked after a successful reset. Note that
+ *	the device might have been reset more than once using
+ *	different reset methods before postreset is invoked.
+ *
+ *	LOCKING:
+ *	Kernel thread context (may sleep)
+  turn on phy error detection by removing the masks  bail out if no device is present  go through all the devices and configure them *
+ * Called to read the hardware registers / DMA buffers, to
+ * obtain the current set of taskfile register values.
+ * @param ap hardware with the registers in
+ * @param tf taskfile to read the registers into
+  read the orb registers  read common 28/48 bit tf parameters  read 48 or 28 bit tf parameters  feature ext and control are write only  read 28-bit lba *
+ * Read a result task-file from the sata core registers.
+  Read the most recently received FIS from the SATA core ORB registers
+	 and convert to an ATA taskfile *
+ * Reads the Status ATA shadow register from hardware.
+ *
+ * @return The status register
+  read byte 3 of Orb2 register  check for the drive going missing indicated by SCR status bits
+	 * 0-3 = 0  JBOD uCode  Turn the work around off as it may have been left on by any
+		 * HW-RAID code that we've been working with *
+ * Prepare as much as possible for a command without involving anything that is
+ * shared between ports.
+  if the port's not connected, complete now with an error  both pio and dma commands use dma  program the scatterlist into the prd table  point the sgdma controller at the dma request structure  setup the request table  tell it to wait  preallocated  force to load u-code only once after reset  turn on phy error detection by removing the masks  enable hotplug event detection  enable interrupts for ports  go through all the devices and configure them  clean up any remaining errors *
+ * host_stop() is called when the rmmod or hot unplug process begins. The
+ * hook must stop all hardware interrupts, DMA engines, etc.
+ *
+ * @param ap hardware with the registers in
+  If the core is busy here, make it idle  write value to register  command the core to send a control FIS  FIXME: flush  write value to register  command the core to send a control FIS  FIXME: flush  write value to register  command the core to send a control FIS  if link is occupied, -ENODEV too is an error  determine by signature whether we have ATA or ATAPI devices *
+ * Ref bug-6320
+ *
+ * This code is a work around for a DMA hardware bug that will repeat the
+ * penultimate 8-bytes on some reads. This code will check that the amount
+ * of data transferred is a multiple of 512 bytes, if not the in it will
+ * fetch the correct data from a buffer in the SATA core and copy it into
+ * memory.
+ *
+ * @param port SATA port to check and if necessary, correct.
+  Only want to apply fix to reads  Check for an incomplete transfer, i.e. not a multiple of 512 bytes
+	   transferred (datacount_port register counts quads transferred)  This port done an interrupt  record the port's interrupt  If there's no command associated with this IRQ, ignore it. We may get
+	 * spurious interrupts when cleaning-up after a failed command, ignore
+	 * these too.  get the status before any error cleanup  Pretend there has been a link error  tell libata we're done  maybe a hotplug event *
+ * irq_handler is the interrupt handling routine registered with the system,
+ * by libata.
+  loop until there are no more interrupts  clear any interrupt  Only need workaround_bug_6320 for single disk systems as dual
+		 * disk will use uCode which prevents this read underrun problem
+		 * from occurring.
+		 * All single disk systems will use port 0  check the raw end of command interrupt to see if the
+			 * port is done  this port had an interrupt, clear it  check for bug 6320 only if no microcode was loaded 
+ * scsi mid-layer and libata interface structures
+  .hardreset = sata_oxnas_hardreset,  .pmp_attach = sata_oxnas_pmp_attach,  .pmp_detach = sata_oxnas_pmp_detach,  allocate host structure  initialize core locking and queues  initialize host controller 
+	 * Now, register with libATA core, this will also initiate the
+	 * device discovery process, invoking our port_start() handler &
+	 * error_handler() to execute a dummy softreset EH session
+	  reset Controller, Link and PHY  Disable the clock to the SATA block 

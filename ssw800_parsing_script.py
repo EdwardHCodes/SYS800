@@ -17,7 +17,9 @@ XML	text/xml
 """
 from comment_parser import comment_parser
 import os
-dirName = r"C:\Users\Edward\Documents\GitHub\mdpnp"
+dirName_mdpnp = r"C:\Users\Edward\Documents\GitHub\mdpnp"
+dirName_openwrt = r"C:\Users\Edward\Documents\GitHub\openwrt"
+dirName_rockbox = r"C:\Users\Edward\Documents\GitHub\rockbox"
 ##First task is getting all files in the folder
 def getListOfFiles(dirName):
     # create a list of file and sub directories
@@ -34,7 +36,9 @@ def getListOfFiles(dirName):
         else:
             allFiles.append(fullPath)
     return allFiles
-allFiles = getListOfFiles(dirName)
+allFiles = getListOfFiles(dirName_mdpnp)
+allFiles = getListOfFiles(dirName_openwrt)
+allFiles = getListOfFiles(dirName_rockbox)
 
 
 
@@ -66,4 +70,6 @@ def parse_project(project):
             F.close()
 
 parse_project("MDPNP")
+parse_project("OpenWRT")
+parse_project("Rockbox")
 

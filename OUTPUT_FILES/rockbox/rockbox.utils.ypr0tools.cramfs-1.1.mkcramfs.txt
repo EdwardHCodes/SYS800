@@ -1,0 +1,292 @@
+
+ * mkcramfs - make a cramfs file system
+ *
+ * Copyright (C) 1999-2002 Transmeta Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+ * If you change the disk format of cramfs, please update fs/cramfs/README.
+  Exit codes used by mkfs-type programs  No errors  Operational error  Usage or syntax error  The kernel only supports PAD_SIZE of 0 and 512. 
+ * The longest filename component to allow for in the input directory tree.
+ * ext2fs (and many others) allow up to 255 bytes.  A couple of filesystems
+ * allow longer (e.g. smbfs 1024), but there isn't much use in supporting
+ * >255-byte names in the input directory tree given that such names get
+ * truncated to CRAMFS_MAXPATHLEN (252 bytes) when written to cramfs.
+ *
+ * Old versions of mkcramfs generated corrupted filesystems if any input
+ * filenames exceeded CRAMFS_MAXPATHLEN (252 bytes), however old
+ * versions of cramfsck seem to have been able to detect the corruption.
+ 
+ * Maximum size fs you can create is roughly 256MB.  (The last file's
+ * data must begin within 256MB boundary but can extend beyond that.)
+ *
+ * Note that if you want it to fit in a ROM then you're limited to what the
+ * hardware and kernel can support.
+  offset  filesize  block pointers  pre-count the root node 
+ * If opt_holes is set, then mkcramfs can create explicit holes in the
+ * data, which saves 26 bytes per hole (which is a lot smaller a
+ * saving than most most filesystems).
+ *
+ * Note that kernels up to at least 2.3.39 don't support cramfs holes,
+ * which is why this is turned off by default.
+ *
+ * If opt_verbose is 1, be verbose.  If it is higher, be even more verbose.
+  In-core version of inode / directory entry.  stats  these are only used for non-empty files  always null except non-empty files  temporarily open files while mmapped  FS data  points to other identical file  pointer to compressed data in archive  Where in the archive is the directory entry?  organization  null for non-directories and empty directories  Input status of 0 to print help and exit without an error. 
+ * We define our own sorting function instead of using alphasort which
+ * uses strcoll and changes ordering based on locale information.
+  Set up the path.  TODO: Reuse the parent's buffer to save memcpy'ing and duplication.  read in the directory and sort  process directory  Ignore "." and ".." - we won't be adding them to the archive  truncate multi-byte UTF-8 filenames on character boundary  the first lost byte must not be a trail byte  are we reasonably certain it was UTF-8 ?  TODO: We ought to replace with a default
+			   gid instead of truncating; otherwise there
+			   are security problems.  Maybe mode should
+			   be &= ~070.  Same goes for uid once Linux
+			   supports >16-bit uids.  maybe we should skip sockets  block pointers & data expansion allowance + data  Link it into the list  allocated by scandir() with malloc()  Returns sizeof(struct cramfs_super), which includes the root inode.  0 if no padding 
+ * TODO: Does this work for chars >= 0x80?  Most filesystems use UTF-8
+ * encoding for filenames, whereas the console is a single-byte
+ * character set like iso-latin-1.
+  major/minor numbers can be as high as 2^12 or 4096  size be as high as 2^24 or 16777216 
+ * We do a width-first printout of the directory
+ * entries, using a stack to remember the directories
+ * we've seen.
+  Non-empty directories, regfiles and symlinks will
+			   write over inode->offset later.  another node  Pad up the name to a 4-byte boundary 
+		 * Reverse the order the stack entries pushed during
+		 * this directory, for a small optimization of disk
+		 * access in the created fs.  This change makes things
+		 * `ls -UR' order.
+		  Pop a subdirectory entry from the stack, and recurse.  Returns non-zero iff the first LEN bytes from BEGIN are all NULs. 
+ * One 4-byte pointer per block and then the actual blocked
+ * output. The first block does not need an offset pointer,
+ * as it will start immediately after the pointer block;
+ * so the i'th pointer points to the end of the i'th block
+ * (i.e. the start of the (i+1)'th block or past EOF).
+ *
+ * Note that size > 0, as a zero-sized file wouldn't ever
+ * have gotten here in the first place.
+  (I don't think this can happen with zlib.)  TODO: Arguably, original_size in these 2 lines should be
+	   st_blocks * 512.  But if you say that then perhaps
+	   administrative data should also be included in both. 
+ * Traverse the entry tree, writing data for every item that has
+ * non-null entry->path (i.e. every non-empty regfile) and non-null
+ * entry->uncompressed (i.e. every symlink).
+  Pad up the image_length to a 4-byte boundary  used twice...  initial guess (upper-bound) of required filesystem size  for getopt  for strtoul  command line options  may be padded later  3 is for padding  old option, ignored  always allocate a multiple of blksize bytes because that's
+	   what we're going to write later on  find duplicate files. TODO: uses the most inefficient algorithm
+	   possible.  TODO: Why do we use a private/anonymous mapping here
+	   followed by a write below, instead of just a shared mapping
+	   and a couple of ftruncate calls?  Is it just to save us
+	   having to deal with removing the file afterwards?  If we
+	   really need this huge anonymous mapping, we ought to mmap
+	   in smaller chunks, so that the user doesn't need nn MB of
+	   RAM free.  If the reason is to be able to write to
+	   un-mmappable block devices, then we could try shared mmap
+	   and revert to anonymous mmap if the shared mmap fails.  Skip the first opt_pad bytes for boot loader code  Skip the superblock and come back to write it later.  Insert a file image.  We always write a multiple of blksize bytes, so that
+	   losetup works.  Write the superblock now that we can fill in all of the fields.  Put the checksum in.  Check to make sure we allocated enough space.  (These warnings used to come at the start, but they scroll off the
+	   screen too quickly.)  bytes, not chars: think UTF-8.  (not possible with current Linux versions) 
+ * Local variables:
+ * c-file-style: "linux"
+ * End:
+ 
+ * mkcramfs - make a cramfs file system
+ *
+ * Copyright (C) 1999-2002 Transmeta Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+ * If you change the disk format of cramfs, please update fs/cramfs/README.
+  Exit codes used by mkfs-type programs  No errors  Operational error  Usage or syntax error  The kernel only supports PAD_SIZE of 0 and 512. 
+ * The longest filename component to allow for in the input directory tree.
+ * ext2fs (and many others) allow up to 255 bytes.  A couple of filesystems
+ * allow longer (e.g. smbfs 1024), but there isn't much use in supporting
+ * >255-byte names in the input directory tree given that such names get
+ * truncated to CRAMFS_MAXPATHLEN (252 bytes) when written to cramfs.
+ *
+ * Old versions of mkcramfs generated corrupted filesystems if any input
+ * filenames exceeded CRAMFS_MAXPATHLEN (252 bytes), however old
+ * versions of cramfsck seem to have been able to detect the corruption.
+ 
+ * Maximum size fs you can create is roughly 256MB.  (The last file's
+ * data must begin within 256MB boundary but can extend beyond that.)
+ *
+ * Note that if you want it to fit in a ROM then you're limited to what the
+ * hardware and kernel can support.
+  offset  filesize  block pointers  pre-count the root node 
+ * If opt_holes is set, then mkcramfs can create explicit holes in the
+ * data, which saves 26 bytes per hole (which is a lot smaller a
+ * saving than most most filesystems).
+ *
+ * Note that kernels up to at least 2.3.39 don't support cramfs holes,
+ * which is why this is turned off by default.
+ *
+ * If opt_verbose is 1, be verbose.  If it is higher, be even more verbose.
+  In-core version of inode / directory entry.  stats  these are only used for non-empty files  always null except non-empty files  temporarily open files while mmapped  FS data  points to other identical file  pointer to compressed data in archive  Where in the archive is the directory entry?  organization  null for non-directories and empty directories  Input status of 0 to print help and exit without an error. 
+ * We define our own sorting function instead of using alphasort which
+ * uses strcoll and changes ordering based on locale information.
+  Set up the path.  TODO: Reuse the parent's buffer to save memcpy'ing and duplication.  read in the directory and sort  process directory  Ignore "." and ".." - we won't be adding them to the archive  truncate multi-byte UTF-8 filenames on character boundary  the first lost byte must not be a trail byte  are we reasonably certain it was UTF-8 ?  TODO: We ought to replace with a default
+			   gid instead of truncating; otherwise there
+			   are security problems.  Maybe mode should
+			   be &= ~070.  Same goes for uid once Linux
+			   supports >16-bit uids.  maybe we should skip sockets  block pointers & data expansion allowance + data  Link it into the list  allocated by scandir() with malloc()  Returns sizeof(struct cramfs_super), which includes the root inode.  0 if no padding 
+ * TODO: Does this work for chars >= 0x80?  Most filesystems use UTF-8
+ * encoding for filenames, whereas the console is a single-byte
+ * character set like iso-latin-1.
+  major/minor numbers can be as high as 2^12 or 4096  size be as high as 2^24 or 16777216 
+ * We do a width-first printout of the directory
+ * entries, using a stack to remember the directories
+ * we've seen.
+  Non-empty directories, regfiles and symlinks will
+			   write over inode->offset later.  another node  Pad up the name to a 4-byte boundary 
+		 * Reverse the order the stack entries pushed during
+		 * this directory, for a small optimization of disk
+		 * access in the created fs.  This change makes things
+		 * `ls -UR' order.
+		  Pop a subdirectory entry from the stack, and recurse.  Returns non-zero iff the first LEN bytes from BEGIN are all NULs. 
+ * One 4-byte pointer per block and then the actual blocked
+ * output. The first block does not need an offset pointer,
+ * as it will start immediately after the pointer block;
+ * so the i'th pointer points to the end of the i'th block
+ * (i.e. the start of the (i+1)'th block or past EOF).
+ *
+ * Note that size > 0, as a zero-sized file wouldn't ever
+ * have gotten here in the first place.
+  (I don't think this can happen with zlib.)  TODO: Arguably, original_size in these 2 lines should be
+	   st_blocks * 512.  But if you say that then perhaps
+	   administrative data should also be included in both. 
+ * Traverse the entry tree, writing data for every item that has
+ * non-null entry->path (i.e. every non-empty regfile) and non-null
+ * entry->uncompressed (i.e. every symlink).
+  Pad up the image_length to a 4-byte boundary  used twice...  initial guess (upper-bound) of required filesystem size  for getopt  for strtoul  command line options  may be padded later  3 is for padding  old option, ignored  always allocate a multiple of blksize bytes because that's
+	   what we're going to write later on  find duplicate files. TODO: uses the most inefficient algorithm
+	   possible.  TODO: Why do we use a private/anonymous mapping here
+	   followed by a write below, instead of just a shared mapping
+	   and a couple of ftruncate calls?  Is it just to save us
+	   having to deal with removing the file afterwards?  If we
+	   really need this huge anonymous mapping, we ought to mmap
+	   in smaller chunks, so that the user doesn't need nn MB of
+	   RAM free.  If the reason is to be able to write to
+	   un-mmappable block devices, then we could try shared mmap
+	   and revert to anonymous mmap if the shared mmap fails.  Skip the first opt_pad bytes for boot loader code  Skip the superblock and come back to write it later.  Insert a file image.  We always write a multiple of blksize bytes, so that
+	   losetup works.  Write the superblock now that we can fill in all of the fields.  Put the checksum in.  Check to make sure we allocated enough space.  (These warnings used to come at the start, but they scroll off the
+	   screen too quickly.)  bytes, not chars: think UTF-8.  (not possible with current Linux versions) 
+ * Local variables:
+ * c-file-style: "linux"
+ * End:
+ 
+ * mkcramfs - make a cramfs file system
+ *
+ * Copyright (C) 1999-2002 Transmeta Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+ * If you change the disk format of cramfs, please update fs/cramfs/README.
+  Exit codes used by mkfs-type programs  No errors  Operational error  Usage or syntax error  The kernel only supports PAD_SIZE of 0 and 512. 
+ * The longest filename component to allow for in the input directory tree.
+ * ext2fs (and many others) allow up to 255 bytes.  A couple of filesystems
+ * allow longer (e.g. smbfs 1024), but there isn't much use in supporting
+ * >255-byte names in the input directory tree given that such names get
+ * truncated to CRAMFS_MAXPATHLEN (252 bytes) when written to cramfs.
+ *
+ * Old versions of mkcramfs generated corrupted filesystems if any input
+ * filenames exceeded CRAMFS_MAXPATHLEN (252 bytes), however old
+ * versions of cramfsck seem to have been able to detect the corruption.
+ 
+ * Maximum size fs you can create is roughly 256MB.  (The last file's
+ * data must begin within 256MB boundary but can extend beyond that.)
+ *
+ * Note that if you want it to fit in a ROM then you're limited to what the
+ * hardware and kernel can support.
+  offset  filesize  block pointers  pre-count the root node 
+ * If opt_holes is set, then mkcramfs can create explicit holes in the
+ * data, which saves 26 bytes per hole (which is a lot smaller a
+ * saving than most most filesystems).
+ *
+ * Note that kernels up to at least 2.3.39 don't support cramfs holes,
+ * which is why this is turned off by default.
+ *
+ * If opt_verbose is 1, be verbose.  If it is higher, be even more verbose.
+  In-core version of inode / directory entry.  stats  these are only used for non-empty files  always null except non-empty files  temporarily open files while mmapped  FS data  points to other identical file  pointer to compressed data in archive  Where in the archive is the directory entry?  organization  null for non-directories and empty directories  Input status of 0 to print help and exit without an error. 
+ * We define our own sorting function instead of using alphasort which
+ * uses strcoll and changes ordering based on locale information.
+  Set up the path.  TODO: Reuse the parent's buffer to save memcpy'ing and duplication.  read in the directory and sort  process directory  Ignore "." and ".." - we won't be adding them to the archive  truncate multi-byte UTF-8 filenames on character boundary  the first lost byte must not be a trail byte  are we reasonably certain it was UTF-8 ?  TODO: We ought to replace with a default
+			   gid instead of truncating; otherwise there
+			   are security problems.  Maybe mode should
+			   be &= ~070.  Same goes for uid once Linux
+			   supports >16-bit uids.  maybe we should skip sockets  block pointers & data expansion allowance + data  Link it into the list  allocated by scandir() with malloc()  Returns sizeof(struct cramfs_super), which includes the root inode.  0 if no padding 
+ * TODO: Does this work for chars >= 0x80?  Most filesystems use UTF-8
+ * encoding for filenames, whereas the console is a single-byte
+ * character set like iso-latin-1.
+  major/minor numbers can be as high as 2^12 or 4096  size be as high as 2^24 or 16777216 
+ * We do a width-first printout of the directory
+ * entries, using a stack to remember the directories
+ * we've seen.
+  Non-empty directories, regfiles and symlinks will
+			   write over inode->offset later.  another node  Pad up the name to a 4-byte boundary 
+		 * Reverse the order the stack entries pushed during
+		 * this directory, for a small optimization of disk
+		 * access in the created fs.  This change makes things
+		 * `ls -UR' order.
+		  Pop a subdirectory entry from the stack, and recurse.  Returns non-zero iff the first LEN bytes from BEGIN are all NULs. 
+ * One 4-byte pointer per block and then the actual blocked
+ * output. The first block does not need an offset pointer,
+ * as it will start immediately after the pointer block;
+ * so the i'th pointer points to the end of the i'th block
+ * (i.e. the start of the (i+1)'th block or past EOF).
+ *
+ * Note that size > 0, as a zero-sized file wouldn't ever
+ * have gotten here in the first place.
+  (I don't think this can happen with zlib.)  TODO: Arguably, original_size in these 2 lines should be
+	   st_blocks * 512.  But if you say that then perhaps
+	   administrative data should also be included in both. 
+ * Traverse the entry tree, writing data for every item that has
+ * non-null entry->path (i.e. every non-empty regfile) and non-null
+ * entry->uncompressed (i.e. every symlink).
+  Pad up the image_length to a 4-byte boundary  used twice...  initial guess (upper-bound) of required filesystem size  for getopt  for strtoul  command line options  may be padded later  3 is for padding  old option, ignored  always allocate a multiple of blksize bytes because that's
+	   what we're going to write later on  find duplicate files. TODO: uses the most inefficient algorithm
+	   possible.  TODO: Why do we use a private/anonymous mapping here
+	   followed by a write below, instead of just a shared mapping
+	   and a couple of ftruncate calls?  Is it just to save us
+	   having to deal with removing the file afterwards?  If we
+	   really need this huge anonymous mapping, we ought to mmap
+	   in smaller chunks, so that the user doesn't need nn MB of
+	   RAM free.  If the reason is to be able to write to
+	   un-mmappable block devices, then we could try shared mmap
+	   and revert to anonymous mmap if the shared mmap fails.  Skip the first opt_pad bytes for boot loader code  Skip the superblock and come back to write it later.  Insert a file image.  We always write a multiple of blksize bytes, so that
+	   losetup works.  Write the superblock now that we can fill in all of the fields.  Put the checksum in.  Check to make sure we allocated enough space.  (These warnings used to come at the start, but they scroll off the
+	   screen too quickly.)  bytes, not chars: think UTF-8.  (not possible with current Linux versions) 
+ * Local variables:
+ * c-file-style: "linux"
+ * End:
+ 

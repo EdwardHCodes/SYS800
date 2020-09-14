@@ -1,0 +1,556 @@
+
+ * flip.c: Puzzle involving lighting up all the squares on a grid,
+ * where each click toggles an overlapping set of lights.
+ 
+ * Possible ways to decide which lights are toggled by each click.
+ * Essentially, each of these describes a means of inventing a
+ * matrix over GF(2).
+ 
+ * This structure is shared between all the game_states describing
+ * a particular game, so it's reference-counted.
+  array of (w*h) by (w*h)  array of w*h  structure copy  shouldn't happen 
+ * Structure used during random matrix generation, and a compare
+ * function to permit storage in a tree234.
+  coords of click square  coords of output square 
+     * Number of click squares which currently affect this output
+     * square.
+     
+     * Number of output squares currently affected by this click
+     * square.
+     
+ * Compare function for choosing the next square to add. We must
+ * sort by coverage, then by omino size, then everything else.
+ 
+ * Compare function for adjusting the coverage figures after a
+ * change. We sort first by coverage and output square, then by
+ * everything else.
+ 
+ * Compare function for adjusting the omino sizes after a change.
+ * We sort first by omino size and input square, then by everything
+ * else.
+  already there 
+     * First set up the matrix.
+     
+             * Repeatedly choose a square to add to the matrix,
+             * until we have enough. I'll arbitrarily choose our
+             * limit to be the same as the total number of set bits
+             * in the crosses matrix.
+              centre squares already present 
+                 * Find the lowest element in the pick tree.
+                 
+                 * Find the highest element with the same coverage
+                 * and omino size, by setting all other elements to
+                 * lots.
+                 
+                 * Pick at random from all elements up to k of the
+                 * pick tree.
+                 
+                 * Add this square to the matrix.
+                 
+                 * Correct the matrix coverage field of any sq
+                 * which points at this output square.
+                 
+                 * Correct the omino size field of any sq which
+                 * points at this input square.
+                 
+                 * The sq we actually picked out of the tree is
+                 * finished with; but its neighbours now need to
+                 * appear.
+                 
+             * Free all remaining sq structures.
+             
+             * Finally, check to see if any two matrix rows are
+             * exactly identical. If so, this is not an acceptable
+             * matrix, and we give up and go round again.
+             * 
+             * I haven't been immediately able to think of a
+             * plausible means of algorithmically avoiding this
+             * situation (by, say, making a small perturbation to
+             * an offending matrix), so for the moment I'm just
+             * going to deal with it by throwing the whole thing
+             * away. I suspect this will lead to scalability
+             * problems (since most of the things happening in
+             * these matrices are local, the chance of _some_
+             * neighbourhood having two identical regions will
+             * increase with the grid area), but so far this puzzle
+             * seems to be really hard at large sizes so I'm not
+             * massively worried yet. Anyone needs this done
+             * better, they're welcome to submit a patch.
+              no matches found 
+     * Now invent a random initial set of lights.
+     * 
+     * At first glance it looks as if it might be quite difficult
+     * to choose equiprobably from all soluble light sets. After
+     * all, soluble light sets are those in the image space of the
+     * transformation matrix; so first we'd have to identify that
+     * space and its dimension, then pick a random coordinate for
+     * each basis vector and recombine. Lot of fiddly matrix
+     * algebra there.
+     * 
+     * However, vector spaces are nicely orthogonal and relieve us
+     * of all that difficulty. For every point in the image space,
+     * there are precisely as many points in the input space that
+     * map to it as there are elements in the kernel of the
+     * transformation matrix (because adding any kernel element to
+     * the input does not change the output, and because any two
+     * inputs mapping to the same output must differ by an element
+     * of the kernel because that's what the kernel _is_); and
+     * these cosets are all disjoint (obviously, since no input
+     * point can map to more than one output point) and cover the
+     * whole space (equally obviously, because no input point can
+     * map to fewer than one output point!).
+     *
+     * So the input space contains the same number of points for
+     * each point in the output space; thus, we can simply choose
+     * equiprobably from elements of the _input_ space, and filter
+     * the result through the transformation matrix in the obvious
+     * way, and we thereby guarantee to choose equiprobably from
+     * all the output points. Phew!
+     
+         * Ensure we don't have the starting state already!
+         
+     * Now encode the matrix and the starting grid as a game
+     * description. We'll do this by concatenating two great big
+     * hex bitmaps.
+     
+     * Set up a list of simultaneous equations. Each one is of
+     * length (wh+1) and has wh coefficients followed by a value.
+     
+     * Perform Gaussian elimination over GF(2).
+     
+	 * Find the leftmost column which has a 1 in it somewhere
+	 * outside the first `rowsdone' rows.
+	  found one 
+	     * This is a column which will not have an equation
+	     * controlling it. Mark it as undetermined.
+	     
+	 * If there wasn't one, then we've finished: all remaining
+	 * equations are of the form 0 = constant. Check to see if
+	 * any of them wants 0 to be equal to 1; this is the
+	 * condition which indicates an insoluble problem
+	 * (therefore _hopefully_ one typed in by a user!).
+	 
+	 * We've found a 1. It's in column i, and the topmost 1 in
+	 * that column is in row j. Do a row-XOR to move it up to
+	 * the topmost row if it isn't already there.
+	 
+	 * Do row-XORs to eliminate that 1 from all rows below the
+	 * topmost row.
+	 
+	 * Mark this row and column as done.
+	 
+	 * If we've done all the rows, terminate.
+	 
+     * If we reach here, we have the ability to produce a solution.
+     * So we go through _all_ possible solutions (each
+     * corresponding to a set of arbitrary choices of those
+     * components not directly determined by an equation), and pick
+     * one requiring the smallest number of flips.
+     
+	 * Find a solution based on the current values of the
+	 * undetermined variables.
+	 
+	     * Find the leftmost set bit in this equation.
+	      there must have been one! 
+	     * Compute this variable using the rest.
+	     
+	 * Compare this solution to the current best one, and
+	 * replace the best one if this one is shorter.
+	 
+	 * Now increment the binary number given by the
+	 * undetermined variables: turn all 1s into 0s until we see
+	 * a 0, at which point we turn it into a 1.
+	 
+	 * If we didn't find a 0 at any point, we have wrapped
+	 * round and are back at the start, i.e. we have enumerated
+	 * all solutions.
+	 
+     * We have a solution. Produce a move string encoding the
+     * solution.
+     
+             * It's just possible that a manually entered game ID
+             * will have at least one square do nothing whatsoever.
+             * If so, we avoid encoding a move at all.
+              toggle hint  can't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  haven't decided yet 
+	 * Draw a polygon indicating that the square is diagonally
+	 * flipping over.
+	 
+     * Draw a little diagram in the tile which indicates which
+     * surrounding tiles flip when this one is clicked.
+     
+     * Draw a hint rectangle if required.
+     
+         * Draw the grid lines.
+          scale it so it goes from 0 to 1  means `animated'  game_request_keys  wants_statusbar  flags 
+ * flip.c: Puzzle involving lighting up all the squares on a grid,
+ * where each click toggles an overlapping set of lights.
+ 
+ * Possible ways to decide which lights are toggled by each click.
+ * Essentially, each of these describes a means of inventing a
+ * matrix over GF(2).
+ 
+ * This structure is shared between all the game_states describing
+ * a particular game, so it's reference-counted.
+  array of (w*h) by (w*h)  array of w*h  structure copy  shouldn't happen 
+ * Structure used during random matrix generation, and a compare
+ * function to permit storage in a tree234.
+  coords of click square  coords of output square 
+     * Number of click squares which currently affect this output
+     * square.
+     
+     * Number of output squares currently affected by this click
+     * square.
+     
+ * Compare function for choosing the next square to add. We must
+ * sort by coverage, then by omino size, then everything else.
+ 
+ * Compare function for adjusting the coverage figures after a
+ * change. We sort first by coverage and output square, then by
+ * everything else.
+ 
+ * Compare function for adjusting the omino sizes after a change.
+ * We sort first by omino size and input square, then by everything
+ * else.
+  already there 
+     * First set up the matrix.
+     
+             * Repeatedly choose a square to add to the matrix,
+             * until we have enough. I'll arbitrarily choose our
+             * limit to be the same as the total number of set bits
+             * in the crosses matrix.
+              centre squares already present 
+                 * Find the lowest element in the pick tree.
+                 
+                 * Find the highest element with the same coverage
+                 * and omino size, by setting all other elements to
+                 * lots.
+                 
+                 * Pick at random from all elements up to k of the
+                 * pick tree.
+                 
+                 * Add this square to the matrix.
+                 
+                 * Correct the matrix coverage field of any sq
+                 * which points at this output square.
+                 
+                 * Correct the omino size field of any sq which
+                 * points at this input square.
+                 
+                 * The sq we actually picked out of the tree is
+                 * finished with; but its neighbours now need to
+                 * appear.
+                 
+             * Free all remaining sq structures.
+             
+             * Finally, check to see if any two matrix rows are
+             * exactly identical. If so, this is not an acceptable
+             * matrix, and we give up and go round again.
+             * 
+             * I haven't been immediately able to think of a
+             * plausible means of algorithmically avoiding this
+             * situation (by, say, making a small perturbation to
+             * an offending matrix), so for the moment I'm just
+             * going to deal with it by throwing the whole thing
+             * away. I suspect this will lead to scalability
+             * problems (since most of the things happening in
+             * these matrices are local, the chance of _some_
+             * neighbourhood having two identical regions will
+             * increase with the grid area), but so far this puzzle
+             * seems to be really hard at large sizes so I'm not
+             * massively worried yet. Anyone needs this done
+             * better, they're welcome to submit a patch.
+              no matches found 
+     * Now invent a random initial set of lights.
+     * 
+     * At first glance it looks as if it might be quite difficult
+     * to choose equiprobably from all soluble light sets. After
+     * all, soluble light sets are those in the image space of the
+     * transformation matrix; so first we'd have to identify that
+     * space and its dimension, then pick a random coordinate for
+     * each basis vector and recombine. Lot of fiddly matrix
+     * algebra there.
+     * 
+     * However, vector spaces are nicely orthogonal and relieve us
+     * of all that difficulty. For every point in the image space,
+     * there are precisely as many points in the input space that
+     * map to it as there are elements in the kernel of the
+     * transformation matrix (because adding any kernel element to
+     * the input does not change the output, and because any two
+     * inputs mapping to the same output must differ by an element
+     * of the kernel because that's what the kernel _is_); and
+     * these cosets are all disjoint (obviously, since no input
+     * point can map to more than one output point) and cover the
+     * whole space (equally obviously, because no input point can
+     * map to fewer than one output point!).
+     *
+     * So the input space contains the same number of points for
+     * each point in the output space; thus, we can simply choose
+     * equiprobably from elements of the _input_ space, and filter
+     * the result through the transformation matrix in the obvious
+     * way, and we thereby guarantee to choose equiprobably from
+     * all the output points. Phew!
+     
+         * Ensure we don't have the starting state already!
+         
+     * Now encode the matrix and the starting grid as a game
+     * description. We'll do this by concatenating two great big
+     * hex bitmaps.
+     
+     * Set up a list of simultaneous equations. Each one is of
+     * length (wh+1) and has wh coefficients followed by a value.
+     
+     * Perform Gaussian elimination over GF(2).
+     
+	 * Find the leftmost column which has a 1 in it somewhere
+	 * outside the first `rowsdone' rows.
+	  found one 
+	     * This is a column which will not have an equation
+	     * controlling it. Mark it as undetermined.
+	     
+	 * If there wasn't one, then we've finished: all remaining
+	 * equations are of the form 0 = constant. Check to see if
+	 * any of them wants 0 to be equal to 1; this is the
+	 * condition which indicates an insoluble problem
+	 * (therefore _hopefully_ one typed in by a user!).
+	 
+	 * We've found a 1. It's in column i, and the topmost 1 in
+	 * that column is in row j. Do a row-XOR to move it up to
+	 * the topmost row if it isn't already there.
+	 
+	 * Do row-XORs to eliminate that 1 from all rows below the
+	 * topmost row.
+	 
+	 * Mark this row and column as done.
+	 
+	 * If we've done all the rows, terminate.
+	 
+     * If we reach here, we have the ability to produce a solution.
+     * So we go through _all_ possible solutions (each
+     * corresponding to a set of arbitrary choices of those
+     * components not directly determined by an equation), and pick
+     * one requiring the smallest number of flips.
+     
+	 * Find a solution based on the current values of the
+	 * undetermined variables.
+	 
+	     * Find the leftmost set bit in this equation.
+	      there must have been one! 
+	     * Compute this variable using the rest.
+	     
+	 * Compare this solution to the current best one, and
+	 * replace the best one if this one is shorter.
+	 
+	 * Now increment the binary number given by the
+	 * undetermined variables: turn all 1s into 0s until we see
+	 * a 0, at which point we turn it into a 1.
+	 
+	 * If we didn't find a 0 at any point, we have wrapped
+	 * round and are back at the start, i.e. we have enumerated
+	 * all solutions.
+	 
+     * We have a solution. Produce a move string encoding the
+     * solution.
+     
+             * It's just possible that a manually entered game ID
+             * will have at least one square do nothing whatsoever.
+             * If so, we avoid encoding a move at all.
+              toggle hint  can't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  haven't decided yet 
+	 * Draw a polygon indicating that the square is diagonally
+	 * flipping over.
+	 
+     * Draw a little diagram in the tile which indicates which
+     * surrounding tiles flip when this one is clicked.
+     
+     * Draw a hint rectangle if required.
+     
+         * Draw the grid lines.
+          scale it so it goes from 0 to 1  means `animated'  game_request_keys  wants_statusbar  flags 
+ * flip.c: Puzzle involving lighting up all the squares on a grid,
+ * where each click toggles an overlapping set of lights.
+ 
+ * Possible ways to decide which lights are toggled by each click.
+ * Essentially, each of these describes a means of inventing a
+ * matrix over GF(2).
+ 
+ * This structure is shared between all the game_states describing
+ * a particular game, so it's reference-counted.
+  array of (w*h) by (w*h)  array of w*h  structure copy  shouldn't happen 
+ * Structure used during random matrix generation, and a compare
+ * function to permit storage in a tree234.
+  coords of click square  coords of output square 
+     * Number of click squares which currently affect this output
+     * square.
+     
+     * Number of output squares currently affected by this click
+     * square.
+     
+ * Compare function for choosing the next square to add. We must
+ * sort by coverage, then by omino size, then everything else.
+ 
+ * Compare function for adjusting the coverage figures after a
+ * change. We sort first by coverage and output square, then by
+ * everything else.
+ 
+ * Compare function for adjusting the omino sizes after a change.
+ * We sort first by omino size and input square, then by everything
+ * else.
+  already there 
+     * First set up the matrix.
+     
+             * Repeatedly choose a square to add to the matrix,
+             * until we have enough. I'll arbitrarily choose our
+             * limit to be the same as the total number of set bits
+             * in the crosses matrix.
+              centre squares already present 
+                 * Find the lowest element in the pick tree.
+                 
+                 * Find the highest element with the same coverage
+                 * and omino size, by setting all other elements to
+                 * lots.
+                 
+                 * Pick at random from all elements up to k of the
+                 * pick tree.
+                 
+                 * Add this square to the matrix.
+                 
+                 * Correct the matrix coverage field of any sq
+                 * which points at this output square.
+                 
+                 * Correct the omino size field of any sq which
+                 * points at this input square.
+                 
+                 * The sq we actually picked out of the tree is
+                 * finished with; but its neighbours now need to
+                 * appear.
+                 
+             * Free all remaining sq structures.
+             
+             * Finally, check to see if any two matrix rows are
+             * exactly identical. If so, this is not an acceptable
+             * matrix, and we give up and go round again.
+             * 
+             * I haven't been immediately able to think of a
+             * plausible means of algorithmically avoiding this
+             * situation (by, say, making a small perturbation to
+             * an offending matrix), so for the moment I'm just
+             * going to deal with it by throwing the whole thing
+             * away. I suspect this will lead to scalability
+             * problems (since most of the things happening in
+             * these matrices are local, the chance of _some_
+             * neighbourhood having two identical regions will
+             * increase with the grid area), but so far this puzzle
+             * seems to be really hard at large sizes so I'm not
+             * massively worried yet. Anyone needs this done
+             * better, they're welcome to submit a patch.
+              no matches found 
+     * Now invent a random initial set of lights.
+     * 
+     * At first glance it looks as if it might be quite difficult
+     * to choose equiprobably from all soluble light sets. After
+     * all, soluble light sets are those in the image space of the
+     * transformation matrix; so first we'd have to identify that
+     * space and its dimension, then pick a random coordinate for
+     * each basis vector and recombine. Lot of fiddly matrix
+     * algebra there.
+     * 
+     * However, vector spaces are nicely orthogonal and relieve us
+     * of all that difficulty. For every point in the image space,
+     * there are precisely as many points in the input space that
+     * map to it as there are elements in the kernel of the
+     * transformation matrix (because adding any kernel element to
+     * the input does not change the output, and because any two
+     * inputs mapping to the same output must differ by an element
+     * of the kernel because that's what the kernel _is_); and
+     * these cosets are all disjoint (obviously, since no input
+     * point can map to more than one output point) and cover the
+     * whole space (equally obviously, because no input point can
+     * map to fewer than one output point!).
+     *
+     * So the input space contains the same number of points for
+     * each point in the output space; thus, we can simply choose
+     * equiprobably from elements of the _input_ space, and filter
+     * the result through the transformation matrix in the obvious
+     * way, and we thereby guarantee to choose equiprobably from
+     * all the output points. Phew!
+     
+         * Ensure we don't have the starting state already!
+         
+     * Now encode the matrix and the starting grid as a game
+     * description. We'll do this by concatenating two great big
+     * hex bitmaps.
+     
+     * Set up a list of simultaneous equations. Each one is of
+     * length (wh+1) and has wh coefficients followed by a value.
+     
+     * Perform Gaussian elimination over GF(2).
+     
+	 * Find the leftmost column which has a 1 in it somewhere
+	 * outside the first `rowsdone' rows.
+	  found one 
+	     * This is a column which will not have an equation
+	     * controlling it. Mark it as undetermined.
+	     
+	 * If there wasn't one, then we've finished: all remaining
+	 * equations are of the form 0 = constant. Check to see if
+	 * any of them wants 0 to be equal to 1; this is the
+	 * condition which indicates an insoluble problem
+	 * (therefore _hopefully_ one typed in by a user!).
+	 
+	 * We've found a 1. It's in column i, and the topmost 1 in
+	 * that column is in row j. Do a row-XOR to move it up to
+	 * the topmost row if it isn't already there.
+	 
+	 * Do row-XORs to eliminate that 1 from all rows below the
+	 * topmost row.
+	 
+	 * Mark this row and column as done.
+	 
+	 * If we've done all the rows, terminate.
+	 
+     * If we reach here, we have the ability to produce a solution.
+     * So we go through _all_ possible solutions (each
+     * corresponding to a set of arbitrary choices of those
+     * components not directly determined by an equation), and pick
+     * one requiring the smallest number of flips.
+     
+	 * Find a solution based on the current values of the
+	 * undetermined variables.
+	 
+	     * Find the leftmost set bit in this equation.
+	      there must have been one! 
+	     * Compute this variable using the rest.
+	     
+	 * Compare this solution to the current best one, and
+	 * replace the best one if this one is shorter.
+	 
+	 * Now increment the binary number given by the
+	 * undetermined variables: turn all 1s into 0s until we see
+	 * a 0, at which point we turn it into a 1.
+	 
+	 * If we didn't find a 0 at any point, we have wrapped
+	 * round and are back at the start, i.e. we have enumerated
+	 * all solutions.
+	 
+     * We have a solution. Produce a move string encoding the
+     * solution.
+     
+             * It's just possible that a manually entered game ID
+             * will have at least one square do nothing whatsoever.
+             * If so, we avoid encoding a move at all.
+              toggle hint  can't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  haven't decided yet 
+	 * Draw a polygon indicating that the square is diagonally
+	 * flipping over.
+	 
+     * Draw a little diagram in the tile which indicates which
+     * surrounding tiles flip when this one is clicked.
+     
+     * Draw a hint rectangle if required.
+     
+         * Draw the grid lines.
+          scale it so it goes from 0 to 1  means `animated'  game_request_keys  wants_statusbar  flags 

@@ -1,0 +1,208 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds the record size interval lengths, in mebibytes  0 means OFF  5MB  10MB  15MB  32MB  64MB  75MB  100MB  128MB  256MB  512MB  650MB  700MB  1GB  1.5GB  1.75GB   recording screen status flags  2 GB - 4 MB  as we have the ability to disable the remote, we need an alternative loop  (GIU) list needs updating * File name creation * current file number to assist in creating unique numbered filenames
+   without actually having to create the file on disk  CONFIG_RTC  path for current file * Automatic Gain Control (AGC) * Timing counters:
+ * peak_time is incremented every 0.2s, every 2nd run of record screen loop.
+ * hist_time is incremented every 0.5s, display update.
+ * peak_time is the counter of the peak hold read and agc process,
+ * overflow every 13 years 8-)
+  Automatic Gain Control   "Off",
+    "Safety (clip)",
+    "Live (slow)",
+    "DJ-Set (slow)",
+    "Medium",
+    "Voice (fast)"   fast gain reduction threshold -0.8dB  accelerated gain reduction threshold -1.6dB  threshold for balance control -32dB  autogain high level thresholds (-3dB, -7dB, -4dB, -5dB, -5dB)  autogain low level thresholds (-14dB, -11dB, -6dB, -7dB, -8dB)  autogain threshold times [1/5s] or [200ms]  AGC operation  AGC levels  AGC time since high target volume was exceeded  AGC time since volume fallen below low target  AGC balance time exceeding +/- 0.7dB  AGC maximum gain  HAVE_AGC  HAVE_AGC  MIC  AUDIO_SRC_LINEIN, AUDIO_SRC_FMRADIO, AUDIO_SRC_SPDIF  reset the clipping indicators  Read peak meter values & calculate balance.
+ * Returns validity of peak values.
+ * Used for automatic gain control and history diagram.
+  AGC helper function to check if maximum gain is reached  range -128...+108 [0.5dB]  LINE, FMRADIO  MIC  LINE, FMRADIO 
+ * Handle automatic gain control (AGC).
+ * Change recording gain if peak_x levels are above or below
+ * target volume for specified timeouts.
+  Automatic balance control - only if not in safety mode  0.47 - 0.75dB  0.75 - 3.00dB  3.00 - 4.90dB  4.90 - inf dB  Automatic gain control  on target level every 1.2 sec  HAVE_AGC  the list below must match enum audio_sources in audio.h  Directory existence and writeablility should have already been
+     * verified - do not pass NULL pointers to pcmrec  We'll wait at least up to the start of the next second so no duplicate
+       names are created  Hit disk to get a starting filename for the type  Set audio input source, power up/down devices  Set peakmeters for recording or reset to playback  steal mp3 buffer, create unique filename and start recording  create unique filename and start recording just to be sure  used in trigger_listerner and recording_screen *
+ * Callback function so that the peak meter code can send an event
+ * to this application. This function can be passed to
+ * peak_meter_set_trigger_listener in order to activate the trigger.
+  if we're already recording this is a retrigger  New file on trig start tell recording_screen to reset the time  A _change_ to TRIG_READY means the current recording has stopped  Stop  Pause  New file on trig stop tell recording_screen to reset the time  Stop and shutdown  Stuff for drawing the screen  not used  Draw MIC recording gain  MIC  MIC  MIC  negative to re-init, positive to quit, zero to run  for preparing strings  for preparing strings  character width/height  refresh counter  status of the audio system  previous status so we can act on changes  the viewports  Radio is left on if:
+     *   1) Is was on at the start and the initial source is FM Radio
+     *   2) 1) and the source was never changed to something else
+      peakmeter (and trigger bar) x pos  peakmeter y pos  peakmeter height  trigger bar y pos  trigger bar width  required height for top half  tweak layout tiny screens / big fonts  the list in the bottom vp  detect source change  hardware samplerate gets messed up so prevent mixer playing  recording_menu gets messed up: so prevent manus talking  audio_init_recording stops anything playing when it takes the audio
+       buffer  HAVE_AGC  Disable speaker to prevent feedback  Create new filename for recording start  start of the loop: we stay in this loop until user quits recscreen  request to re-init stuff, done after settings screen  If input changes away from FM Radio,
+               radio will remain off when recording screen closes.  viewport init and calculations that only needs to be done once  top vp, 4 lines, force sys font if total screen < 6 lines
+                NOTE: one could limit the list to 1 line and get away with 5 lines  use one line for histogram  compact needs 4 lines total top=4,list=2 get a copy now so it can be sized more easily  list section, rest of the screen  req for next calls  init the bottom list  force a redraw  h is same  If format changed, a new number is required  MIC  HAVE_AGC  Update immediately  populate translation table for list id -> enum  spdif  mono  stereo  if(done < 0) 
+         * Flash the LED while waiting to record.  Turn it on while
+         * recording.
+          trigger is on in status TRIG_READY (no check needed) 
+             * other trigger stati than trig_off and trig_steady
+             * already imply that we are recording.
+              trigger is on in status TRIG_READY (no check needed)  CONFIG_LED  Wait for a button a while (HZ/10) drawing the peak meter  simulate a button press  let list handle the button  MIC  MIC  MIC  HAVE_AGC  Update immediately  MIC  MIC  MIC  HAVE_AGC  Update immediately  turn off the trigger  Update immediately  this feature exists for some h1x0/h3x0 targets that suffer
+                   from noise caused by remote LCD updates
+                   NOTE 1: this will leave the list on the remote
+                   NOTE 2: to be replaced by a global LCD_off() routine  switch to single screen, leave message on remote  remote switched on again  toggle  Update immediately  Only act if the mpeg is stopped  is this manual or triggered recording?  manual recording  no voice possible here, but a beep  longer beep on start  this is triggered recording  we don't start recording now, but enable the
+                        trigger and let the callback function
+                        trigger_listener control when the recording starts if new file button pressed, start new file  if pause button pressed, pause or resume  no voice possible here, but a beep  short beep on resume  Update immediately  led is restored at begin of loop / end of function  the init is now done at the beginning of the loop  Only accept USB connection when not recording switch(button) every 2nd run of loop  Handle AGC every 200ms when enabled and peak data is valid  start of vp_top drawing  Switch back and forth displaying warning on first available
+                   line to ensure visibility - the motion should also help
+                   draw attention  Don't use language string unless agreed upon to make this
+                   method permanent - could do something in the statusbar  Tracks amount of prerecorded data in buffer  Display the split interval if the record timesplit
+                   is active  Display the record timesplit interval rather
+                       than the file size if the record timer is active  We will do file splitting regardless, either at the end of
+            a split interval, or when the filesize approaches the 2GB
+            FAT file size (compatibility) limit.  draw the clipcounter just in front of the peakmeter  draw the trigger status  MIC  HAVE_AGC  spdif samplerate changed  update_list is set whenever content changes  draw peakmeter again (check if this can be removed)  display update every second  end while(!done)  stop recording first and try to finish saving whatever it can  Restore radio playback - radio_status should be unchanged if started
+           through fm radio screen (barring usb connect)  Go back to playback mode  restore talking  restore keyclick  Re-enable speaker  make sure the trigger is really turned off  if the directory was created or recording happened, make sure the
+       browser is updated  recording_screen  dummy  HAVE_RECORDING **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds the record size interval lengths, in mebibytes  0 means OFF  5MB  10MB  15MB  32MB  64MB  75MB  100MB  128MB  256MB  512MB  650MB  700MB  1GB  1.5GB  1.75GB   recording screen status flags  2 GB - 4 MB  as we have the ability to disable the remote, we need an alternative loop  (GIU) list needs updating * File name creation * current file number to assist in creating unique numbered filenames
+   without actually having to create the file on disk  CONFIG_RTC  path for current file * Automatic Gain Control (AGC) * Timing counters:
+ * peak_time is incremented every 0.2s, every 2nd run of record screen loop.
+ * hist_time is incremented every 0.5s, display update.
+ * peak_time is the counter of the peak hold read and agc process,
+ * overflow every 13 years 8-)
+  Automatic Gain Control   "Off",
+    "Safety (clip)",
+    "Live (slow)",
+    "DJ-Set (slow)",
+    "Medium",
+    "Voice (fast)"   fast gain reduction threshold -0.8dB  accelerated gain reduction threshold -1.6dB  threshold for balance control -32dB  autogain high level thresholds (-3dB, -7dB, -4dB, -5dB, -5dB)  autogain low level thresholds (-14dB, -11dB, -6dB, -7dB, -8dB)  autogain threshold times [1/5s] or [200ms]  AGC operation  AGC levels  AGC time since high target volume was exceeded  AGC time since volume fallen below low target  AGC balance time exceeding +/- 0.7dB  AGC maximum gain  HAVE_AGC  HAVE_AGC  MIC  AUDIO_SRC_LINEIN, AUDIO_SRC_FMRADIO, AUDIO_SRC_SPDIF  reset the clipping indicators  Read peak meter values & calculate balance.
+ * Returns validity of peak values.
+ * Used for automatic gain control and history diagram.
+  AGC helper function to check if maximum gain is reached  range -128...+108 [0.5dB]  LINE, FMRADIO  MIC  LINE, FMRADIO 
+ * Handle automatic gain control (AGC).
+ * Change recording gain if peak_x levels are above or below
+ * target volume for specified timeouts.
+  Automatic balance control - only if not in safety mode  0.47 - 0.75dB  0.75 - 3.00dB  3.00 - 4.90dB  4.90 - inf dB  Automatic gain control  on target level every 1.2 sec  HAVE_AGC  the list below must match enum audio_sources in audio.h  Directory existence and writeablility should have already been
+     * verified - do not pass NULL pointers to pcmrec  We'll wait at least up to the start of the next second so no duplicate
+       names are created  Hit disk to get a starting filename for the type  Set audio input source, power up/down devices  Set peakmeters for recording or reset to playback  steal mp3 buffer, create unique filename and start recording  create unique filename and start recording just to be sure  used in trigger_listerner and recording_screen *
+ * Callback function so that the peak meter code can send an event
+ * to this application. This function can be passed to
+ * peak_meter_set_trigger_listener in order to activate the trigger.
+  if we're already recording this is a retrigger  New file on trig start tell recording_screen to reset the time  A _change_ to TRIG_READY means the current recording has stopped  Stop  Pause  New file on trig stop tell recording_screen to reset the time  Stop and shutdown  Stuff for drawing the screen  not used  Draw MIC recording gain  MIC  MIC  MIC  negative to re-init, positive to quit, zero to run  for preparing strings  for preparing strings  character width/height  refresh counter  status of the audio system  previous status so we can act on changes  the viewports  Radio is left on if:
+     *   1) Is was on at the start and the initial source is FM Radio
+     *   2) 1) and the source was never changed to something else
+      peakmeter (and trigger bar) x pos  peakmeter y pos  peakmeter height  trigger bar y pos  trigger bar width  required height for top half  tweak layout tiny screens / big fonts  the list in the bottom vp  detect source change  hardware samplerate gets messed up so prevent mixer playing  recording_menu gets messed up: so prevent manus talking  audio_init_recording stops anything playing when it takes the audio
+       buffer  HAVE_AGC  Disable speaker to prevent feedback  Create new filename for recording start  start of the loop: we stay in this loop until user quits recscreen  request to re-init stuff, done after settings screen  If input changes away from FM Radio,
+               radio will remain off when recording screen closes.  viewport init and calculations that only needs to be done once  top vp, 4 lines, force sys font if total screen < 6 lines
+                NOTE: one could limit the list to 1 line and get away with 5 lines  use one line for histogram  compact needs 4 lines total top=4,list=2 get a copy now so it can be sized more easily  list section, rest of the screen  req for next calls  init the bottom list  force a redraw  h is same  If format changed, a new number is required  MIC  HAVE_AGC  Update immediately  populate translation table for list id -> enum  spdif  mono  stereo  if(done < 0) 
+         * Flash the LED while waiting to record.  Turn it on while
+         * recording.
+          trigger is on in status TRIG_READY (no check needed) 
+             * other trigger stati than trig_off and trig_steady
+             * already imply that we are recording.
+              trigger is on in status TRIG_READY (no check needed)  CONFIG_LED  Wait for a button a while (HZ/10) drawing the peak meter  simulate a button press  let list handle the button  MIC  MIC  MIC  HAVE_AGC  Update immediately  MIC  MIC  MIC  HAVE_AGC  Update immediately  turn off the trigger  Update immediately  this feature exists for some h1x0/h3x0 targets that suffer
+                   from noise caused by remote LCD updates
+                   NOTE 1: this will leave the list on the remote
+                   NOTE 2: to be replaced by a global LCD_off() routine  switch to single screen, leave message on remote  remote switched on again  toggle  Update immediately  Only act if the mpeg is stopped  is this manual or triggered recording?  manual recording  no voice possible here, but a beep  longer beep on start  this is triggered recording  we don't start recording now, but enable the
+                        trigger and let the callback function
+                        trigger_listener control when the recording starts if new file button pressed, start new file  if pause button pressed, pause or resume  no voice possible here, but a beep  short beep on resume  Update immediately  led is restored at begin of loop / end of function  the init is now done at the beginning of the loop  Only accept USB connection when not recording switch(button) every 2nd run of loop  Handle AGC every 200ms when enabled and peak data is valid  start of vp_top drawing  Switch back and forth displaying warning on first available
+                   line to ensure visibility - the motion should also help
+                   draw attention  Don't use language string unless agreed upon to make this
+                   method permanent - could do something in the statusbar  Tracks amount of prerecorded data in buffer  Display the split interval if the record timesplit
+                   is active  Display the record timesplit interval rather
+                       than the file size if the record timer is active  We will do file splitting regardless, either at the end of
+            a split interval, or when the filesize approaches the 2GB
+            FAT file size (compatibility) limit.  draw the clipcounter just in front of the peakmeter  draw the trigger status  MIC  HAVE_AGC  spdif samplerate changed  update_list is set whenever content changes  draw peakmeter again (check if this can be removed)  display update every second  end while(!done)  stop recording first and try to finish saving whatever it can  Restore radio playback - radio_status should be unchanged if started
+           through fm radio screen (barring usb connect)  Go back to playback mode  restore talking  restore keyclick  Re-enable speaker  make sure the trigger is really turned off  if the directory was created or recording happened, make sure the
+       browser is updated  recording_screen  dummy  HAVE_RECORDING **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds the record size interval lengths, in mebibytes  0 means OFF  5MB  10MB  15MB  32MB  64MB  75MB  100MB  128MB  256MB  512MB  650MB  700MB  1GB  1.5GB  1.75GB   recording screen status flags  2 GB - 4 MB  as we have the ability to disable the remote, we need an alternative loop  (GIU) list needs updating * File name creation * current file number to assist in creating unique numbered filenames
+   without actually having to create the file on disk  CONFIG_RTC  path for current file * Automatic Gain Control (AGC) * Timing counters:
+ * peak_time is incremented every 0.2s, every 2nd run of record screen loop.
+ * hist_time is incremented every 0.5s, display update.
+ * peak_time is the counter of the peak hold read and agc process,
+ * overflow every 13 years 8-)
+  Automatic Gain Control   "Off",
+    "Safety (clip)",
+    "Live (slow)",
+    "DJ-Set (slow)",
+    "Medium",
+    "Voice (fast)"   fast gain reduction threshold -0.8dB  accelerated gain reduction threshold -1.6dB  threshold for balance control -32dB  autogain high level thresholds (-3dB, -7dB, -4dB, -5dB, -5dB)  autogain low level thresholds (-14dB, -11dB, -6dB, -7dB, -8dB)  autogain threshold times [1/5s] or [200ms]  AGC operation  AGC levels  AGC time since high target volume was exceeded  AGC time since volume fallen below low target  AGC balance time exceeding +/- 0.7dB  AGC maximum gain  HAVE_AGC  HAVE_AGC  MIC  AUDIO_SRC_LINEIN, AUDIO_SRC_FMRADIO, AUDIO_SRC_SPDIF  reset the clipping indicators  Read peak meter values & calculate balance.
+ * Returns validity of peak values.
+ * Used for automatic gain control and history diagram.
+  AGC helper function to check if maximum gain is reached  range -128...+108 [0.5dB]  LINE, FMRADIO  MIC  LINE, FMRADIO 
+ * Handle automatic gain control (AGC).
+ * Change recording gain if peak_x levels are above or below
+ * target volume for specified timeouts.
+  Automatic balance control - only if not in safety mode  0.47 - 0.75dB  0.75 - 3.00dB  3.00 - 4.90dB  4.90 - inf dB  Automatic gain control  on target level every 1.2 sec  HAVE_AGC  the list below must match enum audio_sources in audio.h  Directory existence and writeablility should have already been
+     * verified - do not pass NULL pointers to pcmrec  We'll wait at least up to the start of the next second so no duplicate
+       names are created  Hit disk to get a starting filename for the type  Set audio input source, power up/down devices  Set peakmeters for recording or reset to playback  steal mp3 buffer, create unique filename and start recording  create unique filename and start recording just to be sure  used in trigger_listerner and recording_screen *
+ * Callback function so that the peak meter code can send an event
+ * to this application. This function can be passed to
+ * peak_meter_set_trigger_listener in order to activate the trigger.
+  if we're already recording this is a retrigger  New file on trig start tell recording_screen to reset the time  A _change_ to TRIG_READY means the current recording has stopped  Stop  Pause  New file on trig stop tell recording_screen to reset the time  Stop and shutdown  Stuff for drawing the screen  not used  Draw MIC recording gain  MIC  MIC  MIC  negative to re-init, positive to quit, zero to run  for preparing strings  for preparing strings  character width/height  refresh counter  status of the audio system  previous status so we can act on changes  the viewports  Radio is left on if:
+     *   1) Is was on at the start and the initial source is FM Radio
+     *   2) 1) and the source was never changed to something else
+      peakmeter (and trigger bar) x pos  peakmeter y pos  peakmeter height  trigger bar y pos  trigger bar width  required height for top half  tweak layout tiny screens / big fonts  the list in the bottom vp  detect source change  hardware samplerate gets messed up so prevent mixer playing  recording_menu gets messed up: so prevent manus talking  audio_init_recording stops anything playing when it takes the audio
+       buffer  HAVE_AGC  Disable speaker to prevent feedback  Create new filename for recording start  start of the loop: we stay in this loop until user quits recscreen  request to re-init stuff, done after settings screen  If input changes away from FM Radio,
+               radio will remain off when recording screen closes.  viewport init and calculations that only needs to be done once  top vp, 4 lines, force sys font if total screen < 6 lines
+                NOTE: one could limit the list to 1 line and get away with 5 lines  use one line for histogram  compact needs 4 lines total top=4,list=2 get a copy now so it can be sized more easily  list section, rest of the screen  req for next calls  init the bottom list  force a redraw  h is same  If format changed, a new number is required  MIC  HAVE_AGC  Update immediately  populate translation table for list id -> enum  spdif  mono  stereo  if(done < 0) 
+         * Flash the LED while waiting to record.  Turn it on while
+         * recording.
+          trigger is on in status TRIG_READY (no check needed) 
+             * other trigger stati than trig_off and trig_steady
+             * already imply that we are recording.
+              trigger is on in status TRIG_READY (no check needed)  CONFIG_LED  Wait for a button a while (HZ/10) drawing the peak meter  simulate a button press  let list handle the button  MIC  MIC  MIC  HAVE_AGC  Update immediately  MIC  MIC  MIC  HAVE_AGC  Update immediately  turn off the trigger  Update immediately  this feature exists for some h1x0/h3x0 targets that suffer
+                   from noise caused by remote LCD updates
+                   NOTE 1: this will leave the list on the remote
+                   NOTE 2: to be replaced by a global LCD_off() routine  switch to single screen, leave message on remote  remote switched on again  toggle  Update immediately  Only act if the mpeg is stopped  is this manual or triggered recording?  manual recording  no voice possible here, but a beep  longer beep on start  this is triggered recording  we don't start recording now, but enable the
+                        trigger and let the callback function
+                        trigger_listener control when the recording starts if new file button pressed, start new file  if pause button pressed, pause or resume  no voice possible here, but a beep  short beep on resume  Update immediately  led is restored at begin of loop / end of function  the init is now done at the beginning of the loop  Only accept USB connection when not recording switch(button) every 2nd run of loop  Handle AGC every 200ms when enabled and peak data is valid  start of vp_top drawing  Switch back and forth displaying warning on first available
+                   line to ensure visibility - the motion should also help
+                   draw attention  Don't use language string unless agreed upon to make this
+                   method permanent - could do something in the statusbar  Tracks amount of prerecorded data in buffer  Display the split interval if the record timesplit
+                   is active  Display the record timesplit interval rather
+                       than the file size if the record timer is active  We will do file splitting regardless, either at the end of
+            a split interval, or when the filesize approaches the 2GB
+            FAT file size (compatibility) limit.  draw the clipcounter just in front of the peakmeter  draw the trigger status  MIC  HAVE_AGC  spdif samplerate changed  update_list is set whenever content changes  draw peakmeter again (check if this can be removed)  display update every second  end while(!done)  stop recording first and try to finish saving whatever it can  Restore radio playback - radio_status should be unchanged if started
+           through fm radio screen (barring usb connect)  Go back to playback mode  restore talking  restore keyclick  Re-enable speaker  make sure the trigger is really turned off  if the directory was created or recording happened, make sure the
+       browser is updated  recording_screen  dummy  HAVE_RECORDING 

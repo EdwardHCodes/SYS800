@@ -1,7 +1,5 @@
-#need to pip3 install libmagic
+#pip3 install libmagic
 #pip3 install comment_parser
-#pip3 
-#for windows machines you must also download additional dll files
 """
 Language	Mime String
 C	text/x-c
@@ -61,7 +59,6 @@ def parse_project(project, allFiles):
         ##F.close()
         if fyle.endswith(".c"):
             try:
-                print(fyle)
                 comments = comment_parser.extract_comments(fyle, mime="text/x-c")
                 name = fyle.replace("\\", ".").replace(
                     "C:.Users.Edward.Documents.GitHub.", "")
@@ -71,10 +68,13 @@ def parse_project(project, allFiles):
                     F.write(str(comment))
                 F.close()
             except UnicodeDecodeError:
-                print("Bad characters in files!")
+                print("Bad characters in files!" + fyle)
             except ValueError:
                 print("The file is empty!")
-#parse_project("MDPNP", mdpnpFiles)
+print("MDPNP # of Files" + "= " + str(len(mdpnpFiles)))
+print("OpenWRT # of Files" + "= " + str(len(openwrtFiles)))
+print("Rockbox # of Files" + "= " + str(len(rockboxFiles)))
+parse_project("MDPNP", mdpnpFiles)
 parse_project("OpenWRT", openwrtFiles)
-#parse_project("Rockbox", rockboxFiles)
+parse_project("Rockbox", rockboxFiles)
 

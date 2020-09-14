@@ -1,0 +1,664 @@
+
+ * lightup.c: Implementation of the Nikoli game 'Light Up'.
+ *
+ * Possible future solver enhancements:
+ *
+ *  - In a situation where two clues are diagonally adjacent, you can
+ *    deduce bounds on the number of lights shared between them. For
+ *    instance, suppose a 3 clue is diagonally adjacent to a 1 clue:
+ *    of the two squares adjacent to both clues, at least one must be
+ *    a light (or the 3 would be unsatisfiable) and yet at most one
+ *    must be a light (or the 1 would be overcommitted), so in fact
+ *    _exactly_ one must be a light, and hence the other two squares
+ *    adjacent to the 3 must also be lights and the other two adjacent
+ *    to the 1 must not. Likewise if the 3 is replaced with a 2 but
+ *    one of its other two squares is known not to be a light, and so
+ *    on.
+ *
+ *  - In a situation where two clues are orthogonally separated (not
+ *    necessarily directly adjacent), you may be able to deduce
+ *    something about the squares that align with each other. For
+ *    instance, suppose two clues are vertically adjacent. Consider
+ *    the pair of squares A,B horizontally adjacent to the top clue,
+ *    and the pair C,D horizontally adjacent to the bottom clue.
+ *    Assuming no intervening obstacles, A and C align with each other
+ *    and hence at most one of them can be a light, and B and D
+ *    likewise, so we must have at most two lights between the four
+ *    squares. So if the clues indicate that there are at _least_ two
+ *    lights in those four squares because the top clue requires at
+ *    least one of AB to be a light and the bottom one requires at
+ *    least one of CD, then we can in fact deduce that there are
+ *    _exactly_ two lights between the four squares, and fill in the
+ *    other squares adjacent to each clue accordingly. For instance,
+ *    if both clues are 3s, then we instantly deduce that all four of
+ *    the squares _vertically_ adjacent to the two clues must be
+ *    lights. (For that to happen, of course, there'd also have to be
+ *    a black square in between the clues, so the two inner lights
+ *    don't light each other.)
+ *
+ *  - I haven't thought it through carefully, but there's always the
+ *    possibility that both of the above deductions are special cases
+ *    of some more general pattern which can be made computationally
+ *    feasible...
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+  --- Constants, structure definitions, etc. ---  black  white  yellow  red  %age of black squares  0 to DIFFCOUNT  flags for black squares  it has a number attached  this number was useful for solving  flags for non-black squares  can't put a light here  For black squares, (optionally) the number
+                           of surrounding lights. For non-black squares,
+                           the number of times it's lit. size h*w size h*w  A ll_data holds information about which lights would be lit by
+ * a particular grid location's light (or conversely, which locations
+ * could light a specific other location).  most things should consider this struct opaque.  Macro that executes 'block' once per light in lld, including
+ * the origin if include_origin is specified. 'block' can use
+ * lx and ly as the coords.  Fills in (doesn't allocate) a surrounds structure with the grid locations
+ * around a given square, taking account of the edges.  --- Game parameter functions ---  structure copy  cope with user input such as '18x10' by ensuring symmetry
+         * is not selected by default to be incompatible with dimensions  cope with old params  --- Game state construction/freeing helper functions ---  --- Game completion test routines. ---  These are split up because occasionally functions are only
+ * interested in one particular aspect.  Returns true if all grid spaces are lit.  Returns non-zero if any lights are lit by other lights. 
+     * This function computes the display hint for a number: we
+     * turn the number red if it is definitely wrong. This means
+     * that either
+     * 
+     *  (a) it has too many lights around it, or
+     * 	(b) it would have too few lights around it even if all the
+     * 	    plausible squares (not black, lit or F_IMPOSSIBLE) were
+     * 	    filled with lights.
+      Returns true if any numbers add up incorrectly.  --- Board initial setup (blacks, lights, numbers) ---  ... but see below.  clear, then randomise, required region.  Copy required region.  SYMM_ROT4 misses the middle square above; fix that here.  Fills in (does not allocate) a ll_data with all the tiles that would
+ * be illuminated by a light at point (ox,oy). If origin is true then the
+ * origin is included in this list.  Makes sure a light is the given state, editing the lights table to suit the
+ * new state if necessary.  Returns 1 if removing a light at (x,y) would cause a square to go dark.  Sets up an initial random correct position (i.e. every
+ * space lit, and no lights lit by other lights) by filling the
+ * grid with lights and then removing lights one by one at random.  Place a light on all grid squares without lights.  we use this later.  If we're not lighting any lights ourself, don't remove anything.  [1]  Check whether removing lights we're lighting would cause anything
+         * to go dark.  No, it wouldn't, so we can remove them all.  we're done.  could get here if the line at [1] continue'd out of the loop.  Fills in all black squares with numbers of adjacent lights.  --- Actual solver, with helper subroutines. ---  We have an unlit square; count how many ways there are left to
+     * place a light that lights us (including this square); if only
+     * one, we must put a light there. Squares that could light us
+     * are, of course, the same as the squares we would light...  For a given number square, determine whether we have enough info
+ * to unambiguously place its lights.  nl is no. of lights we need to place, ns is no. of spaces we
+     * have to place them in. Try and narrow these down, and mark
+     * points we can ignore later.  light here already; one less light for one less place.  nowhere to put anything.  we have placed all lights we need to around here; all remaining
+         * surrounds are therefore IMPOSSIBLE.  we have as many lights to place as spaces; fill them all.  New solver algorithm: overlapping sets can add IMPOSSIBLE flags.
+ * Algorithm thanks to Simon:
+ *
+ * (a) Any square where you can place a light has a set of squares
+ *     which would become non-lights as a result. (This includes
+ *     squares lit by the first square, and can also include squares
+ *     adjacent to the same clue square if the new light is the last
+ *     one around that clue.) Call this MAKESDARK(x,y) with (x,y) being
+ *     the square you place a light.
+
+ * (b) Any unlit square has a set of squares on which you could place
+ *     a light to illuminate it. (Possibly including itself, of
+ *     course.) This set of squares has the property that _at least
+ *     one_ of them must contain a light. Sets of this type also arise
+ *     from clue squares. Call this MAKESLIGHT(x,y), again with (x,y)
+ *     the square you would place a light.
+
+ * (c) If there exists (dx,dy) and (lx,ly) such that MAKESDARK(dx,dy) is
+ *     a superset of MAKESLIGHT(lx,ly), this implies that placing a light at
+ *     (dx,dy) would either leave no remaining way to illuminate a certain
+ *     square, or would leave no remaining way to fulfill a certain clue
+ *     (at lx,ly). In either case, a light can be ruled out at that position.
+ *
+ * So, we construct all possible MAKESLIGHT sets, both from unlit squares
+ * and clue squares, and then we look for plausible MAKESDARK sets that include
+ * our (lx,ly) to see if we can find a (dx,dy) to rule out. By the time we have
+ * constructed the MAKESLIGHT set we don't care about (lx,ly), just the set
+ * members.
+ *
+ * Once we have such a set, Simon came up with a Cunning Plan to find
+ * the most sensible MAKESDARK candidate:
+ *
+ * (a) for each square S in your set X, find all the squares which _would_
+ *     rule it out. That means any square which would light S, plus
+ *     any square adjacent to the same clue square as S (provided
+ *     that clue square has only one remaining light to be placed).
+ *     It's not hard to make this list. Don't do anything with this
+ *     data at the moment except _count_ the squares.
+
+ * (b) Find the square S_min in the original set which has the
+ *     _smallest_ number of other squares which would rule it out.
+
+ * (c) Find all the squares that rule out S_min (it's probably
+ *     better to recompute this than to have stored it during step
+ *     (a), since the CPU requirement is modest but the storage
+ *     cost would get ugly.) For each of these squares, see if it
+ *     rules out everything else in the set X. Any which does can
+ *     be marked as not-a-light.
+ *
+  Check whether a light at (dx,dy) rules out everything
+     * in scratch, and mark (dx,dy) as IMPOSSIBLE if it does.
+     * We can use try_rule_out for this as well, as the set of
+     * squares which would rule out (x,y) is the same as the
+     * set of squares which (x,y) would rule out.  The light ruled out everything in scratch. Yay.  XXX Find all the squares which would rule out (x,y); anything
+     * that would light it as well as squares adjacent to same clues
+     * as X assuming that clue only has one remaining light.
+     * Call the callback with each square.  Find all squares that would rule out a light at (x,y) and call trl_cb
+     * with them: anything that would light (x,y)...  ... as well as any empty space (that isn't x,y) next to any clue square
+     * next to (x,y) that only has one light left to place.  we have an adjacent clue square; find /its/ surrounds
+         * and count the remaining lights it needs.  We have a clue with tot_lights to fill, and curr_lights currently
+         * around it. If adding a light at (x,y) fills up the clue (i.e.
+         * curr_lights + 1 = tot_lights) then we need to discount all other
+         * unlit squares around the clue.  Construct a MAKESLIGHT set from an unlit square.  Construct a series of MAKESLIGHT sets from a clue square.
+ *  for a clue square with N remaining spaces that must contain M lights, every
+ *  subset of size N-M+1 of those N spaces forms such a set.
+  m is no. of lights still to place; starts off at the clue value
+     * and decreases when we find a light already down.
+     * n is no. of spaces left; starts off at 0 and goes up when we find
+     * a plausible space.  sempty is now a surrounds of only blank squares.  clue is full already.  become impossible.  Our own solver, from scratch, should never cause this to happen
+             * (assuming a soluble grid). However, if we're trying to solve
+             * from a half-completed *incorrect* grid this might occur; we
+             * just return the 'no solutions' code in this case.  These 2 loops, and the functions they call, are the critical loops
+         * for timing; any optimisations should look here first.  nowhere to put a light, puzzle is unsoluble.  Try a more cunning (and more involved) way... more details above.  We now have to make a guess; we have places to put lights but
+         * no definite idea about where they can go.  mustn't delve any deeper.  Of all the squares that we could place a light, pick the one
+         * that would light the most currently unlit squares.  This heuristic was just plucked from the air; there may well be
+         * a more efficient way of choosing a square to flip to minimise
+         * recursion.  suyb  Now we've chosen a plausible (x,y), try to solve it once as 'lit'
+         * and once as 'impossible'; we need to make one copy to do this.  we didn't care about finding all solutions, and we just
+             * found one; return with it immediately.  If we wanted a unique solution but we hit our recursion limit
+         * (on either branch) then we have to assume we didn't find possible
+         * extra solutions, and return 'not soluble'.  Make sure that whether or not it was self or copy (or both) that
+         * were soluble, that we return a solved state in self.  copy wasn't soluble; keep self state and return that result.  copy solved and we didn't, so copy in copy's (now solved)
+             * flags and light state.  Fills in the (possibly partially-complete) game_state as far as it can,
+ * returning the number of possible solutions. If it returns >0 then the
+ * game_state will be in a solved state, but you won't know which one.  if we wanted an easy puzzle, make sure we didn't need recursion.  --- New game creation and user input code. ---  The basic algorithm here is to generate the most complex grid possible
+ * while honouring two restrictions:
+ *
+ *  * we require a unique solution, and
+ *  * either we require solubility with no recursion (!params->recurse)
+ *  * or we require some recursion. (params->recurse).
+ *
+ * The solver helpfully keeps track of the numbers it needed to use to
+ * get its solution, so we use that to remove an initial set of numbers
+ * and check we still satsify our requirements (on uniqueness and
+ * non-recursiveness, if applicable; we don't check explicit recursiveness
+ * until the end).
+ *
+ * Then we try to remove all numbers in a random order, and see if we
+ * still satisfy requirements (putting them back if we didn't).
+ *
+ * Removing numbers will always, in general terms, make a puzzle require
+ * more recursion but it may also mean a puzzle becomes non-unique.
+ *
+ * Once we're done, if we wanted a recursive puzzle but the most difficult
+ * puzzle we could come up with was non-recursive, we give up and try a new
+ * grid.  structure copy  Construct a shuffled list of grid positions; we only
+     * do this once, because if it gets used more than once it'll
+     * be on a different grid layout.  also cleans board.  set up lights and then the numbers, and remove the lights  Take a copy, remove numbers we didn't use and check there's
+             * still a unique solution; if so, use the copy subsequently.  Go through grid removing numbers at random one-by-one and
+             * trying to solve again; if it ceases to be good put the number back.  Was the maximally-difficult puzzle difficult enough?
+                 * Check we can't solve it with a more simplistic solver.  Couldn't generate a good puzzle in however many goes. Ramp up the
+         * %age of black squares (if we didn't already have lots; in which case
+         * why couldn't we generate a puzzle?) and try again.  Game is encoded as a long string one character per square;
+     * 'S' is a space
+     * 'B' is a black square with no number
+     * '0', '1', '2', '3', '4' is a black square with a number.  OK  OK  and the i++ will add another one  run-on...  empty square  We don't care here about non-unique puzzles; if the
+     * user entered one themself then I doubt they care.  Try and solve from where we are now (for non-unique
+     * puzzles this may produce a different answer).  That didn't work; try solving from the clean puzzle.  'borrowed' from slant.c, mainly. I could have printed it one
+ * character per cell (like debug_state) but that comes out tiny.
+ * 'L' is used for 'light here' because 'O' looks too much like '0'
+ * (black square with no surrounding lights).  actual interesting bit.  nothing to encode.  nothing to decode.  black square  black square with number  display (white) square lit up  display light in square  display light as overlapped  display cursor  display black numbered square as error.  background flash is on.  display non-light little square  width * height  Believe it or not, this empty = "" hack is needed to get around a bug in
+ * the prc-tools gcc when optimisation is turned on; before, it produced:
+    lightup-sect.c: In function `interpret_move':
+    lightup-sect.c:1416: internal error--unrecognizable insn:
+    (insn 582 580 583 (set (reg:SI 134)
+            (pc)) -1 (nil)
+        (nil))
+  Only allow cursor-effect operations if the cursor is visible
+             * (otherwise you have no idea which square it might be affecting)  LIGHT and IMPOSSIBLE are mutually exclusive.  ----------------------------------------------------------------------
+ * Drawing routines.
+  XXX entirely cloned from fifteen.c; separate out?  Ick: fake up `ds->tilesize' for macro expansion purposes  At some stage we should put these into a real options struct.
+ * Note that tile_redraw has no #ifdeffery; it relies on tile_flags not
+ * to put those flags in.  We know that this won't change over the course of the game
+             * so it's OK to ignore this when calculating whether or not
+             * to redraw the tile. 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Grid contents.
+      game_request_keys  wants_statusbar  flags  Run the solvers easiest to hardest until we find one that
+     * can solve our puzzle. If it's soluble we know that the
+     * hardest (recursive) solver will always find the solution.  sflags from last successful solve  vim: set shiftwidth=4 tabstop=8: 
+ * lightup.c: Implementation of the Nikoli game 'Light Up'.
+ *
+ * Possible future solver enhancements:
+ *
+ *  - In a situation where two clues are diagonally adjacent, you can
+ *    deduce bounds on the number of lights shared between them. For
+ *    instance, suppose a 3 clue is diagonally adjacent to a 1 clue:
+ *    of the two squares adjacent to both clues, at least one must be
+ *    a light (or the 3 would be unsatisfiable) and yet at most one
+ *    must be a light (or the 1 would be overcommitted), so in fact
+ *    _exactly_ one must be a light, and hence the other two squares
+ *    adjacent to the 3 must also be lights and the other two adjacent
+ *    to the 1 must not. Likewise if the 3 is replaced with a 2 but
+ *    one of its other two squares is known not to be a light, and so
+ *    on.
+ *
+ *  - In a situation where two clues are orthogonally separated (not
+ *    necessarily directly adjacent), you may be able to deduce
+ *    something about the squares that align with each other. For
+ *    instance, suppose two clues are vertically adjacent. Consider
+ *    the pair of squares A,B horizontally adjacent to the top clue,
+ *    and the pair C,D horizontally adjacent to the bottom clue.
+ *    Assuming no intervening obstacles, A and C align with each other
+ *    and hence at most one of them can be a light, and B and D
+ *    likewise, so we must have at most two lights between the four
+ *    squares. So if the clues indicate that there are at _least_ two
+ *    lights in those four squares because the top clue requires at
+ *    least one of AB to be a light and the bottom one requires at
+ *    least one of CD, then we can in fact deduce that there are
+ *    _exactly_ two lights between the four squares, and fill in the
+ *    other squares adjacent to each clue accordingly. For instance,
+ *    if both clues are 3s, then we instantly deduce that all four of
+ *    the squares _vertically_ adjacent to the two clues must be
+ *    lights. (For that to happen, of course, there'd also have to be
+ *    a black square in between the clues, so the two inner lights
+ *    don't light each other.)
+ *
+ *  - I haven't thought it through carefully, but there's always the
+ *    possibility that both of the above deductions are special cases
+ *    of some more general pattern which can be made computationally
+ *    feasible...
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+  --- Constants, structure definitions, etc. ---  black  white  yellow  red  %age of black squares  0 to DIFFCOUNT  flags for black squares  it has a number attached  this number was useful for solving  flags for non-black squares  can't put a light here  For black squares, (optionally) the number
+                           of surrounding lights. For non-black squares,
+                           the number of times it's lit. size h*w size h*w  A ll_data holds information about which lights would be lit by
+ * a particular grid location's light (or conversely, which locations
+ * could light a specific other location).  most things should consider this struct opaque.  Macro that executes 'block' once per light in lld, including
+ * the origin if include_origin is specified. 'block' can use
+ * lx and ly as the coords.  Fills in (doesn't allocate) a surrounds structure with the grid locations
+ * around a given square, taking account of the edges.  --- Game parameter functions ---  structure copy  cope with user input such as '18x10' by ensuring symmetry
+         * is not selected by default to be incompatible with dimensions  cope with old params  --- Game state construction/freeing helper functions ---  --- Game completion test routines. ---  These are split up because occasionally functions are only
+ * interested in one particular aspect.  Returns true if all grid spaces are lit.  Returns non-zero if any lights are lit by other lights. 
+     * This function computes the display hint for a number: we
+     * turn the number red if it is definitely wrong. This means
+     * that either
+     * 
+     *  (a) it has too many lights around it, or
+     * 	(b) it would have too few lights around it even if all the
+     * 	    plausible squares (not black, lit or F_IMPOSSIBLE) were
+     * 	    filled with lights.
+      Returns true if any numbers add up incorrectly.  --- Board initial setup (blacks, lights, numbers) ---  ... but see below.  clear, then randomise, required region.  Copy required region.  SYMM_ROT4 misses the middle square above; fix that here.  Fills in (does not allocate) a ll_data with all the tiles that would
+ * be illuminated by a light at point (ox,oy). If origin is true then the
+ * origin is included in this list.  Makes sure a light is the given state, editing the lights table to suit the
+ * new state if necessary.  Returns 1 if removing a light at (x,y) would cause a square to go dark.  Sets up an initial random correct position (i.e. every
+ * space lit, and no lights lit by other lights) by filling the
+ * grid with lights and then removing lights one by one at random.  Place a light on all grid squares without lights.  we use this later.  If we're not lighting any lights ourself, don't remove anything.  [1]  Check whether removing lights we're lighting would cause anything
+         * to go dark.  No, it wouldn't, so we can remove them all.  we're done.  could get here if the line at [1] continue'd out of the loop.  Fills in all black squares with numbers of adjacent lights.  --- Actual solver, with helper subroutines. ---  We have an unlit square; count how many ways there are left to
+     * place a light that lights us (including this square); if only
+     * one, we must put a light there. Squares that could light us
+     * are, of course, the same as the squares we would light...  For a given number square, determine whether we have enough info
+ * to unambiguously place its lights.  nl is no. of lights we need to place, ns is no. of spaces we
+     * have to place them in. Try and narrow these down, and mark
+     * points we can ignore later.  light here already; one less light for one less place.  nowhere to put anything.  we have placed all lights we need to around here; all remaining
+         * surrounds are therefore IMPOSSIBLE.  we have as many lights to place as spaces; fill them all.  New solver algorithm: overlapping sets can add IMPOSSIBLE flags.
+ * Algorithm thanks to Simon:
+ *
+ * (a) Any square where you can place a light has a set of squares
+ *     which would become non-lights as a result. (This includes
+ *     squares lit by the first square, and can also include squares
+ *     adjacent to the same clue square if the new light is the last
+ *     one around that clue.) Call this MAKESDARK(x,y) with (x,y) being
+ *     the square you place a light.
+
+ * (b) Any unlit square has a set of squares on which you could place
+ *     a light to illuminate it. (Possibly including itself, of
+ *     course.) This set of squares has the property that _at least
+ *     one_ of them must contain a light. Sets of this type also arise
+ *     from clue squares. Call this MAKESLIGHT(x,y), again with (x,y)
+ *     the square you would place a light.
+
+ * (c) If there exists (dx,dy) and (lx,ly) such that MAKESDARK(dx,dy) is
+ *     a superset of MAKESLIGHT(lx,ly), this implies that placing a light at
+ *     (dx,dy) would either leave no remaining way to illuminate a certain
+ *     square, or would leave no remaining way to fulfill a certain clue
+ *     (at lx,ly). In either case, a light can be ruled out at that position.
+ *
+ * So, we construct all possible MAKESLIGHT sets, both from unlit squares
+ * and clue squares, and then we look for plausible MAKESDARK sets that include
+ * our (lx,ly) to see if we can find a (dx,dy) to rule out. By the time we have
+ * constructed the MAKESLIGHT set we don't care about (lx,ly), just the set
+ * members.
+ *
+ * Once we have such a set, Simon came up with a Cunning Plan to find
+ * the most sensible MAKESDARK candidate:
+ *
+ * (a) for each square S in your set X, find all the squares which _would_
+ *     rule it out. That means any square which would light S, plus
+ *     any square adjacent to the same clue square as S (provided
+ *     that clue square has only one remaining light to be placed).
+ *     It's not hard to make this list. Don't do anything with this
+ *     data at the moment except _count_ the squares.
+
+ * (b) Find the square S_min in the original set which has the
+ *     _smallest_ number of other squares which would rule it out.
+
+ * (c) Find all the squares that rule out S_min (it's probably
+ *     better to recompute this than to have stored it during step
+ *     (a), since the CPU requirement is modest but the storage
+ *     cost would get ugly.) For each of these squares, see if it
+ *     rules out everything else in the set X. Any which does can
+ *     be marked as not-a-light.
+ *
+  Check whether a light at (dx,dy) rules out everything
+     * in scratch, and mark (dx,dy) as IMPOSSIBLE if it does.
+     * We can use try_rule_out for this as well, as the set of
+     * squares which would rule out (x,y) is the same as the
+     * set of squares which (x,y) would rule out.  The light ruled out everything in scratch. Yay.  XXX Find all the squares which would rule out (x,y); anything
+     * that would light it as well as squares adjacent to same clues
+     * as X assuming that clue only has one remaining light.
+     * Call the callback with each square.  Find all squares that would rule out a light at (x,y) and call trl_cb
+     * with them: anything that would light (x,y)...  ... as well as any empty space (that isn't x,y) next to any clue square
+     * next to (x,y) that only has one light left to place.  we have an adjacent clue square; find /its/ surrounds
+         * and count the remaining lights it needs.  We have a clue with tot_lights to fill, and curr_lights currently
+         * around it. If adding a light at (x,y) fills up the clue (i.e.
+         * curr_lights + 1 = tot_lights) then we need to discount all other
+         * unlit squares around the clue.  Construct a MAKESLIGHT set from an unlit square.  Construct a series of MAKESLIGHT sets from a clue square.
+ *  for a clue square with N remaining spaces that must contain M lights, every
+ *  subset of size N-M+1 of those N spaces forms such a set.
+  m is no. of lights still to place; starts off at the clue value
+     * and decreases when we find a light already down.
+     * n is no. of spaces left; starts off at 0 and goes up when we find
+     * a plausible space.  sempty is now a surrounds of only blank squares.  clue is full already.  become impossible.  Our own solver, from scratch, should never cause this to happen
+             * (assuming a soluble grid). However, if we're trying to solve
+             * from a half-completed *incorrect* grid this might occur; we
+             * just return the 'no solutions' code in this case.  These 2 loops, and the functions they call, are the critical loops
+         * for timing; any optimisations should look here first.  nowhere to put a light, puzzle is unsoluble.  Try a more cunning (and more involved) way... more details above.  We now have to make a guess; we have places to put lights but
+         * no definite idea about where they can go.  mustn't delve any deeper.  Of all the squares that we could place a light, pick the one
+         * that would light the most currently unlit squares.  This heuristic was just plucked from the air; there may well be
+         * a more efficient way of choosing a square to flip to minimise
+         * recursion.  suyb  Now we've chosen a plausible (x,y), try to solve it once as 'lit'
+         * and once as 'impossible'; we need to make one copy to do this.  we didn't care about finding all solutions, and we just
+             * found one; return with it immediately.  If we wanted a unique solution but we hit our recursion limit
+         * (on either branch) then we have to assume we didn't find possible
+         * extra solutions, and return 'not soluble'.  Make sure that whether or not it was self or copy (or both) that
+         * were soluble, that we return a solved state in self.  copy wasn't soluble; keep self state and return that result.  copy solved and we didn't, so copy in copy's (now solved)
+             * flags and light state.  Fills in the (possibly partially-complete) game_state as far as it can,
+ * returning the number of possible solutions. If it returns >0 then the
+ * game_state will be in a solved state, but you won't know which one.  if we wanted an easy puzzle, make sure we didn't need recursion.  --- New game creation and user input code. ---  The basic algorithm here is to generate the most complex grid possible
+ * while honouring two restrictions:
+ *
+ *  * we require a unique solution, and
+ *  * either we require solubility with no recursion (!params->recurse)
+ *  * or we require some recursion. (params->recurse).
+ *
+ * The solver helpfully keeps track of the numbers it needed to use to
+ * get its solution, so we use that to remove an initial set of numbers
+ * and check we still satsify our requirements (on uniqueness and
+ * non-recursiveness, if applicable; we don't check explicit recursiveness
+ * until the end).
+ *
+ * Then we try to remove all numbers in a random order, and see if we
+ * still satisfy requirements (putting them back if we didn't).
+ *
+ * Removing numbers will always, in general terms, make a puzzle require
+ * more recursion but it may also mean a puzzle becomes non-unique.
+ *
+ * Once we're done, if we wanted a recursive puzzle but the most difficult
+ * puzzle we could come up with was non-recursive, we give up and try a new
+ * grid.  structure copy  Construct a shuffled list of grid positions; we only
+     * do this once, because if it gets used more than once it'll
+     * be on a different grid layout.  also cleans board.  set up lights and then the numbers, and remove the lights  Take a copy, remove numbers we didn't use and check there's
+             * still a unique solution; if so, use the copy subsequently.  Go through grid removing numbers at random one-by-one and
+             * trying to solve again; if it ceases to be good put the number back.  Was the maximally-difficult puzzle difficult enough?
+                 * Check we can't solve it with a more simplistic solver.  Couldn't generate a good puzzle in however many goes. Ramp up the
+         * %age of black squares (if we didn't already have lots; in which case
+         * why couldn't we generate a puzzle?) and try again.  Game is encoded as a long string one character per square;
+     * 'S' is a space
+     * 'B' is a black square with no number
+     * '0', '1', '2', '3', '4' is a black square with a number.  OK  OK  and the i++ will add another one  run-on...  empty square  We don't care here about non-unique puzzles; if the
+     * user entered one themself then I doubt they care.  Try and solve from where we are now (for non-unique
+     * puzzles this may produce a different answer).  That didn't work; try solving from the clean puzzle.  'borrowed' from slant.c, mainly. I could have printed it one
+ * character per cell (like debug_state) but that comes out tiny.
+ * 'L' is used for 'light here' because 'O' looks too much like '0'
+ * (black square with no surrounding lights).  actual interesting bit.  nothing to encode.  nothing to decode.  black square  black square with number  display (white) square lit up  display light in square  display light as overlapped  display cursor  display black numbered square as error.  background flash is on.  display non-light little square  width * height  Believe it or not, this empty = "" hack is needed to get around a bug in
+ * the prc-tools gcc when optimisation is turned on; before, it produced:
+    lightup-sect.c: In function `interpret_move':
+    lightup-sect.c:1416: internal error--unrecognizable insn:
+    (insn 582 580 583 (set (reg:SI 134)
+            (pc)) -1 (nil)
+        (nil))
+  Only allow cursor-effect operations if the cursor is visible
+             * (otherwise you have no idea which square it might be affecting)  LIGHT and IMPOSSIBLE are mutually exclusive.  ----------------------------------------------------------------------
+ * Drawing routines.
+  XXX entirely cloned from fifteen.c; separate out?  Ick: fake up `ds->tilesize' for macro expansion purposes  At some stage we should put these into a real options struct.
+ * Note that tile_redraw has no #ifdeffery; it relies on tile_flags not
+ * to put those flags in.  We know that this won't change over the course of the game
+             * so it's OK to ignore this when calculating whether or not
+             * to redraw the tile. 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Grid contents.
+      game_request_keys  wants_statusbar  flags  Run the solvers easiest to hardest until we find one that
+     * can solve our puzzle. If it's soluble we know that the
+     * hardest (recursive) solver will always find the solution.  sflags from last successful solve  vim: set shiftwidth=4 tabstop=8: 
+ * lightup.c: Implementation of the Nikoli game 'Light Up'.
+ *
+ * Possible future solver enhancements:
+ *
+ *  - In a situation where two clues are diagonally adjacent, you can
+ *    deduce bounds on the number of lights shared between them. For
+ *    instance, suppose a 3 clue is diagonally adjacent to a 1 clue:
+ *    of the two squares adjacent to both clues, at least one must be
+ *    a light (or the 3 would be unsatisfiable) and yet at most one
+ *    must be a light (or the 1 would be overcommitted), so in fact
+ *    _exactly_ one must be a light, and hence the other two squares
+ *    adjacent to the 3 must also be lights and the other two adjacent
+ *    to the 1 must not. Likewise if the 3 is replaced with a 2 but
+ *    one of its other two squares is known not to be a light, and so
+ *    on.
+ *
+ *  - In a situation where two clues are orthogonally separated (not
+ *    necessarily directly adjacent), you may be able to deduce
+ *    something about the squares that align with each other. For
+ *    instance, suppose two clues are vertically adjacent. Consider
+ *    the pair of squares A,B horizontally adjacent to the top clue,
+ *    and the pair C,D horizontally adjacent to the bottom clue.
+ *    Assuming no intervening obstacles, A and C align with each other
+ *    and hence at most one of them can be a light, and B and D
+ *    likewise, so we must have at most two lights between the four
+ *    squares. So if the clues indicate that there are at _least_ two
+ *    lights in those four squares because the top clue requires at
+ *    least one of AB to be a light and the bottom one requires at
+ *    least one of CD, then we can in fact deduce that there are
+ *    _exactly_ two lights between the four squares, and fill in the
+ *    other squares adjacent to each clue accordingly. For instance,
+ *    if both clues are 3s, then we instantly deduce that all four of
+ *    the squares _vertically_ adjacent to the two clues must be
+ *    lights. (For that to happen, of course, there'd also have to be
+ *    a black square in between the clues, so the two inner lights
+ *    don't light each other.)
+ *
+ *  - I haven't thought it through carefully, but there's always the
+ *    possibility that both of the above deductions are special cases
+ *    of some more general pattern which can be made computationally
+ *    feasible...
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+  --- Constants, structure definitions, etc. ---  black  white  yellow  red  %age of black squares  0 to DIFFCOUNT  flags for black squares  it has a number attached  this number was useful for solving  flags for non-black squares  can't put a light here  For black squares, (optionally) the number
+                           of surrounding lights. For non-black squares,
+                           the number of times it's lit. size h*w size h*w  A ll_data holds information about which lights would be lit by
+ * a particular grid location's light (or conversely, which locations
+ * could light a specific other location).  most things should consider this struct opaque.  Macro that executes 'block' once per light in lld, including
+ * the origin if include_origin is specified. 'block' can use
+ * lx and ly as the coords.  Fills in (doesn't allocate) a surrounds structure with the grid locations
+ * around a given square, taking account of the edges.  --- Game parameter functions ---  structure copy  cope with user input such as '18x10' by ensuring symmetry
+         * is not selected by default to be incompatible with dimensions  cope with old params  --- Game state construction/freeing helper functions ---  --- Game completion test routines. ---  These are split up because occasionally functions are only
+ * interested in one particular aspect.  Returns true if all grid spaces are lit.  Returns non-zero if any lights are lit by other lights. 
+     * This function computes the display hint for a number: we
+     * turn the number red if it is definitely wrong. This means
+     * that either
+     * 
+     *  (a) it has too many lights around it, or
+     * 	(b) it would have too few lights around it even if all the
+     * 	    plausible squares (not black, lit or F_IMPOSSIBLE) were
+     * 	    filled with lights.
+      Returns true if any numbers add up incorrectly.  --- Board initial setup (blacks, lights, numbers) ---  ... but see below.  clear, then randomise, required region.  Copy required region.  SYMM_ROT4 misses the middle square above; fix that here.  Fills in (does not allocate) a ll_data with all the tiles that would
+ * be illuminated by a light at point (ox,oy). If origin is true then the
+ * origin is included in this list.  Makes sure a light is the given state, editing the lights table to suit the
+ * new state if necessary.  Returns 1 if removing a light at (x,y) would cause a square to go dark.  Sets up an initial random correct position (i.e. every
+ * space lit, and no lights lit by other lights) by filling the
+ * grid with lights and then removing lights one by one at random.  Place a light on all grid squares without lights.  we use this later.  If we're not lighting any lights ourself, don't remove anything.  [1]  Check whether removing lights we're lighting would cause anything
+         * to go dark.  No, it wouldn't, so we can remove them all.  we're done.  could get here if the line at [1] continue'd out of the loop.  Fills in all black squares with numbers of adjacent lights.  --- Actual solver, with helper subroutines. ---  We have an unlit square; count how many ways there are left to
+     * place a light that lights us (including this square); if only
+     * one, we must put a light there. Squares that could light us
+     * are, of course, the same as the squares we would light...  For a given number square, determine whether we have enough info
+ * to unambiguously place its lights.  nl is no. of lights we need to place, ns is no. of spaces we
+     * have to place them in. Try and narrow these down, and mark
+     * points we can ignore later.  light here already; one less light for one less place.  nowhere to put anything.  we have placed all lights we need to around here; all remaining
+         * surrounds are therefore IMPOSSIBLE.  we have as many lights to place as spaces; fill them all.  New solver algorithm: overlapping sets can add IMPOSSIBLE flags.
+ * Algorithm thanks to Simon:
+ *
+ * (a) Any square where you can place a light has a set of squares
+ *     which would become non-lights as a result. (This includes
+ *     squares lit by the first square, and can also include squares
+ *     adjacent to the same clue square if the new light is the last
+ *     one around that clue.) Call this MAKESDARK(x,y) with (x,y) being
+ *     the square you place a light.
+
+ * (b) Any unlit square has a set of squares on which you could place
+ *     a light to illuminate it. (Possibly including itself, of
+ *     course.) This set of squares has the property that _at least
+ *     one_ of them must contain a light. Sets of this type also arise
+ *     from clue squares. Call this MAKESLIGHT(x,y), again with (x,y)
+ *     the square you would place a light.
+
+ * (c) If there exists (dx,dy) and (lx,ly) such that MAKESDARK(dx,dy) is
+ *     a superset of MAKESLIGHT(lx,ly), this implies that placing a light at
+ *     (dx,dy) would either leave no remaining way to illuminate a certain
+ *     square, or would leave no remaining way to fulfill a certain clue
+ *     (at lx,ly). In either case, a light can be ruled out at that position.
+ *
+ * So, we construct all possible MAKESLIGHT sets, both from unlit squares
+ * and clue squares, and then we look for plausible MAKESDARK sets that include
+ * our (lx,ly) to see if we can find a (dx,dy) to rule out. By the time we have
+ * constructed the MAKESLIGHT set we don't care about (lx,ly), just the set
+ * members.
+ *
+ * Once we have such a set, Simon came up with a Cunning Plan to find
+ * the most sensible MAKESDARK candidate:
+ *
+ * (a) for each square S in your set X, find all the squares which _would_
+ *     rule it out. That means any square which would light S, plus
+ *     any square adjacent to the same clue square as S (provided
+ *     that clue square has only one remaining light to be placed).
+ *     It's not hard to make this list. Don't do anything with this
+ *     data at the moment except _count_ the squares.
+
+ * (b) Find the square S_min in the original set which has the
+ *     _smallest_ number of other squares which would rule it out.
+
+ * (c) Find all the squares that rule out S_min (it's probably
+ *     better to recompute this than to have stored it during step
+ *     (a), since the CPU requirement is modest but the storage
+ *     cost would get ugly.) For each of these squares, see if it
+ *     rules out everything else in the set X. Any which does can
+ *     be marked as not-a-light.
+ *
+  Check whether a light at (dx,dy) rules out everything
+     * in scratch, and mark (dx,dy) as IMPOSSIBLE if it does.
+     * We can use try_rule_out for this as well, as the set of
+     * squares which would rule out (x,y) is the same as the
+     * set of squares which (x,y) would rule out.  The light ruled out everything in scratch. Yay.  XXX Find all the squares which would rule out (x,y); anything
+     * that would light it as well as squares adjacent to same clues
+     * as X assuming that clue only has one remaining light.
+     * Call the callback with each square.  Find all squares that would rule out a light at (x,y) and call trl_cb
+     * with them: anything that would light (x,y)...  ... as well as any empty space (that isn't x,y) next to any clue square
+     * next to (x,y) that only has one light left to place.  we have an adjacent clue square; find /its/ surrounds
+         * and count the remaining lights it needs.  We have a clue with tot_lights to fill, and curr_lights currently
+         * around it. If adding a light at (x,y) fills up the clue (i.e.
+         * curr_lights + 1 = tot_lights) then we need to discount all other
+         * unlit squares around the clue.  Construct a MAKESLIGHT set from an unlit square.  Construct a series of MAKESLIGHT sets from a clue square.
+ *  for a clue square with N remaining spaces that must contain M lights, every
+ *  subset of size N-M+1 of those N spaces forms such a set.
+  m is no. of lights still to place; starts off at the clue value
+     * and decreases when we find a light already down.
+     * n is no. of spaces left; starts off at 0 and goes up when we find
+     * a plausible space.  sempty is now a surrounds of only blank squares.  clue is full already.  become impossible.  Our own solver, from scratch, should never cause this to happen
+             * (assuming a soluble grid). However, if we're trying to solve
+             * from a half-completed *incorrect* grid this might occur; we
+             * just return the 'no solutions' code in this case.  These 2 loops, and the functions they call, are the critical loops
+         * for timing; any optimisations should look here first.  nowhere to put a light, puzzle is unsoluble.  Try a more cunning (and more involved) way... more details above.  We now have to make a guess; we have places to put lights but
+         * no definite idea about where they can go.  mustn't delve any deeper.  Of all the squares that we could place a light, pick the one
+         * that would light the most currently unlit squares.  This heuristic was just plucked from the air; there may well be
+         * a more efficient way of choosing a square to flip to minimise
+         * recursion.  suyb  Now we've chosen a plausible (x,y), try to solve it once as 'lit'
+         * and once as 'impossible'; we need to make one copy to do this.  we didn't care about finding all solutions, and we just
+             * found one; return with it immediately.  If we wanted a unique solution but we hit our recursion limit
+         * (on either branch) then we have to assume we didn't find possible
+         * extra solutions, and return 'not soluble'.  Make sure that whether or not it was self or copy (or both) that
+         * were soluble, that we return a solved state in self.  copy wasn't soluble; keep self state and return that result.  copy solved and we didn't, so copy in copy's (now solved)
+             * flags and light state.  Fills in the (possibly partially-complete) game_state as far as it can,
+ * returning the number of possible solutions. If it returns >0 then the
+ * game_state will be in a solved state, but you won't know which one.  if we wanted an easy puzzle, make sure we didn't need recursion.  --- New game creation and user input code. ---  The basic algorithm here is to generate the most complex grid possible
+ * while honouring two restrictions:
+ *
+ *  * we require a unique solution, and
+ *  * either we require solubility with no recursion (!params->recurse)
+ *  * or we require some recursion. (params->recurse).
+ *
+ * The solver helpfully keeps track of the numbers it needed to use to
+ * get its solution, so we use that to remove an initial set of numbers
+ * and check we still satsify our requirements (on uniqueness and
+ * non-recursiveness, if applicable; we don't check explicit recursiveness
+ * until the end).
+ *
+ * Then we try to remove all numbers in a random order, and see if we
+ * still satisfy requirements (putting them back if we didn't).
+ *
+ * Removing numbers will always, in general terms, make a puzzle require
+ * more recursion but it may also mean a puzzle becomes non-unique.
+ *
+ * Once we're done, if we wanted a recursive puzzle but the most difficult
+ * puzzle we could come up with was non-recursive, we give up and try a new
+ * grid.  structure copy  Construct a shuffled list of grid positions; we only
+     * do this once, because if it gets used more than once it'll
+     * be on a different grid layout.  also cleans board.  set up lights and then the numbers, and remove the lights  Take a copy, remove numbers we didn't use and check there's
+             * still a unique solution; if so, use the copy subsequently.  Go through grid removing numbers at random one-by-one and
+             * trying to solve again; if it ceases to be good put the number back.  Was the maximally-difficult puzzle difficult enough?
+                 * Check we can't solve it with a more simplistic solver.  Couldn't generate a good puzzle in however many goes. Ramp up the
+         * %age of black squares (if we didn't already have lots; in which case
+         * why couldn't we generate a puzzle?) and try again.  Game is encoded as a long string one character per square;
+     * 'S' is a space
+     * 'B' is a black square with no number
+     * '0', '1', '2', '3', '4' is a black square with a number.  OK  OK  and the i++ will add another one  run-on...  empty square  We don't care here about non-unique puzzles; if the
+     * user entered one themself then I doubt they care.  Try and solve from where we are now (for non-unique
+     * puzzles this may produce a different answer).  That didn't work; try solving from the clean puzzle.  'borrowed' from slant.c, mainly. I could have printed it one
+ * character per cell (like debug_state) but that comes out tiny.
+ * 'L' is used for 'light here' because 'O' looks too much like '0'
+ * (black square with no surrounding lights).  actual interesting bit.  nothing to encode.  nothing to decode.  black square  black square with number  display (white) square lit up  display light in square  display light as overlapped  display cursor  display black numbered square as error.  background flash is on.  display non-light little square  width * height  Believe it or not, this empty = "" hack is needed to get around a bug in
+ * the prc-tools gcc when optimisation is turned on; before, it produced:
+    lightup-sect.c: In function `interpret_move':
+    lightup-sect.c:1416: internal error--unrecognizable insn:
+    (insn 582 580 583 (set (reg:SI 134)
+            (pc)) -1 (nil)
+        (nil))
+  Only allow cursor-effect operations if the cursor is visible
+             * (otherwise you have no idea which square it might be affecting)  LIGHT and IMPOSSIBLE are mutually exclusive.  ----------------------------------------------------------------------
+ * Drawing routines.
+  XXX entirely cloned from fifteen.c; separate out?  Ick: fake up `ds->tilesize' for macro expansion purposes  At some stage we should put these into a real options struct.
+ * Note that tile_redraw has no #ifdeffery; it relies on tile_flags not
+ * to put those flags in.  We know that this won't change over the course of the game
+             * so it's OK to ignore this when calculating whether or not
+             * to redraw the tile. 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Grid contents.
+      game_request_keys  wants_statusbar  flags  Run the solvers easiest to hardest until we find one that
+     * can solve our puzzle. If it's soluble we know that the
+     * hardest (recursive) solver will always find the solution.  sflags from last successful solve  vim: set shiftwidth=4 tabstop=8: 

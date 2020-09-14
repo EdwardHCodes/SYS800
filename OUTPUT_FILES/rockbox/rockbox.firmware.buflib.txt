@@ -1,0 +1,517 @@
+**************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* This is a memory allocator designed to provide reasonable management of free
+* space and fast access to allocated data. More than one allocator can be used
+* at a time by initializing multiple contexts.
+*
+* Copyright (C) 2009 Andrew Mahone
+* Copyright (C) 2011 Thomas Martitz
+* 
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for abs()  for snprintf()  for ptrdiff_t  strlcpy()  for ALIGN_*()  The main goal of this design is fast fetching of the pointer for a handle.
+ * For that reason, the handles are stored in a table at the end of the buffer
+ * with a fixed address, so that returning the pointer for a handle is a simple
+ * table lookup. To reduce the frequency with which allocated blocks will need
+ * to be moved to free space, allocations grow up in address from the start of
+ * the buffer. The buffer is treated as an array of union buflib_data. Blocks
+ * start with a length marker, which is included in their length. Free blocks
+ * are marked by negative length. Allocated blocks have a positiv length marker,
+ * and additional metadata following that: It follows a pointer
+ * (union buflib_data*) to the corresponding handle table entry. so that it can
+ * be quickly found and updated during compaction. After that follows
+ * the pointer to the struct buflib_callbacks associated with this allocation
+ * (may be NULL). That pointer follows a variable length character array
+ * containing the nul-terminated string identifier of the allocation. After this
+ * array there's a length marker for the length of the character array including
+ * this length marker (counted in n*sizeof(union buflib_data)), which allows
+ * to find the start of the character array (and therefore the start of the
+ * entire block) when only the handle or payload start is known.
+ *
+ * UPDATE BUFLIB_ALLOC_OVERHEAD (buflib.h) WHEN THE METADATA CHANGES!
+ *
+ * Example:
+ * |<- alloc block #1 ->|<- unalloc block ->|<- alloc block #2      ->|<-handle table->|
+ * |L|H|C|cccc|L2|crc|XXXXXX|-L|YYYYYYYYYYYYYYYY|L|H|C|cc|L2|crc|XXXXXXXXXXXXX|AAA|
+ *
+ * L - length marker (negative if block unallocated)
+ * H - handle table entry pointer
+ * C - pointer to struct buflib_callbacks
+ * c - variable sized string identifier
+ * L2 - second length marker for string identifier
+ * crc - crc32 protecting buflib metadata integrity
+ * X - actual payload
+ * Y - unallocated space
+ * 
+ * A - pointer to start of payload (first X) in the handle table (may be null)
+ *
+ * The blocks can be walked by jumping the abs() of the L length marker, i.e.
+ * union buflib_data* L;
+ * for(L = start; L < end; L += abs(L->val)) { .... }
+ *
+ * 
+ * The allocator functions are passed a context struct so that two allocators
+ * can be run, for example, one per core may be used, with convenience wrappers
+ * for the single-allocator case that use a predefined context.
+  Initialize buffer manager  Align on sizeof(buflib_data), to prevent unaligned access  The handle table is initialized with no entries  A marker is needed for the end of allocated data, to make sure that it
+     * does not collide with the handle table, and to detect end-of-buffer.
+      cannot continue if the buffer is not aligned, since we would need
+     * to reduce the size of the buffer for aligning  relocate the handle table entries   relocate the pointers in the context  Allocate a new handle, returning 0 on failure  first_free_handle is a lower bound on free handles, work through the
+     * table from there until a handle containing NULL is found, or the end
+     * of the table is reached.
+      If the search went past the end of the table, it means we need to extend
+     * the table to get a new handle.
+      Free one handle, shrinking the handle table if it's the last one  Update free handle lower bound if this handle has a lower index than the
+     * old one.
+      Get the start block of an allocation  this is a valid case, e.g. during buflib_alloc_ex() when the handle
+     * has already been allocated but not the data  Shrink the handle table, returning true if its size was reduced, false if
+ * not
+  If shift is non-zero, it represents the number of places to move
+ * blocks in memory. Calculate the new address for this block,
+ * update its entry in the handle table, and then move its contents.
+ *
+ * Returns false if moving was unsucessful
+ * (NULL callback or BUFLIB_CB_CANNOT_MOVE was returned)
+  check for metadata validity  If move must be synchronized with use, user should have specified a
+       callback that handles this  update handle table  Compact allocations and handle table, adjusting handle pointers as needed.
+ * Return true if any space was freed or consolidated, false otherwise.
+  Store the results of attempting to shrink the handle table  compaction has basically two modes of operation:
+     *  1) the buffer is nicely movable: In this mode, blocks can be simply
+     * moved towards the beginning. Free blocks add to a shift value,
+     * which is the amount to move.
+     *  2) the buffer contains unmovable blocks: unmovable blocks create
+     * holes and reset shift. Once a hole is found, we're trying to fill
+     * holes first, moving by shift is the fallback. As the shift is reset,
+     * this effectively splits the buffer into portions of movable blocks.
+     * This mode cannot be used if no holes are found yet as it only works
+     * when it moves blocks across the portions. On the other side,
+     * moving by shift only works within the same portion
+     * For simplicity only 1 hole at a time is considered  cache result to avoid 2nd call to move_block  This block is free, add its length to the shift value  attempt to fill any hole  Move was successful. The memory at block is now free  add its length to shift  Reduce the size of the hole accordingly
+                 * but be careful to not overwrite an existing block  negative  hole closed  attempt move the allocation by shift  free space before an unmovable block becomes a hole,
+                 * therefore mark this block free and track the hole  Move the end-of-allocation mark, and return true if any new space has
+     * been freed.
+      Compact the buffer by trying both shrinking and moving.
+ *
+ * Try to move first. If unsuccesfull, try to shrink. If that was successful
+ * try to move once more as there might be more room now.
+  if something compacted before already there will be no further gain  adjust what we ask for if there's free space in the front
+                 * this isn't too unlikely assuming this block is
+                 * shrinkable but not movable  no shrink needed?  'this' might have changed in the callback (if it shrinked
+                 * from the top or even freed the handle), get it again  The handle was possibly be freed in the callback,
+                 * re-run the loop with the handle before  could also change with shrinking from back  shrinking was successful at least once, try compaction again  Shift buffered items by size units, and update handle pointers. The shift
+ * value must be determined to be safe *before* calling.
+  Shift buffered items up by size bytes, or as many as possible if size == 0.
+ * Set size to the number of bytes freed.
+  Shift buffered items down by size bytes  Allocate a buffer of size bytes, returning a handle for it.
+ * Note: Buffers are movable since NULL is passed for "ops".
+         Don't pass them to functions that call yield()  Allocate a buffer of size bytes, returning a handle for it.
+ *
+ * The additional name parameter gives the allocation a human-readable name,
+ * the ops parameter points to caller-implemented callbacks for moving and
+ * shrinking.
+ *
+ * If you pass NULL for "ops", buffers are movable by default.
+ * Don't pass them to functions that call yield() like I/O.
+ * Buffers are only shrinkable when a shrink callback is given.
+  This really is assigned a value before use  add 5 objects for alloc len, pointer to handle table entry and
+            * name length, the ops pointer and crc  If allocation has failed, and compaction has succeded, it may be
+         * possible to get a handle by trying again.
+          the last one isn't shrinkable
+             * make room in front of a shrinkable and move this alloc  the last is shrinkable, make room for handles directly  buflib_compact_and_shrink() will compact and move last_block()
+         * if possible  need to re-evaluate last before the loop because the last allocation
+     * possibly made room in its front to fit this, so last would be wrong  If the last used block extends all the way to the handle table, the
+         * block "after" it doesn't have a header. Because of this, it's easier
+         * to always find the end of allocation by saving a pointer, and always
+         * calculate the free space at the end by comparing it to the
+         * last_handle pointer.
+          blocks with positive length are already allocated.  The search is first-fit, any fragmentation this causes will be
+         * handled at compaction.
+          Try compacting if allocation failed  Set up the allocated block, by marking the size allocated, and storing
+     * a pointer to the handle.
+      alloc_end must be kept current if we're taking the last block.  Only free blocks *before* alloc_end have tagged length.  Return the handle index as a positive integer.  ret is now either a free block or the same as alloc_end, both is fine  Finds the free block before block, and returns NULL if it's not free  find the block that's before the current one  If next_block == block, the above loop didn't go anywhere. If it did,
+     * and the block before this one is empty, that is the wanted one
+      NULL if found block isn't free  Free the buffer associated with handle_num.  We need to find the block before the current one, to see if it is free
+     * and can be merged with this one.
+      Otherwise, set block to the newly-freed block, and mark it free, before
+     * continuing on, since the code below expects block to point to a free
+     * block which may have free space after it.
+      Check if we are merging with the free space at alloc_end.  Otherwise, the next block might still be a "normal" free block, and the
+     * mid-allocation free means that the buffer is no longer compact.
+      unconditionally  subtract 5 elements for
+     * val, handle, name_len, ops and the handle table entry space for future handles  make it bytes  reserve 16 for the name  Return the maximum allocatable contiguous memory in bytes  make sure buffer is as contiguous as possible   now look if there's free in holes  an unmovable section resets the count as free space
+         * can't be contigous  select the best  Return the amount of unallocated memory in bytes (even if not contiguous)  now look if there's free in holes  make it bytes 
+ * Allocate all available (as returned by buflib_available()) memory and return
+ * a handle to it
+ *
+ * This grabs a lock which can only be unlocked by buflib_free() or
+ * buflib_shrink(), to protect from further allocations (which couldn't be
+ * serviced anyway).
+  limit name to 16 since that's what buflib_available() accounts for it  ignore ctx->compact because it's true if all movable blocks are contiguous
+     * even if the buffer has holes due to unmovable allocations  make it bytes  try as hard as possible to free up space. allocations are
+     * welcome to give up some or all of their memory  compact until no space can be gained anymore  OOM  Shrink the allocation indicated by the handle according to new_start and
+ * new_size. Grow is not possible, therefore new_start and new_start + new_size
+ * must be within the original allocation
+  newstart must be higher and new_size not "negative"  newstart isn't necessarily properly aligned but it
+                 * needn't be since it's only dereferenced by the user code  growing is not supported  update val and the handle table entry  move metadata over, i.e. pointer to handle table entry and name
+         * This is actually the point of no return. Data in the allocation is
+         * being modified, and therefore we must successfully finish the shrink
+         * operation  mark the old block unallocated  find the block before in order to merge with the new free space  We didn't handle size changes yet, assign block to the new one
+         * the code below the wants block whether it changed or not  update crc of the metadata  Now deal with size changes that create free blocks after the allocation  enlarge next block by moving it up  creating a hole  must be negative to indicate being unallocated  handle_num is 1-based **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* This is a memory allocator designed to provide reasonable management of free
+* space and fast access to allocated data. More than one allocator can be used
+* at a time by initializing multiple contexts.
+*
+* Copyright (C) 2009 Andrew Mahone
+* Copyright (C) 2011 Thomas Martitz
+* 
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for abs()  for snprintf()  for ptrdiff_t  strlcpy()  for ALIGN_*()  The main goal of this design is fast fetching of the pointer for a handle.
+ * For that reason, the handles are stored in a table at the end of the buffer
+ * with a fixed address, so that returning the pointer for a handle is a simple
+ * table lookup. To reduce the frequency with which allocated blocks will need
+ * to be moved to free space, allocations grow up in address from the start of
+ * the buffer. The buffer is treated as an array of union buflib_data. Blocks
+ * start with a length marker, which is included in their length. Free blocks
+ * are marked by negative length. Allocated blocks have a positiv length marker,
+ * and additional metadata following that: It follows a pointer
+ * (union buflib_data*) to the corresponding handle table entry. so that it can
+ * be quickly found and updated during compaction. After that follows
+ * the pointer to the struct buflib_callbacks associated with this allocation
+ * (may be NULL). That pointer follows a variable length character array
+ * containing the nul-terminated string identifier of the allocation. After this
+ * array there's a length marker for the length of the character array including
+ * this length marker (counted in n*sizeof(union buflib_data)), which allows
+ * to find the start of the character array (and therefore the start of the
+ * entire block) when only the handle or payload start is known.
+ *
+ * UPDATE BUFLIB_ALLOC_OVERHEAD (buflib.h) WHEN THE METADATA CHANGES!
+ *
+ * Example:
+ * |<- alloc block #1 ->|<- unalloc block ->|<- alloc block #2      ->|<-handle table->|
+ * |L|H|C|cccc|L2|crc|XXXXXX|-L|YYYYYYYYYYYYYYYY|L|H|C|cc|L2|crc|XXXXXXXXXXXXX|AAA|
+ *
+ * L - length marker (negative if block unallocated)
+ * H - handle table entry pointer
+ * C - pointer to struct buflib_callbacks
+ * c - variable sized string identifier
+ * L2 - second length marker for string identifier
+ * crc - crc32 protecting buflib metadata integrity
+ * X - actual payload
+ * Y - unallocated space
+ * 
+ * A - pointer to start of payload (first X) in the handle table (may be null)
+ *
+ * The blocks can be walked by jumping the abs() of the L length marker, i.e.
+ * union buflib_data* L;
+ * for(L = start; L < end; L += abs(L->val)) { .... }
+ *
+ * 
+ * The allocator functions are passed a context struct so that two allocators
+ * can be run, for example, one per core may be used, with convenience wrappers
+ * for the single-allocator case that use a predefined context.
+  Initialize buffer manager  Align on sizeof(buflib_data), to prevent unaligned access  The handle table is initialized with no entries  A marker is needed for the end of allocated data, to make sure that it
+     * does not collide with the handle table, and to detect end-of-buffer.
+      cannot continue if the buffer is not aligned, since we would need
+     * to reduce the size of the buffer for aligning  relocate the handle table entries   relocate the pointers in the context  Allocate a new handle, returning 0 on failure  first_free_handle is a lower bound on free handles, work through the
+     * table from there until a handle containing NULL is found, or the end
+     * of the table is reached.
+      If the search went past the end of the table, it means we need to extend
+     * the table to get a new handle.
+      Free one handle, shrinking the handle table if it's the last one  Update free handle lower bound if this handle has a lower index than the
+     * old one.
+      Get the start block of an allocation  this is a valid case, e.g. during buflib_alloc_ex() when the handle
+     * has already been allocated but not the data  Shrink the handle table, returning true if its size was reduced, false if
+ * not
+  If shift is non-zero, it represents the number of places to move
+ * blocks in memory. Calculate the new address for this block,
+ * update its entry in the handle table, and then move its contents.
+ *
+ * Returns false if moving was unsucessful
+ * (NULL callback or BUFLIB_CB_CANNOT_MOVE was returned)
+  check for metadata validity  If move must be synchronized with use, user should have specified a
+       callback that handles this  update handle table  Compact allocations and handle table, adjusting handle pointers as needed.
+ * Return true if any space was freed or consolidated, false otherwise.
+  Store the results of attempting to shrink the handle table  compaction has basically two modes of operation:
+     *  1) the buffer is nicely movable: In this mode, blocks can be simply
+     * moved towards the beginning. Free blocks add to a shift value,
+     * which is the amount to move.
+     *  2) the buffer contains unmovable blocks: unmovable blocks create
+     * holes and reset shift. Once a hole is found, we're trying to fill
+     * holes first, moving by shift is the fallback. As the shift is reset,
+     * this effectively splits the buffer into portions of movable blocks.
+     * This mode cannot be used if no holes are found yet as it only works
+     * when it moves blocks across the portions. On the other side,
+     * moving by shift only works within the same portion
+     * For simplicity only 1 hole at a time is considered  cache result to avoid 2nd call to move_block  This block is free, add its length to the shift value  attempt to fill any hole  Move was successful. The memory at block is now free  add its length to shift  Reduce the size of the hole accordingly
+                 * but be careful to not overwrite an existing block  negative  hole closed  attempt move the allocation by shift  free space before an unmovable block becomes a hole,
+                 * therefore mark this block free and track the hole  Move the end-of-allocation mark, and return true if any new space has
+     * been freed.
+      Compact the buffer by trying both shrinking and moving.
+ *
+ * Try to move first. If unsuccesfull, try to shrink. If that was successful
+ * try to move once more as there might be more room now.
+  if something compacted before already there will be no further gain  adjust what we ask for if there's free space in the front
+                 * this isn't too unlikely assuming this block is
+                 * shrinkable but not movable  no shrink needed?  'this' might have changed in the callback (if it shrinked
+                 * from the top or even freed the handle), get it again  The handle was possibly be freed in the callback,
+                 * re-run the loop with the handle before  could also change with shrinking from back  shrinking was successful at least once, try compaction again  Shift buffered items by size units, and update handle pointers. The shift
+ * value must be determined to be safe *before* calling.
+  Shift buffered items up by size bytes, or as many as possible if size == 0.
+ * Set size to the number of bytes freed.
+  Shift buffered items down by size bytes  Allocate a buffer of size bytes, returning a handle for it.
+ * Note: Buffers are movable since NULL is passed for "ops".
+         Don't pass them to functions that call yield()  Allocate a buffer of size bytes, returning a handle for it.
+ *
+ * The additional name parameter gives the allocation a human-readable name,
+ * the ops parameter points to caller-implemented callbacks for moving and
+ * shrinking.
+ *
+ * If you pass NULL for "ops", buffers are movable by default.
+ * Don't pass them to functions that call yield() like I/O.
+ * Buffers are only shrinkable when a shrink callback is given.
+  This really is assigned a value before use  add 5 objects for alloc len, pointer to handle table entry and
+            * name length, the ops pointer and crc  If allocation has failed, and compaction has succeded, it may be
+         * possible to get a handle by trying again.
+          the last one isn't shrinkable
+             * make room in front of a shrinkable and move this alloc  the last is shrinkable, make room for handles directly  buflib_compact_and_shrink() will compact and move last_block()
+         * if possible  need to re-evaluate last before the loop because the last allocation
+     * possibly made room in its front to fit this, so last would be wrong  If the last used block extends all the way to the handle table, the
+         * block "after" it doesn't have a header. Because of this, it's easier
+         * to always find the end of allocation by saving a pointer, and always
+         * calculate the free space at the end by comparing it to the
+         * last_handle pointer.
+          blocks with positive length are already allocated.  The search is first-fit, any fragmentation this causes will be
+         * handled at compaction.
+          Try compacting if allocation failed  Set up the allocated block, by marking the size allocated, and storing
+     * a pointer to the handle.
+      alloc_end must be kept current if we're taking the last block.  Only free blocks *before* alloc_end have tagged length.  Return the handle index as a positive integer.  ret is now either a free block or the same as alloc_end, both is fine  Finds the free block before block, and returns NULL if it's not free  find the block that's before the current one  If next_block == block, the above loop didn't go anywhere. If it did,
+     * and the block before this one is empty, that is the wanted one
+      NULL if found block isn't free  Free the buffer associated with handle_num.  We need to find the block before the current one, to see if it is free
+     * and can be merged with this one.
+      Otherwise, set block to the newly-freed block, and mark it free, before
+     * continuing on, since the code below expects block to point to a free
+     * block which may have free space after it.
+      Check if we are merging with the free space at alloc_end.  Otherwise, the next block might still be a "normal" free block, and the
+     * mid-allocation free means that the buffer is no longer compact.
+      unconditionally  subtract 5 elements for
+     * val, handle, name_len, ops and the handle table entry space for future handles  make it bytes  reserve 16 for the name  Return the maximum allocatable contiguous memory in bytes  make sure buffer is as contiguous as possible   now look if there's free in holes  an unmovable section resets the count as free space
+         * can't be contigous  select the best  Return the amount of unallocated memory in bytes (even if not contiguous)  now look if there's free in holes  make it bytes 
+ * Allocate all available (as returned by buflib_available()) memory and return
+ * a handle to it
+ *
+ * This grabs a lock which can only be unlocked by buflib_free() or
+ * buflib_shrink(), to protect from further allocations (which couldn't be
+ * serviced anyway).
+  limit name to 16 since that's what buflib_available() accounts for it  ignore ctx->compact because it's true if all movable blocks are contiguous
+     * even if the buffer has holes due to unmovable allocations  make it bytes  try as hard as possible to free up space. allocations are
+     * welcome to give up some or all of their memory  compact until no space can be gained anymore  OOM  Shrink the allocation indicated by the handle according to new_start and
+ * new_size. Grow is not possible, therefore new_start and new_start + new_size
+ * must be within the original allocation
+  newstart must be higher and new_size not "negative"  newstart isn't necessarily properly aligned but it
+                 * needn't be since it's only dereferenced by the user code  growing is not supported  update val and the handle table entry  move metadata over, i.e. pointer to handle table entry and name
+         * This is actually the point of no return. Data in the allocation is
+         * being modified, and therefore we must successfully finish the shrink
+         * operation  mark the old block unallocated  find the block before in order to merge with the new free space  We didn't handle size changes yet, assign block to the new one
+         * the code below the wants block whether it changed or not  update crc of the metadata  Now deal with size changes that create free blocks after the allocation  enlarge next block by moving it up  creating a hole  must be negative to indicate being unallocated  handle_num is 1-based **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* This is a memory allocator designed to provide reasonable management of free
+* space and fast access to allocated data. More than one allocator can be used
+* at a time by initializing multiple contexts.
+*
+* Copyright (C) 2009 Andrew Mahone
+* Copyright (C) 2011 Thomas Martitz
+* 
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for abs()  for snprintf()  for ptrdiff_t  strlcpy()  for ALIGN_*()  The main goal of this design is fast fetching of the pointer for a handle.
+ * For that reason, the handles are stored in a table at the end of the buffer
+ * with a fixed address, so that returning the pointer for a handle is a simple
+ * table lookup. To reduce the frequency with which allocated blocks will need
+ * to be moved to free space, allocations grow up in address from the start of
+ * the buffer. The buffer is treated as an array of union buflib_data. Blocks
+ * start with a length marker, which is included in their length. Free blocks
+ * are marked by negative length. Allocated blocks have a positiv length marker,
+ * and additional metadata following that: It follows a pointer
+ * (union buflib_data*) to the corresponding handle table entry. so that it can
+ * be quickly found and updated during compaction. After that follows
+ * the pointer to the struct buflib_callbacks associated with this allocation
+ * (may be NULL). That pointer follows a variable length character array
+ * containing the nul-terminated string identifier of the allocation. After this
+ * array there's a length marker for the length of the character array including
+ * this length marker (counted in n*sizeof(union buflib_data)), which allows
+ * to find the start of the character array (and therefore the start of the
+ * entire block) when only the handle or payload start is known.
+ *
+ * UPDATE BUFLIB_ALLOC_OVERHEAD (buflib.h) WHEN THE METADATA CHANGES!
+ *
+ * Example:
+ * |<- alloc block #1 ->|<- unalloc block ->|<- alloc block #2      ->|<-handle table->|
+ * |L|H|C|cccc|L2|crc|XXXXXX|-L|YYYYYYYYYYYYYYYY|L|H|C|cc|L2|crc|XXXXXXXXXXXXX|AAA|
+ *
+ * L - length marker (negative if block unallocated)
+ * H - handle table entry pointer
+ * C - pointer to struct buflib_callbacks
+ * c - variable sized string identifier
+ * L2 - second length marker for string identifier
+ * crc - crc32 protecting buflib metadata integrity
+ * X - actual payload
+ * Y - unallocated space
+ * 
+ * A - pointer to start of payload (first X) in the handle table (may be null)
+ *
+ * The blocks can be walked by jumping the abs() of the L length marker, i.e.
+ * union buflib_data* L;
+ * for(L = start; L < end; L += abs(L->val)) { .... }
+ *
+ * 
+ * The allocator functions are passed a context struct so that two allocators
+ * can be run, for example, one per core may be used, with convenience wrappers
+ * for the single-allocator case that use a predefined context.
+  Initialize buffer manager  Align on sizeof(buflib_data), to prevent unaligned access  The handle table is initialized with no entries  A marker is needed for the end of allocated data, to make sure that it
+     * does not collide with the handle table, and to detect end-of-buffer.
+      cannot continue if the buffer is not aligned, since we would need
+     * to reduce the size of the buffer for aligning  relocate the handle table entries   relocate the pointers in the context  Allocate a new handle, returning 0 on failure  first_free_handle is a lower bound on free handles, work through the
+     * table from there until a handle containing NULL is found, or the end
+     * of the table is reached.
+      If the search went past the end of the table, it means we need to extend
+     * the table to get a new handle.
+      Free one handle, shrinking the handle table if it's the last one  Update free handle lower bound if this handle has a lower index than the
+     * old one.
+      Get the start block of an allocation  this is a valid case, e.g. during buflib_alloc_ex() when the handle
+     * has already been allocated but not the data  Shrink the handle table, returning true if its size was reduced, false if
+ * not
+  If shift is non-zero, it represents the number of places to move
+ * blocks in memory. Calculate the new address for this block,
+ * update its entry in the handle table, and then move its contents.
+ *
+ * Returns false if moving was unsucessful
+ * (NULL callback or BUFLIB_CB_CANNOT_MOVE was returned)
+  check for metadata validity  If move must be synchronized with use, user should have specified a
+       callback that handles this  update handle table  Compact allocations and handle table, adjusting handle pointers as needed.
+ * Return true if any space was freed or consolidated, false otherwise.
+  Store the results of attempting to shrink the handle table  compaction has basically two modes of operation:
+     *  1) the buffer is nicely movable: In this mode, blocks can be simply
+     * moved towards the beginning. Free blocks add to a shift value,
+     * which is the amount to move.
+     *  2) the buffer contains unmovable blocks: unmovable blocks create
+     * holes and reset shift. Once a hole is found, we're trying to fill
+     * holes first, moving by shift is the fallback. As the shift is reset,
+     * this effectively splits the buffer into portions of movable blocks.
+     * This mode cannot be used if no holes are found yet as it only works
+     * when it moves blocks across the portions. On the other side,
+     * moving by shift only works within the same portion
+     * For simplicity only 1 hole at a time is considered  cache result to avoid 2nd call to move_block  This block is free, add its length to the shift value  attempt to fill any hole  Move was successful. The memory at block is now free  add its length to shift  Reduce the size of the hole accordingly
+                 * but be careful to not overwrite an existing block  negative  hole closed  attempt move the allocation by shift  free space before an unmovable block becomes a hole,
+                 * therefore mark this block free and track the hole  Move the end-of-allocation mark, and return true if any new space has
+     * been freed.
+      Compact the buffer by trying both shrinking and moving.
+ *
+ * Try to move first. If unsuccesfull, try to shrink. If that was successful
+ * try to move once more as there might be more room now.
+  if something compacted before already there will be no further gain  adjust what we ask for if there's free space in the front
+                 * this isn't too unlikely assuming this block is
+                 * shrinkable but not movable  no shrink needed?  'this' might have changed in the callback (if it shrinked
+                 * from the top or even freed the handle), get it again  The handle was possibly be freed in the callback,
+                 * re-run the loop with the handle before  could also change with shrinking from back  shrinking was successful at least once, try compaction again  Shift buffered items by size units, and update handle pointers. The shift
+ * value must be determined to be safe *before* calling.
+  Shift buffered items up by size bytes, or as many as possible if size == 0.
+ * Set size to the number of bytes freed.
+  Shift buffered items down by size bytes  Allocate a buffer of size bytes, returning a handle for it.
+ * Note: Buffers are movable since NULL is passed for "ops".
+         Don't pass them to functions that call yield()  Allocate a buffer of size bytes, returning a handle for it.
+ *
+ * The additional name parameter gives the allocation a human-readable name,
+ * the ops parameter points to caller-implemented callbacks for moving and
+ * shrinking.
+ *
+ * If you pass NULL for "ops", buffers are movable by default.
+ * Don't pass them to functions that call yield() like I/O.
+ * Buffers are only shrinkable when a shrink callback is given.
+  This really is assigned a value before use  add 5 objects for alloc len, pointer to handle table entry and
+            * name length, the ops pointer and crc  If allocation has failed, and compaction has succeded, it may be
+         * possible to get a handle by trying again.
+          the last one isn't shrinkable
+             * make room in front of a shrinkable and move this alloc  the last is shrinkable, make room for handles directly  buflib_compact_and_shrink() will compact and move last_block()
+         * if possible  need to re-evaluate last before the loop because the last allocation
+     * possibly made room in its front to fit this, so last would be wrong  If the last used block extends all the way to the handle table, the
+         * block "after" it doesn't have a header. Because of this, it's easier
+         * to always find the end of allocation by saving a pointer, and always
+         * calculate the free space at the end by comparing it to the
+         * last_handle pointer.
+          blocks with positive length are already allocated.  The search is first-fit, any fragmentation this causes will be
+         * handled at compaction.
+          Try compacting if allocation failed  Set up the allocated block, by marking the size allocated, and storing
+     * a pointer to the handle.
+      alloc_end must be kept current if we're taking the last block.  Only free blocks *before* alloc_end have tagged length.  Return the handle index as a positive integer.  ret is now either a free block or the same as alloc_end, both is fine  Finds the free block before block, and returns NULL if it's not free  find the block that's before the current one  If next_block == block, the above loop didn't go anywhere. If it did,
+     * and the block before this one is empty, that is the wanted one
+      NULL if found block isn't free  Free the buffer associated with handle_num.  We need to find the block before the current one, to see if it is free
+     * and can be merged with this one.
+      Otherwise, set block to the newly-freed block, and mark it free, before
+     * continuing on, since the code below expects block to point to a free
+     * block which may have free space after it.
+      Check if we are merging with the free space at alloc_end.  Otherwise, the next block might still be a "normal" free block, and the
+     * mid-allocation free means that the buffer is no longer compact.
+      unconditionally  subtract 5 elements for
+     * val, handle, name_len, ops and the handle table entry space for future handles  make it bytes  reserve 16 for the name  Return the maximum allocatable contiguous memory in bytes  make sure buffer is as contiguous as possible   now look if there's free in holes  an unmovable section resets the count as free space
+         * can't be contigous  select the best  Return the amount of unallocated memory in bytes (even if not contiguous)  now look if there's free in holes  make it bytes 
+ * Allocate all available (as returned by buflib_available()) memory and return
+ * a handle to it
+ *
+ * This grabs a lock which can only be unlocked by buflib_free() or
+ * buflib_shrink(), to protect from further allocations (which couldn't be
+ * serviced anyway).
+  limit name to 16 since that's what buflib_available() accounts for it  ignore ctx->compact because it's true if all movable blocks are contiguous
+     * even if the buffer has holes due to unmovable allocations  make it bytes  try as hard as possible to free up space. allocations are
+     * welcome to give up some or all of their memory  compact until no space can be gained anymore  OOM  Shrink the allocation indicated by the handle according to new_start and
+ * new_size. Grow is not possible, therefore new_start and new_start + new_size
+ * must be within the original allocation
+  newstart must be higher and new_size not "negative"  newstart isn't necessarily properly aligned but it
+                 * needn't be since it's only dereferenced by the user code  growing is not supported  update val and the handle table entry  move metadata over, i.e. pointer to handle table entry and name
+         * This is actually the point of no return. Data in the allocation is
+         * being modified, and therefore we must successfully finish the shrink
+         * operation  mark the old block unallocated  find the block before in order to merge with the new free space  We didn't handle size changes yet, assign block to the new one
+         * the code below the wants block whether it changed or not  update crc of the metadata  Now deal with size changes that create free blocks after the allocation  enlarge next block by moving it up  creating a hole  must be negative to indicate being unallocated  handle_num is 1-based 

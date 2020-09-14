@@ -1,0 +1,2953 @@
+
+ * solo.c: the number-placing puzzle most popularly known as `Sudoku'.
+ *
+ * TODO:
+ *
+ *  - reports from users are that `Trivial'-mode puzzles are still
+ *    rather hard compared to newspapers' easy ones, so some better
+ *    low-end difficulty grading would be nice
+ *     + it's possible that really easy puzzles always have
+ *       _several_ things you can do, so don't make you hunt too
+ *       hard for the one deduction you can currently make
+ *     + it's also possible that easy puzzles require fewer
+ *       cross-eliminations: perhaps there's a higher incidence of
+ *       things you can deduce by looking only at (say) rows,
+ *       rather than things you have to check both rows and columns
+ *       for
+ *     + but really, what I need to do is find some really easy
+ *       puzzles and _play_ them, to see what's actually easy about
+ *       them
+ *     + while I'm revamping this area, filling in the _last_
+ *       number in a nearly-full row or column should certainly be
+ *       permitted even at the lowest difficulty level.
+ *     + also Owen noticed that `Basic' grids requiring numeric
+ *       elimination are actually very hard, so I wonder if a
+ *       difficulty gradation between that and positional-
+ *       elimination-only might be in order
+ *     + but it's not good to have _too_ many difficulty levels, or
+ *       it'll take too long to randomly generate a given level.
+ * 
+ *  - it might still be nice to do some prioritisation on the
+ *    removal of numbers from the grid
+ *     + one possibility is to try to minimise the maximum number
+ * 	 of filled squares in any block, which in particular ought
+ * 	 to enforce never leaving a completely filled block in the
+ * 	 puzzle as presented.
+ *
+ *  - alternative interface modes
+ *     + sudoku.com's Windows program has a palette of possible
+ * 	 entries; you select a palette entry first and then click
+ * 	 on the square you want it to go in, thus enabling
+ * 	 mouse-only play. Useful for PDAs! I don't think it's
+ * 	 actually incompatible with the current highlight-then-type
+ * 	 approach: you _either_ highlight a palette entry and then
+ * 	 click, _or_ you highlight a square and then type. At most
+ * 	 one thing is ever highlighted at a time, so there's no way
+ * 	 to confuse the two.
+ *     + then again, I don't actually like sudoku.com's interface;
+ *       it's too much like a paint package whereas I prefer to
+ *       think of Solo as a text editor.
+ *     + another PDA-friendly possibility is a drag interface:
+ *       _drag_ numbers from the palette into the grid squares.
+ *       Thought experiments suggest I'd prefer that to the
+ *       sudoku.com approach, but I haven't actually tried it.
+ 
+ * Solo puzzles need to be square overall (since each row and each
+ * column must contain one of every digit), but they need not be
+ * subdivided the same way internally. I am going to adopt a
+ * convention whereby I _always_ refer to `r' as the number of rows
+ * of _big_ divisions, and `c' as the number of columns of _big_
+ * divisions. Thus, a 2c by 3r puzzle looks something like this:
+ *
+ *   4 5 1 | 2 6 3
+ *   6 3 2 | 5 4 1
+ *   ------+------     (Of course, you can't subdivide it the other way
+ *   1 4 5 | 6 3 2     or you'll get clashes; observe that the 4 in the
+ *   3 2 6 | 4 1 5     top left would conflict with the 4 in the second
+ *   ------+------     box down on the left-hand side.)
+ *   5 1 4 | 3 2 6
+ *   2 6 3 | 1 5 4
+ *
+ * The need for a strong naming convention should now be clear:
+ * each small box is two rows of digits by three columns, while the
+ * overall puzzle has three rows of small boxes by two columns. So
+ * I will (hopefully) consistently use `r' to denote the number of
+ * rows _of small boxes_ (here 3), which is also the number of
+ * columns of digits in each small box; and `c' vice versa (here
+ * 2).
+ *
+ * I'm also going to choose arbitrarily to list c first wherever
+ * possible: the above is a 2x3 puzzle, not a 3x2 one.
+ 
+ * To save space, I store digits internally as unsigned char. This
+ * imposes a hard limit of 255 on the order of the puzzle. Since
+ * even a 5x5 takes unacceptably long to generate, I don't see this
+ * as a serious limitation unless something _really_ impressive
+ * happens in computing technology; but here's a typedef anyway for
+ * general good practice.
+ 
+ * To determine all possible ways to reach a given sum by adding two or
+ * three numbers from 1..9, each of which occurs exactly once in the sum,
+ * these arrays contain a list of bitmasks for each sum value, where if
+ * bit N is set, it means that N occurs in the sum.  Each list is
+ * terminated by a zero if it is shorter than the size of the array.
+ 
+     * For a square puzzle, `c' and `r' indicate the puzzle
+     * parameters as described above.
+     * 
+     * A jigsaw-style puzzle is indicated by r==1, in which case c
+     * can be whatever it likes (there is no constraint on
+     * compositeness - a 7x7 jigsaw sudoku makes perfect sense).
+      require all digits in X-diagonals 
+     * For text formatting, we do need c and r here.
+     
+     * For any square index, whichblock[i] gives its block index.
+     *
+     * For 0 <= b,i < cr, blocks[b][i] gives the index of the ith
+     * square in block b.  nr_squares[b] gives the number of squares
+     * in block b (also the number of valid elements in blocks[b]).
+     *
+     * blocks_data holds the data pointed to by blocks.
+     *
+     * nr_squares may be NULL for block structures where all blocks are
+     * the same size.
+     
+     * Textual descriptions of each block. For normal Sudoku these
+     * are of the form "(1,3)"; for jigsaw they are "starting at
+     * (5,7)". So the sensible usage in both cases is to say
+     * "elimination within block %s" with one of these strings.
+     * 
+     * Only blocknames itself needs individually freeing; it's all
+     * one block.
+     
+     * For historical reasons, I use `cr' to denote the overall
+     * width/height of the puzzle. It was a natural notation when
+     * all puzzles were divided into blocks in a grid, but doesn't
+     * really make much sense given jigsaw puzzles. However, the
+     * obvious `n' is heavily used in the solver to describe the
+     * index of a number being placed, so `cr' will have to stay.
+      Blocks for killer puzzles.   c*r*c*r elements  marks which digits are clues  a plausible default  so is this  so is this  structure copy  trivial  basic  intermediate  advanced  extreme  unreasonable  eat unknown character  case SYMM_ROT2: strcat(str, "r2"); break; [default]  case DIFF_BLOCK: strcat(str, "dt"); break; [default] 
+ * ----------------------------------------------------------------------
+ * Block structure functions.
+  ----------------------------------------------------------------------
+ * Solver.
+ * 
+ * This solver is used for two purposes:
+ *  + to check solubility of a grid as we gradually remove numbers
+ *    from it
+ *  + to solve an externally generated puzzle when the user selects
+ *    `Solve'.
+ * 
+ * It supports a variety of specific modes of reasoning. By
+ * enabling or disabling subsets of these modes we can arrange a
+ * range of difficulty levels.
+ 
+ * Modes of reasoning currently supported:
+ *
+ *  - Positional elimination: a number must go in a particular
+ *    square because all the other empty squares in a given
+ *    row/col/blk are ruled out.
+ *
+ *  - Killer minmax elimination: for killer-type puzzles, a number
+ *    is impossible if choosing it would cause the sum in a killer
+ *    region to be guaranteed to be too large or too small.
+ *
+ *  - Numeric elimination: a square must have a particular number
+ *    in because all the other numbers that could go in it are
+ *    ruled out.
+ *
+ *  - Intersectional analysis: given two domains which overlap
+ *    (hence one must be a block, and the other can be a row or
+ *    col), if the possible locations for a particular number in
+ *    one of the domains can be narrowed down to the overlap, then
+ *    that number can be ruled out everywhere but the overlap in
+ *    the other domain too.
+ *
+ *  - Set elimination: if there is a subset of the empty squares
+ *    within a domain such that the union of the possible numbers
+ *    in that subset has the same size as the subset itself, then
+ *    those numbers can be ruled out everywhere else in the domain.
+ *    (For example, if there are five empty squares and the
+ *    possible numbers in each are 12, 23, 13, 134 and 1345, then
+ *    the first three empty squares form such a subset: the numbers
+ *    1, 2 and 3 _must_ be in those three squares in some
+ *    permutation, and hence we can deduce none of them can be in
+ *    the fourth or fifth squares.)
+ *     + You can also see this the other way round, concentrating
+ *       on numbers rather than squares: if there is a subset of
+ *       the unplaced numbers within a domain such that the union
+ *       of all their possible positions has the same size as the
+ *       subset itself, then all other numbers can be ruled out for
+ *       those positions. However, it turns out that this is
+ *       exactly equivalent to the first formulation at all times:
+ *       there is a 1-1 correspondence between suitable subsets of
+ *       the unplaced numbers and suitable subsets of the unfilled
+ *       places, found by taking the _complement_ of the union of
+ *       the numbers' possible positions (or the spaces' possible
+ *       contents).
+ * 
+ *  - Forcing chains (see comment for solver_forcing().)
+ * 
+ *  - Recursion. If all else fails, we pick one of the currently
+ *    most constrained empty squares and take a random guess at its
+ *    contents, then continue solving on that basis and see if we
+ *    get any further.
+ 
+     * We set up a cubic array, indexed by x, y and digit; each
+     * element of this array is true or false according to whether
+     * or not that digit _could_ in principle go in that position.
+     *
+     * The way to index this array is cube[(y*cr+x)*cr+n-1]; there
+     * are macros below to help with this.
+     
+     * This is the grid in which we write down our final
+     * deductions. y-coordinates in here are _not_ transformed.
+     
+     * For killer-type puzzles, kclues holds the secondary clue for
+     * each cage.  For derived cages, the clue is in extra_clues.
+     
+     * Now we keep track, at a slightly higher level, of what we
+     * have yet to work out, to prevent doing the same deduction
+     * many times.
+      row[y*cr+n-1] true if digit n has been placed in row y  col[x*cr+n-1] true if digit n has been placed in row x  blk[i*cr+n-1] true if digit n has been placed in block i  diag[i*cr+n-1] true if digit n has been placed in diagonal i  diag 0 is \, 1 is / 
+ * Function called when we are certain that a particular square has
+ * a particular number in it. The y-coordinate passed in here is
+ * transformed.
+ 
+     * Rule out all other numbers in this square.
+     
+     * Rule out this number in all other positions in the row.
+     
+     * Rule out this number in all other positions in the column.
+     
+     * Rule out this number in all other positions in the block.
+     
+     * Enter the number in the result grid.
+     
+     * Cross out this number from the list of numbers left to place
+     * in its row, its column and its block.
+     
+ * Forward-declare the functions taking printf-like format arguments
+ * with __attribute__((format)) so as to ensure the argument syntax
+ * gets debugged.
+ 
+     * Count the number of set bits within this section of the
+     * cube.
+     
+     * Loop over the first domain and see if there's any set bit
+     * not also in the second.
+      both domains contain this index  there is, so we can't deduce 
+     * We have determined that all set bits in the first domain are
+     * within its overlap with the second. So loop over the second
+     * domain and remove all set bits that aren't also in that
+     * overlap; return +1 iff we actually _did_ anything.
+      we did something 
+     * We are passed a cr-by-cr matrix of booleans. Our first job
+     * is to winnow it by finding any definite placements - i.e.
+     * any row with a solitary 1 - and discarding that row and the
+     * column containing the 1.
+     
+	 * If count == 0, then there's a row with no 1s at all and
+	 * the puzzle is internally inconsistent.
+	 
+     * Convert each of rowidx/colidx from a list of 0s and 1s to a
+     * list of the indices of the 1s.
+     
+     * And create the smaller matrix.
+     
+     * Having done that, we now have a matrix in which every row
+     * has at least two 1s in. Now we search to see if we can find
+     * a rectangle of zeroes (in the set-theoretic sense of
+     * `rectangle', i.e. a subset of rows crossed with a subset of
+     * columns) whose width and height add up to n.
+     
+         * We have a candidate set. If its size is <=1 or >=n-1
+         * then we move on immediately.
+         
+             * The number of rows we need is n-count. See if we can
+             * find that many rows which each have a zero in all
+             * the positions listed in `set'.
+             
+             * We expect never to be able to get _more_ than
+             * n-count suitable rows: this would imply that (for
+             * example) there are four numbers which between them
+             * have at most three possible positions, and hence it
+             * indicates a faulty deduction before this point or
+             * even a bogus clue.
+             
+                 * We've got one! Now, for each row which _doesn't_
+                 * satisfy the criterion, eliminate all its set
+                 * bits in the positions _not_ listed in `set'.
+                 * Return +1 (meaning progress has been made) if we
+                 * successfully eliminated anything at all.
+                 * 
+                 * This involves referring back through
+                 * rowidx/colidx in order to work out which actual
+                 * positions in the cube to meddle with.
+                 
+         * Binary increment: change the rightmost 0 to a 1, and
+         * change all 1s to the right of it to 0s.
+          done 
+ * Look for forcing chains. A forcing chain is a path of
+ * pairwise-exclusive squares (i.e. each pair of adjacent squares
+ * in the path are in the same row, column or block) with the
+ * following properties:
+ *
+ *  (a) Each square on the path has precisely two possible numbers.
+ *
+ *  (b) Each pair of squares which are adjacent on the path share
+ * 	at least one possible number in common.
+ *
+ *  (c) Each square in the middle of the path shares _both_ of its
+ * 	numbers with at least one of its neighbours (not the same
+ * 	one with both neighbours).
+ *
+ * These together imply that at least one of the possible number
+ * choices at one end of the path forces _all_ the rest of the
+ * numbers along the path. In order to make real use of this, we
+ * need further properties:
+ *
+ *  (c) Ruling out some number N from the square at one end of the
+ * 	path forces the square at the other end to take the same
+ * 	number N.
+ *
+ *  (d) The two end squares are both in line with some third
+ * 	square.
+ *
+ *  (e) That third square currently has N as a possibility.
+ *
+ * If we can find all of that lot, we can deduce that at least one
+ * of the two ends of the forcing chain has number N, and that
+ * therefore the mutually adjacent third square does not.
+ *
+ * To find forcing chains, we're going to start a bfs at each
+ * suitable square, once for each of its two possible numbers.
+ 
+             * If this square doesn't have exactly two candidate
+             * numbers, don't try it.
+             * 
+             * In this loop we also sum the candidate numbers,
+             * which is a nasty hack to allow us to quickly find
+             * `the other one' (since we will shortly know there
+             * are exactly two).
+             
+             * Now attempt a bfs for each candidate.
+             
+                     * Begin a bfs.
+                     
+                         * Find neighbours of yy,xx.
+                         
+                         * Try visiting each of those neighbours.
+                         
+                             * We need this square to not be
+                             * already visited, and to include
+                             * currn as a possible number.
+                             
+                             * Don't visit _this_ square a second
+                             * time!
+                             
+                             * To continue with the bfs, we need
+                             * this square to have exactly two
+                             * possible numbers.
+                             
+                             * One other possibility is that this
+                             * might be the square in which we can
+                             * make a real deduction: if it's
+                             * adjacent to x,y, and currn is equal
+                             * to the original number we ruled out.
+                             
+	 * Verify that the cage lies entirely within one region,
+	 * so that using the precomputed sums is valid.
+	 
+     * For every possible way to get the sum, see if there is
+     * one square in the cage that disallows all the required
+     * addends.  If we find one such square, this way to compute
+     * the sum is impossible.
+     
+     * Now we know which addends can possibly be used to
+     * compute the sum.  Remove all other digits from the
+     * set of possibilities.
+      First, filter squares with a clue.  
+     * Filter all cages that are covered entirely by the list of
+     * squares.
+     
+	 * Find all squares of block b that lie in our list,
+	 * and make them contiguous at off, which is the current position
+	 * in the output list.
+	  If so, filter out all squares of b from the list.   used for set elimination  only used for intersect() 
+ * Used for passing information about difficulty levels between the solver
+ * and its callers.
+  Maximum levels allowed.   Levels reached by the solver.  
+     * Set up a usage structure as a clean slate (everything
+     * possible).
+      write straight back to the input 
+	 * Allow for expansion of the killer regions, the absolute
+	 * limit is obviously one region per square.
+	 
+     * Place all the clue numbers we are given.
+     
+     * Now loop over the grid repeatedly trying all permitted modes
+     * of reasoning. The loop terminates if we complete an
+     * iteration without making any progress; we then return
+     * failure or success depending on whether the grid is full or
+     * not.
+     
+         * I'd like to write `continue;' inside each of the
+         * following loops, so that the solver returns here after
+         * making some progress. However, I can't specify that I
+         * want to continue an outer loop rather than the innermost
+         * one, so I'm apologetically resorting to a goto.
+         
+	 * Blockwise positional elimination.
+	 
+	     * First, bring the kblocks into a more useful form: remove
+	     * all filled-in squares, and reduce the sum by their values.
+	     * Walk in reverse order, since otherwise remove_from_block
+	     * can move element past our loop counter.
+	     
+		     * Since cages are regions, this tells us something
+		     * about the other squares in the cage.
+		     
+	     * The most trivial kind of solver for killer puzzles: fill
+	     * single-square cages.
+	     
+	     * Now, create the extra_cages information.  Every full region
+	     * (row, column, or block) has the same sum total (45 for 3x3
+	     * puzzles.  After we try to cover these regions with cages that
+	     * lie entirely within them, any squares that remain must bring
+	     * the total to this known value, and so they form additional
+	     * cages which aren't immediately evident in the displayed form
+	     * of the puzzle.
+	     
+	 * Another simple killer-type elimination.  For every square in a
+	 * cage, find the minimum and maximum possible sums of all the
+	 * other squares in the same cage, and rule out possibilities
+	 * for the given square based on whether they are guaranteed to
+	 * cause the sum to be either too high or too low.
+	 * This is a special case of trying all possible sums across a
+	 * region, which is a recursive algorithm.  We should probably
+	 * implement it for a higher difficulty level.
+	 
+	 * Try to use knowledge of which numbers can be used to generate
+	 * a given sum.
+	 * This can only be used if a cage lies entirely within a region.
+	 
+	 * Row-wise positional elimination.
+	 
+	 * Column-wise positional elimination.
+	 
+	 * X-diagonal positional elimination.
+	 
+	 * Numeric elimination.
+	 
+         * Intersectional analysis, rows vs blocks.
+         
+		     * solver_intersect() never returns -1.
+		     
+         * Intersectional analysis, columns vs blocks.
+         
+	     * Intersectional analysis, \-diagonal vs blocks.
+	     
+	     * Intersectional analysis, /-diagonal vs blocks.
+	     
+	 * Blockwise set elimination.
+	 
+	 * Row-wise set elimination.
+	 
+	 * Column-wise set elimination.
+	 
+	     * \-diagonal set elimination.
+	     
+	     * /-diagonal set elimination.
+	     
+	 * Row-vs-column set elimination on a single number.
+	 
+         * Forcing chains.
+         
+	 * If we reach here, we have made no deductions in this
+	 * iteration, so the algorithm terminates.
+	 
+     * Last chance: if we haven't fully solved the puzzle yet, try
+     * recursing based on guesses for a particular square. We pick
+     * one of the most constrained empty squares we can find, which
+     * has the effect of pruning the search tree as much as
+     * possible.
+     
+		     * An unfilled square. Count the number of
+		     * possible digits in it.
+		     
+		     * We should have found any impossibilities
+		     * already, so this can safely be an assert.
+		      no solution found yet 
+	     * Attempt recursion.
+	      Make a list of the possible digits. 
+	     * And step along the list, recursing back into the
+	     * main solver at every stage.
+	     
+		 * If we have our first solution, copy it into the
+		 * grid we will return.
+		  do not change our return value  the recursion turned up exactly one solution 
+		 * As soon as we've found more than one solution,
+		 * give up immediately.
+		 
+         * We're forbidden to use recursion, so we just see whether
+         * our grid is fully solved, and return DIFF_IMPOSSIBLE
+         * otherwise.
+          ----------------------------------------------------------------------
+ * End of solver code.
+  ----------------------------------------------------------------------
+ * Killer set generator.
+  ----------------------------------------------------------------------
+ * Solo filled-grid generator.
+ *
+ * This grid generator works by essentially trying to solve a grid
+ * starting from no clues, and not worrying that there's more than
+ * one possible solution. Unfortunately, it isn't computationally
+ * feasible to do this by calling the above solver with an empty
+ * grid, because that one needs to allocate a lot of scratch space
+ * at every recursion level. Instead, I have a much simpler
+ * algorithm which I shamelessly copied from a Python solver
+ * written by Andrew Wilkinson (which is GPLed, but I've reused
+ * only ideas and no code). It mostly just does the obvious
+ * recursive thing: pick an empty square, put one of the possible
+ * digits in it, recurse until all squares are filled, backtrack
+ * and change some choices if necessary.
+ *
+ * The clever bit is that every time it chooses which square to
+ * fill in next, it does so by counting the number of _possible_
+ * numbers that can go in each square, and it prioritises so that
+ * it picks a square with the _lowest_ number of possibilities. The
+ * idea is that filling in lots of the obvious bits (particularly
+ * any squares with only one possibility) will cut down on the list
+ * of possibilities for other squares and hence reduce the enormous
+ * search space as much as possible as early as possible.
+ *
+ * The use of bit sets implies that we support puzzles up to a size of
+ * 32x32 (less if anyone finds a 16-bit machine to compile this on).
+ 
+ * Internal data structure used in gridgen to keep track of
+ * progress.
+  grid is a copy of the input grid, modified as we go along 
+     * Bitsets.  In each of them, bit n is set if digit n has been placed
+     * in the corresponding region.  row, col and blk are used for all
+     * puzzles.  cge is used only for killer puzzles, and diag is used
+     * only for x-type puzzles.
+     * All of these have cr entries, except diag which only has 2,
+     * and cge, which has as many entries as kblocks.
+      This lists all the empty spaces remaining in the grid.  If we need randomisation in the solve, this is our random state. 
+ * The real recursive step in the generating function.
+ *
+ * Return values: 1 means solution found, 0 means no solution
+ * found on this branch.
+ 
+     * Firstly, check for completion! If there are no spaces left
+     * in the grid, we have a solution.
+     
+     * Next, abandon generation if we went over our steps limit.
+     
+     * Otherwise, there must be at least one space. Find the most
+     * constrained space, using the `r' field as a tie-breaker.
+      so that any space will beat it 
+	 * Find the number of digits that could go in this space.
+	 
+     * Swap that square into the final place in the spaces array,
+     * so that decrementing nspaces will remove it from the list.
+     
+     * Now we've decided which square to start our recursion at,
+     * simply go through all possible values, shuffling them
+     * randomly first if necessary.
+      And finally, go through the digit list and actually recurse.  Update the usage structure to reflect the placing of this digit.  Call the solver recursively. Stop when we find a solution.  Revert the usage structure. 
+ * Entry point to generator. You give it parameters and a starting
+ * grid, which is simply an array of cr*cr digits.
+ 
+     * Clear the grid to start with.
+     
+     * Create a gridgen_usage structure.
+     
+     * Begin by filling in the whole top row with randomly chosen
+     * numbers. This cannot introduce any bias or restriction on
+     * the available grids, since we already know those numbers
+     * are all distinct so all we're doing is choosing their
+     * labels.
+     
+     * Initialise the list of grid spaces, taking care to leave
+     * out the row I've already filled in above.
+     
+     * Run the real generator function.
+     
+     * Clean up the usage structure now we have our answer.
+      ----------------------------------------------------------------------
+ * End of grid generator code.
+ 
+     * Returns: -1 if the cage has any empty square; 0 if all squares
+     * are full but the sum is wrong; +1 if all squares are full and
+     * they have the right sum.
+     *
+     * Does not check uniqueness of numbers within the cage; that's
+     * done elsewhere (because in error highlighting it needs to be
+     * detected separately so as to flag the error in a visually
+     * different way).
+     
+ * Check whether a grid contains a valid complete puzzle.
+ 
+     * Check that each row contains precisely one of everything.
+     
+     * Check that each column contains precisely one of everything.
+     
+     * Check that each block contains precisely one of everything.
+     
+     * Check that each Killer cage, if any, contains at most one of
+     * everything. If we also know the clues for those cages (which we
+     * might not, when this function is called early in puzzle
+     * generation), we also check that they all have the right sum.
+     
+     * Check that each diagonal contains precisely one of everything.
+      just x,y is all we need 
+     * It's surprisingly easy to work out _exactly_ how long this
+     * string needs to be. To decimal-encode all the numbers from 1
+     * to n:
+     * 
+     *  - every number has a units digit; total is n.
+     *  - all numbers above 9 have a tens digit; total is max(n-9,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n-99,0).
+     *  - and so on.
+      don't forget the commas  there are cr rows of these 
+     * Now len is one bigger than the total size of the
+     * comma-separated numbers (because we counted an
+     * additional leading comma). We need to have a leading S
+     * and a trailing NUL, so we're off by one in total.
+     
+     * Encode the block structure. We do this by encoding
+     * the pattern of dividing lines: first we iterate
+     * over the cr*(cr-1) internal vertical grid lines in
+     * ordinary reading order, then over the cr*(cr-1)
+     * internal horizontal ones in transposed reading
+     * order.
+     * 
+     * We encode the number of non-lines between the
+     * lines; _ means zero (two adjacent divisions), a
+     * means 1, ..., y means 25, and z means 25 non-lines
+     * _and no following line_ (so that za means 26, zb 27
+     * etc).
+      terminating virtual edge 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		 
+ * Conservatively stimate the number of characters required for
+ * encoding a grid of a certain area.
+ 
+ * Conservatively stimate the number of characters required for
+ * encoding a given blocks structure.
+  Move data towards the lower block number.   Merge n2 into n1, and move the last block into n2's position.  
+     * Make a list of all the pairs of adjacent blocks.
+     
+	     * Rule the merger out of consideration if it's
+	     * obviously not viable.
+	      we couldn't merge these anyway 
+	     * See if these two blocks have a pair of squares
+	     * adjacent to each other.
+	     
+		     * Yes! Add this pair to our list.
+		     
+     * Now go through that list in random order until we find a pair
+     * of blocks we can merge.
+     
+	 * Pick a random pair, and remove it from the list.
+	  Guarantee that the merged cage would still be a region.  
+	 * Got one! Do the merge.
+	 
+     * Adjust the maximum difficulty level to be consistent with
+     * the puzzle size: all 2x2 puzzles appear to be Trivial
+     * (DIFF_BLOCK) so we cannot hold out for even a Basic
+     * (DIFF_SIMPLE) one.
+     
+     * Loop until we get a grid of the required difficulty. This is
+     * nasty, but it seems to be unpleasantly hard to generate
+     * difficult grids otherwise.
+     
+         * Generate a random solved state, starting by
+         * constructing the block structure.
+          jigsaw mode  basic Sudoku mode 
+	 * Save the solved grid in aux.
+	 
+	     * We might already have written *aux the last time we
+	     * went round this loop, in which case we should free
+	     * the old aux before overwriting it with the new one.
+	     
+	 * Now we have a solved grid. For normal puzzles, we start removing
+	 * things from it while preserving solubility.  Killer puzzles are
+	 * different: we just pass the empty grid to the solver, and use
+	 * the puzzle if it comes back solved.
+	 
+		     * We have one that matches our difficulty.  Store it for
+		     * later, but keep going.
+		     
+		     * Give up after too many tries and either use the good one we
+		     * found, or generate a new grid.
+		     
+		     * The difficulty level got too high.  If we have a good
+		     * one, use it, otherwise go back to the last one that
+		     * was at a lower difficulty and restart the process from
+		     * there.
+		     
+         * Find the set of equivalence classes of squares permitted
+         * by the selected symmetry. We do this by enumerating all
+         * the grid squares which have no symmetric companion
+         * sorting lower than themselves.
+         
+         * Now shuffle that list.
+         
+         * Now loop over the shuffled list and, for each element,
+         * see whether removing that element (and its reflections)
+         * from the grid will still leave the grid soluble.
+          found one! 
+     * Now we have the grid as it will be presented to the user.
+     * Encode it in a game desc.
+      do nothing 
+ * Create a DSF from a spec found in *pdesc. Update this to point past the
+ * end of the block spec, and return an error string or NULL if everything
+ * is OK. The DSF is stored in *PDSF.
+  'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+      do nothing 
+     * Now we've got our dsf. Verify that it matches
+     * expectations.
+     
+	 * Now we expect a suffix giving the jigsaw block
+	 * structure. Parse it and validate that it divides the
+	 * grid into the right number of regions which are the
+	 * right size.
+	 
+     * Set up the block names for solver diagnostic output.
+     
+     * If we already have the solution in ai, save ourselves some
+     * time.
+     
+     * For non-jigsaw Sudoku, we format in the way we always have,
+     * by having the digits unevenly spaced so that the dividing
+     * lines can fit in:
+     *
+     * . . | . .
+     * . . | . .
+     * ----+----
+     * . . | . .
+     * . . | . .
+     *
+     * For jigsaw puzzles, however, we must leave space between
+     * _all_ pairs of digits for an optional dividing line, so we
+     * have to move to the rather ugly
+     * 
+     * .   .   .   .
+     * ------+------
+     * .   . | .   .
+     *       +---+  
+     * .   . | . | .
+     * ------+   |  
+     * .   .   . | .
+     * 
+     * We deal with both cases using the same formatting code; we
+     * simply invent a vmod value such that there's a vertical
+     * dividing line before column i iff i is divisible by vmod
+     * (so it's r in the first case and 1 in the second), and hmod
+     * likewise for horizontal dividing lines.
+     
+     * Line length: we have cr digits, each with a space after it,
+     * and (cr-1)/vmod dividing lines, each with a space after it.
+     * The final space is replaced by a newline, but that doesn't
+     * affect the length.
+     
+     * Number of lines: we have cr rows of digits, and (cr-1)/hmod
+     * dividing rows.
+     
+     * Allocate the space.
+      leave room for terminating NUL 
+     * Write the text.
+     
+	 * Row of digits.
+	 
+	     * Digit.
+	     
+		 * Empty space: we usually write a dot, but we'll
+		 * highlight spaces on the X-diagonals (in X mode)
+		 * by using underscores instead.
+		 
+	     * Optional dividing line.
+	     
+	 * Dividing row.
+	 
+	     * Division between two squares. This varies
+	     * complicatedly in length.
+	      digit and its following space  no following space at end of line  preceding space after a divider 
+	     * Corner square. This is:
+	     * 	- a space if all four surrounding squares are in
+	     * 	  the same block
+	     * 	- a vertical line if the two left ones are in one
+	     * 	  block and the two right in another
+	     * 	- a horizontal line if the two top ones are in one
+	     * 	  block and the two bottom in another
+	     * 	- a plus sign in all other cases. (If we had a
+	     * 	  richer character set available we could break
+	     * 	  this case up further by doing fun things with
+	     * 	  line-drawing T-pieces.)
+	     
+     * Formatting Killer puzzles as text is currently unsupported. I
+     * can't think of any sensible way of doing it which doesn't
+     * involve expanding the puzzle to such a large scale as to make
+     * it unusable.
+     
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow is true, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      This is scratch space used within a single call to game_redraw. 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't overwrite this square. This can only happen here
+         * if we're using the cursor keys.
+         
+         * Can't make pencil marks in a filled square. Again, this
+         * can only become highlighted if we're using cursor keys.
+         
+             * We've made a real change to the grid. Check to see
+             * if the game has been completed.
+             
+	 * Fill in absolutely all pencil marks in unfilled squares,
+	 * for those who like to play by the rigorous approach of
+	 * starting off in that state and eliminating things.
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * ds->entered_items needs one row of cr entries per entity in
+     * which digits may not be duplicated. That's one for each row,
+     * each column, each block, each diagonal, and each Killer cage.
+      not decided yet  no change required  background needs erasing 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      pencil-mode highlight 
+	 * In non-jigsaw mode, the Killer cages are placed at a
+	 * fixed offset from the outer edge of the cell dividing
+	 * lines, so that they look right whether those lines are
+	 * thick or thin. In jigsaw mode, however, doing this will
+	 * sometimes cause the cage outlines in adjacent squares to
+	 * fail to match up with each other, so we must offset a
+	 * fixed amount from the _centre_ of the cell dividing
+	 * lines.
+	 
+	 * First, draw the lines dividing this area from neighbouring
+	 * different areas.
+	 
+	 * Now, take care of the corners (just as for the normal borders).
+	 * We only need a corner if there wasn't a full edge.
+	  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the Killer cages. We do this
+		 * unconditionally, for uniformity between squares,
+		 * rather than making it depend on whether a Killer
+		 * cage edge is actually present on any given side.
+		  Make further space for the Killer number.  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with the
+	     * Killer cage number.
+	     
+	     * Now actually draw the pencil marks.
+	     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+	 * Draw the grid. We draw it as a big thick rectangle of
+	 * COL_GRID initially; individual calls to draw_number()
+	 * will poke the right-shaped holes in it.
+	 
+     * This array is used to keep track of rows, columns and boxes
+     * which contain a number more than once.
+      Rows  Columns  Blocks  Diagonals  Killer cages 
+     * Draw any numbers which need redrawing.
+      Highlight active input areas.  Mark obvious errors (ie, numbers which occur more than once
+	     * in a single row, column, or box). 
+     * Update the _entire_ grid if necessary.
+     
+     * I'll use 9mm squares by default. They should be quite big
+     * for this game, because players will want to jot down no end
+     * of pencil marks in the squares.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ *
+ * This subfunction is also reused with thinner dotted lines to
+ * outline the Killer cages, this time offsetting the outline toward
+ * the interior of the affected squares.
+ 
+     * Maximum perimeter of a k-omino is 2k+2. (Proof: start
+     * with k unconnected squares, with total perimeter 4k.
+     * Now repeatedly join two disconnected components
+     * together into a larger one; every time you do so you
+     * remove at least two unit edges, and you require k-1 of
+     * these operations to create a single connected piece, so
+     * you must have at most 4k-2(k-1) = 2k+2 unit edges left
+     * afterwards.)
+      2k+2 points, 2 coords per point 
+     * Iterate over all the blocks.
+     
+	 * For each block, find a starting square within it
+	 * which has a boundary at the left.
+	  every block must have _some_ leftmost square 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+		 * We turned right, so inset this corner back along
+		 * the edge towards the centre of the square.
+		 
+		 * We turned left, so inset this corner further
+		 * _out_ along the edge into the next square.
+		 
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Highlight X-diagonal squares.
+      avoid redoing centre square, just for fun 
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Killer cages and their totals.
+     
+     * Standard (non-Killer) clue numbers.
+      wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * solo.c: the number-placing puzzle most popularly known as `Sudoku'.
+ *
+ * TODO:
+ *
+ *  - reports from users are that `Trivial'-mode puzzles are still
+ *    rather hard compared to newspapers' easy ones, so some better
+ *    low-end difficulty grading would be nice
+ *     + it's possible that really easy puzzles always have
+ *       _several_ things you can do, so don't make you hunt too
+ *       hard for the one deduction you can currently make
+ *     + it's also possible that easy puzzles require fewer
+ *       cross-eliminations: perhaps there's a higher incidence of
+ *       things you can deduce by looking only at (say) rows,
+ *       rather than things you have to check both rows and columns
+ *       for
+ *     + but really, what I need to do is find some really easy
+ *       puzzles and _play_ them, to see what's actually easy about
+ *       them
+ *     + while I'm revamping this area, filling in the _last_
+ *       number in a nearly-full row or column should certainly be
+ *       permitted even at the lowest difficulty level.
+ *     + also Owen noticed that `Basic' grids requiring numeric
+ *       elimination are actually very hard, so I wonder if a
+ *       difficulty gradation between that and positional-
+ *       elimination-only might be in order
+ *     + but it's not good to have _too_ many difficulty levels, or
+ *       it'll take too long to randomly generate a given level.
+ * 
+ *  - it might still be nice to do some prioritisation on the
+ *    removal of numbers from the grid
+ *     + one possibility is to try to minimise the maximum number
+ * 	 of filled squares in any block, which in particular ought
+ * 	 to enforce never leaving a completely filled block in the
+ * 	 puzzle as presented.
+ *
+ *  - alternative interface modes
+ *     + sudoku.com's Windows program has a palette of possible
+ * 	 entries; you select a palette entry first and then click
+ * 	 on the square you want it to go in, thus enabling
+ * 	 mouse-only play. Useful for PDAs! I don't think it's
+ * 	 actually incompatible with the current highlight-then-type
+ * 	 approach: you _either_ highlight a palette entry and then
+ * 	 click, _or_ you highlight a square and then type. At most
+ * 	 one thing is ever highlighted at a time, so there's no way
+ * 	 to confuse the two.
+ *     + then again, I don't actually like sudoku.com's interface;
+ *       it's too much like a paint package whereas I prefer to
+ *       think of Solo as a text editor.
+ *     + another PDA-friendly possibility is a drag interface:
+ *       _drag_ numbers from the palette into the grid squares.
+ *       Thought experiments suggest I'd prefer that to the
+ *       sudoku.com approach, but I haven't actually tried it.
+ 
+ * Solo puzzles need to be square overall (since each row and each
+ * column must contain one of every digit), but they need not be
+ * subdivided the same way internally. I am going to adopt a
+ * convention whereby I _always_ refer to `r' as the number of rows
+ * of _big_ divisions, and `c' as the number of columns of _big_
+ * divisions. Thus, a 2c by 3r puzzle looks something like this:
+ *
+ *   4 5 1 | 2 6 3
+ *   6 3 2 | 5 4 1
+ *   ------+------     (Of course, you can't subdivide it the other way
+ *   1 4 5 | 6 3 2     or you'll get clashes; observe that the 4 in the
+ *   3 2 6 | 4 1 5     top left would conflict with the 4 in the second
+ *   ------+------     box down on the left-hand side.)
+ *   5 1 4 | 3 2 6
+ *   2 6 3 | 1 5 4
+ *
+ * The need for a strong naming convention should now be clear:
+ * each small box is two rows of digits by three columns, while the
+ * overall puzzle has three rows of small boxes by two columns. So
+ * I will (hopefully) consistently use `r' to denote the number of
+ * rows _of small boxes_ (here 3), which is also the number of
+ * columns of digits in each small box; and `c' vice versa (here
+ * 2).
+ *
+ * I'm also going to choose arbitrarily to list c first wherever
+ * possible: the above is a 2x3 puzzle, not a 3x2 one.
+ 
+ * To save space, I store digits internally as unsigned char. This
+ * imposes a hard limit of 255 on the order of the puzzle. Since
+ * even a 5x5 takes unacceptably long to generate, I don't see this
+ * as a serious limitation unless something _really_ impressive
+ * happens in computing technology; but here's a typedef anyway for
+ * general good practice.
+ 
+ * To determine all possible ways to reach a given sum by adding two or
+ * three numbers from 1..9, each of which occurs exactly once in the sum,
+ * these arrays contain a list of bitmasks for each sum value, where if
+ * bit N is set, it means that N occurs in the sum.  Each list is
+ * terminated by a zero if it is shorter than the size of the array.
+ 
+     * For a square puzzle, `c' and `r' indicate the puzzle
+     * parameters as described above.
+     * 
+     * A jigsaw-style puzzle is indicated by r==1, in which case c
+     * can be whatever it likes (there is no constraint on
+     * compositeness - a 7x7 jigsaw sudoku makes perfect sense).
+      require all digits in X-diagonals 
+     * For text formatting, we do need c and r here.
+     
+     * For any square index, whichblock[i] gives its block index.
+     *
+     * For 0 <= b,i < cr, blocks[b][i] gives the index of the ith
+     * square in block b.  nr_squares[b] gives the number of squares
+     * in block b (also the number of valid elements in blocks[b]).
+     *
+     * blocks_data holds the data pointed to by blocks.
+     *
+     * nr_squares may be NULL for block structures where all blocks are
+     * the same size.
+     
+     * Textual descriptions of each block. For normal Sudoku these
+     * are of the form "(1,3)"; for jigsaw they are "starting at
+     * (5,7)". So the sensible usage in both cases is to say
+     * "elimination within block %s" with one of these strings.
+     * 
+     * Only blocknames itself needs individually freeing; it's all
+     * one block.
+     
+     * For historical reasons, I use `cr' to denote the overall
+     * width/height of the puzzle. It was a natural notation when
+     * all puzzles were divided into blocks in a grid, but doesn't
+     * really make much sense given jigsaw puzzles. However, the
+     * obvious `n' is heavily used in the solver to describe the
+     * index of a number being placed, so `cr' will have to stay.
+      Blocks for killer puzzles.   c*r*c*r elements  marks which digits are clues  a plausible default  so is this  so is this  structure copy  trivial  basic  intermediate  advanced  extreme  unreasonable  eat unknown character  case SYMM_ROT2: strcat(str, "r2"); break; [default]  case DIFF_BLOCK: strcat(str, "dt"); break; [default] 
+ * ----------------------------------------------------------------------
+ * Block structure functions.
+  ----------------------------------------------------------------------
+ * Solver.
+ * 
+ * This solver is used for two purposes:
+ *  + to check solubility of a grid as we gradually remove numbers
+ *    from it
+ *  + to solve an externally generated puzzle when the user selects
+ *    `Solve'.
+ * 
+ * It supports a variety of specific modes of reasoning. By
+ * enabling or disabling subsets of these modes we can arrange a
+ * range of difficulty levels.
+ 
+ * Modes of reasoning currently supported:
+ *
+ *  - Positional elimination: a number must go in a particular
+ *    square because all the other empty squares in a given
+ *    row/col/blk are ruled out.
+ *
+ *  - Killer minmax elimination: for killer-type puzzles, a number
+ *    is impossible if choosing it would cause the sum in a killer
+ *    region to be guaranteed to be too large or too small.
+ *
+ *  - Numeric elimination: a square must have a particular number
+ *    in because all the other numbers that could go in it are
+ *    ruled out.
+ *
+ *  - Intersectional analysis: given two domains which overlap
+ *    (hence one must be a block, and the other can be a row or
+ *    col), if the possible locations for a particular number in
+ *    one of the domains can be narrowed down to the overlap, then
+ *    that number can be ruled out everywhere but the overlap in
+ *    the other domain too.
+ *
+ *  - Set elimination: if there is a subset of the empty squares
+ *    within a domain such that the union of the possible numbers
+ *    in that subset has the same size as the subset itself, then
+ *    those numbers can be ruled out everywhere else in the domain.
+ *    (For example, if there are five empty squares and the
+ *    possible numbers in each are 12, 23, 13, 134 and 1345, then
+ *    the first three empty squares form such a subset: the numbers
+ *    1, 2 and 3 _must_ be in those three squares in some
+ *    permutation, and hence we can deduce none of them can be in
+ *    the fourth or fifth squares.)
+ *     + You can also see this the other way round, concentrating
+ *       on numbers rather than squares: if there is a subset of
+ *       the unplaced numbers within a domain such that the union
+ *       of all their possible positions has the same size as the
+ *       subset itself, then all other numbers can be ruled out for
+ *       those positions. However, it turns out that this is
+ *       exactly equivalent to the first formulation at all times:
+ *       there is a 1-1 correspondence between suitable subsets of
+ *       the unplaced numbers and suitable subsets of the unfilled
+ *       places, found by taking the _complement_ of the union of
+ *       the numbers' possible positions (or the spaces' possible
+ *       contents).
+ * 
+ *  - Forcing chains (see comment for solver_forcing().)
+ * 
+ *  - Recursion. If all else fails, we pick one of the currently
+ *    most constrained empty squares and take a random guess at its
+ *    contents, then continue solving on that basis and see if we
+ *    get any further.
+ 
+     * We set up a cubic array, indexed by x, y and digit; each
+     * element of this array is true or false according to whether
+     * or not that digit _could_ in principle go in that position.
+     *
+     * The way to index this array is cube[(y*cr+x)*cr+n-1]; there
+     * are macros below to help with this.
+     
+     * This is the grid in which we write down our final
+     * deductions. y-coordinates in here are _not_ transformed.
+     
+     * For killer-type puzzles, kclues holds the secondary clue for
+     * each cage.  For derived cages, the clue is in extra_clues.
+     
+     * Now we keep track, at a slightly higher level, of what we
+     * have yet to work out, to prevent doing the same deduction
+     * many times.
+      row[y*cr+n-1] true if digit n has been placed in row y  col[x*cr+n-1] true if digit n has been placed in row x  blk[i*cr+n-1] true if digit n has been placed in block i  diag[i*cr+n-1] true if digit n has been placed in diagonal i  diag 0 is \, 1 is / 
+ * Function called when we are certain that a particular square has
+ * a particular number in it. The y-coordinate passed in here is
+ * transformed.
+ 
+     * Rule out all other numbers in this square.
+     
+     * Rule out this number in all other positions in the row.
+     
+     * Rule out this number in all other positions in the column.
+     
+     * Rule out this number in all other positions in the block.
+     
+     * Enter the number in the result grid.
+     
+     * Cross out this number from the list of numbers left to place
+     * in its row, its column and its block.
+     
+ * Forward-declare the functions taking printf-like format arguments
+ * with __attribute__((format)) so as to ensure the argument syntax
+ * gets debugged.
+ 
+     * Count the number of set bits within this section of the
+     * cube.
+     
+     * Loop over the first domain and see if there's any set bit
+     * not also in the second.
+      both domains contain this index  there is, so we can't deduce 
+     * We have determined that all set bits in the first domain are
+     * within its overlap with the second. So loop over the second
+     * domain and remove all set bits that aren't also in that
+     * overlap; return +1 iff we actually _did_ anything.
+      we did something 
+     * We are passed a cr-by-cr matrix of booleans. Our first job
+     * is to winnow it by finding any definite placements - i.e.
+     * any row with a solitary 1 - and discarding that row and the
+     * column containing the 1.
+     
+	 * If count == 0, then there's a row with no 1s at all and
+	 * the puzzle is internally inconsistent.
+	 
+     * Convert each of rowidx/colidx from a list of 0s and 1s to a
+     * list of the indices of the 1s.
+     
+     * And create the smaller matrix.
+     
+     * Having done that, we now have a matrix in which every row
+     * has at least two 1s in. Now we search to see if we can find
+     * a rectangle of zeroes (in the set-theoretic sense of
+     * `rectangle', i.e. a subset of rows crossed with a subset of
+     * columns) whose width and height add up to n.
+     
+         * We have a candidate set. If its size is <=1 or >=n-1
+         * then we move on immediately.
+         
+             * The number of rows we need is n-count. See if we can
+             * find that many rows which each have a zero in all
+             * the positions listed in `set'.
+             
+             * We expect never to be able to get _more_ than
+             * n-count suitable rows: this would imply that (for
+             * example) there are four numbers which between them
+             * have at most three possible positions, and hence it
+             * indicates a faulty deduction before this point or
+             * even a bogus clue.
+             
+                 * We've got one! Now, for each row which _doesn't_
+                 * satisfy the criterion, eliminate all its set
+                 * bits in the positions _not_ listed in `set'.
+                 * Return +1 (meaning progress has been made) if we
+                 * successfully eliminated anything at all.
+                 * 
+                 * This involves referring back through
+                 * rowidx/colidx in order to work out which actual
+                 * positions in the cube to meddle with.
+                 
+         * Binary increment: change the rightmost 0 to a 1, and
+         * change all 1s to the right of it to 0s.
+          done 
+ * Look for forcing chains. A forcing chain is a path of
+ * pairwise-exclusive squares (i.e. each pair of adjacent squares
+ * in the path are in the same row, column or block) with the
+ * following properties:
+ *
+ *  (a) Each square on the path has precisely two possible numbers.
+ *
+ *  (b) Each pair of squares which are adjacent on the path share
+ * 	at least one possible number in common.
+ *
+ *  (c) Each square in the middle of the path shares _both_ of its
+ * 	numbers with at least one of its neighbours (not the same
+ * 	one with both neighbours).
+ *
+ * These together imply that at least one of the possible number
+ * choices at one end of the path forces _all_ the rest of the
+ * numbers along the path. In order to make real use of this, we
+ * need further properties:
+ *
+ *  (c) Ruling out some number N from the square at one end of the
+ * 	path forces the square at the other end to take the same
+ * 	number N.
+ *
+ *  (d) The two end squares are both in line with some third
+ * 	square.
+ *
+ *  (e) That third square currently has N as a possibility.
+ *
+ * If we can find all of that lot, we can deduce that at least one
+ * of the two ends of the forcing chain has number N, and that
+ * therefore the mutually adjacent third square does not.
+ *
+ * To find forcing chains, we're going to start a bfs at each
+ * suitable square, once for each of its two possible numbers.
+ 
+             * If this square doesn't have exactly two candidate
+             * numbers, don't try it.
+             * 
+             * In this loop we also sum the candidate numbers,
+             * which is a nasty hack to allow us to quickly find
+             * `the other one' (since we will shortly know there
+             * are exactly two).
+             
+             * Now attempt a bfs for each candidate.
+             
+                     * Begin a bfs.
+                     
+                         * Find neighbours of yy,xx.
+                         
+                         * Try visiting each of those neighbours.
+                         
+                             * We need this square to not be
+                             * already visited, and to include
+                             * currn as a possible number.
+                             
+                             * Don't visit _this_ square a second
+                             * time!
+                             
+                             * To continue with the bfs, we need
+                             * this square to have exactly two
+                             * possible numbers.
+                             
+                             * One other possibility is that this
+                             * might be the square in which we can
+                             * make a real deduction: if it's
+                             * adjacent to x,y, and currn is equal
+                             * to the original number we ruled out.
+                             
+	 * Verify that the cage lies entirely within one region,
+	 * so that using the precomputed sums is valid.
+	 
+     * For every possible way to get the sum, see if there is
+     * one square in the cage that disallows all the required
+     * addends.  If we find one such square, this way to compute
+     * the sum is impossible.
+     
+     * Now we know which addends can possibly be used to
+     * compute the sum.  Remove all other digits from the
+     * set of possibilities.
+      First, filter squares with a clue.  
+     * Filter all cages that are covered entirely by the list of
+     * squares.
+     
+	 * Find all squares of block b that lie in our list,
+	 * and make them contiguous at off, which is the current position
+	 * in the output list.
+	  If so, filter out all squares of b from the list.   used for set elimination  only used for intersect() 
+ * Used for passing information about difficulty levels between the solver
+ * and its callers.
+  Maximum levels allowed.   Levels reached by the solver.  
+     * Set up a usage structure as a clean slate (everything
+     * possible).
+      write straight back to the input 
+	 * Allow for expansion of the killer regions, the absolute
+	 * limit is obviously one region per square.
+	 
+     * Place all the clue numbers we are given.
+     
+     * Now loop over the grid repeatedly trying all permitted modes
+     * of reasoning. The loop terminates if we complete an
+     * iteration without making any progress; we then return
+     * failure or success depending on whether the grid is full or
+     * not.
+     
+         * I'd like to write `continue;' inside each of the
+         * following loops, so that the solver returns here after
+         * making some progress. However, I can't specify that I
+         * want to continue an outer loop rather than the innermost
+         * one, so I'm apologetically resorting to a goto.
+         
+	 * Blockwise positional elimination.
+	 
+	     * First, bring the kblocks into a more useful form: remove
+	     * all filled-in squares, and reduce the sum by their values.
+	     * Walk in reverse order, since otherwise remove_from_block
+	     * can move element past our loop counter.
+	     
+		     * Since cages are regions, this tells us something
+		     * about the other squares in the cage.
+		     
+	     * The most trivial kind of solver for killer puzzles: fill
+	     * single-square cages.
+	     
+	     * Now, create the extra_cages information.  Every full region
+	     * (row, column, or block) has the same sum total (45 for 3x3
+	     * puzzles.  After we try to cover these regions with cages that
+	     * lie entirely within them, any squares that remain must bring
+	     * the total to this known value, and so they form additional
+	     * cages which aren't immediately evident in the displayed form
+	     * of the puzzle.
+	     
+	 * Another simple killer-type elimination.  For every square in a
+	 * cage, find the minimum and maximum possible sums of all the
+	 * other squares in the same cage, and rule out possibilities
+	 * for the given square based on whether they are guaranteed to
+	 * cause the sum to be either too high or too low.
+	 * This is a special case of trying all possible sums across a
+	 * region, which is a recursive algorithm.  We should probably
+	 * implement it for a higher difficulty level.
+	 
+	 * Try to use knowledge of which numbers can be used to generate
+	 * a given sum.
+	 * This can only be used if a cage lies entirely within a region.
+	 
+	 * Row-wise positional elimination.
+	 
+	 * Column-wise positional elimination.
+	 
+	 * X-diagonal positional elimination.
+	 
+	 * Numeric elimination.
+	 
+         * Intersectional analysis, rows vs blocks.
+         
+		     * solver_intersect() never returns -1.
+		     
+         * Intersectional analysis, columns vs blocks.
+         
+	     * Intersectional analysis, \-diagonal vs blocks.
+	     
+	     * Intersectional analysis, /-diagonal vs blocks.
+	     
+	 * Blockwise set elimination.
+	 
+	 * Row-wise set elimination.
+	 
+	 * Column-wise set elimination.
+	 
+	     * \-diagonal set elimination.
+	     
+	     * /-diagonal set elimination.
+	     
+	 * Row-vs-column set elimination on a single number.
+	 
+         * Forcing chains.
+         
+	 * If we reach here, we have made no deductions in this
+	 * iteration, so the algorithm terminates.
+	 
+     * Last chance: if we haven't fully solved the puzzle yet, try
+     * recursing based on guesses for a particular square. We pick
+     * one of the most constrained empty squares we can find, which
+     * has the effect of pruning the search tree as much as
+     * possible.
+     
+		     * An unfilled square. Count the number of
+		     * possible digits in it.
+		     
+		     * We should have found any impossibilities
+		     * already, so this can safely be an assert.
+		      no solution found yet 
+	     * Attempt recursion.
+	      Make a list of the possible digits. 
+	     * And step along the list, recursing back into the
+	     * main solver at every stage.
+	     
+		 * If we have our first solution, copy it into the
+		 * grid we will return.
+		  do not change our return value  the recursion turned up exactly one solution 
+		 * As soon as we've found more than one solution,
+		 * give up immediately.
+		 
+         * We're forbidden to use recursion, so we just see whether
+         * our grid is fully solved, and return DIFF_IMPOSSIBLE
+         * otherwise.
+          ----------------------------------------------------------------------
+ * End of solver code.
+  ----------------------------------------------------------------------
+ * Killer set generator.
+  ----------------------------------------------------------------------
+ * Solo filled-grid generator.
+ *
+ * This grid generator works by essentially trying to solve a grid
+ * starting from no clues, and not worrying that there's more than
+ * one possible solution. Unfortunately, it isn't computationally
+ * feasible to do this by calling the above solver with an empty
+ * grid, because that one needs to allocate a lot of scratch space
+ * at every recursion level. Instead, I have a much simpler
+ * algorithm which I shamelessly copied from a Python solver
+ * written by Andrew Wilkinson (which is GPLed, but I've reused
+ * only ideas and no code). It mostly just does the obvious
+ * recursive thing: pick an empty square, put one of the possible
+ * digits in it, recurse until all squares are filled, backtrack
+ * and change some choices if necessary.
+ *
+ * The clever bit is that every time it chooses which square to
+ * fill in next, it does so by counting the number of _possible_
+ * numbers that can go in each square, and it prioritises so that
+ * it picks a square with the _lowest_ number of possibilities. The
+ * idea is that filling in lots of the obvious bits (particularly
+ * any squares with only one possibility) will cut down on the list
+ * of possibilities for other squares and hence reduce the enormous
+ * search space as much as possible as early as possible.
+ *
+ * The use of bit sets implies that we support puzzles up to a size of
+ * 32x32 (less if anyone finds a 16-bit machine to compile this on).
+ 
+ * Internal data structure used in gridgen to keep track of
+ * progress.
+  grid is a copy of the input grid, modified as we go along 
+     * Bitsets.  In each of them, bit n is set if digit n has been placed
+     * in the corresponding region.  row, col and blk are used for all
+     * puzzles.  cge is used only for killer puzzles, and diag is used
+     * only for x-type puzzles.
+     * All of these have cr entries, except diag which only has 2,
+     * and cge, which has as many entries as kblocks.
+      This lists all the empty spaces remaining in the grid.  If we need randomisation in the solve, this is our random state. 
+ * The real recursive step in the generating function.
+ *
+ * Return values: 1 means solution found, 0 means no solution
+ * found on this branch.
+ 
+     * Firstly, check for completion! If there are no spaces left
+     * in the grid, we have a solution.
+     
+     * Next, abandon generation if we went over our steps limit.
+     
+     * Otherwise, there must be at least one space. Find the most
+     * constrained space, using the `r' field as a tie-breaker.
+      so that any space will beat it 
+	 * Find the number of digits that could go in this space.
+	 
+     * Swap that square into the final place in the spaces array,
+     * so that decrementing nspaces will remove it from the list.
+     
+     * Now we've decided which square to start our recursion at,
+     * simply go through all possible values, shuffling them
+     * randomly first if necessary.
+      And finally, go through the digit list and actually recurse.  Update the usage structure to reflect the placing of this digit.  Call the solver recursively. Stop when we find a solution.  Revert the usage structure. 
+ * Entry point to generator. You give it parameters and a starting
+ * grid, which is simply an array of cr*cr digits.
+ 
+     * Clear the grid to start with.
+     
+     * Create a gridgen_usage structure.
+     
+     * Begin by filling in the whole top row with randomly chosen
+     * numbers. This cannot introduce any bias or restriction on
+     * the available grids, since we already know those numbers
+     * are all distinct so all we're doing is choosing their
+     * labels.
+     
+     * Initialise the list of grid spaces, taking care to leave
+     * out the row I've already filled in above.
+     
+     * Run the real generator function.
+     
+     * Clean up the usage structure now we have our answer.
+      ----------------------------------------------------------------------
+ * End of grid generator code.
+ 
+     * Returns: -1 if the cage has any empty square; 0 if all squares
+     * are full but the sum is wrong; +1 if all squares are full and
+     * they have the right sum.
+     *
+     * Does not check uniqueness of numbers within the cage; that's
+     * done elsewhere (because in error highlighting it needs to be
+     * detected separately so as to flag the error in a visually
+     * different way).
+     
+ * Check whether a grid contains a valid complete puzzle.
+ 
+     * Check that each row contains precisely one of everything.
+     
+     * Check that each column contains precisely one of everything.
+     
+     * Check that each block contains precisely one of everything.
+     
+     * Check that each Killer cage, if any, contains at most one of
+     * everything. If we also know the clues for those cages (which we
+     * might not, when this function is called early in puzzle
+     * generation), we also check that they all have the right sum.
+     
+     * Check that each diagonal contains precisely one of everything.
+      just x,y is all we need 
+     * It's surprisingly easy to work out _exactly_ how long this
+     * string needs to be. To decimal-encode all the numbers from 1
+     * to n:
+     * 
+     *  - every number has a units digit; total is n.
+     *  - all numbers above 9 have a tens digit; total is max(n-9,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n-99,0).
+     *  - and so on.
+      don't forget the commas  there are cr rows of these 
+     * Now len is one bigger than the total size of the
+     * comma-separated numbers (because we counted an
+     * additional leading comma). We need to have a leading S
+     * and a trailing NUL, so we're off by one in total.
+     
+     * Encode the block structure. We do this by encoding
+     * the pattern of dividing lines: first we iterate
+     * over the cr*(cr-1) internal vertical grid lines in
+     * ordinary reading order, then over the cr*(cr-1)
+     * internal horizontal ones in transposed reading
+     * order.
+     * 
+     * We encode the number of non-lines between the
+     * lines; _ means zero (two adjacent divisions), a
+     * means 1, ..., y means 25, and z means 25 non-lines
+     * _and no following line_ (so that za means 26, zb 27
+     * etc).
+      terminating virtual edge 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		 
+ * Conservatively stimate the number of characters required for
+ * encoding a grid of a certain area.
+ 
+ * Conservatively stimate the number of characters required for
+ * encoding a given blocks structure.
+  Move data towards the lower block number.   Merge n2 into n1, and move the last block into n2's position.  
+     * Make a list of all the pairs of adjacent blocks.
+     
+	     * Rule the merger out of consideration if it's
+	     * obviously not viable.
+	      we couldn't merge these anyway 
+	     * See if these two blocks have a pair of squares
+	     * adjacent to each other.
+	     
+		     * Yes! Add this pair to our list.
+		     
+     * Now go through that list in random order until we find a pair
+     * of blocks we can merge.
+     
+	 * Pick a random pair, and remove it from the list.
+	  Guarantee that the merged cage would still be a region.  
+	 * Got one! Do the merge.
+	 
+     * Adjust the maximum difficulty level to be consistent with
+     * the puzzle size: all 2x2 puzzles appear to be Trivial
+     * (DIFF_BLOCK) so we cannot hold out for even a Basic
+     * (DIFF_SIMPLE) one.
+     
+     * Loop until we get a grid of the required difficulty. This is
+     * nasty, but it seems to be unpleasantly hard to generate
+     * difficult grids otherwise.
+     
+         * Generate a random solved state, starting by
+         * constructing the block structure.
+          jigsaw mode  basic Sudoku mode 
+	 * Save the solved grid in aux.
+	 
+	     * We might already have written *aux the last time we
+	     * went round this loop, in which case we should free
+	     * the old aux before overwriting it with the new one.
+	     
+	 * Now we have a solved grid. For normal puzzles, we start removing
+	 * things from it while preserving solubility.  Killer puzzles are
+	 * different: we just pass the empty grid to the solver, and use
+	 * the puzzle if it comes back solved.
+	 
+		     * We have one that matches our difficulty.  Store it for
+		     * later, but keep going.
+		     
+		     * Give up after too many tries and either use the good one we
+		     * found, or generate a new grid.
+		     
+		     * The difficulty level got too high.  If we have a good
+		     * one, use it, otherwise go back to the last one that
+		     * was at a lower difficulty and restart the process from
+		     * there.
+		     
+         * Find the set of equivalence classes of squares permitted
+         * by the selected symmetry. We do this by enumerating all
+         * the grid squares which have no symmetric companion
+         * sorting lower than themselves.
+         
+         * Now shuffle that list.
+         
+         * Now loop over the shuffled list and, for each element,
+         * see whether removing that element (and its reflections)
+         * from the grid will still leave the grid soluble.
+          found one! 
+     * Now we have the grid as it will be presented to the user.
+     * Encode it in a game desc.
+      do nothing 
+ * Create a DSF from a spec found in *pdesc. Update this to point past the
+ * end of the block spec, and return an error string or NULL if everything
+ * is OK. The DSF is stored in *PDSF.
+  'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+      do nothing 
+     * Now we've got our dsf. Verify that it matches
+     * expectations.
+     
+	 * Now we expect a suffix giving the jigsaw block
+	 * structure. Parse it and validate that it divides the
+	 * grid into the right number of regions which are the
+	 * right size.
+	 
+     * Set up the block names for solver diagnostic output.
+     
+     * If we already have the solution in ai, save ourselves some
+     * time.
+     
+     * For non-jigsaw Sudoku, we format in the way we always have,
+     * by having the digits unevenly spaced so that the dividing
+     * lines can fit in:
+     *
+     * . . | . .
+     * . . | . .
+     * ----+----
+     * . . | . .
+     * . . | . .
+     *
+     * For jigsaw puzzles, however, we must leave space between
+     * _all_ pairs of digits for an optional dividing line, so we
+     * have to move to the rather ugly
+     * 
+     * .   .   .   .
+     * ------+------
+     * .   . | .   .
+     *       +---+  
+     * .   . | . | .
+     * ------+   |  
+     * .   .   . | .
+     * 
+     * We deal with both cases using the same formatting code; we
+     * simply invent a vmod value such that there's a vertical
+     * dividing line before column i iff i is divisible by vmod
+     * (so it's r in the first case and 1 in the second), and hmod
+     * likewise for horizontal dividing lines.
+     
+     * Line length: we have cr digits, each with a space after it,
+     * and (cr-1)/vmod dividing lines, each with a space after it.
+     * The final space is replaced by a newline, but that doesn't
+     * affect the length.
+     
+     * Number of lines: we have cr rows of digits, and (cr-1)/hmod
+     * dividing rows.
+     
+     * Allocate the space.
+      leave room for terminating NUL 
+     * Write the text.
+     
+	 * Row of digits.
+	 
+	     * Digit.
+	     
+		 * Empty space: we usually write a dot, but we'll
+		 * highlight spaces on the X-diagonals (in X mode)
+		 * by using underscores instead.
+		 
+	     * Optional dividing line.
+	     
+	 * Dividing row.
+	 
+	     * Division between two squares. This varies
+	     * complicatedly in length.
+	      digit and its following space  no following space at end of line  preceding space after a divider 
+	     * Corner square. This is:
+	     * 	- a space if all four surrounding squares are in
+	     * 	  the same block
+	     * 	- a vertical line if the two left ones are in one
+	     * 	  block and the two right in another
+	     * 	- a horizontal line if the two top ones are in one
+	     * 	  block and the two bottom in another
+	     * 	- a plus sign in all other cases. (If we had a
+	     * 	  richer character set available we could break
+	     * 	  this case up further by doing fun things with
+	     * 	  line-drawing T-pieces.)
+	     
+     * Formatting Killer puzzles as text is currently unsupported. I
+     * can't think of any sensible way of doing it which doesn't
+     * involve expanding the puzzle to such a large scale as to make
+     * it unusable.
+     
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow is true, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      This is scratch space used within a single call to game_redraw. 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't overwrite this square. This can only happen here
+         * if we're using the cursor keys.
+         
+         * Can't make pencil marks in a filled square. Again, this
+         * can only become highlighted if we're using cursor keys.
+         
+             * We've made a real change to the grid. Check to see
+             * if the game has been completed.
+             
+	 * Fill in absolutely all pencil marks in unfilled squares,
+	 * for those who like to play by the rigorous approach of
+	 * starting off in that state and eliminating things.
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * ds->entered_items needs one row of cr entries per entity in
+     * which digits may not be duplicated. That's one for each row,
+     * each column, each block, each diagonal, and each Killer cage.
+      not decided yet  no change required  background needs erasing 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      pencil-mode highlight 
+	 * In non-jigsaw mode, the Killer cages are placed at a
+	 * fixed offset from the outer edge of the cell dividing
+	 * lines, so that they look right whether those lines are
+	 * thick or thin. In jigsaw mode, however, doing this will
+	 * sometimes cause the cage outlines in adjacent squares to
+	 * fail to match up with each other, so we must offset a
+	 * fixed amount from the _centre_ of the cell dividing
+	 * lines.
+	 
+	 * First, draw the lines dividing this area from neighbouring
+	 * different areas.
+	 
+	 * Now, take care of the corners (just as for the normal borders).
+	 * We only need a corner if there wasn't a full edge.
+	  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the Killer cages. We do this
+		 * unconditionally, for uniformity between squares,
+		 * rather than making it depend on whether a Killer
+		 * cage edge is actually present on any given side.
+		  Make further space for the Killer number.  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with the
+	     * Killer cage number.
+	     
+	     * Now actually draw the pencil marks.
+	     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+	 * Draw the grid. We draw it as a big thick rectangle of
+	 * COL_GRID initially; individual calls to draw_number()
+	 * will poke the right-shaped holes in it.
+	 
+     * This array is used to keep track of rows, columns and boxes
+     * which contain a number more than once.
+      Rows  Columns  Blocks  Diagonals  Killer cages 
+     * Draw any numbers which need redrawing.
+      Highlight active input areas.  Mark obvious errors (ie, numbers which occur more than once
+	     * in a single row, column, or box). 
+     * Update the _entire_ grid if necessary.
+     
+     * I'll use 9mm squares by default. They should be quite big
+     * for this game, because players will want to jot down no end
+     * of pencil marks in the squares.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ *
+ * This subfunction is also reused with thinner dotted lines to
+ * outline the Killer cages, this time offsetting the outline toward
+ * the interior of the affected squares.
+ 
+     * Maximum perimeter of a k-omino is 2k+2. (Proof: start
+     * with k unconnected squares, with total perimeter 4k.
+     * Now repeatedly join two disconnected components
+     * together into a larger one; every time you do so you
+     * remove at least two unit edges, and you require k-1 of
+     * these operations to create a single connected piece, so
+     * you must have at most 4k-2(k-1) = 2k+2 unit edges left
+     * afterwards.)
+      2k+2 points, 2 coords per point 
+     * Iterate over all the blocks.
+     
+	 * For each block, find a starting square within it
+	 * which has a boundary at the left.
+	  every block must have _some_ leftmost square 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+		 * We turned right, so inset this corner back along
+		 * the edge towards the centre of the square.
+		 
+		 * We turned left, so inset this corner further
+		 * _out_ along the edge into the next square.
+		 
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Highlight X-diagonal squares.
+      avoid redoing centre square, just for fun 
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Killer cages and their totals.
+     
+     * Standard (non-Killer) clue numbers.
+      wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * solo.c: the number-placing puzzle most popularly known as `Sudoku'.
+ *
+ * TODO:
+ *
+ *  - reports from users are that `Trivial'-mode puzzles are still
+ *    rather hard compared to newspapers' easy ones, so some better
+ *    low-end difficulty grading would be nice
+ *     + it's possible that really easy puzzles always have
+ *       _several_ things you can do, so don't make you hunt too
+ *       hard for the one deduction you can currently make
+ *     + it's also possible that easy puzzles require fewer
+ *       cross-eliminations: perhaps there's a higher incidence of
+ *       things you can deduce by looking only at (say) rows,
+ *       rather than things you have to check both rows and columns
+ *       for
+ *     + but really, what I need to do is find some really easy
+ *       puzzles and _play_ them, to see what's actually easy about
+ *       them
+ *     + while I'm revamping this area, filling in the _last_
+ *       number in a nearly-full row or column should certainly be
+ *       permitted even at the lowest difficulty level.
+ *     + also Owen noticed that `Basic' grids requiring numeric
+ *       elimination are actually very hard, so I wonder if a
+ *       difficulty gradation between that and positional-
+ *       elimination-only might be in order
+ *     + but it's not good to have _too_ many difficulty levels, or
+ *       it'll take too long to randomly generate a given level.
+ * 
+ *  - it might still be nice to do some prioritisation on the
+ *    removal of numbers from the grid
+ *     + one possibility is to try to minimise the maximum number
+ * 	 of filled squares in any block, which in particular ought
+ * 	 to enforce never leaving a completely filled block in the
+ * 	 puzzle as presented.
+ *
+ *  - alternative interface modes
+ *     + sudoku.com's Windows program has a palette of possible
+ * 	 entries; you select a palette entry first and then click
+ * 	 on the square you want it to go in, thus enabling
+ * 	 mouse-only play. Useful for PDAs! I don't think it's
+ * 	 actually incompatible with the current highlight-then-type
+ * 	 approach: you _either_ highlight a palette entry and then
+ * 	 click, _or_ you highlight a square and then type. At most
+ * 	 one thing is ever highlighted at a time, so there's no way
+ * 	 to confuse the two.
+ *     + then again, I don't actually like sudoku.com's interface;
+ *       it's too much like a paint package whereas I prefer to
+ *       think of Solo as a text editor.
+ *     + another PDA-friendly possibility is a drag interface:
+ *       _drag_ numbers from the palette into the grid squares.
+ *       Thought experiments suggest I'd prefer that to the
+ *       sudoku.com approach, but I haven't actually tried it.
+ 
+ * Solo puzzles need to be square overall (since each row and each
+ * column must contain one of every digit), but they need not be
+ * subdivided the same way internally. I am going to adopt a
+ * convention whereby I _always_ refer to `r' as the number of rows
+ * of _big_ divisions, and `c' as the number of columns of _big_
+ * divisions. Thus, a 2c by 3r puzzle looks something like this:
+ *
+ *   4 5 1 | 2 6 3
+ *   6 3 2 | 5 4 1
+ *   ------+------     (Of course, you can't subdivide it the other way
+ *   1 4 5 | 6 3 2     or you'll get clashes; observe that the 4 in the
+ *   3 2 6 | 4 1 5     top left would conflict with the 4 in the second
+ *   ------+------     box down on the left-hand side.)
+ *   5 1 4 | 3 2 6
+ *   2 6 3 | 1 5 4
+ *
+ * The need for a strong naming convention should now be clear:
+ * each small box is two rows of digits by three columns, while the
+ * overall puzzle has three rows of small boxes by two columns. So
+ * I will (hopefully) consistently use `r' to denote the number of
+ * rows _of small boxes_ (here 3), which is also the number of
+ * columns of digits in each small box; and `c' vice versa (here
+ * 2).
+ *
+ * I'm also going to choose arbitrarily to list c first wherever
+ * possible: the above is a 2x3 puzzle, not a 3x2 one.
+ 
+ * To save space, I store digits internally as unsigned char. This
+ * imposes a hard limit of 255 on the order of the puzzle. Since
+ * even a 5x5 takes unacceptably long to generate, I don't see this
+ * as a serious limitation unless something _really_ impressive
+ * happens in computing technology; but here's a typedef anyway for
+ * general good practice.
+ 
+ * To determine all possible ways to reach a given sum by adding two or
+ * three numbers from 1..9, each of which occurs exactly once in the sum,
+ * these arrays contain a list of bitmasks for each sum value, where if
+ * bit N is set, it means that N occurs in the sum.  Each list is
+ * terminated by a zero if it is shorter than the size of the array.
+ 
+     * For a square puzzle, `c' and `r' indicate the puzzle
+     * parameters as described above.
+     * 
+     * A jigsaw-style puzzle is indicated by r==1, in which case c
+     * can be whatever it likes (there is no constraint on
+     * compositeness - a 7x7 jigsaw sudoku makes perfect sense).
+      require all digits in X-diagonals 
+     * For text formatting, we do need c and r here.
+     
+     * For any square index, whichblock[i] gives its block index.
+     *
+     * For 0 <= b,i < cr, blocks[b][i] gives the index of the ith
+     * square in block b.  nr_squares[b] gives the number of squares
+     * in block b (also the number of valid elements in blocks[b]).
+     *
+     * blocks_data holds the data pointed to by blocks.
+     *
+     * nr_squares may be NULL for block structures where all blocks are
+     * the same size.
+     
+     * Textual descriptions of each block. For normal Sudoku these
+     * are of the form "(1,3)"; for jigsaw they are "starting at
+     * (5,7)". So the sensible usage in both cases is to say
+     * "elimination within block %s" with one of these strings.
+     * 
+     * Only blocknames itself needs individually freeing; it's all
+     * one block.
+     
+     * For historical reasons, I use `cr' to denote the overall
+     * width/height of the puzzle. It was a natural notation when
+     * all puzzles were divided into blocks in a grid, but doesn't
+     * really make much sense given jigsaw puzzles. However, the
+     * obvious `n' is heavily used in the solver to describe the
+     * index of a number being placed, so `cr' will have to stay.
+      Blocks for killer puzzles.   c*r*c*r elements  marks which digits are clues  a plausible default  so is this  so is this  structure copy  trivial  basic  intermediate  advanced  extreme  unreasonable  eat unknown character  case SYMM_ROT2: strcat(str, "r2"); break; [default]  case DIFF_BLOCK: strcat(str, "dt"); break; [default] 
+ * ----------------------------------------------------------------------
+ * Block structure functions.
+  ----------------------------------------------------------------------
+ * Solver.
+ * 
+ * This solver is used for two purposes:
+ *  + to check solubility of a grid as we gradually remove numbers
+ *    from it
+ *  + to solve an externally generated puzzle when the user selects
+ *    `Solve'.
+ * 
+ * It supports a variety of specific modes of reasoning. By
+ * enabling or disabling subsets of these modes we can arrange a
+ * range of difficulty levels.
+ 
+ * Modes of reasoning currently supported:
+ *
+ *  - Positional elimination: a number must go in a particular
+ *    square because all the other empty squares in a given
+ *    row/col/blk are ruled out.
+ *
+ *  - Killer minmax elimination: for killer-type puzzles, a number
+ *    is impossible if choosing it would cause the sum in a killer
+ *    region to be guaranteed to be too large or too small.
+ *
+ *  - Numeric elimination: a square must have a particular number
+ *    in because all the other numbers that could go in it are
+ *    ruled out.
+ *
+ *  - Intersectional analysis: given two domains which overlap
+ *    (hence one must be a block, and the other can be a row or
+ *    col), if the possible locations for a particular number in
+ *    one of the domains can be narrowed down to the overlap, then
+ *    that number can be ruled out everywhere but the overlap in
+ *    the other domain too.
+ *
+ *  - Set elimination: if there is a subset of the empty squares
+ *    within a domain such that the union of the possible numbers
+ *    in that subset has the same size as the subset itself, then
+ *    those numbers can be ruled out everywhere else in the domain.
+ *    (For example, if there are five empty squares and the
+ *    possible numbers in each are 12, 23, 13, 134 and 1345, then
+ *    the first three empty squares form such a subset: the numbers
+ *    1, 2 and 3 _must_ be in those three squares in some
+ *    permutation, and hence we can deduce none of them can be in
+ *    the fourth or fifth squares.)
+ *     + You can also see this the other way round, concentrating
+ *       on numbers rather than squares: if there is a subset of
+ *       the unplaced numbers within a domain such that the union
+ *       of all their possible positions has the same size as the
+ *       subset itself, then all other numbers can be ruled out for
+ *       those positions. However, it turns out that this is
+ *       exactly equivalent to the first formulation at all times:
+ *       there is a 1-1 correspondence between suitable subsets of
+ *       the unplaced numbers and suitable subsets of the unfilled
+ *       places, found by taking the _complement_ of the union of
+ *       the numbers' possible positions (or the spaces' possible
+ *       contents).
+ * 
+ *  - Forcing chains (see comment for solver_forcing().)
+ * 
+ *  - Recursion. If all else fails, we pick one of the currently
+ *    most constrained empty squares and take a random guess at its
+ *    contents, then continue solving on that basis and see if we
+ *    get any further.
+ 
+     * We set up a cubic array, indexed by x, y and digit; each
+     * element of this array is true or false according to whether
+     * or not that digit _could_ in principle go in that position.
+     *
+     * The way to index this array is cube[(y*cr+x)*cr+n-1]; there
+     * are macros below to help with this.
+     
+     * This is the grid in which we write down our final
+     * deductions. y-coordinates in here are _not_ transformed.
+     
+     * For killer-type puzzles, kclues holds the secondary clue for
+     * each cage.  For derived cages, the clue is in extra_clues.
+     
+     * Now we keep track, at a slightly higher level, of what we
+     * have yet to work out, to prevent doing the same deduction
+     * many times.
+      row[y*cr+n-1] true if digit n has been placed in row y  col[x*cr+n-1] true if digit n has been placed in row x  blk[i*cr+n-1] true if digit n has been placed in block i  diag[i*cr+n-1] true if digit n has been placed in diagonal i  diag 0 is \, 1 is / 
+ * Function called when we are certain that a particular square has
+ * a particular number in it. The y-coordinate passed in here is
+ * transformed.
+ 
+     * Rule out all other numbers in this square.
+     
+     * Rule out this number in all other positions in the row.
+     
+     * Rule out this number in all other positions in the column.
+     
+     * Rule out this number in all other positions in the block.
+     
+     * Enter the number in the result grid.
+     
+     * Cross out this number from the list of numbers left to place
+     * in its row, its column and its block.
+     
+ * Forward-declare the functions taking printf-like format arguments
+ * with __attribute__((format)) so as to ensure the argument syntax
+ * gets debugged.
+ 
+     * Count the number of set bits within this section of the
+     * cube.
+     
+     * Loop over the first domain and see if there's any set bit
+     * not also in the second.
+      both domains contain this index  there is, so we can't deduce 
+     * We have determined that all set bits in the first domain are
+     * within its overlap with the second. So loop over the second
+     * domain and remove all set bits that aren't also in that
+     * overlap; return +1 iff we actually _did_ anything.
+      we did something 
+     * We are passed a cr-by-cr matrix of booleans. Our first job
+     * is to winnow it by finding any definite placements - i.e.
+     * any row with a solitary 1 - and discarding that row and the
+     * column containing the 1.
+     
+	 * If count == 0, then there's a row with no 1s at all and
+	 * the puzzle is internally inconsistent.
+	 
+     * Convert each of rowidx/colidx from a list of 0s and 1s to a
+     * list of the indices of the 1s.
+     
+     * And create the smaller matrix.
+     
+     * Having done that, we now have a matrix in which every row
+     * has at least two 1s in. Now we search to see if we can find
+     * a rectangle of zeroes (in the set-theoretic sense of
+     * `rectangle', i.e. a subset of rows crossed with a subset of
+     * columns) whose width and height add up to n.
+     
+         * We have a candidate set. If its size is <=1 or >=n-1
+         * then we move on immediately.
+         
+             * The number of rows we need is n-count. See if we can
+             * find that many rows which each have a zero in all
+             * the positions listed in `set'.
+             
+             * We expect never to be able to get _more_ than
+             * n-count suitable rows: this would imply that (for
+             * example) there are four numbers which between them
+             * have at most three possible positions, and hence it
+             * indicates a faulty deduction before this point or
+             * even a bogus clue.
+             
+                 * We've got one! Now, for each row which _doesn't_
+                 * satisfy the criterion, eliminate all its set
+                 * bits in the positions _not_ listed in `set'.
+                 * Return +1 (meaning progress has been made) if we
+                 * successfully eliminated anything at all.
+                 * 
+                 * This involves referring back through
+                 * rowidx/colidx in order to work out which actual
+                 * positions in the cube to meddle with.
+                 
+         * Binary increment: change the rightmost 0 to a 1, and
+         * change all 1s to the right of it to 0s.
+          done 
+ * Look for forcing chains. A forcing chain is a path of
+ * pairwise-exclusive squares (i.e. each pair of adjacent squares
+ * in the path are in the same row, column or block) with the
+ * following properties:
+ *
+ *  (a) Each square on the path has precisely two possible numbers.
+ *
+ *  (b) Each pair of squares which are adjacent on the path share
+ * 	at least one possible number in common.
+ *
+ *  (c) Each square in the middle of the path shares _both_ of its
+ * 	numbers with at least one of its neighbours (not the same
+ * 	one with both neighbours).
+ *
+ * These together imply that at least one of the possible number
+ * choices at one end of the path forces _all_ the rest of the
+ * numbers along the path. In order to make real use of this, we
+ * need further properties:
+ *
+ *  (c) Ruling out some number N from the square at one end of the
+ * 	path forces the square at the other end to take the same
+ * 	number N.
+ *
+ *  (d) The two end squares are both in line with some third
+ * 	square.
+ *
+ *  (e) That third square currently has N as a possibility.
+ *
+ * If we can find all of that lot, we can deduce that at least one
+ * of the two ends of the forcing chain has number N, and that
+ * therefore the mutually adjacent third square does not.
+ *
+ * To find forcing chains, we're going to start a bfs at each
+ * suitable square, once for each of its two possible numbers.
+ 
+             * If this square doesn't have exactly two candidate
+             * numbers, don't try it.
+             * 
+             * In this loop we also sum the candidate numbers,
+             * which is a nasty hack to allow us to quickly find
+             * `the other one' (since we will shortly know there
+             * are exactly two).
+             
+             * Now attempt a bfs for each candidate.
+             
+                     * Begin a bfs.
+                     
+                         * Find neighbours of yy,xx.
+                         
+                         * Try visiting each of those neighbours.
+                         
+                             * We need this square to not be
+                             * already visited, and to include
+                             * currn as a possible number.
+                             
+                             * Don't visit _this_ square a second
+                             * time!
+                             
+                             * To continue with the bfs, we need
+                             * this square to have exactly two
+                             * possible numbers.
+                             
+                             * One other possibility is that this
+                             * might be the square in which we can
+                             * make a real deduction: if it's
+                             * adjacent to x,y, and currn is equal
+                             * to the original number we ruled out.
+                             
+	 * Verify that the cage lies entirely within one region,
+	 * so that using the precomputed sums is valid.
+	 
+     * For every possible way to get the sum, see if there is
+     * one square in the cage that disallows all the required
+     * addends.  If we find one such square, this way to compute
+     * the sum is impossible.
+     
+     * Now we know which addends can possibly be used to
+     * compute the sum.  Remove all other digits from the
+     * set of possibilities.
+      First, filter squares with a clue.  
+     * Filter all cages that are covered entirely by the list of
+     * squares.
+     
+	 * Find all squares of block b that lie in our list,
+	 * and make them contiguous at off, which is the current position
+	 * in the output list.
+	  If so, filter out all squares of b from the list.   used for set elimination  only used for intersect() 
+ * Used for passing information about difficulty levels between the solver
+ * and its callers.
+  Maximum levels allowed.   Levels reached by the solver.  
+     * Set up a usage structure as a clean slate (everything
+     * possible).
+      write straight back to the input 
+	 * Allow for expansion of the killer regions, the absolute
+	 * limit is obviously one region per square.
+	 
+     * Place all the clue numbers we are given.
+     
+     * Now loop over the grid repeatedly trying all permitted modes
+     * of reasoning. The loop terminates if we complete an
+     * iteration without making any progress; we then return
+     * failure or success depending on whether the grid is full or
+     * not.
+     
+         * I'd like to write `continue;' inside each of the
+         * following loops, so that the solver returns here after
+         * making some progress. However, I can't specify that I
+         * want to continue an outer loop rather than the innermost
+         * one, so I'm apologetically resorting to a goto.
+         
+	 * Blockwise positional elimination.
+	 
+	     * First, bring the kblocks into a more useful form: remove
+	     * all filled-in squares, and reduce the sum by their values.
+	     * Walk in reverse order, since otherwise remove_from_block
+	     * can move element past our loop counter.
+	     
+		     * Since cages are regions, this tells us something
+		     * about the other squares in the cage.
+		     
+	     * The most trivial kind of solver for killer puzzles: fill
+	     * single-square cages.
+	     
+	     * Now, create the extra_cages information.  Every full region
+	     * (row, column, or block) has the same sum total (45 for 3x3
+	     * puzzles.  After we try to cover these regions with cages that
+	     * lie entirely within them, any squares that remain must bring
+	     * the total to this known value, and so they form additional
+	     * cages which aren't immediately evident in the displayed form
+	     * of the puzzle.
+	     
+	 * Another simple killer-type elimination.  For every square in a
+	 * cage, find the minimum and maximum possible sums of all the
+	 * other squares in the same cage, and rule out possibilities
+	 * for the given square based on whether they are guaranteed to
+	 * cause the sum to be either too high or too low.
+	 * This is a special case of trying all possible sums across a
+	 * region, which is a recursive algorithm.  We should probably
+	 * implement it for a higher difficulty level.
+	 
+	 * Try to use knowledge of which numbers can be used to generate
+	 * a given sum.
+	 * This can only be used if a cage lies entirely within a region.
+	 
+	 * Row-wise positional elimination.
+	 
+	 * Column-wise positional elimination.
+	 
+	 * X-diagonal positional elimination.
+	 
+	 * Numeric elimination.
+	 
+         * Intersectional analysis, rows vs blocks.
+         
+		     * solver_intersect() never returns -1.
+		     
+         * Intersectional analysis, columns vs blocks.
+         
+	     * Intersectional analysis, \-diagonal vs blocks.
+	     
+	     * Intersectional analysis, /-diagonal vs blocks.
+	     
+	 * Blockwise set elimination.
+	 
+	 * Row-wise set elimination.
+	 
+	 * Column-wise set elimination.
+	 
+	     * \-diagonal set elimination.
+	     
+	     * /-diagonal set elimination.
+	     
+	 * Row-vs-column set elimination on a single number.
+	 
+         * Forcing chains.
+         
+	 * If we reach here, we have made no deductions in this
+	 * iteration, so the algorithm terminates.
+	 
+     * Last chance: if we haven't fully solved the puzzle yet, try
+     * recursing based on guesses for a particular square. We pick
+     * one of the most constrained empty squares we can find, which
+     * has the effect of pruning the search tree as much as
+     * possible.
+     
+		     * An unfilled square. Count the number of
+		     * possible digits in it.
+		     
+		     * We should have found any impossibilities
+		     * already, so this can safely be an assert.
+		      no solution found yet 
+	     * Attempt recursion.
+	      Make a list of the possible digits. 
+	     * And step along the list, recursing back into the
+	     * main solver at every stage.
+	     
+		 * If we have our first solution, copy it into the
+		 * grid we will return.
+		  do not change our return value  the recursion turned up exactly one solution 
+		 * As soon as we've found more than one solution,
+		 * give up immediately.
+		 
+         * We're forbidden to use recursion, so we just see whether
+         * our grid is fully solved, and return DIFF_IMPOSSIBLE
+         * otherwise.
+          ----------------------------------------------------------------------
+ * End of solver code.
+  ----------------------------------------------------------------------
+ * Killer set generator.
+  ----------------------------------------------------------------------
+ * Solo filled-grid generator.
+ *
+ * This grid generator works by essentially trying to solve a grid
+ * starting from no clues, and not worrying that there's more than
+ * one possible solution. Unfortunately, it isn't computationally
+ * feasible to do this by calling the above solver with an empty
+ * grid, because that one needs to allocate a lot of scratch space
+ * at every recursion level. Instead, I have a much simpler
+ * algorithm which I shamelessly copied from a Python solver
+ * written by Andrew Wilkinson (which is GPLed, but I've reused
+ * only ideas and no code). It mostly just does the obvious
+ * recursive thing: pick an empty square, put one of the possible
+ * digits in it, recurse until all squares are filled, backtrack
+ * and change some choices if necessary.
+ *
+ * The clever bit is that every time it chooses which square to
+ * fill in next, it does so by counting the number of _possible_
+ * numbers that can go in each square, and it prioritises so that
+ * it picks a square with the _lowest_ number of possibilities. The
+ * idea is that filling in lots of the obvious bits (particularly
+ * any squares with only one possibility) will cut down on the list
+ * of possibilities for other squares and hence reduce the enormous
+ * search space as much as possible as early as possible.
+ *
+ * The use of bit sets implies that we support puzzles up to a size of
+ * 32x32 (less if anyone finds a 16-bit machine to compile this on).
+ 
+ * Internal data structure used in gridgen to keep track of
+ * progress.
+  grid is a copy of the input grid, modified as we go along 
+     * Bitsets.  In each of them, bit n is set if digit n has been placed
+     * in the corresponding region.  row, col and blk are used for all
+     * puzzles.  cge is used only for killer puzzles, and diag is used
+     * only for x-type puzzles.
+     * All of these have cr entries, except diag which only has 2,
+     * and cge, which has as many entries as kblocks.
+      This lists all the empty spaces remaining in the grid.  If we need randomisation in the solve, this is our random state. 
+ * The real recursive step in the generating function.
+ *
+ * Return values: 1 means solution found, 0 means no solution
+ * found on this branch.
+ 
+     * Firstly, check for completion! If there are no spaces left
+     * in the grid, we have a solution.
+     
+     * Next, abandon generation if we went over our steps limit.
+     
+     * Otherwise, there must be at least one space. Find the most
+     * constrained space, using the `r' field as a tie-breaker.
+      so that any space will beat it 
+	 * Find the number of digits that could go in this space.
+	 
+     * Swap that square into the final place in the spaces array,
+     * so that decrementing nspaces will remove it from the list.
+     
+     * Now we've decided which square to start our recursion at,
+     * simply go through all possible values, shuffling them
+     * randomly first if necessary.
+      And finally, go through the digit list and actually recurse.  Update the usage structure to reflect the placing of this digit.  Call the solver recursively. Stop when we find a solution.  Revert the usage structure. 
+ * Entry point to generator. You give it parameters and a starting
+ * grid, which is simply an array of cr*cr digits.
+ 
+     * Clear the grid to start with.
+     
+     * Create a gridgen_usage structure.
+     
+     * Begin by filling in the whole top row with randomly chosen
+     * numbers. This cannot introduce any bias or restriction on
+     * the available grids, since we already know those numbers
+     * are all distinct so all we're doing is choosing their
+     * labels.
+     
+     * Initialise the list of grid spaces, taking care to leave
+     * out the row I've already filled in above.
+     
+     * Run the real generator function.
+     
+     * Clean up the usage structure now we have our answer.
+      ----------------------------------------------------------------------
+ * End of grid generator code.
+ 
+     * Returns: -1 if the cage has any empty square; 0 if all squares
+     * are full but the sum is wrong; +1 if all squares are full and
+     * they have the right sum.
+     *
+     * Does not check uniqueness of numbers within the cage; that's
+     * done elsewhere (because in error highlighting it needs to be
+     * detected separately so as to flag the error in a visually
+     * different way).
+     
+ * Check whether a grid contains a valid complete puzzle.
+ 
+     * Check that each row contains precisely one of everything.
+     
+     * Check that each column contains precisely one of everything.
+     
+     * Check that each block contains precisely one of everything.
+     
+     * Check that each Killer cage, if any, contains at most one of
+     * everything. If we also know the clues for those cages (which we
+     * might not, when this function is called early in puzzle
+     * generation), we also check that they all have the right sum.
+     
+     * Check that each diagonal contains precisely one of everything.
+      just x,y is all we need 
+     * It's surprisingly easy to work out _exactly_ how long this
+     * string needs to be. To decimal-encode all the numbers from 1
+     * to n:
+     * 
+     *  - every number has a units digit; total is n.
+     *  - all numbers above 9 have a tens digit; total is max(n-9,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n-99,0).
+     *  - and so on.
+      don't forget the commas  there are cr rows of these 
+     * Now len is one bigger than the total size of the
+     * comma-separated numbers (because we counted an
+     * additional leading comma). We need to have a leading S
+     * and a trailing NUL, so we're off by one in total.
+     
+     * Encode the block structure. We do this by encoding
+     * the pattern of dividing lines: first we iterate
+     * over the cr*(cr-1) internal vertical grid lines in
+     * ordinary reading order, then over the cr*(cr-1)
+     * internal horizontal ones in transposed reading
+     * order.
+     * 
+     * We encode the number of non-lines between the
+     * lines; _ means zero (two adjacent divisions), a
+     * means 1, ..., y means 25, and z means 25 non-lines
+     * _and no following line_ (so that za means 26, zb 27
+     * etc).
+      terminating virtual edge 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		 
+ * Conservatively stimate the number of characters required for
+ * encoding a grid of a certain area.
+ 
+ * Conservatively stimate the number of characters required for
+ * encoding a given blocks structure.
+  Move data towards the lower block number.   Merge n2 into n1, and move the last block into n2's position.  
+     * Make a list of all the pairs of adjacent blocks.
+     
+	     * Rule the merger out of consideration if it's
+	     * obviously not viable.
+	      we couldn't merge these anyway 
+	     * See if these two blocks have a pair of squares
+	     * adjacent to each other.
+	     
+		     * Yes! Add this pair to our list.
+		     
+     * Now go through that list in random order until we find a pair
+     * of blocks we can merge.
+     
+	 * Pick a random pair, and remove it from the list.
+	  Guarantee that the merged cage would still be a region.  
+	 * Got one! Do the merge.
+	 
+     * Adjust the maximum difficulty level to be consistent with
+     * the puzzle size: all 2x2 puzzles appear to be Trivial
+     * (DIFF_BLOCK) so we cannot hold out for even a Basic
+     * (DIFF_SIMPLE) one.
+     
+     * Loop until we get a grid of the required difficulty. This is
+     * nasty, but it seems to be unpleasantly hard to generate
+     * difficult grids otherwise.
+     
+         * Generate a random solved state, starting by
+         * constructing the block structure.
+          jigsaw mode  basic Sudoku mode 
+	 * Save the solved grid in aux.
+	 
+	     * We might already have written *aux the last time we
+	     * went round this loop, in which case we should free
+	     * the old aux before overwriting it with the new one.
+	     
+	 * Now we have a solved grid. For normal puzzles, we start removing
+	 * things from it while preserving solubility.  Killer puzzles are
+	 * different: we just pass the empty grid to the solver, and use
+	 * the puzzle if it comes back solved.
+	 
+		     * We have one that matches our difficulty.  Store it for
+		     * later, but keep going.
+		     
+		     * Give up after too many tries and either use the good one we
+		     * found, or generate a new grid.
+		     
+		     * The difficulty level got too high.  If we have a good
+		     * one, use it, otherwise go back to the last one that
+		     * was at a lower difficulty and restart the process from
+		     * there.
+		     
+         * Find the set of equivalence classes of squares permitted
+         * by the selected symmetry. We do this by enumerating all
+         * the grid squares which have no symmetric companion
+         * sorting lower than themselves.
+         
+         * Now shuffle that list.
+         
+         * Now loop over the shuffled list and, for each element,
+         * see whether removing that element (and its reflections)
+         * from the grid will still leave the grid soluble.
+          found one! 
+     * Now we have the grid as it will be presented to the user.
+     * Encode it in a game desc.
+      do nothing 
+ * Create a DSF from a spec found in *pdesc. Update this to point past the
+ * end of the block spec, and return an error string or NULL if everything
+ * is OK. The DSF is stored in *PDSF.
+  'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+      do nothing 
+     * Now we've got our dsf. Verify that it matches
+     * expectations.
+     
+	 * Now we expect a suffix giving the jigsaw block
+	 * structure. Parse it and validate that it divides the
+	 * grid into the right number of regions which are the
+	 * right size.
+	 
+     * Set up the block names for solver diagnostic output.
+     
+     * If we already have the solution in ai, save ourselves some
+     * time.
+     
+     * For non-jigsaw Sudoku, we format in the way we always have,
+     * by having the digits unevenly spaced so that the dividing
+     * lines can fit in:
+     *
+     * . . | . .
+     * . . | . .
+     * ----+----
+     * . . | . .
+     * . . | . .
+     *
+     * For jigsaw puzzles, however, we must leave space between
+     * _all_ pairs of digits for an optional dividing line, so we
+     * have to move to the rather ugly
+     * 
+     * .   .   .   .
+     * ------+------
+     * .   . | .   .
+     *       +---+  
+     * .   . | . | .
+     * ------+   |  
+     * .   .   . | .
+     * 
+     * We deal with both cases using the same formatting code; we
+     * simply invent a vmod value such that there's a vertical
+     * dividing line before column i iff i is divisible by vmod
+     * (so it's r in the first case and 1 in the second), and hmod
+     * likewise for horizontal dividing lines.
+     
+     * Line length: we have cr digits, each with a space after it,
+     * and (cr-1)/vmod dividing lines, each with a space after it.
+     * The final space is replaced by a newline, but that doesn't
+     * affect the length.
+     
+     * Number of lines: we have cr rows of digits, and (cr-1)/hmod
+     * dividing rows.
+     
+     * Allocate the space.
+      leave room for terminating NUL 
+     * Write the text.
+     
+	 * Row of digits.
+	 
+	     * Digit.
+	     
+		 * Empty space: we usually write a dot, but we'll
+		 * highlight spaces on the X-diagonals (in X mode)
+		 * by using underscores instead.
+		 
+	     * Optional dividing line.
+	     
+	 * Dividing row.
+	 
+	     * Division between two squares. This varies
+	     * complicatedly in length.
+	      digit and its following space  no following space at end of line  preceding space after a divider 
+	     * Corner square. This is:
+	     * 	- a space if all four surrounding squares are in
+	     * 	  the same block
+	     * 	- a vertical line if the two left ones are in one
+	     * 	  block and the two right in another
+	     * 	- a horizontal line if the two top ones are in one
+	     * 	  block and the two bottom in another
+	     * 	- a plus sign in all other cases. (If we had a
+	     * 	  richer character set available we could break
+	     * 	  this case up further by doing fun things with
+	     * 	  line-drawing T-pieces.)
+	     
+     * Formatting Killer puzzles as text is currently unsupported. I
+     * can't think of any sensible way of doing it which doesn't
+     * involve expanding the puzzle to such a large scale as to make
+     * it unusable.
+     
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow is true, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      This is scratch space used within a single call to game_redraw. 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't overwrite this square. This can only happen here
+         * if we're using the cursor keys.
+         
+         * Can't make pencil marks in a filled square. Again, this
+         * can only become highlighted if we're using cursor keys.
+         
+             * We've made a real change to the grid. Check to see
+             * if the game has been completed.
+             
+	 * Fill in absolutely all pencil marks in unfilled squares,
+	 * for those who like to play by the rigorous approach of
+	 * starting off in that state and eliminating things.
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * ds->entered_items needs one row of cr entries per entity in
+     * which digits may not be duplicated. That's one for each row,
+     * each column, each block, each diagonal, and each Killer cage.
+      not decided yet  no change required  background needs erasing 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      pencil-mode highlight 
+	 * In non-jigsaw mode, the Killer cages are placed at a
+	 * fixed offset from the outer edge of the cell dividing
+	 * lines, so that they look right whether those lines are
+	 * thick or thin. In jigsaw mode, however, doing this will
+	 * sometimes cause the cage outlines in adjacent squares to
+	 * fail to match up with each other, so we must offset a
+	 * fixed amount from the _centre_ of the cell dividing
+	 * lines.
+	 
+	 * First, draw the lines dividing this area from neighbouring
+	 * different areas.
+	 
+	 * Now, take care of the corners (just as for the normal borders).
+	 * We only need a corner if there wasn't a full edge.
+	  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the Killer cages. We do this
+		 * unconditionally, for uniformity between squares,
+		 * rather than making it depend on whether a Killer
+		 * cage edge is actually present on any given side.
+		  Make further space for the Killer number.  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with the
+	     * Killer cage number.
+	     
+	     * Now actually draw the pencil marks.
+	     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+	 * Draw the grid. We draw it as a big thick rectangle of
+	 * COL_GRID initially; individual calls to draw_number()
+	 * will poke the right-shaped holes in it.
+	 
+     * This array is used to keep track of rows, columns and boxes
+     * which contain a number more than once.
+      Rows  Columns  Blocks  Diagonals  Killer cages 
+     * Draw any numbers which need redrawing.
+      Highlight active input areas.  Mark obvious errors (ie, numbers which occur more than once
+	     * in a single row, column, or box). 
+     * Update the _entire_ grid if necessary.
+     
+     * I'll use 9mm squares by default. They should be quite big
+     * for this game, because players will want to jot down no end
+     * of pencil marks in the squares.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ *
+ * This subfunction is also reused with thinner dotted lines to
+ * outline the Killer cages, this time offsetting the outline toward
+ * the interior of the affected squares.
+ 
+     * Maximum perimeter of a k-omino is 2k+2. (Proof: start
+     * with k unconnected squares, with total perimeter 4k.
+     * Now repeatedly join two disconnected components
+     * together into a larger one; every time you do so you
+     * remove at least two unit edges, and you require k-1 of
+     * these operations to create a single connected piece, so
+     * you must have at most 4k-2(k-1) = 2k+2 unit edges left
+     * afterwards.)
+      2k+2 points, 2 coords per point 
+     * Iterate over all the blocks.
+     
+	 * For each block, find a starting square within it
+	 * which has a boundary at the left.
+	  every block must have _some_ leftmost square 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+		 * We turned right, so inset this corner back along
+		 * the edge towards the centre of the square.
+		 
+		 * We turned left, so inset this corner further
+		 * _out_ along the edge into the next square.
+		 
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Highlight X-diagonal squares.
+      avoid redoing centre square, just for fun 
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Killer cages and their totals.
+     
+     * Standard (non-Killer) clue numbers.
+      wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

@@ -1,0 +1,298 @@
+	MikMod sound library
+	(c) 1998, 1999, 2000, 2001 Miodrag Vallat and others - see file AUTHORS
+	for complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  The Protracker Player Driver
+
+  The protracker driver supports all base Protracker 3.x commands and features.
+
+============================================================================== The currently playing module  number of above-range octaves  Triton's linear periods to frequency translation table (for XM modules)  returns a random value between 0 and ceil-1, ceil must be a power of two 	New Note Action Scoring System :
+	--------------------------------
+	1)	total-volume (fadevol, chanvol, volume) is the main scorer.
+	2)	a looping sample is a bonus x2
+	3)	a foreground channel is a bonus x4
+	4)	an active envelope with keyoff is a handicap -x2
+ allow us to take over a nonexisting sample  n*8 + fine/16  This happens sometimes on badly converted AMF, and old MOD  <- prevent divide overflow.. (42 hehe)  FIXME: bad/crafted file. better/more general solution?  Imago Orpheus sometimes stores an extra initial point in the envelope  Fit in the envelope, still  This procedure processes all envelope types, include volume, pitch, and
+   panning.  Envelopes are defined by a set of points, each with a magnitude
+   [relating either to volume, panning position, or pitch modifier] and a tick
+   position.
+
+   Envelopes work in the following manner:
+
+   (a) Each tick the envelope is moved a point further in its progression. For
+       an accurate progression, magnitudes between two envelope points are
+       interpolated.
+
+   (b) When progression reaches a defined point on the envelope, values are
+       shifted to interpolate between this point and the next, and checks for
+       loops or envelope end are done.
+
+   Misc:
+     Sustain loops are loops that are only active as long as the keyoff flag is
+     clear.  When a volume envelope terminates, so does the current fadeout.
+ actual points in the envelope  the 'tick counter' - real point being played 
+		 * Sustain loop on one point (XM type).
+		 * Not processed if KEYOFF.
+		 * Don't move and don't interpolate when the point is reached
+		 
+			 * All following situations will require interpolation between
+			 * two envelope points.
+			 
+			 * Sustain loop between two points (IT type).
+			 * Not processed if KEYOFF.
+			  if we were on a loop point, loop now 
+			 * Regular loop.
+			 * Be sure to correctly handle single point loops.
+			 
+			 * Non looping situations.
+			 
+			 * Start to fade if the volume envelope is finished.
+			  did pointer reach point b?  shift points a and b  XM linear period to frequency conversion ========== Protracker effects  mod style: N, N+x, N+y  case 0: unchanged  okt arpeggio 3: N-x, N, N+y  case 1: unchanged  okt arpeggio 4: N, N+y, N, N-x  case 0, case 2: unchanged  okt arpeggio 5: N-x, N+y, N, and nothing at tick 0  case 0: unchanged  We have to slide a->main.period towards a->wantedperiod, so compute
+		   the difference between those two values  if they are equal or if portamentospeed is too big ... ...make tmpperiod equal tperiod  dist>0, slide up  dist<0, slide down  silence warning  sine  ramp down  square wave  random wave  DoPTEffect6 after DoPTEffectA  silence warning  sine  ramp down  square wave  random wave  crafted file? 	fprintf(stderr,"DoPTEffectB: numpos=%d, dat=%d -> %d\n",mod->numpos,dat,mod->numpos-1); Vincent Voois uses a nasty trick in "Universal Bolero"  if we don't loop, better not to skip the end of the
+		   pattern, after all... so:
+		mod->patbrk=0;  if we were fading, adjust...  cancel the FT2 pattern loop (E60) bug.
+		 * also see DoEEffects() below for it.  note cut  crafted file? 	fprintf(stderr,"DoPTEffectD: numrow=%d, dat=%d -> 0\n",mod->numrow,dat); don't ask me to explain this code - it makes
+		   backwards.s3m and children.xm (heretic's version) play
+		   correctly, among others. Take that for granted, or write
+		   the page of comments yourself... you might need some
+		   aspirin - Miod  hardware filter toggle, not supported  fineslide up  fineslide dn  glissando ctrl  set vibrato waveform  set finetune  set patternloop  set reppos or repcnt ?  set repcnt, so check if repcnt already is set, which means we
+			   are already looping  already looping, decrease counter  this would make walker.xm, shipped with Xsoundtracker,
+				   play correctly, but it's better to remain compatible
+				   with FT2  not yet looping, so set repcnt  jump to reppos if repcnt>0  set reppos - can be (-1)  emulate the FT2 pattern loop (E60) bug:
+			 * http://milkytracker.org/docs/MilkyTracker.html#fxE6x
+			 * roadblas.xm plays correctly with this.  set tremolo waveform  set panning  retrig note  do not retrigger on tick 0, until we are emulating FT2 and effect
+		   data is zero  only retrigger if data nibble > 0, or if tick 0 (FT2 compat)  when retrig counter reaches 0, reset counter and restart
+				   the sample  countdown  fine volume slide up  fine volume slide dn   cut note  When tick reaches the cut-note value, turn the volume to
+		   zero (just like on the amiga)  just turn the volume down  note delay  delay the start of the sample until tick==nib  pattern delay  only once, when tick=0  invert loop, not supported  ========== Scream Tracker effects  only retrigger if low nibble > 0  when retrig counter reaches 0, reset counter and restart the
+				   sample  countdown   silence warning  sine  ramp down  square wave  random  silence warning  sine  ramp down  square wave  random ========== Envelope helpers ========== Fast Tracker effects  DoXMEffect6 after DoXMEffectA  slide right has absolute priority ========== Impulse Tracker effects  if we don't come from another note, ignore the slide and play the note
+	   as is  We have to slide a->main.period towards a->wantedperiod, compute the
+		   difference between those two values  if they are equal or if portamentospeed is too big...  ... make tmpperiod equal tperiod  dist>0 slide up  dist<0 slide down  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  Impulse/Scream Tracker Sxx effects.
+   All Sxx effects share the same memory space.  S1x set glissando voice  S2x set finetune  S3x set vibrato waveform  S4x set tremolo waveform  S5x panbrello  S6x delay x number of frames (patdly)  S7x instrument / NNA commands  S8x set panning position  S9x set surround sound  SAy set high order sample offset yxx00h  SBx pattern loop  SCx notecut  SDx notedelay  SEx patterndelay ========== Impulse Tracker Volume/Pan Column effects 
+ * All volume/pan column effects share the same memory space.
+ ========== UltraTracker effects ========== OctaMED effects ========== Oktalyzer effects  arpeggio style ========== General player functions  0  UNI_NOTE  UNI_INSTRUMENT  UNI_PTEFFECT0  UNI_PTEFFECT1  UNI_PTEFFECT2  UNI_PTEFFECT3  UNI_PTEFFECT4  UNI_PTEFFECT5  UNI_PTEFFECT6  UNI_PTEFFECT7  UNI_PTEFFECT8  UNI_PTEFFECT9  UNI_PTEFFECTA  UNI_PTEFFECTB  UNI_PTEFFECTC  UNI_PTEFFECTD  UNI_PTEFFECTE  UNI_PTEFFECTF  UNI_S3MEFFECTA  UNI_S3MEFFECTD  UNI_S3MEFFECTE  UNI_S3MEFFECTF  UNI_S3MEFFECTI  UNI_S3MEFFECTQ  UNI_S3MEFFECTR  UNI_S3MEFFECTT  UNI_S3MEFFECTU  UNI_KEYOFF  UNI_KEYFADE  UNI_VOLEFFECTS  UNI_XMEFFECT4  UNI_XMEFFECT6  UNI_XMEFFECTA  UNI_XMEFFECTE1  UNI_XMEFFECTE2  UNI_XMEFFECTEA  UNI_XMEFFECTEB  UNI_XMEFFECTG  UNI_XMEFFECTH  UNI_XMEFFECTL  UNI_XMEFFECTP  UNI_XMEFFECTX1  UNI_XMEFFECTX2  UNI_ITEFFECTG  UNI_ITEFFECTH  UNI_ITEFFECTI  UNI_ITEFFECTM  UNI_ITEFFECTN  UNI_ITEFFECTP  UNI_ITEFFECTT  UNI_ITEFFECTU  UNI_ITEFFECTW  UNI_ITEFFECTY  UNI_ITEFFECTZ  UNI_ITEFFECTS0  UNI_ULTEFFECT9  UNI_MEDSPEED  UNI_MEDEFFECTF1  UNI_MEDEFFECTF2  UNI_MEDEFFECTF3  UNI_OKTARP  this doesn't normally happen unless things go fubar elsewhere  past note cut  past note off  past note fade  set NNA note cut  set NNA note continue  set NNA note off  set NNA note fade  disable volume envelope  enable volume envelope   disable panning envelope  enable panning envelope  disable pitch envelope  enable pitch envelope  max 32768  * max 64  * max 256  tmpvol is max 32768 again  used to determine samplevolume  * max 256  * max 128  fade out  do XM style auto-vibrato  keyoff -> depth becomes 0 if final depth wasn't reached or
+				   stays at final level if depth WAS reached  update vibrato position  process pitch envelope  check for a dead note (fadevol=0)  if keyfade, start substracting fadeoutspeed from fadevol:  Handles new notes or instruments  funky is set to indicate note or instrument change  retrig tremolo and vibrato waves ?  safety valve  channel or instrument determined panning ?  instrument change  IT random volume variations: 0:8 bit fixed, and one bit for
+				   sign.  Handles effects  continue volume slide if necessary for XM and IT  NNA management  Make sure the old MP_VOICE channel knows it has no
+					   master now !  assume the channel is taken by NNA  continue note, do nothing  note off  if (a->main.kick==KICK_NOTE)  Setup module and NNA voices  if no channel was cut above, find an empty or quiet channel
+			   here  assign parts of MP_VOICE only done for a KICK_NOTE  second effect pass  don't handle the very first ticks, this allows the other hardware to
+	   settle down so we don't loose any starting notes  update time counter (sngtime is in milliseconds (in fact 2^-10))  thus 2.5*(1<<10), since fps=0.4xtempo  play 2 times row 0  process pattern-delay. pf->patdly2 is the counter and pf->patdly is
+		   the command memory.  patterndelay active  so turn back pf->patpos by 1  do we have to get a new patternpointer ? (when pf->patpos reaches the
+		   pattern size, or when a patternbreak is active)  handle the "---" (end of song) pattern since it can occur
+			   *inside* the module in some formats  Fade global volume if enabled and we're playing the last pattern  now set up the actual hardware channel playback information  make sure the player fetches the first note  make sure the player doesn't start with garbage  mod->numvoices was used during loading to clamp md_sngchn.
+	   After loading it's used to remember how big mod->voice is.
+	 Stop playback if necessary  new song is being started, so completely stop out the old one.  Get current module order  pf->positions[pf->sngpos ? pf->sngpos-1 : 0]: 0;  Get current module row  ex:set ts=4: 	MikMod sound library
+	(c) 1998, 1999, 2000, 2001 Miodrag Vallat and others - see file AUTHORS
+	for complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  The Protracker Player Driver
+
+  The protracker driver supports all base Protracker 3.x commands and features.
+
+============================================================================== The currently playing module  number of above-range octaves  Triton's linear periods to frequency translation table (for XM modules)  returns a random value between 0 and ceil-1, ceil must be a power of two 	New Note Action Scoring System :
+	--------------------------------
+	1)	total-volume (fadevol, chanvol, volume) is the main scorer.
+	2)	a looping sample is a bonus x2
+	3)	a foreground channel is a bonus x4
+	4)	an active envelope with keyoff is a handicap -x2
+ allow us to take over a nonexisting sample  n*8 + fine/16  This happens sometimes on badly converted AMF, and old MOD  <- prevent divide overflow.. (42 hehe)  FIXME: bad/crafted file. better/more general solution?  Imago Orpheus sometimes stores an extra initial point in the envelope  Fit in the envelope, still  This procedure processes all envelope types, include volume, pitch, and
+   panning.  Envelopes are defined by a set of points, each with a magnitude
+   [relating either to volume, panning position, or pitch modifier] and a tick
+   position.
+
+   Envelopes work in the following manner:
+
+   (a) Each tick the envelope is moved a point further in its progression. For
+       an accurate progression, magnitudes between two envelope points are
+       interpolated.
+
+   (b) When progression reaches a defined point on the envelope, values are
+       shifted to interpolate between this point and the next, and checks for
+       loops or envelope end are done.
+
+   Misc:
+     Sustain loops are loops that are only active as long as the keyoff flag is
+     clear.  When a volume envelope terminates, so does the current fadeout.
+ actual points in the envelope  the 'tick counter' - real point being played 
+		 * Sustain loop on one point (XM type).
+		 * Not processed if KEYOFF.
+		 * Don't move and don't interpolate when the point is reached
+		 
+			 * All following situations will require interpolation between
+			 * two envelope points.
+			 
+			 * Sustain loop between two points (IT type).
+			 * Not processed if KEYOFF.
+			  if we were on a loop point, loop now 
+			 * Regular loop.
+			 * Be sure to correctly handle single point loops.
+			 
+			 * Non looping situations.
+			 
+			 * Start to fade if the volume envelope is finished.
+			  did pointer reach point b?  shift points a and b  XM linear period to frequency conversion ========== Protracker effects  mod style: N, N+x, N+y  case 0: unchanged  okt arpeggio 3: N-x, N, N+y  case 1: unchanged  okt arpeggio 4: N, N+y, N, N-x  case 0, case 2: unchanged  okt arpeggio 5: N-x, N+y, N, and nothing at tick 0  case 0: unchanged  We have to slide a->main.period towards a->wantedperiod, so compute
+		   the difference between those two values  if they are equal or if portamentospeed is too big ... ...make tmpperiod equal tperiod  dist>0, slide up  dist<0, slide down  silence warning  sine  ramp down  square wave  random wave  DoPTEffect6 after DoPTEffectA  silence warning  sine  ramp down  square wave  random wave  crafted file? 	fprintf(stderr,"DoPTEffectB: numpos=%d, dat=%d -> %d\n",mod->numpos,dat,mod->numpos-1); Vincent Voois uses a nasty trick in "Universal Bolero"  if we don't loop, better not to skip the end of the
+		   pattern, after all... so:
+		mod->patbrk=0;  if we were fading, adjust...  cancel the FT2 pattern loop (E60) bug.
+		 * also see DoEEffects() below for it.  note cut  crafted file? 	fprintf(stderr,"DoPTEffectD: numrow=%d, dat=%d -> 0\n",mod->numrow,dat); don't ask me to explain this code - it makes
+		   backwards.s3m and children.xm (heretic's version) play
+		   correctly, among others. Take that for granted, or write
+		   the page of comments yourself... you might need some
+		   aspirin - Miod  hardware filter toggle, not supported  fineslide up  fineslide dn  glissando ctrl  set vibrato waveform  set finetune  set patternloop  set reppos or repcnt ?  set repcnt, so check if repcnt already is set, which means we
+			   are already looping  already looping, decrease counter  this would make walker.xm, shipped with Xsoundtracker,
+				   play correctly, but it's better to remain compatible
+				   with FT2  not yet looping, so set repcnt  jump to reppos if repcnt>0  set reppos - can be (-1)  emulate the FT2 pattern loop (E60) bug:
+			 * http://milkytracker.org/docs/MilkyTracker.html#fxE6x
+			 * roadblas.xm plays correctly with this.  set tremolo waveform  set panning  retrig note  do not retrigger on tick 0, until we are emulating FT2 and effect
+		   data is zero  only retrigger if data nibble > 0, or if tick 0 (FT2 compat)  when retrig counter reaches 0, reset counter and restart
+				   the sample  countdown  fine volume slide up  fine volume slide dn   cut note  When tick reaches the cut-note value, turn the volume to
+		   zero (just like on the amiga)  just turn the volume down  note delay  delay the start of the sample until tick==nib  pattern delay  only once, when tick=0  invert loop, not supported  ========== Scream Tracker effects  only retrigger if low nibble > 0  when retrig counter reaches 0, reset counter and restart the
+				   sample  countdown   silence warning  sine  ramp down  square wave  random  silence warning  sine  ramp down  square wave  random ========== Envelope helpers ========== Fast Tracker effects  DoXMEffect6 after DoXMEffectA  slide right has absolute priority ========== Impulse Tracker effects  if we don't come from another note, ignore the slide and play the note
+	   as is  We have to slide a->main.period towards a->wantedperiod, compute the
+		   difference between those two values  if they are equal or if portamentospeed is too big...  ... make tmpperiod equal tperiod  dist>0 slide up  dist<0 slide down  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  Impulse/Scream Tracker Sxx effects.
+   All Sxx effects share the same memory space.  S1x set glissando voice  S2x set finetune  S3x set vibrato waveform  S4x set tremolo waveform  S5x panbrello  S6x delay x number of frames (patdly)  S7x instrument / NNA commands  S8x set panning position  S9x set surround sound  SAy set high order sample offset yxx00h  SBx pattern loop  SCx notecut  SDx notedelay  SEx patterndelay ========== Impulse Tracker Volume/Pan Column effects 
+ * All volume/pan column effects share the same memory space.
+ ========== UltraTracker effects ========== OctaMED effects ========== Oktalyzer effects  arpeggio style ========== General player functions  0  UNI_NOTE  UNI_INSTRUMENT  UNI_PTEFFECT0  UNI_PTEFFECT1  UNI_PTEFFECT2  UNI_PTEFFECT3  UNI_PTEFFECT4  UNI_PTEFFECT5  UNI_PTEFFECT6  UNI_PTEFFECT7  UNI_PTEFFECT8  UNI_PTEFFECT9  UNI_PTEFFECTA  UNI_PTEFFECTB  UNI_PTEFFECTC  UNI_PTEFFECTD  UNI_PTEFFECTE  UNI_PTEFFECTF  UNI_S3MEFFECTA  UNI_S3MEFFECTD  UNI_S3MEFFECTE  UNI_S3MEFFECTF  UNI_S3MEFFECTI  UNI_S3MEFFECTQ  UNI_S3MEFFECTR  UNI_S3MEFFECTT  UNI_S3MEFFECTU  UNI_KEYOFF  UNI_KEYFADE  UNI_VOLEFFECTS  UNI_XMEFFECT4  UNI_XMEFFECT6  UNI_XMEFFECTA  UNI_XMEFFECTE1  UNI_XMEFFECTE2  UNI_XMEFFECTEA  UNI_XMEFFECTEB  UNI_XMEFFECTG  UNI_XMEFFECTH  UNI_XMEFFECTL  UNI_XMEFFECTP  UNI_XMEFFECTX1  UNI_XMEFFECTX2  UNI_ITEFFECTG  UNI_ITEFFECTH  UNI_ITEFFECTI  UNI_ITEFFECTM  UNI_ITEFFECTN  UNI_ITEFFECTP  UNI_ITEFFECTT  UNI_ITEFFECTU  UNI_ITEFFECTW  UNI_ITEFFECTY  UNI_ITEFFECTZ  UNI_ITEFFECTS0  UNI_ULTEFFECT9  UNI_MEDSPEED  UNI_MEDEFFECTF1  UNI_MEDEFFECTF2  UNI_MEDEFFECTF3  UNI_OKTARP  this doesn't normally happen unless things go fubar elsewhere  past note cut  past note off  past note fade  set NNA note cut  set NNA note continue  set NNA note off  set NNA note fade  disable volume envelope  enable volume envelope   disable panning envelope  enable panning envelope  disable pitch envelope  enable pitch envelope  max 32768  * max 64  * max 256  tmpvol is max 32768 again  used to determine samplevolume  * max 256  * max 128  fade out  do XM style auto-vibrato  keyoff -> depth becomes 0 if final depth wasn't reached or
+				   stays at final level if depth WAS reached  update vibrato position  process pitch envelope  check for a dead note (fadevol=0)  if keyfade, start substracting fadeoutspeed from fadevol:  Handles new notes or instruments  funky is set to indicate note or instrument change  retrig tremolo and vibrato waves ?  safety valve  channel or instrument determined panning ?  instrument change  IT random volume variations: 0:8 bit fixed, and one bit for
+				   sign.  Handles effects  continue volume slide if necessary for XM and IT  NNA management  Make sure the old MP_VOICE channel knows it has no
+					   master now !  assume the channel is taken by NNA  continue note, do nothing  note off  if (a->main.kick==KICK_NOTE)  Setup module and NNA voices  if no channel was cut above, find an empty or quiet channel
+			   here  assign parts of MP_VOICE only done for a KICK_NOTE  second effect pass  don't handle the very first ticks, this allows the other hardware to
+	   settle down so we don't loose any starting notes  update time counter (sngtime is in milliseconds (in fact 2^-10))  thus 2.5*(1<<10), since fps=0.4xtempo  play 2 times row 0  process pattern-delay. pf->patdly2 is the counter and pf->patdly is
+		   the command memory.  patterndelay active  so turn back pf->patpos by 1  do we have to get a new patternpointer ? (when pf->patpos reaches the
+		   pattern size, or when a patternbreak is active)  handle the "---" (end of song) pattern since it can occur
+			   *inside* the module in some formats  Fade global volume if enabled and we're playing the last pattern  now set up the actual hardware channel playback information  make sure the player fetches the first note  make sure the player doesn't start with garbage  mod->numvoices was used during loading to clamp md_sngchn.
+	   After loading it's used to remember how big mod->voice is.
+	 Stop playback if necessary  new song is being started, so completely stop out the old one.  Get current module order  pf->positions[pf->sngpos ? pf->sngpos-1 : 0]: 0;  Get current module row  ex:set ts=4: 	MikMod sound library
+	(c) 1998, 1999, 2000, 2001 Miodrag Vallat and others - see file AUTHORS
+	for complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  The Protracker Player Driver
+
+  The protracker driver supports all base Protracker 3.x commands and features.
+
+============================================================================== The currently playing module  number of above-range octaves  Triton's linear periods to frequency translation table (for XM modules)  returns a random value between 0 and ceil-1, ceil must be a power of two 	New Note Action Scoring System :
+	--------------------------------
+	1)	total-volume (fadevol, chanvol, volume) is the main scorer.
+	2)	a looping sample is a bonus x2
+	3)	a foreground channel is a bonus x4
+	4)	an active envelope with keyoff is a handicap -x2
+ allow us to take over a nonexisting sample  n*8 + fine/16  This happens sometimes on badly converted AMF, and old MOD  <- prevent divide overflow.. (42 hehe)  FIXME: bad/crafted file. better/more general solution?  Imago Orpheus sometimes stores an extra initial point in the envelope  Fit in the envelope, still  This procedure processes all envelope types, include volume, pitch, and
+   panning.  Envelopes are defined by a set of points, each with a magnitude
+   [relating either to volume, panning position, or pitch modifier] and a tick
+   position.
+
+   Envelopes work in the following manner:
+
+   (a) Each tick the envelope is moved a point further in its progression. For
+       an accurate progression, magnitudes between two envelope points are
+       interpolated.
+
+   (b) When progression reaches a defined point on the envelope, values are
+       shifted to interpolate between this point and the next, and checks for
+       loops or envelope end are done.
+
+   Misc:
+     Sustain loops are loops that are only active as long as the keyoff flag is
+     clear.  When a volume envelope terminates, so does the current fadeout.
+ actual points in the envelope  the 'tick counter' - real point being played 
+		 * Sustain loop on one point (XM type).
+		 * Not processed if KEYOFF.
+		 * Don't move and don't interpolate when the point is reached
+		 
+			 * All following situations will require interpolation between
+			 * two envelope points.
+			 
+			 * Sustain loop between two points (IT type).
+			 * Not processed if KEYOFF.
+			  if we were on a loop point, loop now 
+			 * Regular loop.
+			 * Be sure to correctly handle single point loops.
+			 
+			 * Non looping situations.
+			 
+			 * Start to fade if the volume envelope is finished.
+			  did pointer reach point b?  shift points a and b  XM linear period to frequency conversion ========== Protracker effects  mod style: N, N+x, N+y  case 0: unchanged  okt arpeggio 3: N-x, N, N+y  case 1: unchanged  okt arpeggio 4: N, N+y, N, N-x  case 0, case 2: unchanged  okt arpeggio 5: N-x, N+y, N, and nothing at tick 0  case 0: unchanged  We have to slide a->main.period towards a->wantedperiod, so compute
+		   the difference between those two values  if they are equal or if portamentospeed is too big ... ...make tmpperiod equal tperiod  dist>0, slide up  dist<0, slide down  silence warning  sine  ramp down  square wave  random wave  DoPTEffect6 after DoPTEffectA  silence warning  sine  ramp down  square wave  random wave  crafted file? 	fprintf(stderr,"DoPTEffectB: numpos=%d, dat=%d -> %d\n",mod->numpos,dat,mod->numpos-1); Vincent Voois uses a nasty trick in "Universal Bolero"  if we don't loop, better not to skip the end of the
+		   pattern, after all... so:
+		mod->patbrk=0;  if we were fading, adjust...  cancel the FT2 pattern loop (E60) bug.
+		 * also see DoEEffects() below for it.  note cut  crafted file? 	fprintf(stderr,"DoPTEffectD: numrow=%d, dat=%d -> 0\n",mod->numrow,dat); don't ask me to explain this code - it makes
+		   backwards.s3m and children.xm (heretic's version) play
+		   correctly, among others. Take that for granted, or write
+		   the page of comments yourself... you might need some
+		   aspirin - Miod  hardware filter toggle, not supported  fineslide up  fineslide dn  glissando ctrl  set vibrato waveform  set finetune  set patternloop  set reppos or repcnt ?  set repcnt, so check if repcnt already is set, which means we
+			   are already looping  already looping, decrease counter  this would make walker.xm, shipped with Xsoundtracker,
+				   play correctly, but it's better to remain compatible
+				   with FT2  not yet looping, so set repcnt  jump to reppos if repcnt>0  set reppos - can be (-1)  emulate the FT2 pattern loop (E60) bug:
+			 * http://milkytracker.org/docs/MilkyTracker.html#fxE6x
+			 * roadblas.xm plays correctly with this.  set tremolo waveform  set panning  retrig note  do not retrigger on tick 0, until we are emulating FT2 and effect
+		   data is zero  only retrigger if data nibble > 0, or if tick 0 (FT2 compat)  when retrig counter reaches 0, reset counter and restart
+				   the sample  countdown  fine volume slide up  fine volume slide dn   cut note  When tick reaches the cut-note value, turn the volume to
+		   zero (just like on the amiga)  just turn the volume down  note delay  delay the start of the sample until tick==nib  pattern delay  only once, when tick=0  invert loop, not supported  ========== Scream Tracker effects  only retrigger if low nibble > 0  when retrig counter reaches 0, reset counter and restart the
+				   sample  countdown   silence warning  sine  ramp down  square wave  random  silence warning  sine  ramp down  square wave  random ========== Envelope helpers ========== Fast Tracker effects  DoXMEffect6 after DoXMEffectA  slide right has absolute priority ========== Impulse Tracker effects  if we don't come from another note, ignore the slide and play the note
+	   as is  We have to slide a->main.period towards a->wantedperiod, compute the
+		   difference between those two values  if they are equal or if portamentospeed is too big...  ... make tmpperiod equal tperiod  dist>0 slide up  dist<0 slide down  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  silence warning  sine  square wave  ramp down  random  Impulse/Scream Tracker Sxx effects.
+   All Sxx effects share the same memory space.  S1x set glissando voice  S2x set finetune  S3x set vibrato waveform  S4x set tremolo waveform  S5x panbrello  S6x delay x number of frames (patdly)  S7x instrument / NNA commands  S8x set panning position  S9x set surround sound  SAy set high order sample offset yxx00h  SBx pattern loop  SCx notecut  SDx notedelay  SEx patterndelay ========== Impulse Tracker Volume/Pan Column effects 
+ * All volume/pan column effects share the same memory space.
+ ========== UltraTracker effects ========== OctaMED effects ========== Oktalyzer effects  arpeggio style ========== General player functions  0  UNI_NOTE  UNI_INSTRUMENT  UNI_PTEFFECT0  UNI_PTEFFECT1  UNI_PTEFFECT2  UNI_PTEFFECT3  UNI_PTEFFECT4  UNI_PTEFFECT5  UNI_PTEFFECT6  UNI_PTEFFECT7  UNI_PTEFFECT8  UNI_PTEFFECT9  UNI_PTEFFECTA  UNI_PTEFFECTB  UNI_PTEFFECTC  UNI_PTEFFECTD  UNI_PTEFFECTE  UNI_PTEFFECTF  UNI_S3MEFFECTA  UNI_S3MEFFECTD  UNI_S3MEFFECTE  UNI_S3MEFFECTF  UNI_S3MEFFECTI  UNI_S3MEFFECTQ  UNI_S3MEFFECTR  UNI_S3MEFFECTT  UNI_S3MEFFECTU  UNI_KEYOFF  UNI_KEYFADE  UNI_VOLEFFECTS  UNI_XMEFFECT4  UNI_XMEFFECT6  UNI_XMEFFECTA  UNI_XMEFFECTE1  UNI_XMEFFECTE2  UNI_XMEFFECTEA  UNI_XMEFFECTEB  UNI_XMEFFECTG  UNI_XMEFFECTH  UNI_XMEFFECTL  UNI_XMEFFECTP  UNI_XMEFFECTX1  UNI_XMEFFECTX2  UNI_ITEFFECTG  UNI_ITEFFECTH  UNI_ITEFFECTI  UNI_ITEFFECTM  UNI_ITEFFECTN  UNI_ITEFFECTP  UNI_ITEFFECTT  UNI_ITEFFECTU  UNI_ITEFFECTW  UNI_ITEFFECTY  UNI_ITEFFECTZ  UNI_ITEFFECTS0  UNI_ULTEFFECT9  UNI_MEDSPEED  UNI_MEDEFFECTF1  UNI_MEDEFFECTF2  UNI_MEDEFFECTF3  UNI_OKTARP  this doesn't normally happen unless things go fubar elsewhere  past note cut  past note off  past note fade  set NNA note cut  set NNA note continue  set NNA note off  set NNA note fade  disable volume envelope  enable volume envelope   disable panning envelope  enable panning envelope  disable pitch envelope  enable pitch envelope  max 32768  * max 64  * max 256  tmpvol is max 32768 again  used to determine samplevolume  * max 256  * max 128  fade out  do XM style auto-vibrato  keyoff -> depth becomes 0 if final depth wasn't reached or
+				   stays at final level if depth WAS reached  update vibrato position  process pitch envelope  check for a dead note (fadevol=0)  if keyfade, start substracting fadeoutspeed from fadevol:  Handles new notes or instruments  funky is set to indicate note or instrument change  retrig tremolo and vibrato waves ?  safety valve  channel or instrument determined panning ?  instrument change  IT random volume variations: 0:8 bit fixed, and one bit for
+				   sign.  Handles effects  continue volume slide if necessary for XM and IT  NNA management  Make sure the old MP_VOICE channel knows it has no
+					   master now !  assume the channel is taken by NNA  continue note, do nothing  note off  if (a->main.kick==KICK_NOTE)  Setup module and NNA voices  if no channel was cut above, find an empty or quiet channel
+			   here  assign parts of MP_VOICE only done for a KICK_NOTE  second effect pass  don't handle the very first ticks, this allows the other hardware to
+	   settle down so we don't loose any starting notes  update time counter (sngtime is in milliseconds (in fact 2^-10))  thus 2.5*(1<<10), since fps=0.4xtempo  play 2 times row 0  process pattern-delay. pf->patdly2 is the counter and pf->patdly is
+		   the command memory.  patterndelay active  so turn back pf->patpos by 1  do we have to get a new patternpointer ? (when pf->patpos reaches the
+		   pattern size, or when a patternbreak is active)  handle the "---" (end of song) pattern since it can occur
+			   *inside* the module in some formats  Fade global volume if enabled and we're playing the last pattern  now set up the actual hardware channel playback information  make sure the player fetches the first note  make sure the player doesn't start with garbage  mod->numvoices was used during loading to clamp md_sngchn.
+	   After loading it's used to remember how big mod->voice is.
+	 Stop playback if necessary  new song is being started, so completely stop out the old one.  Get current module order  pf->positions[pf->sngpos ? pf->sngpos-1 : 0]: 0;  Get current module row  ex:set ts=4: 

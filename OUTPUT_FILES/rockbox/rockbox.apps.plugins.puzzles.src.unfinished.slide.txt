@@ -1,0 +1,928 @@
+
+ * slide.c: Implementation of the block-sliding puzzle `Klotski'.
+ 
+ * TODO:
+ * 
+ *  - Improve the generator.
+ *     * actually, we seem to be mostly sensible already now. I
+ * 	 want more choice over the type of main block and location
+ * 	 of the exit/target, and I think I probably ought to give
+ * 	 up on compactness and just bite the bullet and have the
+ * 	 target area right outside the main wall, but mostly I
+ * 	 think it's OK.
+ *     * the move limit tends to make the game _slower_ to
+ * 	 generate, which is odd. Perhaps investigate why.
+ * 
+ *  - Improve the graphics.
+ *     * All the colours are a bit wishy-washy. _Some_ dark
+ * 	 colours would surely not be excessive? Probably darken
+ * 	 the tiles, the walls and the main block, and leave the
+ * 	 target marker pale.
+ *     * The cattle grid effect is still disgusting. Think of
+ * 	 something completely different.
+ *     * The highlight for next-piece-to-move in the solver is
+ * 	 excessive, and the shadow blends in too well with the
+ * 	 piece lowlights. Adjust both.
+ 
+ * The implementation of this game revolves around the insight
+ * which makes an exhaustive-search solver feasible: although
+ * there are many blocks which can be rearranged in many ways, any
+ * two blocks of the same shape are _indistinguishable_ and hence
+ * the number of _distinct_ board layouts is generally much
+ * smaller. So we adopt a representation for board layouts which
+ * is inherently canonical, i.e. there are no two distinct
+ * representations which encode indistinguishable layouts.
+ *
+ * The way we do this is to encode each square of the board, in
+ * the normal left-to-right top-to-bottom order, as being one of
+ * the following things:
+ *  - the first square (in the given order) of a block (`anchor')
+ *  - special case of the above: the anchor for the _main_ block
+ *    (i.e. the one which the aim of the game is to get to the
+ *    target position)
+ *  - a subsequent square of a block whose previous square was N
+ *    squares ago
+ *  - an impassable wall
+ * 
+ * (We also separately store data about which board positions are
+ * forcefields only passable by the main block. We can't encode
+ * that in the main board data, because then the main block would
+ * destroy forcefields as it went over them.)
+ *
+ * Hence, for example, a 2x2 square block would be encoded as
+ * ANCHOR, followed by DIST(1), and w-2 squares later on there
+ * would be DIST(w-1) followed by DIST(1). So if you start at the
+ * last of those squares, the DIST numbers give you a linked list
+ * pointing back through all the other squares in the same block.
+ *
+ * So the solver simply does a bfs over all reachable positions,
+ * encoding them in this format and storing them in a tree234 to
+ * ensure it doesn't ever revisit an already-analysed position.
+ 
+     * The colours are arranged here so that every base colour is
+     * directly followed by its highlight colour and then its
+     * lowlight colour. Do not break this, or draw_tile() will get
+     * confused.
+     
+ * Board layout is a simple array of bytes. Each byte holds:
+  top-left-most square of some piece  anchor of _main_ piece  empty square  immovable wall  all other values indicate distance back to previous square of same block 
+ * MAXDIST is the largest DIST value we can encode. This must
+ * therefore also be the maximum puzzle width in theory (although
+ * solver running time will dictate a much smaller limit in
+ * practice).
+  just like from solve_board()  target coords for MAINANCHOR  for display only  for move counting  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * During solver execution, the set of visited board positions is
+ * stored as a tree234 of the following structures. `w', `h' and
+ * `data' are obvious in meaning; `dist' represents the minimum
+ * distance to reach this position from the starting point.
+ * 
+ * `prev' links each board to the board position from which it was
+ * most efficiently derived.
+ 
+ * The actual solver. Given a board, attempt to find the minimum
+ * length of move sequence which moves MAINANCHOR to (tx,ty), or
+ * -1 if no solution exists. Returns that minimum length.
+ * 
+ * Also, if `moveout' is provided, writes out the moves in the
+ * form of a sequence of pairs of integers indicating the source
+ * and destination points of the anchor of the moved piece in each
+ * move. Exactly twice as many integers are written as the number
+ * returned from solve_board(), and `moveout' receives an int *
+ * which is a pointer to a dynamically allocated array.
+ 
+	     * The problem is not soluble in under `movelimit'
+	     * moves, so we can quit right now.
+	     
+	 * Find all the anchors and form a linked list of the
+	 * squares within each block.
+	 
+	 * For each anchor, do an array-based BFS to find all the
+	 * places we can slide it to.
+	 
+		 * Try to move in each direction from here.
+		 
+		     * For each square involved in this block,
+		     * check to see if the square d spaces away
+		     * from it is either empty or part of the same
+		     * block.
+		      ok  this direction wasn't feasible 
+		     * If we've already tried moving this piece
+		     * here, leave it.
+		     
+		     * We have a viable move. Make it.
+		      we already got one  search completed! 
+	     * Now b2 represents the solved position. Backtrack to
+	     * output the solution.
+	     
+		 * Scan b and b2 to find out which piece has
+		 * moved.
+		  no solution  ----------------------------------------------------------------------
+ * Random board generation.
+  placate optimiser 
+     * Set up a board and fill it with singletons, except for a
+     * border of walls.
+     
+     * Invent a main piece at one extreme. (FIXME: vary the
+     * extreme, and the piece.)
+     
+     * Invent a target position. (FIXME: vary this too.)
+     
+     * Gradually remove singletons until the game becomes soluble.
+     
+		 * See if the board is already soluble.
+		 
+		 * Otherwise, remove this piece.
+		 
+     * Make a list of all the inter-block edges on the board.
+      edge to the right of j*w+i  edge below j*w+i 
+     * Now go through that list in random order, trying to merge
+     * the blocks on each side of each edge.
+     
+	 * Immediately abandon the attempt if we've already tried
+	 * to merge the same pair of blocks along a different
+	 * edge.
+	 
+	 * In order to be mergeable, these two squares must each
+	 * either be, or belong to, a non-main anchor, and their
+	 * anchors must also be distinct.
+	 
+	 * We can merge these blocks. Try it, and see if the
+	 * puzzle remains soluble.
+	 
+	     * p1 and p2 are the squares at the head of each block
+	     * list. Pick the smaller one and put it on the output
+	     * block list.
+	     
+	     * Now advance whichever list that came from.
+	     
+	     * Didn't work. Revert the merge.
+	      ----------------------------------------------------------------------
+ * End of solver/generator code.
+ 
+     * Encode as a game ID.
+      b == WALL ? 
+     * Now read the target coordinates.
+     
+	 * (but minmoves is optional)
+	  c == 'w' || c == 'W' ? 
+     * Now read the target coordinates.
+      already complete! 
+     * Run the solver and attempt to find the shortest solution
+     * from the current position.
+     
+     * Encode the resulting solution as a move string.
+      used as scratch in interpret_move  what's currently displayed  this click has no effect 
+	 * User has clicked on a block. Find the block's anchor
+	 * and register that we've started dragging it.
+	 
+	 * Now we immediately bfs out from the current location of
+	 * the anchor, to find all the places to which this block
+	 * can be dragged.
+	  already done this one 
+		 * Now search the grid to see if the block we're
+		 * dragging could fit into this space.
+		  this position isn't valid at all 
+		     * If we got to the end of that loop without
+		     * disqualifying this position, mark it as
+		     * reachable for this drag.
+		     
+	 * And that's it. Update the display to reflect the start
+	 * of a drag.
+	 
+	 * Now search outwards from (tx,ty), in order of Manhattan
+	 * distance, until we find a reachable square.
+	  give up - this drag has no effect 
+	 * Terminate the drag, and if the piece has actually moved
+	 * then return a move string quoting the old and new
+	 * locations of the piece's anchor.
+	  null move; just update the UI 
+	 * Make the next move in the stored solution.
+	 
+     * Scan to the far end of the piece's linked list.
+     
+     * Remove the piece from its old location in the new
+     * game state.
+     
+     * And put it back in at the new location.
+      , wh = w*h 
+	     * This is a solve move, so we just set up a stored
+	     * solution path.
+	     
+		 * Special case: if the first move in the solution
+		 * involves the piece for which we already have a
+		 * partial stored move, adjust the source point to
+		 * the original starting point of that piece.
+		  eat comma 
+		 * If the player has moved the same piece as they
+		 * moved last time, don't increment the move
+		 * count. In fact, if they've put the piece back
+		 * where it started from, _decrement_ the move
+		 * count.
+		  reverted last move  don't change lastmoved_pos 
+	     * If we have a stored solution path, see if we've
+	     * strayed from it or successfully made the next move
+	     * along it.
+	      strayed from the path  `state' at least still exists  advanced along the path  finished the path!  `state' at least still exists  ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros 
+     * When dragging a tile, we light it up a bit.
+     
+     * The main tile is tinted blue.
+     
+     * And we light that up a bit too when dragging.
+     
+     * The target area on the floor is tinted green.
+     
+ * Utility function.
+ 
+	     * We aim to draw a quadrant of a circle in two
+	     * different colours. We do this using Bresenham's
+	     * algorithm directly, because the Puzzles drawing API
+	     * doesn't have a draw-sector primitive.
+	     
+		 * Plot the point.
+		 
+     * Drawing the blocks is hellishly fiddly. The blocks don't
+     * stretch to the full size of the tile; there's a border
+     * around them of size BORDER_WIDTH. Then they have bevelled
+     * borders of size HIGHLIGHT_WIDTH, and also rounded corners.
+     *
+     * I tried for some time to find a clean and clever way to
+     * figure out what needed drawing from the corner and border
+     * flags, but in the end the cleanest way I could find was the
+     * following. We divide the grid square into 25 parts by
+     * ruling four horizontal and four vertical lines across it;
+     * those lines are at BORDER_WIDTH and BORDER_WIDTH +
+     * HIGHLIGHT_WIDTH from the top, from the bottom, from the
+     * left and from the right. Then we carefully consider each of
+     * the resulting 25 sections of square, and decide separately
+     * what needs to go in it based on the flags. In complicated
+     * cases there can be up to five possibilities affecting any
+     * given section (no corner or border flags, just the corner
+     * flag, one border flag, the other border flag, both border
+     * flags). So there's a lot of very fiddly logic here and all
+     * I could really think to do was give it my best shot and
+     * then test it and correct all the typos. Not fun to write,
+     * and I'm sure it isn't fun to read either, but it seems to
+     * work.
+     
+     * Draw the tile background.
+     
+	 * Cattle-grid effect to indicate that nothing but the
+	 * main block can slide over this square.
+	 
+     * Draw the tile midground: a shadow of a block, for
+     * displaying partial solutions.
+     
+     * Draw the tile foreground, i.e. some section of a block or
+     * wall.
+     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+     * Construct the board we'll be displaying (which may be
+     * different from the one in state if ui describes a drag in
+     * progress).
+     
+     * Build a dsf out of that board, so we can conveniently tell
+     * which edges are connected and which aren't.
+     
+     * Now we can construct the data about what we want to draw.
+     
+	     * See if this square is part of the target area.
+	     
+		 * Now look around to see if other squares
+		 * belonging to the same block are adjacent to us.
+		 
+	     * If we're in the middle of showing a solution,
+	     * display a shadow piece for the target of the
+	     * current move.
+	     
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 
+        if (!strcmp(p, "-v")) {
+            verbose = true;
+        } else
+        
+ * slide.c: Implementation of the block-sliding puzzle `Klotski'.
+ 
+ * TODO:
+ * 
+ *  - Improve the generator.
+ *     * actually, we seem to be mostly sensible already now. I
+ * 	 want more choice over the type of main block and location
+ * 	 of the exit/target, and I think I probably ought to give
+ * 	 up on compactness and just bite the bullet and have the
+ * 	 target area right outside the main wall, but mostly I
+ * 	 think it's OK.
+ *     * the move limit tends to make the game _slower_ to
+ * 	 generate, which is odd. Perhaps investigate why.
+ * 
+ *  - Improve the graphics.
+ *     * All the colours are a bit wishy-washy. _Some_ dark
+ * 	 colours would surely not be excessive? Probably darken
+ * 	 the tiles, the walls and the main block, and leave the
+ * 	 target marker pale.
+ *     * The cattle grid effect is still disgusting. Think of
+ * 	 something completely different.
+ *     * The highlight for next-piece-to-move in the solver is
+ * 	 excessive, and the shadow blends in too well with the
+ * 	 piece lowlights. Adjust both.
+ 
+ * The implementation of this game revolves around the insight
+ * which makes an exhaustive-search solver feasible: although
+ * there are many blocks which can be rearranged in many ways, any
+ * two blocks of the same shape are _indistinguishable_ and hence
+ * the number of _distinct_ board layouts is generally much
+ * smaller. So we adopt a representation for board layouts which
+ * is inherently canonical, i.e. there are no two distinct
+ * representations which encode indistinguishable layouts.
+ *
+ * The way we do this is to encode each square of the board, in
+ * the normal left-to-right top-to-bottom order, as being one of
+ * the following things:
+ *  - the first square (in the given order) of a block (`anchor')
+ *  - special case of the above: the anchor for the _main_ block
+ *    (i.e. the one which the aim of the game is to get to the
+ *    target position)
+ *  - a subsequent square of a block whose previous square was N
+ *    squares ago
+ *  - an impassable wall
+ * 
+ * (We also separately store data about which board positions are
+ * forcefields only passable by the main block. We can't encode
+ * that in the main board data, because then the main block would
+ * destroy forcefields as it went over them.)
+ *
+ * Hence, for example, a 2x2 square block would be encoded as
+ * ANCHOR, followed by DIST(1), and w-2 squares later on there
+ * would be DIST(w-1) followed by DIST(1). So if you start at the
+ * last of those squares, the DIST numbers give you a linked list
+ * pointing back through all the other squares in the same block.
+ *
+ * So the solver simply does a bfs over all reachable positions,
+ * encoding them in this format and storing them in a tree234 to
+ * ensure it doesn't ever revisit an already-analysed position.
+ 
+     * The colours are arranged here so that every base colour is
+     * directly followed by its highlight colour and then its
+     * lowlight colour. Do not break this, or draw_tile() will get
+     * confused.
+     
+ * Board layout is a simple array of bytes. Each byte holds:
+  top-left-most square of some piece  anchor of _main_ piece  empty square  immovable wall  all other values indicate distance back to previous square of same block 
+ * MAXDIST is the largest DIST value we can encode. This must
+ * therefore also be the maximum puzzle width in theory (although
+ * solver running time will dictate a much smaller limit in
+ * practice).
+  just like from solve_board()  target coords for MAINANCHOR  for display only  for move counting  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * During solver execution, the set of visited board positions is
+ * stored as a tree234 of the following structures. `w', `h' and
+ * `data' are obvious in meaning; `dist' represents the minimum
+ * distance to reach this position from the starting point.
+ * 
+ * `prev' links each board to the board position from which it was
+ * most efficiently derived.
+ 
+ * The actual solver. Given a board, attempt to find the minimum
+ * length of move sequence which moves MAINANCHOR to (tx,ty), or
+ * -1 if no solution exists. Returns that minimum length.
+ * 
+ * Also, if `moveout' is provided, writes out the moves in the
+ * form of a sequence of pairs of integers indicating the source
+ * and destination points of the anchor of the moved piece in each
+ * move. Exactly twice as many integers are written as the number
+ * returned from solve_board(), and `moveout' receives an int *
+ * which is a pointer to a dynamically allocated array.
+ 
+	     * The problem is not soluble in under `movelimit'
+	     * moves, so we can quit right now.
+	     
+	 * Find all the anchors and form a linked list of the
+	 * squares within each block.
+	 
+	 * For each anchor, do an array-based BFS to find all the
+	 * places we can slide it to.
+	 
+		 * Try to move in each direction from here.
+		 
+		     * For each square involved in this block,
+		     * check to see if the square d spaces away
+		     * from it is either empty or part of the same
+		     * block.
+		      ok  this direction wasn't feasible 
+		     * If we've already tried moving this piece
+		     * here, leave it.
+		     
+		     * We have a viable move. Make it.
+		      we already got one  search completed! 
+	     * Now b2 represents the solved position. Backtrack to
+	     * output the solution.
+	     
+		 * Scan b and b2 to find out which piece has
+		 * moved.
+		  no solution  ----------------------------------------------------------------------
+ * Random board generation.
+  placate optimiser 
+     * Set up a board and fill it with singletons, except for a
+     * border of walls.
+     
+     * Invent a main piece at one extreme. (FIXME: vary the
+     * extreme, and the piece.)
+     
+     * Invent a target position. (FIXME: vary this too.)
+     
+     * Gradually remove singletons until the game becomes soluble.
+     
+		 * See if the board is already soluble.
+		 
+		 * Otherwise, remove this piece.
+		 
+     * Make a list of all the inter-block edges on the board.
+      edge to the right of j*w+i  edge below j*w+i 
+     * Now go through that list in random order, trying to merge
+     * the blocks on each side of each edge.
+     
+	 * Immediately abandon the attempt if we've already tried
+	 * to merge the same pair of blocks along a different
+	 * edge.
+	 
+	 * In order to be mergeable, these two squares must each
+	 * either be, or belong to, a non-main anchor, and their
+	 * anchors must also be distinct.
+	 
+	 * We can merge these blocks. Try it, and see if the
+	 * puzzle remains soluble.
+	 
+	     * p1 and p2 are the squares at the head of each block
+	     * list. Pick the smaller one and put it on the output
+	     * block list.
+	     
+	     * Now advance whichever list that came from.
+	     
+	     * Didn't work. Revert the merge.
+	      ----------------------------------------------------------------------
+ * End of solver/generator code.
+ 
+     * Encode as a game ID.
+      b == WALL ? 
+     * Now read the target coordinates.
+     
+	 * (but minmoves is optional)
+	  c == 'w' || c == 'W' ? 
+     * Now read the target coordinates.
+      already complete! 
+     * Run the solver and attempt to find the shortest solution
+     * from the current position.
+     
+     * Encode the resulting solution as a move string.
+      used as scratch in interpret_move  what's currently displayed  this click has no effect 
+	 * User has clicked on a block. Find the block's anchor
+	 * and register that we've started dragging it.
+	 
+	 * Now we immediately bfs out from the current location of
+	 * the anchor, to find all the places to which this block
+	 * can be dragged.
+	  already done this one 
+		 * Now search the grid to see if the block we're
+		 * dragging could fit into this space.
+		  this position isn't valid at all 
+		     * If we got to the end of that loop without
+		     * disqualifying this position, mark it as
+		     * reachable for this drag.
+		     
+	 * And that's it. Update the display to reflect the start
+	 * of a drag.
+	 
+	 * Now search outwards from (tx,ty), in order of Manhattan
+	 * distance, until we find a reachable square.
+	  give up - this drag has no effect 
+	 * Terminate the drag, and if the piece has actually moved
+	 * then return a move string quoting the old and new
+	 * locations of the piece's anchor.
+	  null move; just update the UI 
+	 * Make the next move in the stored solution.
+	 
+     * Scan to the far end of the piece's linked list.
+     
+     * Remove the piece from its old location in the new
+     * game state.
+     
+     * And put it back in at the new location.
+      , wh = w*h 
+	     * This is a solve move, so we just set up a stored
+	     * solution path.
+	     
+		 * Special case: if the first move in the solution
+		 * involves the piece for which we already have a
+		 * partial stored move, adjust the source point to
+		 * the original starting point of that piece.
+		  eat comma 
+		 * If the player has moved the same piece as they
+		 * moved last time, don't increment the move
+		 * count. In fact, if they've put the piece back
+		 * where it started from, _decrement_ the move
+		 * count.
+		  reverted last move  don't change lastmoved_pos 
+	     * If we have a stored solution path, see if we've
+	     * strayed from it or successfully made the next move
+	     * along it.
+	      strayed from the path  `state' at least still exists  advanced along the path  finished the path!  `state' at least still exists  ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros 
+     * When dragging a tile, we light it up a bit.
+     
+     * The main tile is tinted blue.
+     
+     * And we light that up a bit too when dragging.
+     
+     * The target area on the floor is tinted green.
+     
+ * Utility function.
+ 
+	     * We aim to draw a quadrant of a circle in two
+	     * different colours. We do this using Bresenham's
+	     * algorithm directly, because the Puzzles drawing API
+	     * doesn't have a draw-sector primitive.
+	     
+		 * Plot the point.
+		 
+     * Drawing the blocks is hellishly fiddly. The blocks don't
+     * stretch to the full size of the tile; there's a border
+     * around them of size BORDER_WIDTH. Then they have bevelled
+     * borders of size HIGHLIGHT_WIDTH, and also rounded corners.
+     *
+     * I tried for some time to find a clean and clever way to
+     * figure out what needed drawing from the corner and border
+     * flags, but in the end the cleanest way I could find was the
+     * following. We divide the grid square into 25 parts by
+     * ruling four horizontal and four vertical lines across it;
+     * those lines are at BORDER_WIDTH and BORDER_WIDTH +
+     * HIGHLIGHT_WIDTH from the top, from the bottom, from the
+     * left and from the right. Then we carefully consider each of
+     * the resulting 25 sections of square, and decide separately
+     * what needs to go in it based on the flags. In complicated
+     * cases there can be up to five possibilities affecting any
+     * given section (no corner or border flags, just the corner
+     * flag, one border flag, the other border flag, both border
+     * flags). So there's a lot of very fiddly logic here and all
+     * I could really think to do was give it my best shot and
+     * then test it and correct all the typos. Not fun to write,
+     * and I'm sure it isn't fun to read either, but it seems to
+     * work.
+     
+     * Draw the tile background.
+     
+	 * Cattle-grid effect to indicate that nothing but the
+	 * main block can slide over this square.
+	 
+     * Draw the tile midground: a shadow of a block, for
+     * displaying partial solutions.
+     
+     * Draw the tile foreground, i.e. some section of a block or
+     * wall.
+     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+     * Construct the board we'll be displaying (which may be
+     * different from the one in state if ui describes a drag in
+     * progress).
+     
+     * Build a dsf out of that board, so we can conveniently tell
+     * which edges are connected and which aren't.
+     
+     * Now we can construct the data about what we want to draw.
+     
+	     * See if this square is part of the target area.
+	     
+		 * Now look around to see if other squares
+		 * belonging to the same block are adjacent to us.
+		 
+	     * If we're in the middle of showing a solution,
+	     * display a shadow piece for the target of the
+	     * current move.
+	     
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 
+        if (!strcmp(p, "-v")) {
+            verbose = true;
+        } else
+        
+ * slide.c: Implementation of the block-sliding puzzle `Klotski'.
+ 
+ * TODO:
+ * 
+ *  - Improve the generator.
+ *     * actually, we seem to be mostly sensible already now. I
+ * 	 want more choice over the type of main block and location
+ * 	 of the exit/target, and I think I probably ought to give
+ * 	 up on compactness and just bite the bullet and have the
+ * 	 target area right outside the main wall, but mostly I
+ * 	 think it's OK.
+ *     * the move limit tends to make the game _slower_ to
+ * 	 generate, which is odd. Perhaps investigate why.
+ * 
+ *  - Improve the graphics.
+ *     * All the colours are a bit wishy-washy. _Some_ dark
+ * 	 colours would surely not be excessive? Probably darken
+ * 	 the tiles, the walls and the main block, and leave the
+ * 	 target marker pale.
+ *     * The cattle grid effect is still disgusting. Think of
+ * 	 something completely different.
+ *     * The highlight for next-piece-to-move in the solver is
+ * 	 excessive, and the shadow blends in too well with the
+ * 	 piece lowlights. Adjust both.
+ 
+ * The implementation of this game revolves around the insight
+ * which makes an exhaustive-search solver feasible: although
+ * there are many blocks which can be rearranged in many ways, any
+ * two blocks of the same shape are _indistinguishable_ and hence
+ * the number of _distinct_ board layouts is generally much
+ * smaller. So we adopt a representation for board layouts which
+ * is inherently canonical, i.e. there are no two distinct
+ * representations which encode indistinguishable layouts.
+ *
+ * The way we do this is to encode each square of the board, in
+ * the normal left-to-right top-to-bottom order, as being one of
+ * the following things:
+ *  - the first square (in the given order) of a block (`anchor')
+ *  - special case of the above: the anchor for the _main_ block
+ *    (i.e. the one which the aim of the game is to get to the
+ *    target position)
+ *  - a subsequent square of a block whose previous square was N
+ *    squares ago
+ *  - an impassable wall
+ * 
+ * (We also separately store data about which board positions are
+ * forcefields only passable by the main block. We can't encode
+ * that in the main board data, because then the main block would
+ * destroy forcefields as it went over them.)
+ *
+ * Hence, for example, a 2x2 square block would be encoded as
+ * ANCHOR, followed by DIST(1), and w-2 squares later on there
+ * would be DIST(w-1) followed by DIST(1). So if you start at the
+ * last of those squares, the DIST numbers give you a linked list
+ * pointing back through all the other squares in the same block.
+ *
+ * So the solver simply does a bfs over all reachable positions,
+ * encoding them in this format and storing them in a tree234 to
+ * ensure it doesn't ever revisit an already-analysed position.
+ 
+     * The colours are arranged here so that every base colour is
+     * directly followed by its highlight colour and then its
+     * lowlight colour. Do not break this, or draw_tile() will get
+     * confused.
+     
+ * Board layout is a simple array of bytes. Each byte holds:
+  top-left-most square of some piece  anchor of _main_ piece  empty square  immovable wall  all other values indicate distance back to previous square of same block 
+ * MAXDIST is the largest DIST value we can encode. This must
+ * therefore also be the maximum puzzle width in theory (although
+ * solver running time will dictate a much smaller limit in
+ * practice).
+  just like from solve_board()  target coords for MAINANCHOR  for display only  for move counting  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * During solver execution, the set of visited board positions is
+ * stored as a tree234 of the following structures. `w', `h' and
+ * `data' are obvious in meaning; `dist' represents the minimum
+ * distance to reach this position from the starting point.
+ * 
+ * `prev' links each board to the board position from which it was
+ * most efficiently derived.
+ 
+ * The actual solver. Given a board, attempt to find the minimum
+ * length of move sequence which moves MAINANCHOR to (tx,ty), or
+ * -1 if no solution exists. Returns that minimum length.
+ * 
+ * Also, if `moveout' is provided, writes out the moves in the
+ * form of a sequence of pairs of integers indicating the source
+ * and destination points of the anchor of the moved piece in each
+ * move. Exactly twice as many integers are written as the number
+ * returned from solve_board(), and `moveout' receives an int *
+ * which is a pointer to a dynamically allocated array.
+ 
+	     * The problem is not soluble in under `movelimit'
+	     * moves, so we can quit right now.
+	     
+	 * Find all the anchors and form a linked list of the
+	 * squares within each block.
+	 
+	 * For each anchor, do an array-based BFS to find all the
+	 * places we can slide it to.
+	 
+		 * Try to move in each direction from here.
+		 
+		     * For each square involved in this block,
+		     * check to see if the square d spaces away
+		     * from it is either empty or part of the same
+		     * block.
+		      ok  this direction wasn't feasible 
+		     * If we've already tried moving this piece
+		     * here, leave it.
+		     
+		     * We have a viable move. Make it.
+		      we already got one  search completed! 
+	     * Now b2 represents the solved position. Backtrack to
+	     * output the solution.
+	     
+		 * Scan b and b2 to find out which piece has
+		 * moved.
+		  no solution  ----------------------------------------------------------------------
+ * Random board generation.
+  placate optimiser 
+     * Set up a board and fill it with singletons, except for a
+     * border of walls.
+     
+     * Invent a main piece at one extreme. (FIXME: vary the
+     * extreme, and the piece.)
+     
+     * Invent a target position. (FIXME: vary this too.)
+     
+     * Gradually remove singletons until the game becomes soluble.
+     
+		 * See if the board is already soluble.
+		 
+		 * Otherwise, remove this piece.
+		 
+     * Make a list of all the inter-block edges on the board.
+      edge to the right of j*w+i  edge below j*w+i 
+     * Now go through that list in random order, trying to merge
+     * the blocks on each side of each edge.
+     
+	 * Immediately abandon the attempt if we've already tried
+	 * to merge the same pair of blocks along a different
+	 * edge.
+	 
+	 * In order to be mergeable, these two squares must each
+	 * either be, or belong to, a non-main anchor, and their
+	 * anchors must also be distinct.
+	 
+	 * We can merge these blocks. Try it, and see if the
+	 * puzzle remains soluble.
+	 
+	     * p1 and p2 are the squares at the head of each block
+	     * list. Pick the smaller one and put it on the output
+	     * block list.
+	     
+	     * Now advance whichever list that came from.
+	     
+	     * Didn't work. Revert the merge.
+	      ----------------------------------------------------------------------
+ * End of solver/generator code.
+ 
+     * Encode as a game ID.
+      b == WALL ? 
+     * Now read the target coordinates.
+     
+	 * (but minmoves is optional)
+	  c == 'w' || c == 'W' ? 
+     * Now read the target coordinates.
+      already complete! 
+     * Run the solver and attempt to find the shortest solution
+     * from the current position.
+     
+     * Encode the resulting solution as a move string.
+      used as scratch in interpret_move  what's currently displayed  this click has no effect 
+	 * User has clicked on a block. Find the block's anchor
+	 * and register that we've started dragging it.
+	 
+	 * Now we immediately bfs out from the current location of
+	 * the anchor, to find all the places to which this block
+	 * can be dragged.
+	  already done this one 
+		 * Now search the grid to see if the block we're
+		 * dragging could fit into this space.
+		  this position isn't valid at all 
+		     * If we got to the end of that loop without
+		     * disqualifying this position, mark it as
+		     * reachable for this drag.
+		     
+	 * And that's it. Update the display to reflect the start
+	 * of a drag.
+	 
+	 * Now search outwards from (tx,ty), in order of Manhattan
+	 * distance, until we find a reachable square.
+	  give up - this drag has no effect 
+	 * Terminate the drag, and if the piece has actually moved
+	 * then return a move string quoting the old and new
+	 * locations of the piece's anchor.
+	  null move; just update the UI 
+	 * Make the next move in the stored solution.
+	 
+     * Scan to the far end of the piece's linked list.
+     
+     * Remove the piece from its old location in the new
+     * game state.
+     
+     * And put it back in at the new location.
+      , wh = w*h 
+	     * This is a solve move, so we just set up a stored
+	     * solution path.
+	     
+		 * Special case: if the first move in the solution
+		 * involves the piece for which we already have a
+		 * partial stored move, adjust the source point to
+		 * the original starting point of that piece.
+		  eat comma 
+		 * If the player has moved the same piece as they
+		 * moved last time, don't increment the move
+		 * count. In fact, if they've put the piece back
+		 * where it started from, _decrement_ the move
+		 * count.
+		  reverted last move  don't change lastmoved_pos 
+	     * If we have a stored solution path, see if we've
+	     * strayed from it or successfully made the next move
+	     * along it.
+	      strayed from the path  `state' at least still exists  advanced along the path  finished the path!  `state' at least still exists  ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros 
+     * When dragging a tile, we light it up a bit.
+     
+     * The main tile is tinted blue.
+     
+     * And we light that up a bit too when dragging.
+     
+     * The target area on the floor is tinted green.
+     
+ * Utility function.
+ 
+	     * We aim to draw a quadrant of a circle in two
+	     * different colours. We do this using Bresenham's
+	     * algorithm directly, because the Puzzles drawing API
+	     * doesn't have a draw-sector primitive.
+	     
+		 * Plot the point.
+		 
+     * Drawing the blocks is hellishly fiddly. The blocks don't
+     * stretch to the full size of the tile; there's a border
+     * around them of size BORDER_WIDTH. Then they have bevelled
+     * borders of size HIGHLIGHT_WIDTH, and also rounded corners.
+     *
+     * I tried for some time to find a clean and clever way to
+     * figure out what needed drawing from the corner and border
+     * flags, but in the end the cleanest way I could find was the
+     * following. We divide the grid square into 25 parts by
+     * ruling four horizontal and four vertical lines across it;
+     * those lines are at BORDER_WIDTH and BORDER_WIDTH +
+     * HIGHLIGHT_WIDTH from the top, from the bottom, from the
+     * left and from the right. Then we carefully consider each of
+     * the resulting 25 sections of square, and decide separately
+     * what needs to go in it based on the flags. In complicated
+     * cases there can be up to five possibilities affecting any
+     * given section (no corner or border flags, just the corner
+     * flag, one border flag, the other border flag, both border
+     * flags). So there's a lot of very fiddly logic here and all
+     * I could really think to do was give it my best shot and
+     * then test it and correct all the typos. Not fun to write,
+     * and I'm sure it isn't fun to read either, but it seems to
+     * work.
+     
+     * Draw the tile background.
+     
+	 * Cattle-grid effect to indicate that nothing but the
+	 * main block can slide over this square.
+	 
+     * Draw the tile midground: a shadow of a block, for
+     * displaying partial solutions.
+     
+     * Draw the tile foreground, i.e. some section of a block or
+     * wall.
+     
+	 * The initial contents of the window are not guaranteed
+	 * and can vary with front ends. To be on the safe side,
+	 * all games should start by drawing a big
+	 * background-colour rectangle covering the whole window.
+	 
+     * Construct the board we'll be displaying (which may be
+     * different from the one in state if ui describes a drag in
+     * progress).
+     
+     * Build a dsf out of that board, so we can conveniently tell
+     * which edges are connected and which aren't.
+     
+     * Now we can construct the data about what we want to draw.
+     
+	     * See if this square is part of the target area.
+	     
+		 * Now look around to see if other squares
+		 * belonging to the same block are adjacent to us.
+		 
+	     * If we're in the middle of showing a solution,
+	     * display a shadow piece for the target of the
+	     * current move.
+	     
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 
+        if (!strcmp(p, "-v")) {
+            verbose = true;
+        } else
+        

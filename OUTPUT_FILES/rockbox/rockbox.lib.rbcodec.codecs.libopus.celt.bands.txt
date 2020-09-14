@@ -1,0 +1,172 @@
+ Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2008-2009 Gregory Maxwell
+   Written by Jean-Marc Valin and Gregory Maxwell 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ This is a cos() approximation designed to be bit-exact on any platform. Bit exactness
+   with this approximation is important because it has an impact on the bit allocation  Compute the amplitude (sqrt energy) in each of the bands  We're adding one here to ensure the normalized band isn't larger than unity norm printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  Compute the amplitude (sqrt energy) in each of the bands printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  De-normalise the energy to produce the synthesis from the unit-energy bands  Handle the integer part of the log energy  Handle the fractional part.  Handle extreme gains with negative shift.  For shift < -2 we'd be likely to overflow, so we're capping
+               the gain here. This shouldn't happen unless the bitstream is
+               already corrupted.  Be careful of the fixed-point "else" just above when changing this code  This prevents energy collapse for transients with multiple short MDCTs  depth in 1/8 bits  r needs to be multiplied by 2 or 2*sqrt(2) depending on LM because
+            short blocks don't have the same energy as long  Detect collapse  Fill with noise  We just added some energy, so we need to renormalise  Side is not encoded, no need to calculate  Compute the norm of X+Y and X-Y as |X|^2 + |Y|^2 +/- sum(xy)  Compensating for the mid normalization  mid and side are in Q15, not Q14 like X and Y  Apply mid scaling (side is already scaled)  Decide whether we should spread the pulses in the current frame  Compute rough CDF of |x[j]|  Q13  Only include four last bands (8 kHz and up) printf("%d %d %d\n", hf_sum, *hf_average, *tapset_decision); end has to be non-zero  Recursive averaging  Hysteresis  Indexing table for converting from natural Hadamard to ordery Hadamard
+   This is essentially a bit-reversed Gray, on top of which we've added
+   an inversion of the order because we want the DC at the end rather than
+   the beginning. The lines are for N=2, 4, 8, 16  The upper limit ensures that in a stereo split with itheta==16384, we'll
+       always have enough bits left over to code at least one pulse in the
+       side; otherwise it would collapse, since it doesn't get folded.  Decide on the resolution to give to the split parameter theta  theta is the atan() of the ratio between the (normalized)
+         side and mid. With just that parameter, we can re-scale both
+         mid and side because we know that 1) they have unit norm and
+         2) they are orthogonal.  Entropy coding of the angle. We use a uniform pdf for the
+         time split, a step for stereo, and a triangular one for the rest.  Use a probability of p0 up to itheta=8192 and then use 1 after  Uniform pdf  Triangular pdf  NOTE: Renormalising X and Y *may* help fixed-point a bit at very high rate.
+               Let's do that at higher complexity  This is the mid vs side allocation that minimizes squared error
+         in that band.  This function is responsible for encoding and decoding a mono partition.
+   It can split the band in two and transmit the energy difference with
+   the two half-bands. It can be called recursively so bands can end up being
+   split in 8 parts.  If we need 1.5 more bit than we can produce, split the band in two.  Give more bits to low-energy MDCTs than they would otherwise deserve  Rough approximation for pre-echo masking  Corresponds to a forward-masking slope of 1.5 dB per 10 ms  >32-bit split case  This is the basic no-split case  Ensures we can never bust the budget  Finally do the actual quantization  If there's no pulse, fill the band anyway  B can be as large as 16, so this shift might overflow an int on a
+               16-bit platform; use a long to get defined behavior. Noise  Folded spectrum  About 48 dB below the "normal" folding level  This function is responsible for encoding and decoding a band for the mono case.  Special case for one sample  Band recombining to increase frequency resolution  Increasing the time resolution  Reorganize the samples in time order instead of frequency order  This code is used by the decoder and by the resynthesis-enabled encoder  Undo the sample reorganization going from time order to frequency order  Undo time-freq changes that we did earlier  Scale output for later folding  This function is responsible for encoding and decoding a band for the stereo case.  Special case for one sample  This is a special case for N=2 that only works for stereo and takes
+      advantage of the fact that mid and side are orthogonal to encode
+      the side with just one bit.  Only need one bit for the side.  Here we only need to encode a sign for the side.  We use orig_fill here because we want to fold the side, but if
+         itheta==16384, we'll have cleared the low bits of fill.  We don't split N=2 bands, so cm is either 1 or 0 (for a fold-collapse),
+         and there's no need to worry about mixing with the other channel.  "Normal" split code  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  This code is used by the decoder and by the resynthesis-enabled encoder  No need to allocate norm for the last band because we don't need an
+      output in that band.  We can use the last band as scratch space because we don't need that
+      scratch space for the last band.  Compute how many bits we want to allocate to this band  Get a conservative estimate of the collapse_mask's for the bands we're
+         going to be folding from.  This ensures we never repeat spectral content within one band  Otherwise, we'll be using the LCG to fold, so all blocks will (almost
+         always) be non-zero.  Switch off dual stereo to do intensity.  Update the folding position only as long as we have 1 bit/sample depth.  Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2008-2009 Gregory Maxwell
+   Written by Jean-Marc Valin and Gregory Maxwell 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ This is a cos() approximation designed to be bit-exact on any platform. Bit exactness
+   with this approximation is important because it has an impact on the bit allocation  Compute the amplitude (sqrt energy) in each of the bands  We're adding one here to ensure the normalized band isn't larger than unity norm printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  Compute the amplitude (sqrt energy) in each of the bands printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  De-normalise the energy to produce the synthesis from the unit-energy bands  Handle the integer part of the log energy  Handle the fractional part.  Handle extreme gains with negative shift.  For shift < -2 we'd be likely to overflow, so we're capping
+               the gain here. This shouldn't happen unless the bitstream is
+               already corrupted.  Be careful of the fixed-point "else" just above when changing this code  This prevents energy collapse for transients with multiple short MDCTs  depth in 1/8 bits  r needs to be multiplied by 2 or 2*sqrt(2) depending on LM because
+            short blocks don't have the same energy as long  Detect collapse  Fill with noise  We just added some energy, so we need to renormalise  Side is not encoded, no need to calculate  Compute the norm of X+Y and X-Y as |X|^2 + |Y|^2 +/- sum(xy)  Compensating for the mid normalization  mid and side are in Q15, not Q14 like X and Y  Apply mid scaling (side is already scaled)  Decide whether we should spread the pulses in the current frame  Compute rough CDF of |x[j]|  Q13  Only include four last bands (8 kHz and up) printf("%d %d %d\n", hf_sum, *hf_average, *tapset_decision); end has to be non-zero  Recursive averaging  Hysteresis  Indexing table for converting from natural Hadamard to ordery Hadamard
+   This is essentially a bit-reversed Gray, on top of which we've added
+   an inversion of the order because we want the DC at the end rather than
+   the beginning. The lines are for N=2, 4, 8, 16  The upper limit ensures that in a stereo split with itheta==16384, we'll
+       always have enough bits left over to code at least one pulse in the
+       side; otherwise it would collapse, since it doesn't get folded.  Decide on the resolution to give to the split parameter theta  theta is the atan() of the ratio between the (normalized)
+         side and mid. With just that parameter, we can re-scale both
+         mid and side because we know that 1) they have unit norm and
+         2) they are orthogonal.  Entropy coding of the angle. We use a uniform pdf for the
+         time split, a step for stereo, and a triangular one for the rest.  Use a probability of p0 up to itheta=8192 and then use 1 after  Uniform pdf  Triangular pdf  NOTE: Renormalising X and Y *may* help fixed-point a bit at very high rate.
+               Let's do that at higher complexity  This is the mid vs side allocation that minimizes squared error
+         in that band.  This function is responsible for encoding and decoding a mono partition.
+   It can split the band in two and transmit the energy difference with
+   the two half-bands. It can be called recursively so bands can end up being
+   split in 8 parts.  If we need 1.5 more bit than we can produce, split the band in two.  Give more bits to low-energy MDCTs than they would otherwise deserve  Rough approximation for pre-echo masking  Corresponds to a forward-masking slope of 1.5 dB per 10 ms  >32-bit split case  This is the basic no-split case  Ensures we can never bust the budget  Finally do the actual quantization  If there's no pulse, fill the band anyway  B can be as large as 16, so this shift might overflow an int on a
+               16-bit platform; use a long to get defined behavior. Noise  Folded spectrum  About 48 dB below the "normal" folding level  This function is responsible for encoding and decoding a band for the mono case.  Special case for one sample  Band recombining to increase frequency resolution  Increasing the time resolution  Reorganize the samples in time order instead of frequency order  This code is used by the decoder and by the resynthesis-enabled encoder  Undo the sample reorganization going from time order to frequency order  Undo time-freq changes that we did earlier  Scale output for later folding  This function is responsible for encoding and decoding a band for the stereo case.  Special case for one sample  This is a special case for N=2 that only works for stereo and takes
+      advantage of the fact that mid and side are orthogonal to encode
+      the side with just one bit.  Only need one bit for the side.  Here we only need to encode a sign for the side.  We use orig_fill here because we want to fold the side, but if
+         itheta==16384, we'll have cleared the low bits of fill.  We don't split N=2 bands, so cm is either 1 or 0 (for a fold-collapse),
+         and there's no need to worry about mixing with the other channel.  "Normal" split code  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  This code is used by the decoder and by the resynthesis-enabled encoder  No need to allocate norm for the last band because we don't need an
+      output in that band.  We can use the last band as scratch space because we don't need that
+      scratch space for the last band.  Compute how many bits we want to allocate to this band  Get a conservative estimate of the collapse_mask's for the bands we're
+         going to be folding from.  This ensures we never repeat spectral content within one band  Otherwise, we'll be using the LCG to fold, so all blocks will (almost
+         always) be non-zero.  Switch off dual stereo to do intensity.  Update the folding position only as long as we have 1 bit/sample depth.  Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2008-2009 Gregory Maxwell
+   Written by Jean-Marc Valin and Gregory Maxwell 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ This is a cos() approximation designed to be bit-exact on any platform. Bit exactness
+   with this approximation is important because it has an impact on the bit allocation  Compute the amplitude (sqrt energy) in each of the bands  We're adding one here to ensure the normalized band isn't larger than unity norm printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  Compute the amplitude (sqrt energy) in each of the bands printf ("%f ", bandE[i+c*m->nbEBands]);printf ("\n"); Normalise each band such that the energy is one.  FIXED_POINT  De-normalise the energy to produce the synthesis from the unit-energy bands  Handle the integer part of the log energy  Handle the fractional part.  Handle extreme gains with negative shift.  For shift < -2 we'd be likely to overflow, so we're capping
+               the gain here. This shouldn't happen unless the bitstream is
+               already corrupted.  Be careful of the fixed-point "else" just above when changing this code  This prevents energy collapse for transients with multiple short MDCTs  depth in 1/8 bits  r needs to be multiplied by 2 or 2*sqrt(2) depending on LM because
+            short blocks don't have the same energy as long  Detect collapse  Fill with noise  We just added some energy, so we need to renormalise  Side is not encoded, no need to calculate  Compute the norm of X+Y and X-Y as |X|^2 + |Y|^2 +/- sum(xy)  Compensating for the mid normalization  mid and side are in Q15, not Q14 like X and Y  Apply mid scaling (side is already scaled)  Decide whether we should spread the pulses in the current frame  Compute rough CDF of |x[j]|  Q13  Only include four last bands (8 kHz and up) printf("%d %d %d\n", hf_sum, *hf_average, *tapset_decision); end has to be non-zero  Recursive averaging  Hysteresis  Indexing table for converting from natural Hadamard to ordery Hadamard
+   This is essentially a bit-reversed Gray, on top of which we've added
+   an inversion of the order because we want the DC at the end rather than
+   the beginning. The lines are for N=2, 4, 8, 16  The upper limit ensures that in a stereo split with itheta==16384, we'll
+       always have enough bits left over to code at least one pulse in the
+       side; otherwise it would collapse, since it doesn't get folded.  Decide on the resolution to give to the split parameter theta  theta is the atan() of the ratio between the (normalized)
+         side and mid. With just that parameter, we can re-scale both
+         mid and side because we know that 1) they have unit norm and
+         2) they are orthogonal.  Entropy coding of the angle. We use a uniform pdf for the
+         time split, a step for stereo, and a triangular one for the rest.  Use a probability of p0 up to itheta=8192 and then use 1 after  Uniform pdf  Triangular pdf  NOTE: Renormalising X and Y *may* help fixed-point a bit at very high rate.
+               Let's do that at higher complexity  This is the mid vs side allocation that minimizes squared error
+         in that band.  This function is responsible for encoding and decoding a mono partition.
+   It can split the band in two and transmit the energy difference with
+   the two half-bands. It can be called recursively so bands can end up being
+   split in 8 parts.  If we need 1.5 more bit than we can produce, split the band in two.  Give more bits to low-energy MDCTs than they would otherwise deserve  Rough approximation for pre-echo masking  Corresponds to a forward-masking slope of 1.5 dB per 10 ms  >32-bit split case  This is the basic no-split case  Ensures we can never bust the budget  Finally do the actual quantization  If there's no pulse, fill the band anyway  B can be as large as 16, so this shift might overflow an int on a
+               16-bit platform; use a long to get defined behavior. Noise  Folded spectrum  About 48 dB below the "normal" folding level  This function is responsible for encoding and decoding a band for the mono case.  Special case for one sample  Band recombining to increase frequency resolution  Increasing the time resolution  Reorganize the samples in time order instead of frequency order  This code is used by the decoder and by the resynthesis-enabled encoder  Undo the sample reorganization going from time order to frequency order  Undo time-freq changes that we did earlier  Scale output for later folding  This function is responsible for encoding and decoding a band for the stereo case.  Special case for one sample  This is a special case for N=2 that only works for stereo and takes
+      advantage of the fact that mid and side are orthogonal to encode
+      the side with just one bit.  Only need one bit for the side.  Here we only need to encode a sign for the side.  We use orig_fill here because we want to fold the side, but if
+         itheta==16384, we'll have cleared the low bits of fill.  We don't split N=2 bands, so cm is either 1 or 0 (for a fold-collapse),
+         and there's no need to worry about mixing with the other channel.  "Normal" split code  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  For a stereo split, the high bits of fill are always zero, so no
+            folding will be done to the side.  In stereo mode, we do not apply a scaling to the mid because we need the normalized
+            mid for folding later.  This code is used by the decoder and by the resynthesis-enabled encoder  No need to allocate norm for the last band because we don't need an
+      output in that band.  We can use the last band as scratch space because we don't need that
+      scratch space for the last band.  Compute how many bits we want to allocate to this band  Get a conservative estimate of the collapse_mask's for the bands we're
+         going to be folding from.  This ensures we never repeat spectral content within one band  Otherwise, we'll be using the LCG to fold, so all blocks will (almost
+         always) be non-zero.  Switch off dual stereo to do intensity.  Update the folding position only as long as we have 1 bit/sample depth. 

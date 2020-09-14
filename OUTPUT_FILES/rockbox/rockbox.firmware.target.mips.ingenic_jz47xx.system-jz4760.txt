@@ -1,0 +1,106 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** @0 @32 end of HW IRQs, everything else is SW @45 @64 Prioritze DMA0 (audio) and TCU0 (systick), then everything on ipl1 (ie MSC mostly) This enables the HW timer, set to EXT_XTAL / 4 (so @ 12/4 = 3MHz, 1 us = 3 ticks)  wraps at 21.845ms  Must be under 21845 us!  Figure out how many ticks we need  while (start + usec < REG_TCU_TCNT(HW_UDELAY_TIMER)) { }; Limit: 500MHZ <= CLK_OUT * OD <= 1500MHZ  Limit: 1MHZ <= XIN/N <= 50MHZ  Match.  PLL output clock = EXTAL * NF / (NR * NO)
+ *
+ * NF = FD + 2, NR = RD + 2
+ * NO = 1 (if OD = 0), NO = 2 (if OD = 1 or 2), NO = 4 (if OD = 3)
+ * divisors,
+     *  for jz4760b,I:H:H2:P:M:S.
+     *  DIV should be one of [1, 2, 3, 4, 6, 8]
+      @ CPU_FREQ of 576/192MHz, this means:
+              CCLK  (= HCLK*n, H2CLK*n, PCLK*o)
+        96MHz HCLK  (= MCLK or 2x MCLK, PCLK*n)
+        96MHz H2CLK (= HCLK or HCLK/2, PCLK*n)
+        96MHz PCLK
+        96MHz MCLK  (= PCLK*n)
+        96MHZ SCLK  (= H2CLK or HCLK/2)
+     no divisor on PLL for peripherals Use mobile DDR / SDRAM  PLL stable time  enable PLL 
+     * Init USB Host clock, PLL0 must be multiple of 48MHz!
+      Init MSC clock; shoot for 48MHz base clock.  Clock LCD clock as low as possible here  init PLL wait for pll output stable ... enable PLL1  init PLL_1 , source clock is extal clock wait for pll_1 output stable ... 57600  Disable port interrupts while changing hardware  Disable UART unit function  Set both receiver and transmitter in UART mode (not SIR)  Set databits, stopbits and parity. (8-bit data, 1 stopbit, no parity)  Set baud rate  Enable UART unit, enable and clear FIFO  Clear ECS bit of CPCCR, 0:clock source is EXCLK, 1:clock source is EXCLK/2  Clear all bits of USBCDR, 0:OTG clock source is pin EXCLK, PLL0 output, divider = 1:12MHZ  Set CE bit of CPCCR, it means frequence is changed immediately  Clear OTG bit of CLKGR0, 0:device can be accessed  fil  rdt  rdt - filload_en  TXRISETUNE & TXVREFTUNE.  enable tx pre-emphasis  most DC leave of tx  Device Mode.  phy reset  Enable the USB PHY  Wait PHY Clock Stable.  Gets called *before* main  Enable CP | Mask interrupt 2  Disable all interrupts  set ahb arbitrators  HARB0_PRIOR [bridge, cim, lcd, ipu]  Not documented!  HARB2_PRIOR [p0b, gps, uhc],[eth, dma, p1br, otg]  write REG_DDRC_CTRL 8 times to clear ddr fifo  PLL0 drives everything but audio Leave PLL1 disabled until audio needs it Make sure UARTs are off  Enable interrupts at core level  reset after 4ms  enable wdt clock  wdt start  check for power button without including any .h file  Set minimum wakeup_n pin low-level assertion time for wakeup: 100ms  Set reset pin low-level assertion time after wakeup: must  > 60ms  clear wakeup status register  set wake up valid level as low  Put CPU to hibernate mode **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** @0 @32 end of HW IRQs, everything else is SW @45 @64 Prioritze DMA0 (audio) and TCU0 (systick), then everything on ipl1 (ie MSC mostly) This enables the HW timer, set to EXT_XTAL / 4 (so @ 12/4 = 3MHz, 1 us = 3 ticks)  wraps at 21.845ms  Must be under 21845 us!  Figure out how many ticks we need  while (start + usec < REG_TCU_TCNT(HW_UDELAY_TIMER)) { }; Limit: 500MHZ <= CLK_OUT * OD <= 1500MHZ  Limit: 1MHZ <= XIN/N <= 50MHZ  Match.  PLL output clock = EXTAL * NF / (NR * NO)
+ *
+ * NF = FD + 2, NR = RD + 2
+ * NO = 1 (if OD = 0), NO = 2 (if OD = 1 or 2), NO = 4 (if OD = 3)
+ * divisors,
+     *  for jz4760b,I:H:H2:P:M:S.
+     *  DIV should be one of [1, 2, 3, 4, 6, 8]
+      @ CPU_FREQ of 576/192MHz, this means:
+              CCLK  (= HCLK*n, H2CLK*n, PCLK*o)
+        96MHz HCLK  (= MCLK or 2x MCLK, PCLK*n)
+        96MHz H2CLK (= HCLK or HCLK/2, PCLK*n)
+        96MHz PCLK
+        96MHz MCLK  (= PCLK*n)
+        96MHZ SCLK  (= H2CLK or HCLK/2)
+     no divisor on PLL for peripherals Use mobile DDR / SDRAM  PLL stable time  enable PLL 
+     * Init USB Host clock, PLL0 must be multiple of 48MHz!
+      Init MSC clock; shoot for 48MHz base clock.  Clock LCD clock as low as possible here  init PLL wait for pll output stable ... enable PLL1  init PLL_1 , source clock is extal clock wait for pll_1 output stable ... 57600  Disable port interrupts while changing hardware  Disable UART unit function  Set both receiver and transmitter in UART mode (not SIR)  Set databits, stopbits and parity. (8-bit data, 1 stopbit, no parity)  Set baud rate  Enable UART unit, enable and clear FIFO  Clear ECS bit of CPCCR, 0:clock source is EXCLK, 1:clock source is EXCLK/2  Clear all bits of USBCDR, 0:OTG clock source is pin EXCLK, PLL0 output, divider = 1:12MHZ  Set CE bit of CPCCR, it means frequence is changed immediately  Clear OTG bit of CLKGR0, 0:device can be accessed  fil  rdt  rdt - filload_en  TXRISETUNE & TXVREFTUNE.  enable tx pre-emphasis  most DC leave of tx  Device Mode.  phy reset  Enable the USB PHY  Wait PHY Clock Stable.  Gets called *before* main  Enable CP | Mask interrupt 2  Disable all interrupts  set ahb arbitrators  HARB0_PRIOR [bridge, cim, lcd, ipu]  Not documented!  HARB2_PRIOR [p0b, gps, uhc],[eth, dma, p1br, otg]  write REG_DDRC_CTRL 8 times to clear ddr fifo  PLL0 drives everything but audio Leave PLL1 disabled until audio needs it Make sure UARTs are off  Enable interrupts at core level  reset after 4ms  enable wdt clock  wdt start  check for power button without including any .h file  Set minimum wakeup_n pin low-level assertion time for wakeup: 100ms  Set reset pin low-level assertion time after wakeup: must  > 60ms  clear wakeup status register  set wake up valid level as low  Put CPU to hibernate mode **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** @0 @32 end of HW IRQs, everything else is SW @45 @64 Prioritze DMA0 (audio) and TCU0 (systick), then everything on ipl1 (ie MSC mostly) This enables the HW timer, set to EXT_XTAL / 4 (so @ 12/4 = 3MHz, 1 us = 3 ticks)  wraps at 21.845ms  Must be under 21845 us!  Figure out how many ticks we need  while (start + usec < REG_TCU_TCNT(HW_UDELAY_TIMER)) { }; Limit: 500MHZ <= CLK_OUT * OD <= 1500MHZ  Limit: 1MHZ <= XIN/N <= 50MHZ  Match.  PLL output clock = EXTAL * NF / (NR * NO)
+ *
+ * NF = FD + 2, NR = RD + 2
+ * NO = 1 (if OD = 0), NO = 2 (if OD = 1 or 2), NO = 4 (if OD = 3)
+ * divisors,
+     *  for jz4760b,I:H:H2:P:M:S.
+     *  DIV should be one of [1, 2, 3, 4, 6, 8]
+      @ CPU_FREQ of 576/192MHz, this means:
+              CCLK  (= HCLK*n, H2CLK*n, PCLK*o)
+        96MHz HCLK  (= MCLK or 2x MCLK, PCLK*n)
+        96MHz H2CLK (= HCLK or HCLK/2, PCLK*n)
+        96MHz PCLK
+        96MHz MCLK  (= PCLK*n)
+        96MHZ SCLK  (= H2CLK or HCLK/2)
+     no divisor on PLL for peripherals Use mobile DDR / SDRAM  PLL stable time  enable PLL 
+     * Init USB Host clock, PLL0 must be multiple of 48MHz!
+      Init MSC clock; shoot for 48MHz base clock.  Clock LCD clock as low as possible here  init PLL wait for pll output stable ... enable PLL1  init PLL_1 , source clock is extal clock wait for pll_1 output stable ... 57600  Disable port interrupts while changing hardware  Disable UART unit function  Set both receiver and transmitter in UART mode (not SIR)  Set databits, stopbits and parity. (8-bit data, 1 stopbit, no parity)  Set baud rate  Enable UART unit, enable and clear FIFO  Clear ECS bit of CPCCR, 0:clock source is EXCLK, 1:clock source is EXCLK/2  Clear all bits of USBCDR, 0:OTG clock source is pin EXCLK, PLL0 output, divider = 1:12MHZ  Set CE bit of CPCCR, it means frequence is changed immediately  Clear OTG bit of CLKGR0, 0:device can be accessed  fil  rdt  rdt - filload_en  TXRISETUNE & TXVREFTUNE.  enable tx pre-emphasis  most DC leave of tx  Device Mode.  phy reset  Enable the USB PHY  Wait PHY Clock Stable.  Gets called *before* main  Enable CP | Mask interrupt 2  Disable all interrupts  set ahb arbitrators  HARB0_PRIOR [bridge, cim, lcd, ipu]  Not documented!  HARB2_PRIOR [p0b, gps, uhc],[eth, dma, p1br, otg]  write REG_DDRC_CTRL 8 times to clear ddr fifo  PLL0 drives everything but audio Leave PLL1 disabled until audio needs it Make sure UARTs are off  Enable interrupts at core level  reset after 4ms  enable wdt clock  wdt start  check for power button without including any .h file  Set minimum wakeup_n pin low-level assertion time for wakeup: 100ms  Set reset pin low-level assertion time after wakeup: must  > 60ms  clear wakeup status register  set wake up valid level as low  Put CPU to hibernate mode 

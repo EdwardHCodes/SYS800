@@ -1,0 +1,112 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Default number of PCM frames to queue - adjust as necessary per-target  Define any of these as "1" and uncomment the LOGF_ENABLE line to log
+   regular and/or timeout messages #define LOGF_ENABLE Minimum priority needs to be a bit elevated since voice has fairly low
+   latency  A speex frame generally consists of 20ms of audio
+ * (http://www.speex.org/docs/manual/speex-manual/node10.html)
+ * for wideband mode this results in 320 samples of decoded PCM.
+  Samples / frame  Sample rate in HZ  Sample depth in bits  The max. wideband bitrate is 42.4 kbps
+ * (http://www.speex.org/docs/manual/speex-manual/node11.html). For 20ms
+ * this gives a maximum of 106 bytes for an encoded speex frame  Voice thread variables  MIPS is stack-hungry  ISR uses any available stack - need a bit more room  Voice thread synchronization objects  Voice processing states  A delay to not bring audio back to normal level too soon  Play a clip  Stop current clip  Structure to store clip data callback info  Callback to get more clips  Start of clip  Size of clip  Private thread data for its current state that must be passed to its
+ * internal functions  Last queue event pulled from queue  Decoder instance  Bit cursor  DSP used for voice output  Copy of clip data  Number of samples to drop at start of clip  Speex output buffer/input to DSP  Pointer to DSP output buffer for PCM  Functions called in their repective state that return the next state to
+   state machine loop - compiler may inline them at its discretion  Might have lookahead and be skipping samples, so size is needed  Buffer for decoded samples  Queue frame indexes  For PCM pointer adjustment  Buffers for mixing voice  Have to adjust the pointers that point into things in voice_buf  Only when calling dsp_process  A move must not allow PCM to access the channel  Number of frames in queue  Mixer channel callback  Done!  Start playback of voice channel if not already playing  Stop the voice channel  Grab a free PCM frame  Full  Commit a frame returned by voice_buf_get and set the actual size  Stop any current clip and start playing a new one  Stop current voice clip from playing  a dummy  Tell if voice is still in a playing state  This function is meant to be used by the buffer request functions to
+   ensure the codec is no longer active  Unqueue all future clips  Wait for voice to finish speaking.  NOTE: One problem here is that we can't tell if another thread started a
+     * new clip by the time we wait. This should be resolvable if conditions
+     * ever require knowing the very clip you requested has finished.  Initialize voice thread data that must be valid upon starting and the
+ * setup the DSP parameters  Voice thread message processing  Boost CPU now  Stop any clip still playing  Copy the clip info  We need nothing more from the sending thread - let it run  Clean-start the decoder  Make bit buffer use our own buffer  Waiting for PCM to finish  Drop through and stop the first time after clip runs out  Fall-through  No default: no other message ids are sent  Decode frames or stop if all have completed  Decode the data  End of stream or error - get next clip  Make bit buffer use our own buffer  Don't skip any samples when we're stringing clips together  If all clips are done and not playing, force pcm playback.  request more data _before_ running out of data (requesting
+             * more after the fact prevents speex from successful decoding)
+             * place a hint telling the callback how much of the
+             * previous buffer we have consumed such that it can rewind
+             * as necessary  Output the decoded frame  Process the PCM samples in the DSP and send out for mixing  Unless other effects are introduced to voice that have delays,
+           all output should have been purged to dst in one call  Voice thread entrypoint  Initialize buffers, all synchronization objects and create the thread  Already did an init and succeeded at it  Set the voice thread priority **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Default number of PCM frames to queue - adjust as necessary per-target  Define any of these as "1" and uncomment the LOGF_ENABLE line to log
+   regular and/or timeout messages #define LOGF_ENABLE Minimum priority needs to be a bit elevated since voice has fairly low
+   latency  A speex frame generally consists of 20ms of audio
+ * (http://www.speex.org/docs/manual/speex-manual/node10.html)
+ * for wideband mode this results in 320 samples of decoded PCM.
+  Samples / frame  Sample rate in HZ  Sample depth in bits  The max. wideband bitrate is 42.4 kbps
+ * (http://www.speex.org/docs/manual/speex-manual/node11.html). For 20ms
+ * this gives a maximum of 106 bytes for an encoded speex frame  Voice thread variables  MIPS is stack-hungry  ISR uses any available stack - need a bit more room  Voice thread synchronization objects  Voice processing states  A delay to not bring audio back to normal level too soon  Play a clip  Stop current clip  Structure to store clip data callback info  Callback to get more clips  Start of clip  Size of clip  Private thread data for its current state that must be passed to its
+ * internal functions  Last queue event pulled from queue  Decoder instance  Bit cursor  DSP used for voice output  Copy of clip data  Number of samples to drop at start of clip  Speex output buffer/input to DSP  Pointer to DSP output buffer for PCM  Functions called in their repective state that return the next state to
+   state machine loop - compiler may inline them at its discretion  Might have lookahead and be skipping samples, so size is needed  Buffer for decoded samples  Queue frame indexes  For PCM pointer adjustment  Buffers for mixing voice  Have to adjust the pointers that point into things in voice_buf  Only when calling dsp_process  A move must not allow PCM to access the channel  Number of frames in queue  Mixer channel callback  Done!  Start playback of voice channel if not already playing  Stop the voice channel  Grab a free PCM frame  Full  Commit a frame returned by voice_buf_get and set the actual size  Stop any current clip and start playing a new one  Stop current voice clip from playing  a dummy  Tell if voice is still in a playing state  This function is meant to be used by the buffer request functions to
+   ensure the codec is no longer active  Unqueue all future clips  Wait for voice to finish speaking.  NOTE: One problem here is that we can't tell if another thread started a
+     * new clip by the time we wait. This should be resolvable if conditions
+     * ever require knowing the very clip you requested has finished.  Initialize voice thread data that must be valid upon starting and the
+ * setup the DSP parameters  Voice thread message processing  Boost CPU now  Stop any clip still playing  Copy the clip info  We need nothing more from the sending thread - let it run  Clean-start the decoder  Make bit buffer use our own buffer  Waiting for PCM to finish  Drop through and stop the first time after clip runs out  Fall-through  No default: no other message ids are sent  Decode frames or stop if all have completed  Decode the data  End of stream or error - get next clip  Make bit buffer use our own buffer  Don't skip any samples when we're stringing clips together  If all clips are done and not playing, force pcm playback.  request more data _before_ running out of data (requesting
+             * more after the fact prevents speex from successful decoding)
+             * place a hint telling the callback how much of the
+             * previous buffer we have consumed such that it can rewind
+             * as necessary  Output the decoded frame  Process the PCM samples in the DSP and send out for mixing  Unless other effects are introduced to voice that have delays,
+           all output should have been purged to dst in one call  Voice thread entrypoint  Initialize buffers, all synchronization objects and create the thread  Already did an init and succeeded at it  Set the voice thread priority **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Default number of PCM frames to queue - adjust as necessary per-target  Define any of these as "1" and uncomment the LOGF_ENABLE line to log
+   regular and/or timeout messages #define LOGF_ENABLE Minimum priority needs to be a bit elevated since voice has fairly low
+   latency  A speex frame generally consists of 20ms of audio
+ * (http://www.speex.org/docs/manual/speex-manual/node10.html)
+ * for wideband mode this results in 320 samples of decoded PCM.
+  Samples / frame  Sample rate in HZ  Sample depth in bits  The max. wideband bitrate is 42.4 kbps
+ * (http://www.speex.org/docs/manual/speex-manual/node11.html). For 20ms
+ * this gives a maximum of 106 bytes for an encoded speex frame  Voice thread variables  MIPS is stack-hungry  ISR uses any available stack - need a bit more room  Voice thread synchronization objects  Voice processing states  A delay to not bring audio back to normal level too soon  Play a clip  Stop current clip  Structure to store clip data callback info  Callback to get more clips  Start of clip  Size of clip  Private thread data for its current state that must be passed to its
+ * internal functions  Last queue event pulled from queue  Decoder instance  Bit cursor  DSP used for voice output  Copy of clip data  Number of samples to drop at start of clip  Speex output buffer/input to DSP  Pointer to DSP output buffer for PCM  Functions called in their repective state that return the next state to
+   state machine loop - compiler may inline them at its discretion  Might have lookahead and be skipping samples, so size is needed  Buffer for decoded samples  Queue frame indexes  For PCM pointer adjustment  Buffers for mixing voice  Have to adjust the pointers that point into things in voice_buf  Only when calling dsp_process  A move must not allow PCM to access the channel  Number of frames in queue  Mixer channel callback  Done!  Start playback of voice channel if not already playing  Stop the voice channel  Grab a free PCM frame  Full  Commit a frame returned by voice_buf_get and set the actual size  Stop any current clip and start playing a new one  Stop current voice clip from playing  a dummy  Tell if voice is still in a playing state  This function is meant to be used by the buffer request functions to
+   ensure the codec is no longer active  Unqueue all future clips  Wait for voice to finish speaking.  NOTE: One problem here is that we can't tell if another thread started a
+     * new clip by the time we wait. This should be resolvable if conditions
+     * ever require knowing the very clip you requested has finished.  Initialize voice thread data that must be valid upon starting and the
+ * setup the DSP parameters  Voice thread message processing  Boost CPU now  Stop any clip still playing  Copy the clip info  We need nothing more from the sending thread - let it run  Clean-start the decoder  Make bit buffer use our own buffer  Waiting for PCM to finish  Drop through and stop the first time after clip runs out  Fall-through  No default: no other message ids are sent  Decode frames or stop if all have completed  Decode the data  End of stream or error - get next clip  Make bit buffer use our own buffer  Don't skip any samples when we're stringing clips together  If all clips are done and not playing, force pcm playback.  request more data _before_ running out of data (requesting
+             * more after the fact prevents speex from successful decoding)
+             * place a hint telling the callback how much of the
+             * previous buffer we have consumed such that it can rewind
+             * as necessary  Output the decoded frame  Process the PCM samples in the DSP and send out for mixing  Unless other effects are introduced to voice that have delays,
+           all output should have been purged to dst in one call  Voice thread entrypoint  Initialize buffers, all synchronization objects and create the thread  Already did an init and succeeded at it  Set the voice thread priority 

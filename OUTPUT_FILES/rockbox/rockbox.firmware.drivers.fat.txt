@@ -1,0 +1,217 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for struct filestr_cache #define LOGF_ENABLE BPB offsets; generic  fat12/16  fat32  Short and long name directory entry template  short entry   0  11  12  13  14  16  18  20  22  24  26  28  32  long entry   0   1  11  12  13  14  26  28  32  raw byte array   0  32  at most 20 LFN entries  attributes  NTRES flags  last known free cluster count  first cluster to start looking for free
+                                clusters, or 0xffffffff for no hint  fsinfo offsets  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  Note: This struct doesn't hold the raw values after mounting if
+ * bpb_bytspersec isn't 512. All sector counts are normalized to 512 byte
+ * physical sectors.  Bytes per sector, typically 512  Sectors per cluster  Number of reserved sectors  Number of sectors on volume (old 16-bit)  Number of FAT structures, typically 2  Media type (typically 0xf0 or 0xf8)  Number of used sectors per FAT structure  Number of sectors on the volume
+                                     (new 32-bit)  0xAA55 *** FAT32 specific **** variables for internal use  Number of dir entries in the root  internals for FAT16 support  sector offset of root dir relative to start
+                                     * of first pseudo cluster  HAVE_FAT16SUPPORT * Additional information kept for each volume * true if we mounted a FAT16 partition, false if FAT32  on which physical device is this located  on which volume is this located (shortcut)  true if volume is mounted, false otherwise  some functions are different for different FAT types  HAVE_FAT16SUPPORT  mounted partition info  set error code and jump to routine exit  return the new short entry  all TEMPL flags  use template crttime  use template wrttime  use template lstacc time  keep all time fields  caches a FAT or data area sector  returns a raw buffer for a sector; buffer counts as INUSE but filesystem
+ * contents are NOT loaded before returning - use when completely overwriting
+ * a sector's contents in order to avoid a fill  flush a cache buffer to storage  Update next FAT  The fat_bpb struct does not hold the raw value of bpb_bytspersec, the
+     * value is multiplied in cases where bpb_bytspersec != SECTOR_SIZE. We need
+     * to undo that multiplication before we do the sanity check.  calculate shortname checksum  fix the name  special kanji char  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  smallest tables with one-step lookup that directly map the lists;
+       here we're only concerned with what gets through the longname
+       filter (check_longname will have been called earlier so common
+       illegal chars are neither in these tables nor checked for)  Illegal char, remove  Illegal char, replace (note: NTFS behavior for extended chars)  convert long name into dos name, possibly recommending randomization  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  as per FAT spec, set "lossy conversion" flag if any destructive
+       alterations to the name occur other than case changes  find extension part  handle .dotnames / extensions cannot have spaces  name part  pad both name and extension  special kanji character  extension part  no extension  extension too long  first one just copies  the "~n" string can range from "~1" to "~999999"
+       of course a directory can have at most 65536 entries which means
+       the numbers will never be required to get that big in order to map
+       to a unique name  holds "~n"  check long filename for validity  smallest table with one-step lookup that directly maps the list  check trailing space(s) and periods  Get first longname entry name offset  Get the next longname entry offset or 0 if the end is reached  return 28  return 14  initialize the parse state; call before parsing first long entry  no inline so gcc can't figure out what isn't initialized here;
+       ord_max is king as to the validity of all other fields  one resync per parse operation  convert the FAT long name entry to a contiguous segment  this entry is the first long entry (first in order but
+           containing last part)  valid ordinals yet?  try resync  check ordinal continuity and that the checksum matches the
+           one stored in the last entry  so far so good; save entry information  segment may end early only in last entry  the only valid padding, if any, is 0xffff  long filename is corrupt  finish parsing of the longname entries and do the conversion to
+   UTF-8 if we have all the segments  ord_max must not have been set to <= 0 because of any earlier problems
+       and the ordinal immediately before the shortname entry must be 1  check the longname checksums against the shortname checksum  longname is good so far so convert all the segments to UTF-8  ensure the last segment is NULL-terminated if it is filled  end should be hit before ever seeing padding  longname ok  negative clusters (FAT16 root dir) don't get the 2 offset  HAVE_FAT16SUPPORT  if FAT16 root dir, dont use the FAT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  nr 0 is unused  HAVE_FAT16SUPPORT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  don't change top 4 bits  nr 0 is unused  safe to grab buffer: bpb is irrelevant and no sector will be cached
+       for this volume since it isn't mounted  Read the sector  Sanity check is performed later  calculate a few commonly used values  HAVE_FAT16SUPPORT  Determine FAT type 
+      we are sometimes testing with "illegally small" fat32 images,
+      so we don't use the proper fat32 test case for test code
+     !TEST_FAT  TEST_FAT  FAT16  FAT12  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  FAT16 specific part of BPB  rounded up, to full clusters  I assign negative pseudo cluster numbers for the root directory,
+           their range is counted upward until -1.  backwards, before the data  HAVE_FAT16SUPPORT  FAT32 specific part of BPB  force recalc later  HAVE_FAT16SUPPORT  Read the fsinfo sector  Sanity check FS info  Fix up calls that change per FAT type  HAVE_FAT16SUPPORT  cluster already allocated?  passed end of existing entries and now need to append  negative, pseudo-cluster of the root dir  impossible to append something to the root  HAVE_FAT16SUPPORT  create the cluster chain  extend dir file by one cluster and clear it; file position should be at the
+   current last cluster before calling and size of dir checked  no more room or something went wrong  we must clear whole clusters  !CONFIG_RTC  non-RTC version returns an increment from the supplied time, or a
+     * fixed standard time/date if no time given as input  Macros to convert a 2-digit string to a decimal constant.
+       (YEAR), MONTH and DAY are set by the date command, which outputs
+       DAY as 00..31 and MONTH as 01..12. The leading zero would lead to
+       misinterpretation as an octal constant.  The actual build date, as FAT date constant  double time, for CRTTIME with 1s precision  set to 00:11:11  advance to next multiple of 11  00 would be a bad marker  secs = mins  simplification: ignore leap years  CONFIG_RTC  shortname checksum saved in each longname entry  we need to convert the name first since the entries are written in
+       reverse order  name doesn't fill last block  i > ucslen  pad-out to end  longame entries  verify this entry is free  set name  shortname entry  srcent points to short entry template  make our own short entry  short name may change even if just moving  caller wants  The "." and ".." directory entries must not be long names  filename is invalid  one dir entry needed for every 13 characters of filename,
+           plus one entry for the short name  name is too long  step 1: search for a sufficiently-long run of free entries and check
+               for duplicate shortname  all remaining entries in cluster are free  move entry passed end of cluster  individual free entry  occupied  ignore long name entry  check that our intended shortname doesn't already exist  shortname exists already, make a new one  name has changed, we need to restart search  found adequate space; point to initial free entry  step 2: extend the dir if necessary  FAT specification allows no more than 65536 entries (2MB)
+               per directory  remember the parent directory entry information  step 3: add entry  get old time to increment from  open the parent directory  basic file data  time and date info  not gonna bother here  open the parent directory  nothing at all freed  longname already destroyed; revert to shortname  directory entry info is now gone * File entity functions * create the first cluster  add the "." entry  this returns the short entry template for the remaining entries  and the ".." entry  the root cluster is cluster 0 in the ".." entry  lastly, add the entry in the parent directory  if the directory file's first cluster is the same as the file's
+       directory cluster and they're on the same volume, 'dir' is its parent
+       directory; the file must also have a dircluster (ie. not removed)  first, triviality  if the directory info matches and the volumes are the same, file1 and
+       file2 refer to the same file/directory  this does _not_ open any root  inherit basic parent information; dirscan info is expected to have been
+       initialized beforehand (usually via scanning for the entry ;)  free everything in the parent directory  mark all clusters in the chain as free  at least the first cluster was freed  save old file; don't change it unless everything succeeds  rename only works on the same volume  root directories can't be renamed  file was removed but is still open  open old parent  fetch a copy of the existing short entry  create new name in new parent directory  if renaming a directory and it was a move, update the '..' entry to
+       keep it pointing to its parent directory  open the dir that was renamed  obtain dot-dot directory entry  .. entry must be second entry according to FAT spec (p.29)  parent cluster is 0 if parent dir is the root - FAT spec (p.29)  remove old name  finally, update old file with new directory entry info * File stream functions * empty file  TEST_FAT  return next sector number to be transferred  helper for fat_readwrite  HAVE_FAT16SUPPORT  look up first sector of file  file is empty; try to allocate its first cluster  HAVE_FAT16SUPPORT  out of sectors in this cluster; get the next cluster  jumped clusters right at start?  remain in previous position  find sequential sectors and transfer them all at once  not sequential/over limit  transfer any remainder  rewind the file position  FAT16 root dir  HAVE_FAT16SUPPORT  we need to find the sector BEFORE the requested, since
+           the file struct stores the last accessed sector  seek forward from current position  truncate trailing clusters after the current position  still partial success * Directory stream functions * long file names are stored in special entries; each entry holds up to
+       13 UTF-16 characters' thus, UTF-8 converted names can be max 255 chars
+       (1020 bytes) long, not including the trailing '\0'.  Nothing cached or sector isn't contiguous  eof  last entry  free entry  LFN entry  resync so we don't return just the short name if what we
+                   landed in the middle of is valid (directory changes
+                   between calls likely created the situation; ignoring this
+                   case can be harmful elsewhere and is destructive to the
+                   entry series itself)  at beginning?  name[0] == 0 shouldn't happen here but...  retry it once from the new position  ignore volume id entry  the long entries failed to pass all checks or there is
+                   just a short entry.  name is OEM  end while  error or eod; stay on last good position  rewind the directory scan counter to the beginning * Mounting and unmounting functions * double mount  fill-in basic info first  it worked  calculate freecount if unset  not mounted  free the entries for this volume * Debug screen stuff * MAX_LOG_SECTOR_SIZE * Misc. * this knows our mktime() only uses these struct tm fields  mark the possible volumes as not mounted **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for struct filestr_cache #define LOGF_ENABLE BPB offsets; generic  fat12/16  fat32  Short and long name directory entry template  short entry   0  11  12  13  14  16  18  20  22  24  26  28  32  long entry   0   1  11  12  13  14  26  28  32  raw byte array   0  32  at most 20 LFN entries  attributes  NTRES flags  last known free cluster count  first cluster to start looking for free
+                                clusters, or 0xffffffff for no hint  fsinfo offsets  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  Note: This struct doesn't hold the raw values after mounting if
+ * bpb_bytspersec isn't 512. All sector counts are normalized to 512 byte
+ * physical sectors.  Bytes per sector, typically 512  Sectors per cluster  Number of reserved sectors  Number of sectors on volume (old 16-bit)  Number of FAT structures, typically 2  Media type (typically 0xf0 or 0xf8)  Number of used sectors per FAT structure  Number of sectors on the volume
+                                     (new 32-bit)  0xAA55 *** FAT32 specific **** variables for internal use  Number of dir entries in the root  internals for FAT16 support  sector offset of root dir relative to start
+                                     * of first pseudo cluster  HAVE_FAT16SUPPORT * Additional information kept for each volume * true if we mounted a FAT16 partition, false if FAT32  on which physical device is this located  on which volume is this located (shortcut)  true if volume is mounted, false otherwise  some functions are different for different FAT types  HAVE_FAT16SUPPORT  mounted partition info  set error code and jump to routine exit  return the new short entry  all TEMPL flags  use template crttime  use template wrttime  use template lstacc time  keep all time fields  caches a FAT or data area sector  returns a raw buffer for a sector; buffer counts as INUSE but filesystem
+ * contents are NOT loaded before returning - use when completely overwriting
+ * a sector's contents in order to avoid a fill  flush a cache buffer to storage  Update next FAT  The fat_bpb struct does not hold the raw value of bpb_bytspersec, the
+     * value is multiplied in cases where bpb_bytspersec != SECTOR_SIZE. We need
+     * to undo that multiplication before we do the sanity check.  calculate shortname checksum  fix the name  special kanji char  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  smallest tables with one-step lookup that directly map the lists;
+       here we're only concerned with what gets through the longname
+       filter (check_longname will have been called earlier so common
+       illegal chars are neither in these tables nor checked for)  Illegal char, remove  Illegal char, replace (note: NTFS behavior for extended chars)  convert long name into dos name, possibly recommending randomization  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  as per FAT spec, set "lossy conversion" flag if any destructive
+       alterations to the name occur other than case changes  find extension part  handle .dotnames / extensions cannot have spaces  name part  pad both name and extension  special kanji character  extension part  no extension  extension too long  first one just copies  the "~n" string can range from "~1" to "~999999"
+       of course a directory can have at most 65536 entries which means
+       the numbers will never be required to get that big in order to map
+       to a unique name  holds "~n"  check long filename for validity  smallest table with one-step lookup that directly maps the list  check trailing space(s) and periods  Get first longname entry name offset  Get the next longname entry offset or 0 if the end is reached  return 28  return 14  initialize the parse state; call before parsing first long entry  no inline so gcc can't figure out what isn't initialized here;
+       ord_max is king as to the validity of all other fields  one resync per parse operation  convert the FAT long name entry to a contiguous segment  this entry is the first long entry (first in order but
+           containing last part)  valid ordinals yet?  try resync  check ordinal continuity and that the checksum matches the
+           one stored in the last entry  so far so good; save entry information  segment may end early only in last entry  the only valid padding, if any, is 0xffff  long filename is corrupt  finish parsing of the longname entries and do the conversion to
+   UTF-8 if we have all the segments  ord_max must not have been set to <= 0 because of any earlier problems
+       and the ordinal immediately before the shortname entry must be 1  check the longname checksums against the shortname checksum  longname is good so far so convert all the segments to UTF-8  ensure the last segment is NULL-terminated if it is filled  end should be hit before ever seeing padding  longname ok  negative clusters (FAT16 root dir) don't get the 2 offset  HAVE_FAT16SUPPORT  if FAT16 root dir, dont use the FAT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  nr 0 is unused  HAVE_FAT16SUPPORT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  don't change top 4 bits  nr 0 is unused  safe to grab buffer: bpb is irrelevant and no sector will be cached
+       for this volume since it isn't mounted  Read the sector  Sanity check is performed later  calculate a few commonly used values  HAVE_FAT16SUPPORT  Determine FAT type 
+      we are sometimes testing with "illegally small" fat32 images,
+      so we don't use the proper fat32 test case for test code
+     !TEST_FAT  TEST_FAT  FAT16  FAT12  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  FAT16 specific part of BPB  rounded up, to full clusters  I assign negative pseudo cluster numbers for the root directory,
+           their range is counted upward until -1.  backwards, before the data  HAVE_FAT16SUPPORT  FAT32 specific part of BPB  force recalc later  HAVE_FAT16SUPPORT  Read the fsinfo sector  Sanity check FS info  Fix up calls that change per FAT type  HAVE_FAT16SUPPORT  cluster already allocated?  passed end of existing entries and now need to append  negative, pseudo-cluster of the root dir  impossible to append something to the root  HAVE_FAT16SUPPORT  create the cluster chain  extend dir file by one cluster and clear it; file position should be at the
+   current last cluster before calling and size of dir checked  no more room or something went wrong  we must clear whole clusters  !CONFIG_RTC  non-RTC version returns an increment from the supplied time, or a
+     * fixed standard time/date if no time given as input  Macros to convert a 2-digit string to a decimal constant.
+       (YEAR), MONTH and DAY are set by the date command, which outputs
+       DAY as 00..31 and MONTH as 01..12. The leading zero would lead to
+       misinterpretation as an octal constant.  The actual build date, as FAT date constant  double time, for CRTTIME with 1s precision  set to 00:11:11  advance to next multiple of 11  00 would be a bad marker  secs = mins  simplification: ignore leap years  CONFIG_RTC  shortname checksum saved in each longname entry  we need to convert the name first since the entries are written in
+       reverse order  name doesn't fill last block  i > ucslen  pad-out to end  longame entries  verify this entry is free  set name  shortname entry  srcent points to short entry template  make our own short entry  short name may change even if just moving  caller wants  The "." and ".." directory entries must not be long names  filename is invalid  one dir entry needed for every 13 characters of filename,
+           plus one entry for the short name  name is too long  step 1: search for a sufficiently-long run of free entries and check
+               for duplicate shortname  all remaining entries in cluster are free  move entry passed end of cluster  individual free entry  occupied  ignore long name entry  check that our intended shortname doesn't already exist  shortname exists already, make a new one  name has changed, we need to restart search  found adequate space; point to initial free entry  step 2: extend the dir if necessary  FAT specification allows no more than 65536 entries (2MB)
+               per directory  remember the parent directory entry information  step 3: add entry  get old time to increment from  open the parent directory  basic file data  time and date info  not gonna bother here  open the parent directory  nothing at all freed  longname already destroyed; revert to shortname  directory entry info is now gone * File entity functions * create the first cluster  add the "." entry  this returns the short entry template for the remaining entries  and the ".." entry  the root cluster is cluster 0 in the ".." entry  lastly, add the entry in the parent directory  if the directory file's first cluster is the same as the file's
+       directory cluster and they're on the same volume, 'dir' is its parent
+       directory; the file must also have a dircluster (ie. not removed)  first, triviality  if the directory info matches and the volumes are the same, file1 and
+       file2 refer to the same file/directory  this does _not_ open any root  inherit basic parent information; dirscan info is expected to have been
+       initialized beforehand (usually via scanning for the entry ;)  free everything in the parent directory  mark all clusters in the chain as free  at least the first cluster was freed  save old file; don't change it unless everything succeeds  rename only works on the same volume  root directories can't be renamed  file was removed but is still open  open old parent  fetch a copy of the existing short entry  create new name in new parent directory  if renaming a directory and it was a move, update the '..' entry to
+       keep it pointing to its parent directory  open the dir that was renamed  obtain dot-dot directory entry  .. entry must be second entry according to FAT spec (p.29)  parent cluster is 0 if parent dir is the root - FAT spec (p.29)  remove old name  finally, update old file with new directory entry info * File stream functions * empty file  TEST_FAT  return next sector number to be transferred  helper for fat_readwrite  HAVE_FAT16SUPPORT  look up first sector of file  file is empty; try to allocate its first cluster  HAVE_FAT16SUPPORT  out of sectors in this cluster; get the next cluster  jumped clusters right at start?  remain in previous position  find sequential sectors and transfer them all at once  not sequential/over limit  transfer any remainder  rewind the file position  FAT16 root dir  HAVE_FAT16SUPPORT  we need to find the sector BEFORE the requested, since
+           the file struct stores the last accessed sector  seek forward from current position  truncate trailing clusters after the current position  still partial success * Directory stream functions * long file names are stored in special entries; each entry holds up to
+       13 UTF-16 characters' thus, UTF-8 converted names can be max 255 chars
+       (1020 bytes) long, not including the trailing '\0'.  Nothing cached or sector isn't contiguous  eof  last entry  free entry  LFN entry  resync so we don't return just the short name if what we
+                   landed in the middle of is valid (directory changes
+                   between calls likely created the situation; ignoring this
+                   case can be harmful elsewhere and is destructive to the
+                   entry series itself)  at beginning?  name[0] == 0 shouldn't happen here but...  retry it once from the new position  ignore volume id entry  the long entries failed to pass all checks or there is
+                   just a short entry.  name is OEM  end while  error or eod; stay on last good position  rewind the directory scan counter to the beginning * Mounting and unmounting functions * double mount  fill-in basic info first  it worked  calculate freecount if unset  not mounted  free the entries for this volume * Debug screen stuff * MAX_LOG_SECTOR_SIZE * Misc. * this knows our mktime() only uses these struct tm fields  mark the possible volumes as not mounted **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Linus Nielsen Feltzing
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for struct filestr_cache #define LOGF_ENABLE BPB offsets; generic  fat12/16  fat32  Short and long name directory entry template  short entry   0  11  12  13  14  16  18  20  22  24  26  28  32  long entry   0   1  11  12  13  14  26  28  32  raw byte array   0  32  at most 20 LFN entries  attributes  NTRES flags  last known free cluster count  first cluster to start looking for free
+                                clusters, or 0xffffffff for no hint  fsinfo offsets  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  Note: This struct doesn't hold the raw values after mounting if
+ * bpb_bytspersec isn't 512. All sector counts are normalized to 512 byte
+ * physical sectors.  Bytes per sector, typically 512  Sectors per cluster  Number of reserved sectors  Number of sectors on volume (old 16-bit)  Number of FAT structures, typically 2  Media type (typically 0xf0 or 0xf8)  Number of used sectors per FAT structure  Number of sectors on the volume
+                                     (new 32-bit)  0xAA55 *** FAT32 specific **** variables for internal use  Number of dir entries in the root  internals for FAT16 support  sector offset of root dir relative to start
+                                     * of first pseudo cluster  HAVE_FAT16SUPPORT * Additional information kept for each volume * true if we mounted a FAT16 partition, false if FAT32  on which physical device is this located  on which volume is this located (shortcut)  true if volume is mounted, false otherwise  some functions are different for different FAT types  HAVE_FAT16SUPPORT  mounted partition info  set error code and jump to routine exit  return the new short entry  all TEMPL flags  use template crttime  use template wrttime  use template lstacc time  keep all time fields  caches a FAT or data area sector  returns a raw buffer for a sector; buffer counts as INUSE but filesystem
+ * contents are NOT loaded before returning - use when completely overwriting
+ * a sector's contents in order to avoid a fill  flush a cache buffer to storage  Update next FAT  The fat_bpb struct does not hold the raw value of bpb_bytspersec, the
+     * value is multiplied in cases where bpb_bytspersec != SECTOR_SIZE. We need
+     * to undo that multiplication before we do the sanity check.  calculate shortname checksum  fix the name  special kanji char  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  smallest tables with one-step lookup that directly map the lists;
+       here we're only concerned with what gets through the longname
+       filter (check_longname will have been called earlier so common
+       illegal chars are neither in these tables nor checked for)  Illegal char, remove  Illegal char, replace (note: NTFS behavior for extended chars)  convert long name into dos name, possibly recommending randomization  FIXME: needs conversion to OEM charset FIRST but there is currently
+       no unicode function for that!  as per FAT spec, set "lossy conversion" flag if any destructive
+       alterations to the name occur other than case changes  find extension part  handle .dotnames / extensions cannot have spaces  name part  pad both name and extension  special kanji character  extension part  no extension  extension too long  first one just copies  the "~n" string can range from "~1" to "~999999"
+       of course a directory can have at most 65536 entries which means
+       the numbers will never be required to get that big in order to map
+       to a unique name  holds "~n"  check long filename for validity  smallest table with one-step lookup that directly maps the list  check trailing space(s) and periods  Get first longname entry name offset  Get the next longname entry offset or 0 if the end is reached  return 28  return 14  initialize the parse state; call before parsing first long entry  no inline so gcc can't figure out what isn't initialized here;
+       ord_max is king as to the validity of all other fields  one resync per parse operation  convert the FAT long name entry to a contiguous segment  this entry is the first long entry (first in order but
+           containing last part)  valid ordinals yet?  try resync  check ordinal continuity and that the checksum matches the
+           one stored in the last entry  so far so good; save entry information  segment may end early only in last entry  the only valid padding, if any, is 0xffff  long filename is corrupt  finish parsing of the longname entries and do the conversion to
+   UTF-8 if we have all the segments  ord_max must not have been set to <= 0 because of any earlier problems
+       and the ordinal immediately before the shortname entry must be 1  check the longname checksums against the shortname checksum  longname is good so far so convert all the segments to UTF-8  ensure the last segment is NULL-terminated if it is filled  end should be hit before ever seeing padding  longname ok  negative clusters (FAT16 root dir) don't get the 2 offset  HAVE_FAT16SUPPORT  if FAT16 root dir, dont use the FAT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  nr 0 is unused  HAVE_FAT16SUPPORT  is this last cluster in chain?  Ignore the reserved clusters 0 & 1, and also
+                    cluster numbers out of bounds  0 is an illegal cluster number  being allocated  being freed  don't change top 4 bits  nr 0 is unused  safe to grab buffer: bpb is irrelevant and no sector will be cached
+       for this volume since it isn't mounted  Read the sector  Sanity check is performed later  calculate a few commonly used values  HAVE_FAT16SUPPORT  Determine FAT type 
+      we are sometimes testing with "illegally small" fat32 images,
+      so we don't use the proper fat32 test case for test code
+     !TEST_FAT  TEST_FAT  FAT16  FAT12  !HAVE_FAT16SUPPORT  HAVE_FAT16SUPPORT  FAT16 specific part of BPB  rounded up, to full clusters  I assign negative pseudo cluster numbers for the root directory,
+           their range is counted upward until -1.  backwards, before the data  HAVE_FAT16SUPPORT  FAT32 specific part of BPB  force recalc later  HAVE_FAT16SUPPORT  Read the fsinfo sector  Sanity check FS info  Fix up calls that change per FAT type  HAVE_FAT16SUPPORT  cluster already allocated?  passed end of existing entries and now need to append  negative, pseudo-cluster of the root dir  impossible to append something to the root  HAVE_FAT16SUPPORT  create the cluster chain  extend dir file by one cluster and clear it; file position should be at the
+   current last cluster before calling and size of dir checked  no more room or something went wrong  we must clear whole clusters  !CONFIG_RTC  non-RTC version returns an increment from the supplied time, or a
+     * fixed standard time/date if no time given as input  Macros to convert a 2-digit string to a decimal constant.
+       (YEAR), MONTH and DAY are set by the date command, which outputs
+       DAY as 00..31 and MONTH as 01..12. The leading zero would lead to
+       misinterpretation as an octal constant.  The actual build date, as FAT date constant  double time, for CRTTIME with 1s precision  set to 00:11:11  advance to next multiple of 11  00 would be a bad marker  secs = mins  simplification: ignore leap years  CONFIG_RTC  shortname checksum saved in each longname entry  we need to convert the name first since the entries are written in
+       reverse order  name doesn't fill last block  i > ucslen  pad-out to end  longame entries  verify this entry is free  set name  shortname entry  srcent points to short entry template  make our own short entry  short name may change even if just moving  caller wants  The "." and ".." directory entries must not be long names  filename is invalid  one dir entry needed for every 13 characters of filename,
+           plus one entry for the short name  name is too long  step 1: search for a sufficiently-long run of free entries and check
+               for duplicate shortname  all remaining entries in cluster are free  move entry passed end of cluster  individual free entry  occupied  ignore long name entry  check that our intended shortname doesn't already exist  shortname exists already, make a new one  name has changed, we need to restart search  found adequate space; point to initial free entry  step 2: extend the dir if necessary  FAT specification allows no more than 65536 entries (2MB)
+               per directory  remember the parent directory entry information  step 3: add entry  get old time to increment from  open the parent directory  basic file data  time and date info  not gonna bother here  open the parent directory  nothing at all freed  longname already destroyed; revert to shortname  directory entry info is now gone * File entity functions * create the first cluster  add the "." entry  this returns the short entry template for the remaining entries  and the ".." entry  the root cluster is cluster 0 in the ".." entry  lastly, add the entry in the parent directory  if the directory file's first cluster is the same as the file's
+       directory cluster and they're on the same volume, 'dir' is its parent
+       directory; the file must also have a dircluster (ie. not removed)  first, triviality  if the directory info matches and the volumes are the same, file1 and
+       file2 refer to the same file/directory  this does _not_ open any root  inherit basic parent information; dirscan info is expected to have been
+       initialized beforehand (usually via scanning for the entry ;)  free everything in the parent directory  mark all clusters in the chain as free  at least the first cluster was freed  save old file; don't change it unless everything succeeds  rename only works on the same volume  root directories can't be renamed  file was removed but is still open  open old parent  fetch a copy of the existing short entry  create new name in new parent directory  if renaming a directory and it was a move, update the '..' entry to
+       keep it pointing to its parent directory  open the dir that was renamed  obtain dot-dot directory entry  .. entry must be second entry according to FAT spec (p.29)  parent cluster is 0 if parent dir is the root - FAT spec (p.29)  remove old name  finally, update old file with new directory entry info * File stream functions * empty file  TEST_FAT  return next sector number to be transferred  helper for fat_readwrite  HAVE_FAT16SUPPORT  look up first sector of file  file is empty; try to allocate its first cluster  HAVE_FAT16SUPPORT  out of sectors in this cluster; get the next cluster  jumped clusters right at start?  remain in previous position  find sequential sectors and transfer them all at once  not sequential/over limit  transfer any remainder  rewind the file position  FAT16 root dir  HAVE_FAT16SUPPORT  we need to find the sector BEFORE the requested, since
+           the file struct stores the last accessed sector  seek forward from current position  truncate trailing clusters after the current position  still partial success * Directory stream functions * long file names are stored in special entries; each entry holds up to
+       13 UTF-16 characters' thus, UTF-8 converted names can be max 255 chars
+       (1020 bytes) long, not including the trailing '\0'.  Nothing cached or sector isn't contiguous  eof  last entry  free entry  LFN entry  resync so we don't return just the short name if what we
+                   landed in the middle of is valid (directory changes
+                   between calls likely created the situation; ignoring this
+                   case can be harmful elsewhere and is destructive to the
+                   entry series itself)  at beginning?  name[0] == 0 shouldn't happen here but...  retry it once from the new position  ignore volume id entry  the long entries failed to pass all checks or there is
+                   just a short entry.  name is OEM  end while  error or eod; stay on last good position  rewind the directory scan counter to the beginning * Mounting and unmounting functions * double mount  fill-in basic info first  it worked  calculate freecount if unset  not mounted  free the entries for this volume * Debug screen stuff * MAX_LOG_SECTOR_SIZE * Misc. * this knows our mktime() only uses these struct tm fields  mark the possible volumes as not mounted 

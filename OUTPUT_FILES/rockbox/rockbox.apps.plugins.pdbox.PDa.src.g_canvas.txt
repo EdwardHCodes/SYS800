@@ -1,0 +1,178 @@
+ Copyright (c) 1997-2001 Miller Puckette and others.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file defines the "glist" class, also known as "canvas" (the two used
+to be different but are now unified except for some fossilized names.)  changes by Thomas Musil IEM KUG Graz Austria 2001  bug-fix: canvas_menuclose(): by Krzysztof Czaja  bug-fix: table_new(): I reversed the y-bounds   IOhannes :
+ * changed the canvas_restore, so that it might accept $args as well
+ * (like "pd $0_test")
+ * so you can make multiple & distinguishable templates
+ * 1511:forum::für::umläute:2001
+ * changes marked with    IOhannes
+  ROCKBOX  ROCKBOX  directory patch lives in  number of "$" arguments  array of "$" arguments  value of "$0"  ---------------------- variables ---------------------------  whether DSP is on or off  last canvas to start text edting  last canvas we did a find in  list of all root canvases  ------------------ forward function declarations ---------------  --------- functions to handle the canvas environment -----------  this is a canvas; if we have a window, put on "windows" list  ROCKBOX  ROCKBOX  maintain the list of visible toplevels for the GUI's "windows" menu  find all root canvases  next line updates the window menu state before -postcommand tries it  add a glist the list of "root" canvases (toplevels without parents.)  take it off the window list  if there's an old one lying around free it here.  This
+	happens if an abstraction is loaded but never gets as far
+	as calling canvas_new().  --------------- traversing the set of lines in a canvas -----------  -------------------- the canvas object --------------------------  zero out everyone except "pd" field  make a new glist.  It will either be a "root" canvas or else
+    its parent will be a "text" object in another window... we don't
+    know which yet.  ROCKBOX  ROCKBOX  post("canvas %x, owner %x", x, owner);  toplevel: x, y, w, h, font  subwindow: x, y, w, h, name, vis  (otherwise assume we're being created from the menu.)  ROCKBOX  ROCKBOX  make a new glist and add it to this glist.  It will appear as
+    a "graph", not a text object.   ROCKBOX  ROCKBOX  in 0.34 and earlier, the pixel rectangle and the y bounds were
+	reversed; this would behave the same, except that the dialog window
+	would be confusing.  The "correct" way is to have "py1" be the value
+	that is higher on the screen.  ROCKBOX  ROCKBOX  call glist_addglist from a Pd message  return true if the glist should appear as a graph on parent;
+    otherwise it appears as a text box.  This is sent from the GUI to inform a toplevel that its window has been
+    moved or resized.  post("set bounds %d %d %d %d", x1, y1, x2, y2);  if it's flipped so that y grows upward,
+	    fix so that zero is bottom edge and redraw.  This is
+	    only appropriate if we're a regular "text" object on the
+	    parent.  and move text objects accordingly; they should stick
+	    to the bottom, not the top.  the window becomes "mapped" (visible and not miniaturized) or
+    "unmapped" (either miniaturized or just plain gone.)  This should be
+    called from the GUI after the fact to "notify" us that we're mapped.  simulate a mouse up so u_main will calculate scrollbars...
+		    ugly!  just clear out the whole canvas...  alternatively, we could have erased them one by one...
+    	    for (y = x->gl_list; y; y = y->g_next)
+	    	gobj_vis(y, x, 0);
+	    	    ... but we should go through and erase the lines as well
+		    if we do it that way.  ----  editors -- perhaps this and "vis" should go to g_editor.c -------  ROCKBOX  ROCKBOX  recursively create or destroy all editors of a glist and its 
+    sub-glists, as long as they aren't toplevels.  we call this when we want the window to become visible, mapped, and
+    in front of all windows; or with "f" zero, when we want to get rid of
+    the window.  test if we're already visible and toplevel  just put us in front  ROCKBOX  ROCKBOX  make invisible  bug workaround -- a graph in a visible patch gets "invised"
+		when the patch is closed, and must lose the editor here.  It's
+		probably not the natural place to do this.  Other cases like
+		subpatches fall here too but don'd need the editor freed, so
+		we check if it exists.  if we're a graph on our parent, and if the parent exists
+	       and is visible, show ourselves on parent.  we call this on a non-toplevel glist to "open" it into its
+    own window.  shouldn't happen but don't get too upset.  erase ourself in parent window  get rid of our editor (and subeditors)  redraw ourself in parent window (blanked out this time)  we consider a graph "toplevel" if it has its own window
+	or if it appears as a box in its parent window so that we
+	don't draw the actual contents there.  probably unnecessary  ----------------- lines ----------  ROCKBOX  ROCKBOX  kill all lines for the object  kill all lines for one inlet or outlet  IOhannes  this should be unnecessary, but sometimes the canvas's name gets
+	out of sync with the owning box's argument; this fixes that  When you ask a canvas its size the result is 2 pixels more than what
+    you gave it to open it; perhaps there's a 1-pixel border all around it
+    or something.  Anyway, we just add the 2 pixels back here; seems we
+    have to do this for linux but not MSW; not sure about MacOS.  ROCKBOX  for some reason this is initially called with cw=ch=1 so
+	    we just suppress that here.  ROCKBOX  -------------------------- subcanvases ----------------------  find out from subcanvas contents how much to fatten the box  ROCKBOX  ROCKBOX  fake for now  ------------------ table --------------------------- ROCKBOX  ROCKBOX  create a graph for the table  return true if the "canvas" object is an abstraction (so we don't
+    save its contents, fogr example.)   return true if the "canvas" object is a "table".  return true if the "canvas" object should be treated as a text
+    object.  This is true for abstractions but also for "table"s...  get the document containing this canvas  ------------------------- DSP chain handling -------------------------  schedule one canvas for DSP.  This is called below for all "root"
+    canvases, but is also called from the "dsp" method for sub-
+    canvases, which are treated almost like any other tilde object.   create a new "DSP graph" object to use in sorting this canvas.
+	If we aren't toplevel, there are already other dspcontexts around.  find all the "dsp" boxes and add them to the graph  ... and all dsp interconnections  finally, sort them and add them to the DSP chain  this routine starts DSP for all root canvases.  DSP can be suspended before, and resumed after, operations which
+    might affect the DSP chain.  For example, we suspend before loading and
+    resume afterward, so that DSP doesn't get resorted for every DSP object
+    int the patch.  this is equivalent to suspending and resuming in one step.  LATER replace this with a queueing scheme  redraw all "scalars" (do this if a drawing command is changed.) 
+    LATER we'll use the "template" information to select which ones we
+    redraw.   public interface for above  find all root canvases  ------------------------------- setup routine ------------------------  why are some of these "glist" and others "canvas"?  old version...  new version:  we prevent the user from typing "canvas" in an object box
+	by sending 0 for a creator function.  here is the real creator function, invoked in patch files
+	    by sending the "canvas" message to #N, which is bound
+	    to pd_camvasmaker.  -------------------------- objects -----------------------------  -------------- Thomas Musil's GUI objects ------------  ------------------------ gui stuff ---------------------------  ---------------------- list handling ------------------------  ----- subcanvases, which you get by typing "pd" in a box ---- ---------------------------- tables -- GG -------------------  -------------- setups from other files for canvas_class ----------------  Copyright (c) 1997-2001 Miller Puckette and others.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file defines the "glist" class, also known as "canvas" (the two used
+to be different but are now unified except for some fossilized names.)  changes by Thomas Musil IEM KUG Graz Austria 2001  bug-fix: canvas_menuclose(): by Krzysztof Czaja  bug-fix: table_new(): I reversed the y-bounds   IOhannes :
+ * changed the canvas_restore, so that it might accept $args as well
+ * (like "pd $0_test")
+ * so you can make multiple & distinguishable templates
+ * 1511:forum::für::umläute:2001
+ * changes marked with    IOhannes
+  ROCKBOX  ROCKBOX  directory patch lives in  number of "$" arguments  array of "$" arguments  value of "$0"  ---------------------- variables ---------------------------  whether DSP is on or off  last canvas to start text edting  last canvas we did a find in  list of all root canvases  ------------------ forward function declarations ---------------  --------- functions to handle the canvas environment -----------  this is a canvas; if we have a window, put on "windows" list  ROCKBOX  ROCKBOX  maintain the list of visible toplevels for the GUI's "windows" menu  find all root canvases  next line updates the window menu state before -postcommand tries it  add a glist the list of "root" canvases (toplevels without parents.)  take it off the window list  if there's an old one lying around free it here.  This
+	happens if an abstraction is loaded but never gets as far
+	as calling canvas_new().  --------------- traversing the set of lines in a canvas -----------  -------------------- the canvas object --------------------------  zero out everyone except "pd" field  make a new glist.  It will either be a "root" canvas or else
+    its parent will be a "text" object in another window... we don't
+    know which yet.  ROCKBOX  ROCKBOX  post("canvas %x, owner %x", x, owner);  toplevel: x, y, w, h, font  subwindow: x, y, w, h, name, vis  (otherwise assume we're being created from the menu.)  ROCKBOX  ROCKBOX  make a new glist and add it to this glist.  It will appear as
+    a "graph", not a text object.   ROCKBOX  ROCKBOX  in 0.34 and earlier, the pixel rectangle and the y bounds were
+	reversed; this would behave the same, except that the dialog window
+	would be confusing.  The "correct" way is to have "py1" be the value
+	that is higher on the screen.  ROCKBOX  ROCKBOX  call glist_addglist from a Pd message  return true if the glist should appear as a graph on parent;
+    otherwise it appears as a text box.  This is sent from the GUI to inform a toplevel that its window has been
+    moved or resized.  post("set bounds %d %d %d %d", x1, y1, x2, y2);  if it's flipped so that y grows upward,
+	    fix so that zero is bottom edge and redraw.  This is
+	    only appropriate if we're a regular "text" object on the
+	    parent.  and move text objects accordingly; they should stick
+	    to the bottom, not the top.  the window becomes "mapped" (visible and not miniaturized) or
+    "unmapped" (either miniaturized or just plain gone.)  This should be
+    called from the GUI after the fact to "notify" us that we're mapped.  simulate a mouse up so u_main will calculate scrollbars...
+		    ugly!  just clear out the whole canvas...  alternatively, we could have erased them one by one...
+    	    for (y = x->gl_list; y; y = y->g_next)
+	    	gobj_vis(y, x, 0);
+	    	    ... but we should go through and erase the lines as well
+		    if we do it that way.  ----  editors -- perhaps this and "vis" should go to g_editor.c -------  ROCKBOX  ROCKBOX  recursively create or destroy all editors of a glist and its 
+    sub-glists, as long as they aren't toplevels.  we call this when we want the window to become visible, mapped, and
+    in front of all windows; or with "f" zero, when we want to get rid of
+    the window.  test if we're already visible and toplevel  just put us in front  ROCKBOX  ROCKBOX  make invisible  bug workaround -- a graph in a visible patch gets "invised"
+		when the patch is closed, and must lose the editor here.  It's
+		probably not the natural place to do this.  Other cases like
+		subpatches fall here too but don'd need the editor freed, so
+		we check if it exists.  if we're a graph on our parent, and if the parent exists
+	       and is visible, show ourselves on parent.  we call this on a non-toplevel glist to "open" it into its
+    own window.  shouldn't happen but don't get too upset.  erase ourself in parent window  get rid of our editor (and subeditors)  redraw ourself in parent window (blanked out this time)  we consider a graph "toplevel" if it has its own window
+	or if it appears as a box in its parent window so that we
+	don't draw the actual contents there.  probably unnecessary  ----------------- lines ----------  ROCKBOX  ROCKBOX  kill all lines for the object  kill all lines for one inlet or outlet  IOhannes  this should be unnecessary, but sometimes the canvas's name gets
+	out of sync with the owning box's argument; this fixes that  When you ask a canvas its size the result is 2 pixels more than what
+    you gave it to open it; perhaps there's a 1-pixel border all around it
+    or something.  Anyway, we just add the 2 pixels back here; seems we
+    have to do this for linux but not MSW; not sure about MacOS.  ROCKBOX  for some reason this is initially called with cw=ch=1 so
+	    we just suppress that here.  ROCKBOX  -------------------------- subcanvases ----------------------  find out from subcanvas contents how much to fatten the box  ROCKBOX  ROCKBOX  fake for now  ------------------ table --------------------------- ROCKBOX  ROCKBOX  create a graph for the table  return true if the "canvas" object is an abstraction (so we don't
+    save its contents, fogr example.)   return true if the "canvas" object is a "table".  return true if the "canvas" object should be treated as a text
+    object.  This is true for abstractions but also for "table"s...  get the document containing this canvas  ------------------------- DSP chain handling -------------------------  schedule one canvas for DSP.  This is called below for all "root"
+    canvases, but is also called from the "dsp" method for sub-
+    canvases, which are treated almost like any other tilde object.   create a new "DSP graph" object to use in sorting this canvas.
+	If we aren't toplevel, there are already other dspcontexts around.  find all the "dsp" boxes and add them to the graph  ... and all dsp interconnections  finally, sort them and add them to the DSP chain  this routine starts DSP for all root canvases.  DSP can be suspended before, and resumed after, operations which
+    might affect the DSP chain.  For example, we suspend before loading and
+    resume afterward, so that DSP doesn't get resorted for every DSP object
+    int the patch.  this is equivalent to suspending and resuming in one step.  LATER replace this with a queueing scheme  redraw all "scalars" (do this if a drawing command is changed.) 
+    LATER we'll use the "template" information to select which ones we
+    redraw.   public interface for above  find all root canvases  ------------------------------- setup routine ------------------------  why are some of these "glist" and others "canvas"?  old version...  new version:  we prevent the user from typing "canvas" in an object box
+	by sending 0 for a creator function.  here is the real creator function, invoked in patch files
+	    by sending the "canvas" message to #N, which is bound
+	    to pd_camvasmaker.  -------------------------- objects -----------------------------  -------------- Thomas Musil's GUI objects ------------  ------------------------ gui stuff ---------------------------  ---------------------- list handling ------------------------  ----- subcanvases, which you get by typing "pd" in a box ---- ---------------------------- tables -- GG -------------------  -------------- setups from other files for canvas_class ----------------  Copyright (c) 1997-2001 Miller Puckette and others.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file defines the "glist" class, also known as "canvas" (the two used
+to be different but are now unified except for some fossilized names.)  changes by Thomas Musil IEM KUG Graz Austria 2001  bug-fix: canvas_menuclose(): by Krzysztof Czaja  bug-fix: table_new(): I reversed the y-bounds   IOhannes :
+ * changed the canvas_restore, so that it might accept $args as well
+ * (like "pd $0_test")
+ * so you can make multiple & distinguishable templates
+ * 1511:forum::für::umläute:2001
+ * changes marked with    IOhannes
+  ROCKBOX  ROCKBOX  directory patch lives in  number of "$" arguments  array of "$" arguments  value of "$0"  ---------------------- variables ---------------------------  whether DSP is on or off  last canvas to start text edting  last canvas we did a find in  list of all root canvases  ------------------ forward function declarations ---------------  --------- functions to handle the canvas environment -----------  this is a canvas; if we have a window, put on "windows" list  ROCKBOX  ROCKBOX  maintain the list of visible toplevels for the GUI's "windows" menu  find all root canvases  next line updates the window menu state before -postcommand tries it  add a glist the list of "root" canvases (toplevels without parents.)  take it off the window list  if there's an old one lying around free it here.  This
+	happens if an abstraction is loaded but never gets as far
+	as calling canvas_new().  --------------- traversing the set of lines in a canvas -----------  -------------------- the canvas object --------------------------  zero out everyone except "pd" field  make a new glist.  It will either be a "root" canvas or else
+    its parent will be a "text" object in another window... we don't
+    know which yet.  ROCKBOX  ROCKBOX  post("canvas %x, owner %x", x, owner);  toplevel: x, y, w, h, font  subwindow: x, y, w, h, name, vis  (otherwise assume we're being created from the menu.)  ROCKBOX  ROCKBOX  make a new glist and add it to this glist.  It will appear as
+    a "graph", not a text object.   ROCKBOX  ROCKBOX  in 0.34 and earlier, the pixel rectangle and the y bounds were
+	reversed; this would behave the same, except that the dialog window
+	would be confusing.  The "correct" way is to have "py1" be the value
+	that is higher on the screen.  ROCKBOX  ROCKBOX  call glist_addglist from a Pd message  return true if the glist should appear as a graph on parent;
+    otherwise it appears as a text box.  This is sent from the GUI to inform a toplevel that its window has been
+    moved or resized.  post("set bounds %d %d %d %d", x1, y1, x2, y2);  if it's flipped so that y grows upward,
+	    fix so that zero is bottom edge and redraw.  This is
+	    only appropriate if we're a regular "text" object on the
+	    parent.  and move text objects accordingly; they should stick
+	    to the bottom, not the top.  the window becomes "mapped" (visible and not miniaturized) or
+    "unmapped" (either miniaturized or just plain gone.)  This should be
+    called from the GUI after the fact to "notify" us that we're mapped.  simulate a mouse up so u_main will calculate scrollbars...
+		    ugly!  just clear out the whole canvas...  alternatively, we could have erased them one by one...
+    	    for (y = x->gl_list; y; y = y->g_next)
+	    	gobj_vis(y, x, 0);
+	    	    ... but we should go through and erase the lines as well
+		    if we do it that way.  ----  editors -- perhaps this and "vis" should go to g_editor.c -------  ROCKBOX  ROCKBOX  recursively create or destroy all editors of a glist and its 
+    sub-glists, as long as they aren't toplevels.  we call this when we want the window to become visible, mapped, and
+    in front of all windows; or with "f" zero, when we want to get rid of
+    the window.  test if we're already visible and toplevel  just put us in front  ROCKBOX  ROCKBOX  make invisible  bug workaround -- a graph in a visible patch gets "invised"
+		when the patch is closed, and must lose the editor here.  It's
+		probably not the natural place to do this.  Other cases like
+		subpatches fall here too but don'd need the editor freed, so
+		we check if it exists.  if we're a graph on our parent, and if the parent exists
+	       and is visible, show ourselves on parent.  we call this on a non-toplevel glist to "open" it into its
+    own window.  shouldn't happen but don't get too upset.  erase ourself in parent window  get rid of our editor (and subeditors)  redraw ourself in parent window (blanked out this time)  we consider a graph "toplevel" if it has its own window
+	or if it appears as a box in its parent window so that we
+	don't draw the actual contents there.  probably unnecessary  ----------------- lines ----------  ROCKBOX  ROCKBOX  kill all lines for the object  kill all lines for one inlet or outlet  IOhannes  this should be unnecessary, but sometimes the canvas's name gets
+	out of sync with the owning box's argument; this fixes that  When you ask a canvas its size the result is 2 pixels more than what
+    you gave it to open it; perhaps there's a 1-pixel border all around it
+    or something.  Anyway, we just add the 2 pixels back here; seems we
+    have to do this for linux but not MSW; not sure about MacOS.  ROCKBOX  for some reason this is initially called with cw=ch=1 so
+	    we just suppress that here.  ROCKBOX  -------------------------- subcanvases ----------------------  find out from subcanvas contents how much to fatten the box  ROCKBOX  ROCKBOX  fake for now  ------------------ table --------------------------- ROCKBOX  ROCKBOX  create a graph for the table  return true if the "canvas" object is an abstraction (so we don't
+    save its contents, fogr example.)   return true if the "canvas" object is a "table".  return true if the "canvas" object should be treated as a text
+    object.  This is true for abstractions but also for "table"s...  get the document containing this canvas  ------------------------- DSP chain handling -------------------------  schedule one canvas for DSP.  This is called below for all "root"
+    canvases, but is also called from the "dsp" method for sub-
+    canvases, which are treated almost like any other tilde object.   create a new "DSP graph" object to use in sorting this canvas.
+	If we aren't toplevel, there are already other dspcontexts around.  find all the "dsp" boxes and add them to the graph  ... and all dsp interconnections  finally, sort them and add them to the DSP chain  this routine starts DSP for all root canvases.  DSP can be suspended before, and resumed after, operations which
+    might affect the DSP chain.  For example, we suspend before loading and
+    resume afterward, so that DSP doesn't get resorted for every DSP object
+    int the patch.  this is equivalent to suspending and resuming in one step.  LATER replace this with a queueing scheme  redraw all "scalars" (do this if a drawing command is changed.) 
+    LATER we'll use the "template" information to select which ones we
+    redraw.   public interface for above  find all root canvases  ------------------------------- setup routine ------------------------  why are some of these "glist" and others "canvas"?  old version...  new version:  we prevent the user from typing "canvas" in an object box
+	by sending 0 for a creator function.  here is the real creator function, invoked in patch files
+	    by sending the "canvas" message to #N, which is bound
+	    to pd_camvasmaker.  -------------------------- objects -----------------------------  -------------- Thomas Musil's GUI objects ------------  ------------------------ gui stuff ---------------------------  ---------------------- list handling ------------------------  ----- subcanvases, which you get by typing "pd" in a box ---- ---------------------------- tables -- GG -------------------  -------------- setups from other files for canvas_class ---------------- 

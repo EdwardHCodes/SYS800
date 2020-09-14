@@ -1,0 +1,475 @@
+ This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  CHM decompression implementation  prototypes  filenames of the system files used for decompression.
+ * Content and ControlData are essential.
+ * ResetTable is preferred, but SpanInfo can be used if not available
+ **************************************
+ * MSPACK_CREATE_CHM_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CHMD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file.
+ * Calls chmd_real_open() with entire=1.
+ **************************************
+ * CHMD_FAST_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file, but does not read
+ * the file headers. Calls chmd_real_open() with entire=0
+ **************************************
+ * CHMD_REAL_OPEN
+ ***************************************
+ * the real implementation of chmd_open() and chmd_fast_open(). It simply
+ * passes the "entire" parameter to chmd_read_headers(), which will then
+ * either read all headers, or a bare mininum.
+  if the error is DATAFORMAT, and there are some results, return
+         * partial results with a warning, rather than nothing **************************************
+ * CHMD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mschmd_header
+  free files  if this CHM was being decompressed, free decompression state  if this CHM had a chunk cache, free it and contents **************************************
+ * CHMD_READ_HEADERS
+ ***************************************
+ * reads the basic CHM file headers. If the "entire" parameter is
+ * non-zero, all file entries will also be read. fills out a pre-existing
+ * mschmd_header structure, allocates memory for files as necessary
+  The GUIDs found in CHM headers  {7C01FD10-7BAA-11D0-9E0C-00A0-C922-E6EC}  {7C01FD11-7BAA-11D0-9E0C-00A0-C922-E6EC}  reads an encoded integer into a variable; 7 bits of data per byte,
+ * the high bit is used to indicate that there is another byte  initialise pointers  read the first header  check ITSF signature  check both header GUIDs  read the header section table  chmhst3_OffsetCS0 does not exist in version 1 or 2 CHM files.
+   * The offset will be corrected later, once HS1 is read.
+    seek to header section 0  read header section 0  seek to header section 1  read header section 1  versions before 3 don't have chmhst3_OffsetCS0  check if content offset or file size is wrong  ensure there are chunks and that chunk size is
+   * large enough for signature and num_entries  The chunk_cache data structure is not great; large values for num_chunks
+   * or num_chunks*chunk_size can exhaust all memory. Until a better chunk
+   * cache is implemented, put arbitrary limits on num_chunks and chunk size.
+    common sense checks on header section 1 fields  if we are doing a quick read, stop here!  seek to the first PMGL chunk, and reduce the number of chunks to read  read and process all chunks from FirstPMGL to LastPMGL  read next chunk  process only directory (PMGL) chunks  ignore blank or one-char (e.g. "/") filenames we'd return as blank  empty files and directory names are stored as a file entry at
+       * offset 0 with length 0. We want to keep empty files, but not
+       * directory names, which end with a "/"  system file  normal file  this is reached either when num_entries runs out, or if
+     * reading data from the chunk reached a premature end of chunk **************************************
+ * CHMD_FAST_FIND
+ ***************************************
+ * uses PMGI index chunks and quickref data to quickly locate a file
+ * directly from the on-disk index.
+ *
+ * TODO: protect against infinite loops in chunks (where pgml_NextChunk
+ * or a PMGI index entry point to an already visited chunk)
+  p and end are initialised to prevent MSVC warning about "potentially"
+     * uninitialised usage. This is provably untrue, but MS won't fix:
+     * https://developercommunity.visualstudio.com/content/problem/363489/c4701-false-positive-warning.html  clear the results structure  go through PMGI chunk hierarchy to reach PMGL chunk  search PMGI/PMGL chunk. exit early if no entry found  found result. loop around for next chunk if this is PMGI  PMGL chunks only, search from first_pmgl to last_pmgl  search PMGL chunk. exit if file found  stop simple infinite loops: can't visit the same chunk twice  if we found a file, read it  reads the given chunk into memory, storing it in a chunk cache
+ * so it doesn't need to be read from disk more than once
+  check arguments - most are already checked by chmd_fast_find  ensure chunk cache is available  try to answer out of chunk cache  need to read chunk - allocate memory for it  seek to block and read it  check the signature. Is is PMGL or PMGI?  all OK. Store chunk in cache and return it  searches a PMGI/PMGL chunk for a given filename entry. Returns -1 on
+ * data format error, 0 if entry definitely not found, 1 if entry
+ * found. In the latter case, *result and *result_end are set pointing
+ * to that entry's data (either the "next chunk" ENCINT for a PMGI or
+ * the section, offset and length ENCINTs for a PMGL).
+ *
+ * In the case of PMGL chunks, the entry has definitely been
+ * found. In the case of PMGI chunks, the entry which points to the
+ * chunk that may eventually contain that entry has been found.
+  PMGL chunk or PMGI chunk? (note: read_chunk() has already
+     * checked the rest of the characters in the chunk signature)   Step 1: binary search first filename of each QR entry
+     *  - target filename == entry
+     *    found file
+     *  - target filename < all entries
+     *    file not found
+     *  - target filename > all entries
+     *    proceed to step 2 using final entry
+     *  - target filename between two searched entries
+     *    proceed to step 2
+      but we can live with it  pick new midpoint  compare filename with entry QR points to  exact match!  otherwise, read the group of entries for QR entry M  Step 2: linear search through the set of entries reached in step 1.
+     * - filename == any entry
+     *   found entry
+     * - filename < all entries (PMGI) or any entry (PMGL)
+     *   entry not found, stop now
+     * - filename > all entries
+     *   entry not found (PMGL) / maybe found (PMGI)
+     * - 
+      entry found  entry not found (PMGL) / maybe found (PMGI)  read and ignore the rest of this entry  skip section  skip offset  skip length  store potential final result  skip chunk number  PMGL? not found. PMGI? maybe found  decodes a UTF-8 character from s[] into c. Will not read past e. 
+ * doesn't test that extension bytes are %10xxxxxx.
+ * allows some overlong encodings.
+  case-insensitively compares two UTF8 encoded strings. String length for
+ * both strings must be provided, null bytes are not terminators **************************************
+ * CHMD_EXTRACT
+ ***************************************
+ * extracts a file from a CHM helpfile
+  create decompression state if it doesn't exist  open input chm file if not open, or the open one is a different chm  open file for output  if file is empty, simply creating it is enough  Uncompressed section file  simple seek + copy  MSCompressed section file  (re)initialise compression state if we it is not yet initialised,
+     * or we have advanced too far and have to backtrack
+      seek to input data  get to correct offset.  if getting to the correct offset was error free, unpack file  save offset in input source stream, in case there is a section 0
+     * file between now and the next section 1 file extracted  if an LZX error occured, the LZX decompressor is now useless **************************************
+ * CHMD_SYS_WRITE
+ ***************************************
+ * chmd_sys_write is the internal writer function which the decompressor
+ * uses. If either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset.
+ **************************************
+ * CHMD_INIT_DECOMP
+ ***************************************
+ * Initialises the LZX decompressor to decompress the compressed stream,
+ * from the nearest reset offset and length that is needed for the given
+ * file.
+  ensure we have a mscompressed content section  ensure we have a ControlData file  read ControlData  check LZXC signature  read reset_interval and window_size and validate version number  free ControlData  find window_bits from window_size  validate reset_interval  which reset table entry would we like?  convert from reset interval multiple (usually 64k) to 32k frames  read the reset table entry  the uncompressed length given in the reset table is dishonest.
+     * the uncompressed data is always padded out from the given
+     * uncompressed length up to the next reset interval  if we can't read the reset table entry, just start from
+     * the beginning. Use spaninfo to get the uncompressed length  get offset of compressed data stream:
+   * = offset of uncompressed section from start of file
+   * + offset of compressed stream from start of uncompressed section
+   * + offset of chosen reset interval from start of compressed stream  set start offset and overall remaining stream length  initialise LZX stream **************************************
+ * READ_RESET_TABLE
+ ***************************************
+ * Reads one entry out of the reset table. Also reads the uncompressed
+ * data length. Writes these to offset_ptr and length_ptr respectively.
+ * Returns non-zero for success, zero for failure.
+  do we have a ResetTable file?  read ResetTable file  check sanity of reset table  get the uncompressed length of the LZX stream  ensure reset table entry for this offset exists  free the reset table  return success **************************************
+ * READ_SPANINFO
+ ***************************************
+ * Reads the uncompressed data length from the spaninfo file.
+ * Returns zero for success or a non-zero error code for failure.
+  find SpanInfo file  check it's large enough  read the SpanInfo file  get the uncompressed length of the LZX stream **************************************
+ * FIND_SYS_FILE
+ ***************************************
+ * Uses chmd_fast_find to locate a system file, and fills out that system
+ * file's entry and links it into the list of system files. Returns zero
+ * for success, non-zero for both failure and the file not existing.
+  already loaded  try using fast_find to find the file - return DATAFORMAT error if
+     * it fails, or successfully doesn't find the file  copy result  link file into sysfiles list **************************************
+ * READ_SYS_FILE
+ ***************************************
+ * Allocates memory for a section 0 (uncompressed) file and reads it into
+ * memory.
+ **************************************
+ * CHMD_ERROR
+ ***************************************
+ * returns the last error that occurred
+ **************************************
+ * READ_OFF64
+ ***************************************
+ * Reads a 64-bit signed integer from memory in Intel byte order.
+ * If running on a system with a 64-bit off_t, this is simply done.
+ * If running on a system with a 32-bit off_t, offsets up to 0x7FFFFFFF
+ * are accepted, offsets beyond that cause an error message.
+  This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  CHM decompression implementation  prototypes  filenames of the system files used for decompression.
+ * Content and ControlData are essential.
+ * ResetTable is preferred, but SpanInfo can be used if not available
+ **************************************
+ * MSPACK_CREATE_CHM_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CHMD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file.
+ * Calls chmd_real_open() with entire=1.
+ **************************************
+ * CHMD_FAST_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file, but does not read
+ * the file headers. Calls chmd_real_open() with entire=0
+ **************************************
+ * CHMD_REAL_OPEN
+ ***************************************
+ * the real implementation of chmd_open() and chmd_fast_open(). It simply
+ * passes the "entire" parameter to chmd_read_headers(), which will then
+ * either read all headers, or a bare mininum.
+  if the error is DATAFORMAT, and there are some results, return
+         * partial results with a warning, rather than nothing **************************************
+ * CHMD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mschmd_header
+  free files  if this CHM was being decompressed, free decompression state  if this CHM had a chunk cache, free it and contents **************************************
+ * CHMD_READ_HEADERS
+ ***************************************
+ * reads the basic CHM file headers. If the "entire" parameter is
+ * non-zero, all file entries will also be read. fills out a pre-existing
+ * mschmd_header structure, allocates memory for files as necessary
+  The GUIDs found in CHM headers  {7C01FD10-7BAA-11D0-9E0C-00A0-C922-E6EC}  {7C01FD11-7BAA-11D0-9E0C-00A0-C922-E6EC}  reads an encoded integer into a variable; 7 bits of data per byte,
+ * the high bit is used to indicate that there is another byte  initialise pointers  read the first header  check ITSF signature  check both header GUIDs  read the header section table  chmhst3_OffsetCS0 does not exist in version 1 or 2 CHM files.
+   * The offset will be corrected later, once HS1 is read.
+    seek to header section 0  read header section 0  seek to header section 1  read header section 1  versions before 3 don't have chmhst3_OffsetCS0  check if content offset or file size is wrong  ensure there are chunks and that chunk size is
+   * large enough for signature and num_entries  The chunk_cache data structure is not great; large values for num_chunks
+   * or num_chunks*chunk_size can exhaust all memory. Until a better chunk
+   * cache is implemented, put arbitrary limits on num_chunks and chunk size.
+    common sense checks on header section 1 fields  if we are doing a quick read, stop here!  seek to the first PMGL chunk, and reduce the number of chunks to read  read and process all chunks from FirstPMGL to LastPMGL  read next chunk  process only directory (PMGL) chunks  ignore blank or one-char (e.g. "/") filenames we'd return as blank  empty files and directory names are stored as a file entry at
+       * offset 0 with length 0. We want to keep empty files, but not
+       * directory names, which end with a "/"  system file  normal file  this is reached either when num_entries runs out, or if
+     * reading data from the chunk reached a premature end of chunk **************************************
+ * CHMD_FAST_FIND
+ ***************************************
+ * uses PMGI index chunks and quickref data to quickly locate a file
+ * directly from the on-disk index.
+ *
+ * TODO: protect against infinite loops in chunks (where pgml_NextChunk
+ * or a PMGI index entry point to an already visited chunk)
+  p and end are initialised to prevent MSVC warning about "potentially"
+     * uninitialised usage. This is provably untrue, but MS won't fix:
+     * https://developercommunity.visualstudio.com/content/problem/363489/c4701-false-positive-warning.html  clear the results structure  go through PMGI chunk hierarchy to reach PMGL chunk  search PMGI/PMGL chunk. exit early if no entry found  found result. loop around for next chunk if this is PMGI  PMGL chunks only, search from first_pmgl to last_pmgl  search PMGL chunk. exit if file found  stop simple infinite loops: can't visit the same chunk twice  if we found a file, read it  reads the given chunk into memory, storing it in a chunk cache
+ * so it doesn't need to be read from disk more than once
+  check arguments - most are already checked by chmd_fast_find  ensure chunk cache is available  try to answer out of chunk cache  need to read chunk - allocate memory for it  seek to block and read it  check the signature. Is is PMGL or PMGI?  all OK. Store chunk in cache and return it  searches a PMGI/PMGL chunk for a given filename entry. Returns -1 on
+ * data format error, 0 if entry definitely not found, 1 if entry
+ * found. In the latter case, *result and *result_end are set pointing
+ * to that entry's data (either the "next chunk" ENCINT for a PMGI or
+ * the section, offset and length ENCINTs for a PMGL).
+ *
+ * In the case of PMGL chunks, the entry has definitely been
+ * found. In the case of PMGI chunks, the entry which points to the
+ * chunk that may eventually contain that entry has been found.
+  PMGL chunk or PMGI chunk? (note: read_chunk() has already
+     * checked the rest of the characters in the chunk signature)   Step 1: binary search first filename of each QR entry
+     *  - target filename == entry
+     *    found file
+     *  - target filename < all entries
+     *    file not found
+     *  - target filename > all entries
+     *    proceed to step 2 using final entry
+     *  - target filename between two searched entries
+     *    proceed to step 2
+      but we can live with it  pick new midpoint  compare filename with entry QR points to  exact match!  otherwise, read the group of entries for QR entry M  Step 2: linear search through the set of entries reached in step 1.
+     * - filename == any entry
+     *   found entry
+     * - filename < all entries (PMGI) or any entry (PMGL)
+     *   entry not found, stop now
+     * - filename > all entries
+     *   entry not found (PMGL) / maybe found (PMGI)
+     * - 
+      entry found  entry not found (PMGL) / maybe found (PMGI)  read and ignore the rest of this entry  skip section  skip offset  skip length  store potential final result  skip chunk number  PMGL? not found. PMGI? maybe found  decodes a UTF-8 character from s[] into c. Will not read past e. 
+ * doesn't test that extension bytes are %10xxxxxx.
+ * allows some overlong encodings.
+  case-insensitively compares two UTF8 encoded strings. String length for
+ * both strings must be provided, null bytes are not terminators **************************************
+ * CHMD_EXTRACT
+ ***************************************
+ * extracts a file from a CHM helpfile
+  create decompression state if it doesn't exist  open input chm file if not open, or the open one is a different chm  open file for output  if file is empty, simply creating it is enough  Uncompressed section file  simple seek + copy  MSCompressed section file  (re)initialise compression state if we it is not yet initialised,
+     * or we have advanced too far and have to backtrack
+      seek to input data  get to correct offset.  if getting to the correct offset was error free, unpack file  save offset in input source stream, in case there is a section 0
+     * file between now and the next section 1 file extracted  if an LZX error occured, the LZX decompressor is now useless **************************************
+ * CHMD_SYS_WRITE
+ ***************************************
+ * chmd_sys_write is the internal writer function which the decompressor
+ * uses. If either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset.
+ **************************************
+ * CHMD_INIT_DECOMP
+ ***************************************
+ * Initialises the LZX decompressor to decompress the compressed stream,
+ * from the nearest reset offset and length that is needed for the given
+ * file.
+  ensure we have a mscompressed content section  ensure we have a ControlData file  read ControlData  check LZXC signature  read reset_interval and window_size and validate version number  free ControlData  find window_bits from window_size  validate reset_interval  which reset table entry would we like?  convert from reset interval multiple (usually 64k) to 32k frames  read the reset table entry  the uncompressed length given in the reset table is dishonest.
+     * the uncompressed data is always padded out from the given
+     * uncompressed length up to the next reset interval  if we can't read the reset table entry, just start from
+     * the beginning. Use spaninfo to get the uncompressed length  get offset of compressed data stream:
+   * = offset of uncompressed section from start of file
+   * + offset of compressed stream from start of uncompressed section
+   * + offset of chosen reset interval from start of compressed stream  set start offset and overall remaining stream length  initialise LZX stream **************************************
+ * READ_RESET_TABLE
+ ***************************************
+ * Reads one entry out of the reset table. Also reads the uncompressed
+ * data length. Writes these to offset_ptr and length_ptr respectively.
+ * Returns non-zero for success, zero for failure.
+  do we have a ResetTable file?  read ResetTable file  check sanity of reset table  get the uncompressed length of the LZX stream  ensure reset table entry for this offset exists  free the reset table  return success **************************************
+ * READ_SPANINFO
+ ***************************************
+ * Reads the uncompressed data length from the spaninfo file.
+ * Returns zero for success or a non-zero error code for failure.
+  find SpanInfo file  check it's large enough  read the SpanInfo file  get the uncompressed length of the LZX stream **************************************
+ * FIND_SYS_FILE
+ ***************************************
+ * Uses chmd_fast_find to locate a system file, and fills out that system
+ * file's entry and links it into the list of system files. Returns zero
+ * for success, non-zero for both failure and the file not existing.
+  already loaded  try using fast_find to find the file - return DATAFORMAT error if
+     * it fails, or successfully doesn't find the file  copy result  link file into sysfiles list **************************************
+ * READ_SYS_FILE
+ ***************************************
+ * Allocates memory for a section 0 (uncompressed) file and reads it into
+ * memory.
+ **************************************
+ * CHMD_ERROR
+ ***************************************
+ * returns the last error that occurred
+ **************************************
+ * READ_OFF64
+ ***************************************
+ * Reads a 64-bit signed integer from memory in Intel byte order.
+ * If running on a system with a 64-bit off_t, this is simply done.
+ * If running on a system with a 32-bit off_t, offsets up to 0x7FFFFFFF
+ * are accepted, offsets beyond that cause an error message.
+  This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  CHM decompression implementation  prototypes  filenames of the system files used for decompression.
+ * Content and ControlData are essential.
+ * ResetTable is preferred, but SpanInfo can be used if not available
+ **************************************
+ * MSPACK_CREATE_CHM_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CHMD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file.
+ * Calls chmd_real_open() with entire=1.
+ **************************************
+ * CHMD_FAST_OPEN
+ ***************************************
+ * opens a file and tries to read it as a CHM file, but does not read
+ * the file headers. Calls chmd_real_open() with entire=0
+ **************************************
+ * CHMD_REAL_OPEN
+ ***************************************
+ * the real implementation of chmd_open() and chmd_fast_open(). It simply
+ * passes the "entire" parameter to chmd_read_headers(), which will then
+ * either read all headers, or a bare mininum.
+  if the error is DATAFORMAT, and there are some results, return
+         * partial results with a warning, rather than nothing **************************************
+ * CHMD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mschmd_header
+  free files  if this CHM was being decompressed, free decompression state  if this CHM had a chunk cache, free it and contents **************************************
+ * CHMD_READ_HEADERS
+ ***************************************
+ * reads the basic CHM file headers. If the "entire" parameter is
+ * non-zero, all file entries will also be read. fills out a pre-existing
+ * mschmd_header structure, allocates memory for files as necessary
+  The GUIDs found in CHM headers  {7C01FD10-7BAA-11D0-9E0C-00A0-C922-E6EC}  {7C01FD11-7BAA-11D0-9E0C-00A0-C922-E6EC}  reads an encoded integer into a variable; 7 bits of data per byte,
+ * the high bit is used to indicate that there is another byte  initialise pointers  read the first header  check ITSF signature  check both header GUIDs  read the header section table  chmhst3_OffsetCS0 does not exist in version 1 or 2 CHM files.
+   * The offset will be corrected later, once HS1 is read.
+    seek to header section 0  read header section 0  seek to header section 1  read header section 1  versions before 3 don't have chmhst3_OffsetCS0  check if content offset or file size is wrong  ensure there are chunks and that chunk size is
+   * large enough for signature and num_entries  The chunk_cache data structure is not great; large values for num_chunks
+   * or num_chunks*chunk_size can exhaust all memory. Until a better chunk
+   * cache is implemented, put arbitrary limits on num_chunks and chunk size.
+    common sense checks on header section 1 fields  if we are doing a quick read, stop here!  seek to the first PMGL chunk, and reduce the number of chunks to read  read and process all chunks from FirstPMGL to LastPMGL  read next chunk  process only directory (PMGL) chunks  ignore blank or one-char (e.g. "/") filenames we'd return as blank  empty files and directory names are stored as a file entry at
+       * offset 0 with length 0. We want to keep empty files, but not
+       * directory names, which end with a "/"  system file  normal file  this is reached either when num_entries runs out, or if
+     * reading data from the chunk reached a premature end of chunk **************************************
+ * CHMD_FAST_FIND
+ ***************************************
+ * uses PMGI index chunks and quickref data to quickly locate a file
+ * directly from the on-disk index.
+ *
+ * TODO: protect against infinite loops in chunks (where pgml_NextChunk
+ * or a PMGI index entry point to an already visited chunk)
+  p and end are initialised to prevent MSVC warning about "potentially"
+     * uninitialised usage. This is provably untrue, but MS won't fix:
+     * https://developercommunity.visualstudio.com/content/problem/363489/c4701-false-positive-warning.html  clear the results structure  go through PMGI chunk hierarchy to reach PMGL chunk  search PMGI/PMGL chunk. exit early if no entry found  found result. loop around for next chunk if this is PMGI  PMGL chunks only, search from first_pmgl to last_pmgl  search PMGL chunk. exit if file found  stop simple infinite loops: can't visit the same chunk twice  if we found a file, read it  reads the given chunk into memory, storing it in a chunk cache
+ * so it doesn't need to be read from disk more than once
+  check arguments - most are already checked by chmd_fast_find  ensure chunk cache is available  try to answer out of chunk cache  need to read chunk - allocate memory for it  seek to block and read it  check the signature. Is is PMGL or PMGI?  all OK. Store chunk in cache and return it  searches a PMGI/PMGL chunk for a given filename entry. Returns -1 on
+ * data format error, 0 if entry definitely not found, 1 if entry
+ * found. In the latter case, *result and *result_end are set pointing
+ * to that entry's data (either the "next chunk" ENCINT for a PMGI or
+ * the section, offset and length ENCINTs for a PMGL).
+ *
+ * In the case of PMGL chunks, the entry has definitely been
+ * found. In the case of PMGI chunks, the entry which points to the
+ * chunk that may eventually contain that entry has been found.
+  PMGL chunk or PMGI chunk? (note: read_chunk() has already
+     * checked the rest of the characters in the chunk signature)   Step 1: binary search first filename of each QR entry
+     *  - target filename == entry
+     *    found file
+     *  - target filename < all entries
+     *    file not found
+     *  - target filename > all entries
+     *    proceed to step 2 using final entry
+     *  - target filename between two searched entries
+     *    proceed to step 2
+      but we can live with it  pick new midpoint  compare filename with entry QR points to  exact match!  otherwise, read the group of entries for QR entry M  Step 2: linear search through the set of entries reached in step 1.
+     * - filename == any entry
+     *   found entry
+     * - filename < all entries (PMGI) or any entry (PMGL)
+     *   entry not found, stop now
+     * - filename > all entries
+     *   entry not found (PMGL) / maybe found (PMGI)
+     * - 
+      entry found  entry not found (PMGL) / maybe found (PMGI)  read and ignore the rest of this entry  skip section  skip offset  skip length  store potential final result  skip chunk number  PMGL? not found. PMGI? maybe found  decodes a UTF-8 character from s[] into c. Will not read past e. 
+ * doesn't test that extension bytes are %10xxxxxx.
+ * allows some overlong encodings.
+  case-insensitively compares two UTF8 encoded strings. String length for
+ * both strings must be provided, null bytes are not terminators **************************************
+ * CHMD_EXTRACT
+ ***************************************
+ * extracts a file from a CHM helpfile
+  create decompression state if it doesn't exist  open input chm file if not open, or the open one is a different chm  open file for output  if file is empty, simply creating it is enough  Uncompressed section file  simple seek + copy  MSCompressed section file  (re)initialise compression state if we it is not yet initialised,
+     * or we have advanced too far and have to backtrack
+      seek to input data  get to correct offset.  if getting to the correct offset was error free, unpack file  save offset in input source stream, in case there is a section 0
+     * file between now and the next section 1 file extracted  if an LZX error occured, the LZX decompressor is now useless **************************************
+ * CHMD_SYS_WRITE
+ ***************************************
+ * chmd_sys_write is the internal writer function which the decompressor
+ * uses. If either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset.
+ **************************************
+ * CHMD_INIT_DECOMP
+ ***************************************
+ * Initialises the LZX decompressor to decompress the compressed stream,
+ * from the nearest reset offset and length that is needed for the given
+ * file.
+  ensure we have a mscompressed content section  ensure we have a ControlData file  read ControlData  check LZXC signature  read reset_interval and window_size and validate version number  free ControlData  find window_bits from window_size  validate reset_interval  which reset table entry would we like?  convert from reset interval multiple (usually 64k) to 32k frames  read the reset table entry  the uncompressed length given in the reset table is dishonest.
+     * the uncompressed data is always padded out from the given
+     * uncompressed length up to the next reset interval  if we can't read the reset table entry, just start from
+     * the beginning. Use spaninfo to get the uncompressed length  get offset of compressed data stream:
+   * = offset of uncompressed section from start of file
+   * + offset of compressed stream from start of uncompressed section
+   * + offset of chosen reset interval from start of compressed stream  set start offset and overall remaining stream length  initialise LZX stream **************************************
+ * READ_RESET_TABLE
+ ***************************************
+ * Reads one entry out of the reset table. Also reads the uncompressed
+ * data length. Writes these to offset_ptr and length_ptr respectively.
+ * Returns non-zero for success, zero for failure.
+  do we have a ResetTable file?  read ResetTable file  check sanity of reset table  get the uncompressed length of the LZX stream  ensure reset table entry for this offset exists  free the reset table  return success **************************************
+ * READ_SPANINFO
+ ***************************************
+ * Reads the uncompressed data length from the spaninfo file.
+ * Returns zero for success or a non-zero error code for failure.
+  find SpanInfo file  check it's large enough  read the SpanInfo file  get the uncompressed length of the LZX stream **************************************
+ * FIND_SYS_FILE
+ ***************************************
+ * Uses chmd_fast_find to locate a system file, and fills out that system
+ * file's entry and links it into the list of system files. Returns zero
+ * for success, non-zero for both failure and the file not existing.
+  already loaded  try using fast_find to find the file - return DATAFORMAT error if
+     * it fails, or successfully doesn't find the file  copy result  link file into sysfiles list **************************************
+ * READ_SYS_FILE
+ ***************************************
+ * Allocates memory for a section 0 (uncompressed) file and reads it into
+ * memory.
+ **************************************
+ * CHMD_ERROR
+ ***************************************
+ * returns the last error that occurred
+ **************************************
+ * READ_OFF64
+ ***************************************
+ * Reads a 64-bit signed integer from memory in Intel byte order.
+ * If running on a system with a 64-bit off_t, this is simply done.
+ * If running on a system with a 32-bit off_t, offsets up to 0x7FFFFFFF
+ * are accepted, offsets beyond that cause an error message.
+ 

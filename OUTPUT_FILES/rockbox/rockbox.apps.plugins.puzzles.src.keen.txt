@@ -1,0 +1,1219 @@
+
+ * keen.c: an implementation of the Times's 'KenKen' puzzle, and
+ * also of Nikoli's very similar 'Inshi No Heya' puzzle.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Clue notation. Important here that ADD and MUL come before SUB
+ * and DIV, and that DIV comes last. 
+ 
+ * Maximum size of any clue block. Very large ones are annoying in UI
+ * terms (if they're multiplicative you end up with too many digits to
+ * fit in the square) and also in solver terms (too many possibilities
+ * to iterate over).
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * This function is called from the main clue-based solver
+     * routine when we discover a candidate layout for a given clue
+     * box consistent with everything we currently know about the
+     * digit constraints in that box. We expect to find the digits
+     * of the candidate layout in ctx->dscratch, and we update
+     * ctx->iscratch as appropriate.
+     *
+     * The contents of ctx->iscratch are completely different
+     * depending on whether diff == DIFF_HARD or not. This function
+     * uses iscratch completely differently between the two cases, and
+     * the code in solver_common() which consumes the result must
+     * likewise have an if statement with completely different
+     * branches for the two cases.
+     *
+     * In DIFF_EASY and DIFF_NORMAL modes, the valid entries in
+     * ctx->iscratch are 0,...,n-1, and each of those entries
+     * ctx->iscratch[i] gives a bitmap of the possible digits in the
+     * ith square of the clue box currently under consideration. So
+     * each entry of iscratch starts off as an empty bitmap, and we
+     * set bits in it as possible layouts for the clue box are
+     * considered (and the difference between DIFF_EASY and
+     * DIFF_NORMAL is just that in DIFF_EASY mode we deliberately set
+     * more bits than absolutely necessary, hence restricting our own
+     * knowledge).
+     *
+     * But in DIFF_HARD mode, the valid entries are 0,...,2*w-1 (at
+     * least outside *this* function - inside this function, we also
+     * use 2*w,...,4*w-1 as scratch space in the loop below); the
+     * first w of those give the possible digits in the intersection
+     * of the current clue box with each column of the puzzle, and the
+     * next w do the same for each row. In this mode, each iscratch
+     * entry starts off as a _full_ bitmap, and in this function we
+     * _clear_ bits for digits that are absent from a given row or
+     * column in each candidate layout, so that the only bits which
+     * remain set are those for digits which have to appear in a given
+     * row/column no matter how the clue box is laid out.
+     
+	 * Easy-mode clue deductions: we do not record information
+	 * about which squares take which values, so we amalgamate
+	 * all the values in dscratch and OR them all into
+	 * everywhere.
+	 
+	 * Normal-mode deductions: we process the information in
+	 * dscratch in the obvious way.
+	 
+	 * Hard-mode deductions: instead of ruling things out
+	 * _inside_ the clue box, we look for numbers which occur in
+	 * a given row or column in all candidate layouts, and rule
+	 * them out of all squares in that row or column that
+	 * _aren't_ part of this clue box.
+	 
+     * Iterate over each clue box and deduce what we can.
+     
+         * Initialise ctx->iscratch for this clue box. At different
+         * difficulty levels we must initialise a different amount of
+         * it to different things; see the comments in
+         * solver_clue_candidate explaining what each version does.
+         
+	     * These two clue types must always apply to a box of
+	     * area 2. Also, the two digits in these boxes can never
+	     * be the same (because any domino must have its two
+	     * squares in either the same row or the same column).
+	     * So we simply iterate over all possibilities for the
+	     * two squares (both ways round), rule out any which are
+	     * inconsistent with the digit constraints we already
+	     * have, and update the digit constraints with any new
+	     * information thus garnered.
+	      (i,j) is a valid digit pair. Try it both ways round. 
+	     * For these clue types, I have no alternative but to go
+	     * through all possible number combinations.
+	     *
+	     * Instead of a tedious physical recursion, I iterate in
+	     * the scratch array through all possibilities. At any
+	     * given moment, i indexes the element of the box that
+	     * will next be incremented.
+	      start with the identity 
+		     * Find the next valid value for cell i.
+		      this one won't fit  this one is ruled out already  clashes with another row/col  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on. 
+         * Do deductions based on the information we've now
+         * accumulated in ctx->iscratch. See the comments above in
+         * solver_clue_candidate explaining what data is left in here,
+         * and how it differs between DIFF_HARD and lower difficulty
+         * levels (hence the big if statement here).
+          placate optimiser  placate optimiser  placate optimiser 
+	     * Once we find one block we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is. (We have to do this
+	     * for the Hard deductions but not the Easy/Normal ones,
+	     * because only the Hard deductions are cross-box.)
+	     
+     * Omit the EASY deductions when solving at NORMAL level, since
+     * the NORMAL deductions are a superset of them anyway and it
+     * saves on time and confusing solver diagnostics.
+     *
+     * Note that this breaks the natural semantics of the return
+     * value of latin_solver. Without this hack, you could determine
+     * a puzzle's difficulty in one go by trying to solve it at
+     * maximum difficulty and seeing what difficulty value was
+     * returned; but with this hack, solving an Easy puzzle on
+     * Normal difficulty will typically return Normal. Hence the
+     * uses of the solver to determine difficulty are all arranged
+     * so as to double-check by re-solving at the next difficulty
+     * level down and making sure it failed.
+     
+     * Iterate over each clue box and check it's satisfied.
+     
+     * Transform the dsf-formatted clue list into one over which we
+     * can iterate more easily.
+     *
+     * Also transpose the x- and y-coordinates at this point,
+     * because the 'cube' array in the general Latin square solver
+     * puts x first (oops).
+      transpose  ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Encode the block structure. We do this by encoding the
+     * pattern of dividing lines: first we iterate over the w*(w-1)
+     * internal vertical grid lines in ordinary reading order, then
+     * over the w*(w-1) internal horizontal ones in transposed
+     * reading order.
+     *
+     * We encode the number of non-lines between the lines; _ means
+     * zero (two adjacent divisions), a means 1, ..., y means 25,
+     * and z means 25 non-lines _and no following line_ (so that za
+     * means 26, zb 27 etc).
+      terminating virtual edge 
+     * Now go through and compress the string by replacing runs of
+     * the same letter with a single copy of that letter followed by
+     * a repeat count, where that makes it shorter. (This puzzle
+     * seems to generate enough long strings of _ to make this a
+     * worthwhile step.)
+      'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+     
+     * Difficulty exceptions: 3x3 puzzles at difficulty Hard or
+     * higher are currently not generable - the generator will spin
+     * forever looking for puzzles of the appropriate difficulty. We
+     * dial each of these down to the next lower difficulty.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e n h x u; do
+  for i in {3..9}; do
+    echo ./keen --generate 1 ${i}d${d}
+    perl -e 'alarm 30; exec @ARGV' ./keen --generate 5 ${i}d${d} >/dev/null \
+      || echo broken
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * First construct a latin square to be the solution.
+	 
+	 * Divide the grid into arbitrarily sized blocks, but so as
+	 * to arrange plenty of dominoes which can be SUB/DIV clues.
+	 * We do this by first placing dominoes at random for a
+	 * while, then tying the remaining singletons one by one
+	 * into neighbouring blocks.
+	  Place dominoes. 
+		 * When we find a potential domino, we place it with
+		 * probability 3/4, which seems to strike a decent
+		 * balance between plenty of dominoes and leaving
+		 * enough singletons to make interesting larger
+		 * shapes.
+		  Fold in singletons.  Quit and start again if we have any singletons left over
+         * which we weren't able to do anything at all with. 
+	 * Decide what would be acceptable clues for each block.
+	 *
+	 * Blocks larger than 2 have free choice of ADD or MUL;
+	 * blocks of size 2 can be anything in principle (except
+	 * that they can only be DIV if the two numbers have an
+	 * integer quotient, of course), but we rule out (or try to
+	 * avoid) some clues because they're of low quality.
+	 *
+	 * Hence, we iterate once over the grid, stopping at the
+	 * canonical element of every >2 block and the _non_-
+	 * canonical element of every 2-block; the latter means that
+	 * we can make our decision about a 2-block in the knowledge
+	 * of both numbers in it.
+	 *
+	 * We reuse the 'singletons' array (finished with in the
+	 * above loop) to hold information about which blocks are
+	 * suitable for what.
+	  Fetch the two numbers and sort them into order. 
+		 * Addition clues are always allowed, but we try to
+		 * avoid sums of 3, 4, (2w-1) and (2w-2) if we can,
+		 * because they're too easy - they only leave one
+		 * option for the pair of numbers involved.
+		 
+		 * Multiplication clues: above Normal difficulty, we
+		 * prefer (but don't absolutely insist on) clues of
+		 * this type which leave multiple options open.
+		 
+		 * Subtraction: we completely avoid a difference of
+		 * w-1.
+		 
+		 * Division: for a start, the quotient must be an
+		 * integer or the clue type is impossible. Also, we
+		 * never use quotients strictly greater than w/2,
+		 * because they're not only too easy but also
+		 * inelegant.
+		 
+	 * Actually choose a clue for each block, trying to keep the
+	 * numbers of each type even, and starting with the
+	 * preferred candidates for each type where possible.
+	 *
+	 * I'm sure there should be a faster algorithm for doing
+	 * this, but I can't be bothered: O(N^2) is good enough when
+	 * N is at most the number of dominoes that fits into a 9x9
+	 * square.
+	  case 3  didn't find a nice one, use a nasty one 
+	 * Having chosen the clue types, calculate the clue values.
+	  one is 0 :-) 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * I wondered if at this point it would be worth trying to
+	 * merge adjacent blocks together, to make the puzzle
+	 * gradually more difficult if it's currently easier than
+	 * specced, increasing the chance of a given generation run
+	 * being successful.
+	 *
+	 * It doesn't seem to be critical for the generation speed,
+	 * though, so for the moment I'm leaving it out.
+	 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the block structure makes sense.
+     
+     * Verify that the right number of clues are given, and that SUB
+     * and DIV clues don't apply to blocks of the wrong size.
+      these clues need no validation  structure copy  structure copy 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow is true.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When true, pressing a valid number or letter
+     * key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+     
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  , a = w*w  background needs erasing  pencil-mode highlight 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      Draw the box clue. 
+	 * Special case of clue-drawing: a box with only one square
+	 * is written as just the number, with no operation, because
+	 * it doesn't matter whether the operation is ADD or MUL.
+	 * The generation code above should never produce puzzles
+	 * containing such a thing - I think they're inelegant - but
+	 * it's possible to type in game IDs from elsewhere, so I
+	 * want to display them right if so.
+	  cluetype == C_DIV ?  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the clue text.
+		  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with some
+	     * clue text.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+	 * Big containing rectangle.
+	  completion flash 
+     * We use 9mm squares by default, like Solo.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ 
+     * Iterate over all the blocks.
+     
+	 * For each block, we need a starting square within it which
+	 * has a boundary at the left. Conveniently, we have one
+	 * right here, by construction.
+	 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Clues.
+     
+		 * As in the drawing code, we omit the operator for
+		 * blocks of area 1.
+		  cluetype == C_DIV ? 
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+		 * We don't have a game_text_format for this game,
+		 * so we have to output the solution manually.
+		  vim: set shiftwidth=4 tabstop=8: 
+ * keen.c: an implementation of the Times's 'KenKen' puzzle, and
+ * also of Nikoli's very similar 'Inshi No Heya' puzzle.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Clue notation. Important here that ADD and MUL come before SUB
+ * and DIV, and that DIV comes last. 
+ 
+ * Maximum size of any clue block. Very large ones are annoying in UI
+ * terms (if they're multiplicative you end up with too many digits to
+ * fit in the square) and also in solver terms (too many possibilities
+ * to iterate over).
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * This function is called from the main clue-based solver
+     * routine when we discover a candidate layout for a given clue
+     * box consistent with everything we currently know about the
+     * digit constraints in that box. We expect to find the digits
+     * of the candidate layout in ctx->dscratch, and we update
+     * ctx->iscratch as appropriate.
+     *
+     * The contents of ctx->iscratch are completely different
+     * depending on whether diff == DIFF_HARD or not. This function
+     * uses iscratch completely differently between the two cases, and
+     * the code in solver_common() which consumes the result must
+     * likewise have an if statement with completely different
+     * branches for the two cases.
+     *
+     * In DIFF_EASY and DIFF_NORMAL modes, the valid entries in
+     * ctx->iscratch are 0,...,n-1, and each of those entries
+     * ctx->iscratch[i] gives a bitmap of the possible digits in the
+     * ith square of the clue box currently under consideration. So
+     * each entry of iscratch starts off as an empty bitmap, and we
+     * set bits in it as possible layouts for the clue box are
+     * considered (and the difference between DIFF_EASY and
+     * DIFF_NORMAL is just that in DIFF_EASY mode we deliberately set
+     * more bits than absolutely necessary, hence restricting our own
+     * knowledge).
+     *
+     * But in DIFF_HARD mode, the valid entries are 0,...,2*w-1 (at
+     * least outside *this* function - inside this function, we also
+     * use 2*w,...,4*w-1 as scratch space in the loop below); the
+     * first w of those give the possible digits in the intersection
+     * of the current clue box with each column of the puzzle, and the
+     * next w do the same for each row. In this mode, each iscratch
+     * entry starts off as a _full_ bitmap, and in this function we
+     * _clear_ bits for digits that are absent from a given row or
+     * column in each candidate layout, so that the only bits which
+     * remain set are those for digits which have to appear in a given
+     * row/column no matter how the clue box is laid out.
+     
+	 * Easy-mode clue deductions: we do not record information
+	 * about which squares take which values, so we amalgamate
+	 * all the values in dscratch and OR them all into
+	 * everywhere.
+	 
+	 * Normal-mode deductions: we process the information in
+	 * dscratch in the obvious way.
+	 
+	 * Hard-mode deductions: instead of ruling things out
+	 * _inside_ the clue box, we look for numbers which occur in
+	 * a given row or column in all candidate layouts, and rule
+	 * them out of all squares in that row or column that
+	 * _aren't_ part of this clue box.
+	 
+     * Iterate over each clue box and deduce what we can.
+     
+         * Initialise ctx->iscratch for this clue box. At different
+         * difficulty levels we must initialise a different amount of
+         * it to different things; see the comments in
+         * solver_clue_candidate explaining what each version does.
+         
+	     * These two clue types must always apply to a box of
+	     * area 2. Also, the two digits in these boxes can never
+	     * be the same (because any domino must have its two
+	     * squares in either the same row or the same column).
+	     * So we simply iterate over all possibilities for the
+	     * two squares (both ways round), rule out any which are
+	     * inconsistent with the digit constraints we already
+	     * have, and update the digit constraints with any new
+	     * information thus garnered.
+	      (i,j) is a valid digit pair. Try it both ways round. 
+	     * For these clue types, I have no alternative but to go
+	     * through all possible number combinations.
+	     *
+	     * Instead of a tedious physical recursion, I iterate in
+	     * the scratch array through all possibilities. At any
+	     * given moment, i indexes the element of the box that
+	     * will next be incremented.
+	      start with the identity 
+		     * Find the next valid value for cell i.
+		      this one won't fit  this one is ruled out already  clashes with another row/col  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on. 
+         * Do deductions based on the information we've now
+         * accumulated in ctx->iscratch. See the comments above in
+         * solver_clue_candidate explaining what data is left in here,
+         * and how it differs between DIFF_HARD and lower difficulty
+         * levels (hence the big if statement here).
+          placate optimiser  placate optimiser  placate optimiser 
+	     * Once we find one block we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is. (We have to do this
+	     * for the Hard deductions but not the Easy/Normal ones,
+	     * because only the Hard deductions are cross-box.)
+	     
+     * Omit the EASY deductions when solving at NORMAL level, since
+     * the NORMAL deductions are a superset of them anyway and it
+     * saves on time and confusing solver diagnostics.
+     *
+     * Note that this breaks the natural semantics of the return
+     * value of latin_solver. Without this hack, you could determine
+     * a puzzle's difficulty in one go by trying to solve it at
+     * maximum difficulty and seeing what difficulty value was
+     * returned; but with this hack, solving an Easy puzzle on
+     * Normal difficulty will typically return Normal. Hence the
+     * uses of the solver to determine difficulty are all arranged
+     * so as to double-check by re-solving at the next difficulty
+     * level down and making sure it failed.
+     
+     * Iterate over each clue box and check it's satisfied.
+     
+     * Transform the dsf-formatted clue list into one over which we
+     * can iterate more easily.
+     *
+     * Also transpose the x- and y-coordinates at this point,
+     * because the 'cube' array in the general Latin square solver
+     * puts x first (oops).
+      transpose  ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Encode the block structure. We do this by encoding the
+     * pattern of dividing lines: first we iterate over the w*(w-1)
+     * internal vertical grid lines in ordinary reading order, then
+     * over the w*(w-1) internal horizontal ones in transposed
+     * reading order.
+     *
+     * We encode the number of non-lines between the lines; _ means
+     * zero (two adjacent divisions), a means 1, ..., y means 25,
+     * and z means 25 non-lines _and no following line_ (so that za
+     * means 26, zb 27 etc).
+      terminating virtual edge 
+     * Now go through and compress the string by replacing runs of
+     * the same letter with a single copy of that letter followed by
+     * a repeat count, where that makes it shorter. (This puzzle
+     * seems to generate enough long strings of _ to make this a
+     * worthwhile step.)
+      'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+     
+     * Difficulty exceptions: 3x3 puzzles at difficulty Hard or
+     * higher are currently not generable - the generator will spin
+     * forever looking for puzzles of the appropriate difficulty. We
+     * dial each of these down to the next lower difficulty.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e n h x u; do
+  for i in {3..9}; do
+    echo ./keen --generate 1 ${i}d${d}
+    perl -e 'alarm 30; exec @ARGV' ./keen --generate 5 ${i}d${d} >/dev/null \
+      || echo broken
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * First construct a latin square to be the solution.
+	 
+	 * Divide the grid into arbitrarily sized blocks, but so as
+	 * to arrange plenty of dominoes which can be SUB/DIV clues.
+	 * We do this by first placing dominoes at random for a
+	 * while, then tying the remaining singletons one by one
+	 * into neighbouring blocks.
+	  Place dominoes. 
+		 * When we find a potential domino, we place it with
+		 * probability 3/4, which seems to strike a decent
+		 * balance between plenty of dominoes and leaving
+		 * enough singletons to make interesting larger
+		 * shapes.
+		  Fold in singletons.  Quit and start again if we have any singletons left over
+         * which we weren't able to do anything at all with. 
+	 * Decide what would be acceptable clues for each block.
+	 *
+	 * Blocks larger than 2 have free choice of ADD or MUL;
+	 * blocks of size 2 can be anything in principle (except
+	 * that they can only be DIV if the two numbers have an
+	 * integer quotient, of course), but we rule out (or try to
+	 * avoid) some clues because they're of low quality.
+	 *
+	 * Hence, we iterate once over the grid, stopping at the
+	 * canonical element of every >2 block and the _non_-
+	 * canonical element of every 2-block; the latter means that
+	 * we can make our decision about a 2-block in the knowledge
+	 * of both numbers in it.
+	 *
+	 * We reuse the 'singletons' array (finished with in the
+	 * above loop) to hold information about which blocks are
+	 * suitable for what.
+	  Fetch the two numbers and sort them into order. 
+		 * Addition clues are always allowed, but we try to
+		 * avoid sums of 3, 4, (2w-1) and (2w-2) if we can,
+		 * because they're too easy - they only leave one
+		 * option for the pair of numbers involved.
+		 
+		 * Multiplication clues: above Normal difficulty, we
+		 * prefer (but don't absolutely insist on) clues of
+		 * this type which leave multiple options open.
+		 
+		 * Subtraction: we completely avoid a difference of
+		 * w-1.
+		 
+		 * Division: for a start, the quotient must be an
+		 * integer or the clue type is impossible. Also, we
+		 * never use quotients strictly greater than w/2,
+		 * because they're not only too easy but also
+		 * inelegant.
+		 
+	 * Actually choose a clue for each block, trying to keep the
+	 * numbers of each type even, and starting with the
+	 * preferred candidates for each type where possible.
+	 *
+	 * I'm sure there should be a faster algorithm for doing
+	 * this, but I can't be bothered: O(N^2) is good enough when
+	 * N is at most the number of dominoes that fits into a 9x9
+	 * square.
+	  case 3  didn't find a nice one, use a nasty one 
+	 * Having chosen the clue types, calculate the clue values.
+	  one is 0 :-) 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * I wondered if at this point it would be worth trying to
+	 * merge adjacent blocks together, to make the puzzle
+	 * gradually more difficult if it's currently easier than
+	 * specced, increasing the chance of a given generation run
+	 * being successful.
+	 *
+	 * It doesn't seem to be critical for the generation speed,
+	 * though, so for the moment I'm leaving it out.
+	 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the block structure makes sense.
+     
+     * Verify that the right number of clues are given, and that SUB
+     * and DIV clues don't apply to blocks of the wrong size.
+      these clues need no validation  structure copy  structure copy 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow is true.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When true, pressing a valid number or letter
+     * key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+     
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  , a = w*w  background needs erasing  pencil-mode highlight 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      Draw the box clue. 
+	 * Special case of clue-drawing: a box with only one square
+	 * is written as just the number, with no operation, because
+	 * it doesn't matter whether the operation is ADD or MUL.
+	 * The generation code above should never produce puzzles
+	 * containing such a thing - I think they're inelegant - but
+	 * it's possible to type in game IDs from elsewhere, so I
+	 * want to display them right if so.
+	  cluetype == C_DIV ?  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the clue text.
+		  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with some
+	     * clue text.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+	 * Big containing rectangle.
+	  completion flash 
+     * We use 9mm squares by default, like Solo.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ 
+     * Iterate over all the blocks.
+     
+	 * For each block, we need a starting square within it which
+	 * has a boundary at the left. Conveniently, we have one
+	 * right here, by construction.
+	 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Clues.
+     
+		 * As in the drawing code, we omit the operator for
+		 * blocks of area 1.
+		  cluetype == C_DIV ? 
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+		 * We don't have a game_text_format for this game,
+		 * so we have to output the solution manually.
+		  vim: set shiftwidth=4 tabstop=8: 
+ * keen.c: an implementation of the Times's 'KenKen' puzzle, and
+ * also of Nikoli's very similar 'Inshi No Heya' puzzle.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Clue notation. Important here that ADD and MUL come before SUB
+ * and DIV, and that DIV comes last. 
+ 
+ * Maximum size of any clue block. Very large ones are annoying in UI
+ * terms (if they're multiplicative you end up with too many digits to
+ * fit in the square) and also in solver terms (too many possibilities
+ * to iterate over).
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * This function is called from the main clue-based solver
+     * routine when we discover a candidate layout for a given clue
+     * box consistent with everything we currently know about the
+     * digit constraints in that box. We expect to find the digits
+     * of the candidate layout in ctx->dscratch, and we update
+     * ctx->iscratch as appropriate.
+     *
+     * The contents of ctx->iscratch are completely different
+     * depending on whether diff == DIFF_HARD or not. This function
+     * uses iscratch completely differently between the two cases, and
+     * the code in solver_common() which consumes the result must
+     * likewise have an if statement with completely different
+     * branches for the two cases.
+     *
+     * In DIFF_EASY and DIFF_NORMAL modes, the valid entries in
+     * ctx->iscratch are 0,...,n-1, and each of those entries
+     * ctx->iscratch[i] gives a bitmap of the possible digits in the
+     * ith square of the clue box currently under consideration. So
+     * each entry of iscratch starts off as an empty bitmap, and we
+     * set bits in it as possible layouts for the clue box are
+     * considered (and the difference between DIFF_EASY and
+     * DIFF_NORMAL is just that in DIFF_EASY mode we deliberately set
+     * more bits than absolutely necessary, hence restricting our own
+     * knowledge).
+     *
+     * But in DIFF_HARD mode, the valid entries are 0,...,2*w-1 (at
+     * least outside *this* function - inside this function, we also
+     * use 2*w,...,4*w-1 as scratch space in the loop below); the
+     * first w of those give the possible digits in the intersection
+     * of the current clue box with each column of the puzzle, and the
+     * next w do the same for each row. In this mode, each iscratch
+     * entry starts off as a _full_ bitmap, and in this function we
+     * _clear_ bits for digits that are absent from a given row or
+     * column in each candidate layout, so that the only bits which
+     * remain set are those for digits which have to appear in a given
+     * row/column no matter how the clue box is laid out.
+     
+	 * Easy-mode clue deductions: we do not record information
+	 * about which squares take which values, so we amalgamate
+	 * all the values in dscratch and OR them all into
+	 * everywhere.
+	 
+	 * Normal-mode deductions: we process the information in
+	 * dscratch in the obvious way.
+	 
+	 * Hard-mode deductions: instead of ruling things out
+	 * _inside_ the clue box, we look for numbers which occur in
+	 * a given row or column in all candidate layouts, and rule
+	 * them out of all squares in that row or column that
+	 * _aren't_ part of this clue box.
+	 
+     * Iterate over each clue box and deduce what we can.
+     
+         * Initialise ctx->iscratch for this clue box. At different
+         * difficulty levels we must initialise a different amount of
+         * it to different things; see the comments in
+         * solver_clue_candidate explaining what each version does.
+         
+	     * These two clue types must always apply to a box of
+	     * area 2. Also, the two digits in these boxes can never
+	     * be the same (because any domino must have its two
+	     * squares in either the same row or the same column).
+	     * So we simply iterate over all possibilities for the
+	     * two squares (both ways round), rule out any which are
+	     * inconsistent with the digit constraints we already
+	     * have, and update the digit constraints with any new
+	     * information thus garnered.
+	      (i,j) is a valid digit pair. Try it both ways round. 
+	     * For these clue types, I have no alternative but to go
+	     * through all possible number combinations.
+	     *
+	     * Instead of a tedious physical recursion, I iterate in
+	     * the scratch array through all possibilities. At any
+	     * given moment, i indexes the element of the box that
+	     * will next be incremented.
+	      start with the identity 
+		     * Find the next valid value for cell i.
+		      this one won't fit  this one is ruled out already  clashes with another row/col  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on. 
+         * Do deductions based on the information we've now
+         * accumulated in ctx->iscratch. See the comments above in
+         * solver_clue_candidate explaining what data is left in here,
+         * and how it differs between DIFF_HARD and lower difficulty
+         * levels (hence the big if statement here).
+          placate optimiser  placate optimiser  placate optimiser 
+	     * Once we find one block we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is. (We have to do this
+	     * for the Hard deductions but not the Easy/Normal ones,
+	     * because only the Hard deductions are cross-box.)
+	     
+     * Omit the EASY deductions when solving at NORMAL level, since
+     * the NORMAL deductions are a superset of them anyway and it
+     * saves on time and confusing solver diagnostics.
+     *
+     * Note that this breaks the natural semantics of the return
+     * value of latin_solver. Without this hack, you could determine
+     * a puzzle's difficulty in one go by trying to solve it at
+     * maximum difficulty and seeing what difficulty value was
+     * returned; but with this hack, solving an Easy puzzle on
+     * Normal difficulty will typically return Normal. Hence the
+     * uses of the solver to determine difficulty are all arranged
+     * so as to double-check by re-solving at the next difficulty
+     * level down and making sure it failed.
+     
+     * Iterate over each clue box and check it's satisfied.
+     
+     * Transform the dsf-formatted clue list into one over which we
+     * can iterate more easily.
+     *
+     * Also transpose the x- and y-coordinates at this point,
+     * because the 'cube' array in the general Latin square solver
+     * puts x first (oops).
+      transpose  ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Encode the block structure. We do this by encoding the
+     * pattern of dividing lines: first we iterate over the w*(w-1)
+     * internal vertical grid lines in ordinary reading order, then
+     * over the w*(w-1) internal horizontal ones in transposed
+     * reading order.
+     *
+     * We encode the number of non-lines between the lines; _ means
+     * zero (two adjacent divisions), a means 1, ..., y means 25,
+     * and z means 25 non-lines _and no following line_ (so that za
+     * means 26, zb 27 etc).
+      terminating virtual edge 
+     * Now go through and compress the string by replacing runs of
+     * the same letter with a single copy of that letter followed by
+     * a repeat count, where that makes it shorter. (This puzzle
+     * seems to generate enough long strings of _ to make this a
+     * worthwhile step.)
+      'z' is a special case 
+	     * Non-edge; merge the two dsf classes on either
+	     * side of it.
+	     
+     * When desc is exhausted, we expect to have gone exactly
+     * one space _past_ the end of the grid, due to the dummy
+     * edge at the end.
+     
+     * Difficulty exceptions: 3x3 puzzles at difficulty Hard or
+     * higher are currently not generable - the generator will spin
+     * forever looking for puzzles of the appropriate difficulty. We
+     * dial each of these down to the next lower difficulty.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e n h x u; do
+  for i in {3..9}; do
+    echo ./keen --generate 1 ${i}d${d}
+    perl -e 'alarm 30; exec @ARGV' ./keen --generate 5 ${i}d${d} >/dev/null \
+      || echo broken
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * First construct a latin square to be the solution.
+	 
+	 * Divide the grid into arbitrarily sized blocks, but so as
+	 * to arrange plenty of dominoes which can be SUB/DIV clues.
+	 * We do this by first placing dominoes at random for a
+	 * while, then tying the remaining singletons one by one
+	 * into neighbouring blocks.
+	  Place dominoes. 
+		 * When we find a potential domino, we place it with
+		 * probability 3/4, which seems to strike a decent
+		 * balance between plenty of dominoes and leaving
+		 * enough singletons to make interesting larger
+		 * shapes.
+		  Fold in singletons.  Quit and start again if we have any singletons left over
+         * which we weren't able to do anything at all with. 
+	 * Decide what would be acceptable clues for each block.
+	 *
+	 * Blocks larger than 2 have free choice of ADD or MUL;
+	 * blocks of size 2 can be anything in principle (except
+	 * that they can only be DIV if the two numbers have an
+	 * integer quotient, of course), but we rule out (or try to
+	 * avoid) some clues because they're of low quality.
+	 *
+	 * Hence, we iterate once over the grid, stopping at the
+	 * canonical element of every >2 block and the _non_-
+	 * canonical element of every 2-block; the latter means that
+	 * we can make our decision about a 2-block in the knowledge
+	 * of both numbers in it.
+	 *
+	 * We reuse the 'singletons' array (finished with in the
+	 * above loop) to hold information about which blocks are
+	 * suitable for what.
+	  Fetch the two numbers and sort them into order. 
+		 * Addition clues are always allowed, but we try to
+		 * avoid sums of 3, 4, (2w-1) and (2w-2) if we can,
+		 * because they're too easy - they only leave one
+		 * option for the pair of numbers involved.
+		 
+		 * Multiplication clues: above Normal difficulty, we
+		 * prefer (but don't absolutely insist on) clues of
+		 * this type which leave multiple options open.
+		 
+		 * Subtraction: we completely avoid a difference of
+		 * w-1.
+		 
+		 * Division: for a start, the quotient must be an
+		 * integer or the clue type is impossible. Also, we
+		 * never use quotients strictly greater than w/2,
+		 * because they're not only too easy but also
+		 * inelegant.
+		 
+	 * Actually choose a clue for each block, trying to keep the
+	 * numbers of each type even, and starting with the
+	 * preferred candidates for each type where possible.
+	 *
+	 * I'm sure there should be a faster algorithm for doing
+	 * this, but I can't be bothered: O(N^2) is good enough when
+	 * N is at most the number of dominoes that fits into a 9x9
+	 * square.
+	  case 3  didn't find a nice one, use a nasty one 
+	 * Having chosen the clue types, calculate the clue values.
+	  one is 0 :-) 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * I wondered if at this point it would be worth trying to
+	 * merge adjacent blocks together, to make the puzzle
+	 * gradually more difficult if it's currently easier than
+	 * specced, increasing the chance of a given generation run
+	 * being successful.
+	 *
+	 * It doesn't seem to be critical for the generation speed,
+	 * though, so for the moment I'm leaving it out.
+	 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the block structure makes sense.
+     
+     * Verify that the right number of clues are given, and that SUB
+     * and DIV clues don't apply to blocks of the wrong size.
+      these clues need no validation  structure copy  structure copy 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow is true.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When true, pressing a valid number or letter
+     * key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+     
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  , a = w*w  background needs erasing  pencil-mode highlight 
+     * Draw the corners of thick lines in corner-adjacent squares,
+     * which jut into this square by one pixel.
+      Draw the box clue. 
+	 * Special case of clue-drawing: a box with only one square
+	 * is written as just the number, with no operation, because
+	 * it doesn't matter whether the operation is ADD or MUL.
+	 * The generation code above should never produce puzzles
+	 * containing such a thing - I think they're inelegant - but
+	 * it's possible to type in game IDs from elsewhere, so I
+	 * want to display them right if so.
+	  cluetype == C_DIV ?  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square 
+		 * Make space for the clue text.
+		  minph--; 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * And move it down a bit if it's collided with some
+	     * clue text.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+	 * Big containing rectangle.
+	  completion flash 
+     * We use 9mm squares by default, like Solo.
+     
+ * Subfunction to draw the thick lines between cells. In order to do
+ * this using the line-drawing rather than rectangle-drawing API (so
+ * as to get line thicknesses to scale correctly) and yet have
+ * correctly mitred joins between lines, we must do this by tracing
+ * the boundary of each sub-block and drawing it in one go as a
+ * single polygon.
+ 
+     * Iterate over all the blocks.
+     
+	 * For each block, we need a starting square within it which
+	 * has a boundary at the left. Conveniently, we have one
+	 * right here, by construction.
+	 
+	 * Now begin tracing round the perimeter. At all
+	 * times, (x,y) describes some square within the
+	 * block, and (x+dx,y+dy) is some adjacent square
+	 * outside it; so the edge between those two squares
+	 * is always an edge of the block.
+	  save starting position 
+	     * Advance to the next edge, by looking at the two
+	     * squares beyond it. If they're both outside the block,
+	     * we turn right (by leaving x,y the same and rotating
+	     * dx,dy clockwise); if they're both inside, we turn
+	     * left (by rotating dx,dy anticlockwise and contriving
+	     * to leave x+dx,y+dy unchanged); if one of each, we go
+	     * straight on (and may enforce by assertion that
+	     * they're one of each the _right_ way round).
+	     
+		 * Turn right.
+		 
+		 * Turn left.
+		 
+		 * Go straight on.
+		 
+	     * Now enforce by assertion that we ended up
+	     * somewhere sensible.
+	     
+	     * Record the point we just went past at one end of the
+	     * edge. To do this, we translate (x,y) down and right
+	     * by half a unit (so they're describing a point in the
+	     * _centre_ of the square) and then translate back again
+	     * in a manner rotated by dy and dx.
+	     
+	 * That's our polygon; now draw it.
+	  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Thick lines between cells.
+     
+     * Clues.
+     
+		 * As in the drawing code, we omit the operator for
+		 * blocks of area 1.
+		  cluetype == C_DIV ? 
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+		 * We don't have a game_text_format for this game,
+		 * so we have to output the solution manually.
+		  vim: set shiftwidth=4 tabstop=8: 

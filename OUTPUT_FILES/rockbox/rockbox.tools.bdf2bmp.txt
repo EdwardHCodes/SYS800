@@ -1,0 +1,217 @@
+
+ * bdf2bmp  --  output all glyphs in a bdf-font to a bmp-image-file
+ * version: 0.6
+ * date:    Wed Jan 10 23:59:03 2001
+ * author:  ITOU Hiroki (itouh@lycos.ne.jp)
+ 
+ * Copyright (c) 2000,2001 ITOU Hiroki
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+  modify if you want; color of spacing  modify if you want; out-of-dwidth over baseline  modify if you want; out-of-dwidth under baseline  printf(), fopen(), fwrite()  malloc(), EXIT_SUCCESS, strtol(), exit()  strcmp(), strcpy()  strtol()  stat()  stat ?  isdigit()  int types  number of max characters in bdf-font-file; number is without reason  number of max characters in filenames;  number is without reason  number is without reason; only needs the difference to OFF  number is without reason; only needs the difference to ON  max number of parameters  not DEBUG  DEBUG  not VERBOSE  VERBOSE  macro  width (pixel)  height  offset y (pixel)  offset y  global var  global boundingbox  total number of glyphs in a bdf file  device width; only used for proportional-fonts  0 = MSB, 1 = LSB  func prototype 
+ * Is your-CPU-byte-order MSB or LSB?
+ * MSB .. Most Significant Byte first (BigEndian)  e.g. PowerPC, SPARC
+ * LSB .. Least Significant Byte first (LittleEndian) e.g. Intel Pentium
+ 
+ * write to disk; with arranging LSBfirst(LittleEndian) byte order,
+ *                 because BMP-file is defined as LSB-first
+  LSB; write without arranging  MSB; write with arranging 
+ * 3. read bitmapAREA(onMemory) and write bmpFile with adding spacing
+ *    BMP-file: noCompression(BI_RGB), 8bitColor, Windows-Win32 type
+  bmp-image width (pixel)  bmp-image height (pixel)  number of padding pixels  bmp filesize (byte)   bmp-lines needs to be long alined and padded with 0  number of row glyphs  bmp-image width  bmp-image height 
+         * BITMAPFILEHEADER struct
+          4d = 'M', 42 = 'B'  reserved as 0  reserved as 0  bfOffBits: offset to image-data array 
+         * BITMAPINFOHEADER struct
+          when Windows-BMP, this is 40  biWidth  biHeight: down-top  biPlanes: must be 1  biBitCount: 8bitColor  biCompression: noCompression(BI_RGB)  biSizeImage: when noComprsn, 0 is ok  biXPelsPerMeter: resolution x; 0 ok  biYPelsPerMeter: res y; 0 is ok  biClrUsed: optimized color palette; not used  biClrImportant: 0 is ok 
+         * RGBQUAD[256]: color palette
+            palette[0]: background of glyphs  rgbBlue: B  rgbGreen: G  rgbRed: R  rgbReserved: must be 0    palette[1]: foreground of glyphs  palette[1]: #000000    palette[2]: spacing  B  G  R  must be 0    palette[3]: out of dwidth over baseline  B  G  R  must be 0    palette[4]: out of dwidth; under baseline  B  G  R  must be 0    palette[5] to palette[255]: not used  palette[5to255]: #000000 
+         * IMAGE DATA array
+          padding: long(4bytes) aligned  must pad with 0  spacing  fill palette[2]  read bitmapAREA & write bmpFile  spacing over the last glyph  fill palette[2] 
+ * 2. transfer bdf-font-file to bitmapAREA(onMemory) one glyph by one
+  decimal number translated from hexNumber  a line length(without newline code)  binary strings translated from decimal number  number of glyphs handlled until now  bitA width, height  glyph offset 
+         * 2.1) change hexadecimal strings to a bitmap of glyph( called bitA)
+          if there is BITMAP\nENDCHAR in a given bdf-file  address of bitA  get one character from hexadecimal strings  change hexa strings to bin strings 
+         * 2.2)make another bitmap area(called bitB)
+         *      bitB is sized to FONTBOUNDINGBOX
+          address of bitB  all in boundingbox: palette[0]  show the baselines and widths of glyphs  over baseline: palette[3]  under baseline: palette[4]  in dwidth: palette[0] 
+         * 2.3) copy bitA inside BBX (smaller) to bitB (bigger)
+         *       with offset-shifting;
+         *      a scope beyond bitA is already filled with palette[0or3]
+          offright = font.w - glyph.w - offleft;  do nothing  do nothing 
+         * 2.4) copy bitB to bitmapAREA
+         
+ * read oneline from textfile
+  fgets returns strings included '\n' 
+ * 1. read BDF-file and transfer to assignBitmap()
+  one line(strings) from bdf-font-file  only used in debugging: counter of appeared glyphs  an indivisual glyph width, height,offset x,y  this line is bitmap-data?(ON) or no?(OFF)  top address of a token from strings  bitmap-data(hexadecimal strings)  address of writing next in glyphP  dwidth  the given bdf-file is valid or not  given input-file is not a bdf-file  escape from while-loop  remove carriage-return(CR)  classify from the top character of sP  top of the bdf-file  given input-file is not a bdf-file   16 means no comparing '\0'  get font.w, font.h, font.offx, and font.offy  tokP addresses next space of FONTBOUNDINGBOX  tokP addresses top character of width in FONTBOUNDINGBOX  set NUL on space after width  height in FONTBOUNDINGBOX  get chars  allocate bitmapAREA  get dw  allocate glyphP  allocate more room  zero clear  get glyph.offx, glyph.offy, glyph.w, and glyph.h  space after 'BBX'  top of width  set NUL on space after width  height  offx  offy  d_printf("glyph width=%dpixels ",glyph.w);  d_printf("height=%dpixels\n",glyph.h);  d_printf("glyph offset x=%dpixels ",glyph.offx);  d_printf("y=%dpixels\n",glyph.offy);  switch  while  'break' goto here 
+ *
+ 
+ *
+  address of bitmapAREA  breadth of spacing (default 2)  number of columns(horizontal) (default 32)  parameter strings 
+         * deal with arguments
+          printf("error: not enough arguments\n");  formatting arguments  command-line options  not [0-9]  not command-line options  interpretting arguments  colchar is limited from 1 to 1024  spacing is limited from 0 to 32  checkEndian 
+         * prepare to read&write files
+          Does writeFilename already exist?  go next  printf("not overwrite\n");  read bdf-font-file  write bmp-image-file 
+ * bdf2bmp  --  output all glyphs in a bdf-font to a bmp-image-file
+ * version: 0.6
+ * date:    Wed Jan 10 23:59:03 2001
+ * author:  ITOU Hiroki (itouh@lycos.ne.jp)
+ 
+ * Copyright (c) 2000,2001 ITOU Hiroki
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+  modify if you want; color of spacing  modify if you want; out-of-dwidth over baseline  modify if you want; out-of-dwidth under baseline  printf(), fopen(), fwrite()  malloc(), EXIT_SUCCESS, strtol(), exit()  strcmp(), strcpy()  strtol()  stat()  stat ?  isdigit()  int types  number of max characters in bdf-font-file; number is without reason  number of max characters in filenames;  number is without reason  number is without reason; only needs the difference to OFF  number is without reason; only needs the difference to ON  max number of parameters  not DEBUG  DEBUG  not VERBOSE  VERBOSE  macro  width (pixel)  height  offset y (pixel)  offset y  global var  global boundingbox  total number of glyphs in a bdf file  device width; only used for proportional-fonts  0 = MSB, 1 = LSB  func prototype 
+ * Is your-CPU-byte-order MSB or LSB?
+ * MSB .. Most Significant Byte first (BigEndian)  e.g. PowerPC, SPARC
+ * LSB .. Least Significant Byte first (LittleEndian) e.g. Intel Pentium
+ 
+ * write to disk; with arranging LSBfirst(LittleEndian) byte order,
+ *                 because BMP-file is defined as LSB-first
+  LSB; write without arranging  MSB; write with arranging 
+ * 3. read bitmapAREA(onMemory) and write bmpFile with adding spacing
+ *    BMP-file: noCompression(BI_RGB), 8bitColor, Windows-Win32 type
+  bmp-image width (pixel)  bmp-image height (pixel)  number of padding pixels  bmp filesize (byte)   bmp-lines needs to be long alined and padded with 0  number of row glyphs  bmp-image width  bmp-image height 
+         * BITMAPFILEHEADER struct
+          4d = 'M', 42 = 'B'  reserved as 0  reserved as 0  bfOffBits: offset to image-data array 
+         * BITMAPINFOHEADER struct
+          when Windows-BMP, this is 40  biWidth  biHeight: down-top  biPlanes: must be 1  biBitCount: 8bitColor  biCompression: noCompression(BI_RGB)  biSizeImage: when noComprsn, 0 is ok  biXPelsPerMeter: resolution x; 0 ok  biYPelsPerMeter: res y; 0 is ok  biClrUsed: optimized color palette; not used  biClrImportant: 0 is ok 
+         * RGBQUAD[256]: color palette
+            palette[0]: background of glyphs  rgbBlue: B  rgbGreen: G  rgbRed: R  rgbReserved: must be 0    palette[1]: foreground of glyphs  palette[1]: #000000    palette[2]: spacing  B  G  R  must be 0    palette[3]: out of dwidth over baseline  B  G  R  must be 0    palette[4]: out of dwidth; under baseline  B  G  R  must be 0    palette[5] to palette[255]: not used  palette[5to255]: #000000 
+         * IMAGE DATA array
+          padding: long(4bytes) aligned  must pad with 0  spacing  fill palette[2]  read bitmapAREA & write bmpFile  spacing over the last glyph  fill palette[2] 
+ * 2. transfer bdf-font-file to bitmapAREA(onMemory) one glyph by one
+  decimal number translated from hexNumber  a line length(without newline code)  binary strings translated from decimal number  number of glyphs handlled until now  bitA width, height  glyph offset 
+         * 2.1) change hexadecimal strings to a bitmap of glyph( called bitA)
+          if there is BITMAP\nENDCHAR in a given bdf-file  address of bitA  get one character from hexadecimal strings  change hexa strings to bin strings 
+         * 2.2)make another bitmap area(called bitB)
+         *      bitB is sized to FONTBOUNDINGBOX
+          address of bitB  all in boundingbox: palette[0]  show the baselines and widths of glyphs  over baseline: palette[3]  under baseline: palette[4]  in dwidth: palette[0] 
+         * 2.3) copy bitA inside BBX (smaller) to bitB (bigger)
+         *       with offset-shifting;
+         *      a scope beyond bitA is already filled with palette[0or3]
+          offright = font.w - glyph.w - offleft;  do nothing  do nothing 
+         * 2.4) copy bitB to bitmapAREA
+         
+ * read oneline from textfile
+  fgets returns strings included '\n' 
+ * 1. read BDF-file and transfer to assignBitmap()
+  one line(strings) from bdf-font-file  only used in debugging: counter of appeared glyphs  an indivisual glyph width, height,offset x,y  this line is bitmap-data?(ON) or no?(OFF)  top address of a token from strings  bitmap-data(hexadecimal strings)  address of writing next in glyphP  dwidth  the given bdf-file is valid or not  given input-file is not a bdf-file  escape from while-loop  remove carriage-return(CR)  classify from the top character of sP  top of the bdf-file  given input-file is not a bdf-file   16 means no comparing '\0'  get font.w, font.h, font.offx, and font.offy  tokP addresses next space of FONTBOUNDINGBOX  tokP addresses top character of width in FONTBOUNDINGBOX  set NUL on space after width  height in FONTBOUNDINGBOX  get chars  allocate bitmapAREA  get dw  allocate glyphP  allocate more room  zero clear  get glyph.offx, glyph.offy, glyph.w, and glyph.h  space after 'BBX'  top of width  set NUL on space after width  height  offx  offy  d_printf("glyph width=%dpixels ",glyph.w);  d_printf("height=%dpixels\n",glyph.h);  d_printf("glyph offset x=%dpixels ",glyph.offx);  d_printf("y=%dpixels\n",glyph.offy);  switch  while  'break' goto here 
+ *
+ 
+ *
+  address of bitmapAREA  breadth of spacing (default 2)  number of columns(horizontal) (default 32)  parameter strings 
+         * deal with arguments
+          printf("error: not enough arguments\n");  formatting arguments  command-line options  not [0-9]  not command-line options  interpretting arguments  colchar is limited from 1 to 1024  spacing is limited from 0 to 32  checkEndian 
+         * prepare to read&write files
+          Does writeFilename already exist?  go next  printf("not overwrite\n");  read bdf-font-file  write bmp-image-file 
+ * bdf2bmp  --  output all glyphs in a bdf-font to a bmp-image-file
+ * version: 0.6
+ * date:    Wed Jan 10 23:59:03 2001
+ * author:  ITOU Hiroki (itouh@lycos.ne.jp)
+ 
+ * Copyright (c) 2000,2001 ITOU Hiroki
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+  modify if you want; color of spacing  modify if you want; out-of-dwidth over baseline  modify if you want; out-of-dwidth under baseline  printf(), fopen(), fwrite()  malloc(), EXIT_SUCCESS, strtol(), exit()  strcmp(), strcpy()  strtol()  stat()  stat ?  isdigit()  int types  number of max characters in bdf-font-file; number is without reason  number of max characters in filenames;  number is without reason  number is without reason; only needs the difference to OFF  number is without reason; only needs the difference to ON  max number of parameters  not DEBUG  DEBUG  not VERBOSE  VERBOSE  macro  width (pixel)  height  offset y (pixel)  offset y  global var  global boundingbox  total number of glyphs in a bdf file  device width; only used for proportional-fonts  0 = MSB, 1 = LSB  func prototype 
+ * Is your-CPU-byte-order MSB or LSB?
+ * MSB .. Most Significant Byte first (BigEndian)  e.g. PowerPC, SPARC
+ * LSB .. Least Significant Byte first (LittleEndian) e.g. Intel Pentium
+ 
+ * write to disk; with arranging LSBfirst(LittleEndian) byte order,
+ *                 because BMP-file is defined as LSB-first
+  LSB; write without arranging  MSB; write with arranging 
+ * 3. read bitmapAREA(onMemory) and write bmpFile with adding spacing
+ *    BMP-file: noCompression(BI_RGB), 8bitColor, Windows-Win32 type
+  bmp-image width (pixel)  bmp-image height (pixel)  number of padding pixels  bmp filesize (byte)   bmp-lines needs to be long alined and padded with 0  number of row glyphs  bmp-image width  bmp-image height 
+         * BITMAPFILEHEADER struct
+          4d = 'M', 42 = 'B'  reserved as 0  reserved as 0  bfOffBits: offset to image-data array 
+         * BITMAPINFOHEADER struct
+          when Windows-BMP, this is 40  biWidth  biHeight: down-top  biPlanes: must be 1  biBitCount: 8bitColor  biCompression: noCompression(BI_RGB)  biSizeImage: when noComprsn, 0 is ok  biXPelsPerMeter: resolution x; 0 ok  biYPelsPerMeter: res y; 0 is ok  biClrUsed: optimized color palette; not used  biClrImportant: 0 is ok 
+         * RGBQUAD[256]: color palette
+            palette[0]: background of glyphs  rgbBlue: B  rgbGreen: G  rgbRed: R  rgbReserved: must be 0    palette[1]: foreground of glyphs  palette[1]: #000000    palette[2]: spacing  B  G  R  must be 0    palette[3]: out of dwidth over baseline  B  G  R  must be 0    palette[4]: out of dwidth; under baseline  B  G  R  must be 0    palette[5] to palette[255]: not used  palette[5to255]: #000000 
+         * IMAGE DATA array
+          padding: long(4bytes) aligned  must pad with 0  spacing  fill palette[2]  read bitmapAREA & write bmpFile  spacing over the last glyph  fill palette[2] 
+ * 2. transfer bdf-font-file to bitmapAREA(onMemory) one glyph by one
+  decimal number translated from hexNumber  a line length(without newline code)  binary strings translated from decimal number  number of glyphs handlled until now  bitA width, height  glyph offset 
+         * 2.1) change hexadecimal strings to a bitmap of glyph( called bitA)
+          if there is BITMAP\nENDCHAR in a given bdf-file  address of bitA  get one character from hexadecimal strings  change hexa strings to bin strings 
+         * 2.2)make another bitmap area(called bitB)
+         *      bitB is sized to FONTBOUNDINGBOX
+          address of bitB  all in boundingbox: palette[0]  show the baselines and widths of glyphs  over baseline: palette[3]  under baseline: palette[4]  in dwidth: palette[0] 
+         * 2.3) copy bitA inside BBX (smaller) to bitB (bigger)
+         *       with offset-shifting;
+         *      a scope beyond bitA is already filled with palette[0or3]
+          offright = font.w - glyph.w - offleft;  do nothing  do nothing 
+         * 2.4) copy bitB to bitmapAREA
+         
+ * read oneline from textfile
+  fgets returns strings included '\n' 
+ * 1. read BDF-file and transfer to assignBitmap()
+  one line(strings) from bdf-font-file  only used in debugging: counter of appeared glyphs  an indivisual glyph width, height,offset x,y  this line is bitmap-data?(ON) or no?(OFF)  top address of a token from strings  bitmap-data(hexadecimal strings)  address of writing next in glyphP  dwidth  the given bdf-file is valid or not  given input-file is not a bdf-file  escape from while-loop  remove carriage-return(CR)  classify from the top character of sP  top of the bdf-file  given input-file is not a bdf-file   16 means no comparing '\0'  get font.w, font.h, font.offx, and font.offy  tokP addresses next space of FONTBOUNDINGBOX  tokP addresses top character of width in FONTBOUNDINGBOX  set NUL on space after width  height in FONTBOUNDINGBOX  get chars  allocate bitmapAREA  get dw  allocate glyphP  allocate more room  zero clear  get glyph.offx, glyph.offy, glyph.w, and glyph.h  space after 'BBX'  top of width  set NUL on space after width  height  offx  offy  d_printf("glyph width=%dpixels ",glyph.w);  d_printf("height=%dpixels\n",glyph.h);  d_printf("glyph offset x=%dpixels ",glyph.offx);  d_printf("y=%dpixels\n",glyph.offy);  switch  while  'break' goto here 
+ *
+ 
+ *
+  address of bitmapAREA  breadth of spacing (default 2)  number of columns(horizontal) (default 32)  parameter strings 
+         * deal with arguments
+          printf("error: not enough arguments\n");  formatting arguments  command-line options  not [0-9]  not command-line options  interpretting arguments  colchar is limited from 1 to 1024  spacing is limited from 0 to 32  checkEndian 
+         * prepare to read&write files
+          Does writeFilename already exist?  go next  printf("not overwrite\n");  read bdf-font-file  write bmp-image-file 

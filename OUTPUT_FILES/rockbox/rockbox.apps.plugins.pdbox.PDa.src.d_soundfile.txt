@@ -1,0 +1,325 @@
+ Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file contains, first, a collection of soundfile access routines, a
+sort of soundfile library.  Second, the "soundfiler" object is defined which
+uses the routines to read or write soundfiles, synchronously, from garrays.
+These operations are not to be done in "real time" as they may have to wait
+for disk accesses (even the write routine.)  Finally, the realtime objects
+readsf~ and writesf~ are defined which confine disk operations to a separate
+thread so that they can be used in real time.  The readsf~ and writesf~
+objects use Posix-like threads.   ROCKBOX  ROCKBOX **************** soundfile header structures *********************** the NeXTStep sound header structure; can be big or little endian   magic number '.snd' if file is big-endian  byte offset of first sample  length of sound in bytes  format; see below  sample rate  number of channels  comment  the WAVE header.  All Wave files are little endian.  We assume
+    the "fmt" chunk comes first which is usually the case but perhaps not
+    always; same for AIFF and the "COMM" chunk.    chunk id 'RIFF'             chunk size                  wave chunk id 'WAVE'        format chunk id 'fmt '      format chunk size           format tag (WAV_INT etc)    number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  data chunk id 'data'        length of data chunk        format chunk  format tag, 1 for PCM       number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  ... and the last two items  data chunk id, e.g., 'data' or 'fmt '  length of data chunk        the AIFF header.  I'm assuming AIFC is compatible but don't really know
+    that.  data chunk id 'SSND'        length of data chunk        number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  this version is more convenient for writing them out:  chunk id 'FORM'             chunk size                  aiff chunk id 'AIFF'        format chunk id 'COMM'      format chunk size, 18       number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  probably not what sizeof() gives  header size including first chunk hdr  assume MAXPDSTRING is bigger than headers  this routine returns 1 if the high order byte comes at the lower
+address on our architecture (big-endianness.).  It's 1 for Motorola,
+0 for Intel:  byte swappers ******************* soundfile access routines ********************* This routine opens a file, looks for either a nextstep or "wave" header,
+* seeks to end of it, and fills in bytes per sample and number of channels.
+* Only 2- and 3-byte fixed-point samples and 4-byte floating point samples
+* are supported.  If "headersize" is nonzero, the
+* caller should supply the number of channels, endinanness, and bytes per
+* sample; the header is ignored.  Otherwise, the routine tries to read the
+* header and fill in the properties.
+ header detection overridden  nextstep header  wave header   This is awful.  You have to skip over chunks,
+	       except that if one happens to be a "fmt" chunk, you want to
+	       find out the format from that one.  The case where the
+	       "fmt" chunk comes after the audio isn't handled.  First we guess a number of channels, etc., in case there's
+	    	no "fmt" chunk to follow.  copy the first chunk header to beginnning of buffer.  post("chunk %c %c %c %c",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3]);  read chunks in loop until we get to the data chunk  post("new chunk %c %c %c %c at %d",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3], seekto);  AIFF.  same as WAVE; actually predates it.  Disgusting.  First we guess a number of channels, etc., in case there's
+	    	no COMM block to follow.  copy the first chunk header to beginnning of buffer.  read chunks in loop until we get to the data chunk  post("chunk %c %c %c %c seek %d",
+		    ((t_datachunk *)buf)->dc_id[0],
+		    ((t_datachunk *)buf)->dc_id[1],
+		    ((t_datachunk *)buf)->dc_id[2],
+		    ((t_datachunk *)buf)->dc_id[3], seekto);  seek past header and any sample frames to skip  copy sample format back to caller  the header wasn't recognized.  We're threadable here so let's not
+	print out the error...  zero out other outputs  soundfiler_write ...
+ 
+    usage: write [flags] filename table ...
+    flags:
+	-nframes <frames>
+	-skip <frames>
+	-bytes <bytes per sample>
+	-normalize
+	-nextstep
+	-wave
+	-big
+	-little
+     the routine which actually does the work should LATER also be called
+    from garray_write16.  Parse arguments for writing.  The "obj" argument is only for flagging
+    errors.  For streaming to a file the "normalize", "onset" and "nframes"
+    arguments shouldn't be set but the calling routine flags this.  check if format not specified and fill in  don't handle AIFF floating point samples  for WAVE force little endian; for nextstep use machine native  WAVE format  try to fix size fields in header  do it the lazy way: just set the size field to 'unknown size' ROCKBOX  ROCKBOX  ROCKBOX  ROCKBOX  ------- soundfiler - reads and writes soundfiles to/from "garrays" ----  default maximum 16 MB per channel  soundfiler_read ...
+    
+    usage: read [flags] filename table ...
+    flags:
+    	-skip <frames> ... frames to skip in file
+	-nframes <frames>
+	-onset <frames> ... onset in table to read into (NOT DONE YET)
+	-raw <headersize channels bytes endian>
+	-resize
+	-maxsize <max-size>
+     maxsize implies resize.  figure out what to resize to  for sanity's sake let's clear the save-in-patch flag here  if the resize failed, garray_resize reported the error  zero out remaining elements of vectors  zero out vectors in excess of number of channels  do all graphics updates  this is broken out from soundfiler_write below so garray_write can
+    call it too... not done yet though. ************************ readsf object ***************************** READSF uses the Posix threads package; for the moment we're Linux
+only although this should be portable to the other platforms.
+
+Each instance of readsf~ owns a "child" thread for doing the UNIX (MSW?) file
+reading.  The parent thread signals the child each time:
+    (1) a file wants opening or closing;
+    (2) we've eaten another 1/16 of the shared buffer (so that the
+    	child thread should check if it's time to read some more.)
+The child signals the parent whenever a read has completed.  Signalling
+is done by setting "conditions" and putting data in mutex-controlled common
+areas.
+ arbitrary; just don't want to hang malloc  soundfile buffer  buffer size in bytes  number of audio outlets  audio vectors  vector size for transfers  bang-on-done outlet  opened, running, or idle  sample rate of input signal if known  parameters to communicate with subthread  pending request from parent to I/O thread  file to open (string is permanently allocated)  slot for "errno" return  size of header we'll skip  bytes per sample (2 or 3)  true if file is big-endian  number of channels in soundfile  sample rate of soundfile  number of sample frames to skip  max number of data bytes to read  filedesc  buffer size appropriately rounded down  index of next byte to get from file  index of next byte the ugen will read  true if fifohead has stopped changing  counter for signalling child for more data  number of ticks per signal  writesf~ only; type of file to create  writesf~ only; items writen  writesf~ only; true if byte swapping  writesf~ only; scalar for signal inlet ************* the child thread which performs file I/O ********** debug routine  debugging version...  copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  copy back into the instance structure.  check if another request has been made; if so, field it  set fifosize from bufsize.  fifosize must be a
+		    multiple of the number of bytes eaten for each DSP
+		    tick.  We pessimistically assume MAXVECSIZE samples
+		    per tick since that could change.  There could be a
+		    problem here if the vector size increases while a
+		    soundfile is being played...   arrange for the "request" condition to be signalled 16
+		    times per buffer  in a loop, wait for the fifo to get hungry and feed it  if the head is >= the tail, we can immediately read
+		    	to the end of the fifo.  Unless, that is, we would
+			read all the way to the end of the buffer and the 
+			"tail" is zero; this would fill the buffer completely
+			which isn't allowed because you can't tell a completely
+			full buffer from an empty one.  otherwise check if there are at least READSIZE
+			bytes to read.  If not, wait and loop back.  signal parent in case it's waiting for data  fell out of read loop: close file if necessary,
+		set EOF and signal once more ******* the object proper runs in the calling (parent) thread *** if there's a partial buffer left, copy it out.  then zero out the (rest of the) output  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a variable?  open method.  Called as:
+    open filename [skipframes headersize channels bytespersamp endianness]
+    	(if headersize is zero, header is taken to be automatically
+	detected; thus, use the special "-1" to mean a truly headerless file.)
+     request QUIT and wait for acknowledge ****************************** writesf ****************** just re-use the structure ************* the child thread which performs file I/O ********** copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  check if another request has been made; if so, field it  in a loop, wait for the fifo to have data and write it
+	    	    to disk  if the head is < the tail, we can immediately write
+		    from tail to end of fifo to disk; otherwise we hold off
+		    writing until there are at least WRITESIZE bytes in the
+		    buffer  signal parent in case it's waiting for data ******* the object proper runs in the calling (parent) thread *** no callback needed here  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a Svariable?  open method.  Called as: open [args] filename with args as in
+    	soundfiler_writeargparse().
+     set fifosize from bufsize.  fifosize must be a
+	multiple of the number of bytes eaten for each DSP
+	tick.   arrange for the "request" condition to be signalled 16
+	    times per buffer  request QUIT and wait for acknowledge  post("stopping writesf thread...");  post("signalling...");  post("... done.");  ------------------------ global setup routine -------------------------  Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file contains, first, a collection of soundfile access routines, a
+sort of soundfile library.  Second, the "soundfiler" object is defined which
+uses the routines to read or write soundfiles, synchronously, from garrays.
+These operations are not to be done in "real time" as they may have to wait
+for disk accesses (even the write routine.)  Finally, the realtime objects
+readsf~ and writesf~ are defined which confine disk operations to a separate
+thread so that they can be used in real time.  The readsf~ and writesf~
+objects use Posix-like threads.   ROCKBOX  ROCKBOX **************** soundfile header structures *********************** the NeXTStep sound header structure; can be big or little endian   magic number '.snd' if file is big-endian  byte offset of first sample  length of sound in bytes  format; see below  sample rate  number of channels  comment  the WAVE header.  All Wave files are little endian.  We assume
+    the "fmt" chunk comes first which is usually the case but perhaps not
+    always; same for AIFF and the "COMM" chunk.    chunk id 'RIFF'             chunk size                  wave chunk id 'WAVE'        format chunk id 'fmt '      format chunk size           format tag (WAV_INT etc)    number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  data chunk id 'data'        length of data chunk        format chunk  format tag, 1 for PCM       number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  ... and the last two items  data chunk id, e.g., 'data' or 'fmt '  length of data chunk        the AIFF header.  I'm assuming AIFC is compatible but don't really know
+    that.  data chunk id 'SSND'        length of data chunk        number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  this version is more convenient for writing them out:  chunk id 'FORM'             chunk size                  aiff chunk id 'AIFF'        format chunk id 'COMM'      format chunk size, 18       number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  probably not what sizeof() gives  header size including first chunk hdr  assume MAXPDSTRING is bigger than headers  this routine returns 1 if the high order byte comes at the lower
+address on our architecture (big-endianness.).  It's 1 for Motorola,
+0 for Intel:  byte swappers ******************* soundfile access routines ********************* This routine opens a file, looks for either a nextstep or "wave" header,
+* seeks to end of it, and fills in bytes per sample and number of channels.
+* Only 2- and 3-byte fixed-point samples and 4-byte floating point samples
+* are supported.  If "headersize" is nonzero, the
+* caller should supply the number of channels, endinanness, and bytes per
+* sample; the header is ignored.  Otherwise, the routine tries to read the
+* header and fill in the properties.
+ header detection overridden  nextstep header  wave header   This is awful.  You have to skip over chunks,
+	       except that if one happens to be a "fmt" chunk, you want to
+	       find out the format from that one.  The case where the
+	       "fmt" chunk comes after the audio isn't handled.  First we guess a number of channels, etc., in case there's
+	    	no "fmt" chunk to follow.  copy the first chunk header to beginnning of buffer.  post("chunk %c %c %c %c",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3]);  read chunks in loop until we get to the data chunk  post("new chunk %c %c %c %c at %d",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3], seekto);  AIFF.  same as WAVE; actually predates it.  Disgusting.  First we guess a number of channels, etc., in case there's
+	    	no COMM block to follow.  copy the first chunk header to beginnning of buffer.  read chunks in loop until we get to the data chunk  post("chunk %c %c %c %c seek %d",
+		    ((t_datachunk *)buf)->dc_id[0],
+		    ((t_datachunk *)buf)->dc_id[1],
+		    ((t_datachunk *)buf)->dc_id[2],
+		    ((t_datachunk *)buf)->dc_id[3], seekto);  seek past header and any sample frames to skip  copy sample format back to caller  the header wasn't recognized.  We're threadable here so let's not
+	print out the error...  zero out other outputs  soundfiler_write ...
+ 
+    usage: write [flags] filename table ...
+    flags:
+	-nframes <frames>
+	-skip <frames>
+	-bytes <bytes per sample>
+	-normalize
+	-nextstep
+	-wave
+	-big
+	-little
+     the routine which actually does the work should LATER also be called
+    from garray_write16.  Parse arguments for writing.  The "obj" argument is only for flagging
+    errors.  For streaming to a file the "normalize", "onset" and "nframes"
+    arguments shouldn't be set but the calling routine flags this.  check if format not specified and fill in  don't handle AIFF floating point samples  for WAVE force little endian; for nextstep use machine native  WAVE format  try to fix size fields in header  do it the lazy way: just set the size field to 'unknown size' ROCKBOX  ROCKBOX  ROCKBOX  ROCKBOX  ------- soundfiler - reads and writes soundfiles to/from "garrays" ----  default maximum 16 MB per channel  soundfiler_read ...
+    
+    usage: read [flags] filename table ...
+    flags:
+    	-skip <frames> ... frames to skip in file
+	-nframes <frames>
+	-onset <frames> ... onset in table to read into (NOT DONE YET)
+	-raw <headersize channels bytes endian>
+	-resize
+	-maxsize <max-size>
+     maxsize implies resize.  figure out what to resize to  for sanity's sake let's clear the save-in-patch flag here  if the resize failed, garray_resize reported the error  zero out remaining elements of vectors  zero out vectors in excess of number of channels  do all graphics updates  this is broken out from soundfiler_write below so garray_write can
+    call it too... not done yet though. ************************ readsf object ***************************** READSF uses the Posix threads package; for the moment we're Linux
+only although this should be portable to the other platforms.
+
+Each instance of readsf~ owns a "child" thread for doing the UNIX (MSW?) file
+reading.  The parent thread signals the child each time:
+    (1) a file wants opening or closing;
+    (2) we've eaten another 1/16 of the shared buffer (so that the
+    	child thread should check if it's time to read some more.)
+The child signals the parent whenever a read has completed.  Signalling
+is done by setting "conditions" and putting data in mutex-controlled common
+areas.
+ arbitrary; just don't want to hang malloc  soundfile buffer  buffer size in bytes  number of audio outlets  audio vectors  vector size for transfers  bang-on-done outlet  opened, running, or idle  sample rate of input signal if known  parameters to communicate with subthread  pending request from parent to I/O thread  file to open (string is permanently allocated)  slot for "errno" return  size of header we'll skip  bytes per sample (2 or 3)  true if file is big-endian  number of channels in soundfile  sample rate of soundfile  number of sample frames to skip  max number of data bytes to read  filedesc  buffer size appropriately rounded down  index of next byte to get from file  index of next byte the ugen will read  true if fifohead has stopped changing  counter for signalling child for more data  number of ticks per signal  writesf~ only; type of file to create  writesf~ only; items writen  writesf~ only; true if byte swapping  writesf~ only; scalar for signal inlet ************* the child thread which performs file I/O ********** debug routine  debugging version...  copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  copy back into the instance structure.  check if another request has been made; if so, field it  set fifosize from bufsize.  fifosize must be a
+		    multiple of the number of bytes eaten for each DSP
+		    tick.  We pessimistically assume MAXVECSIZE samples
+		    per tick since that could change.  There could be a
+		    problem here if the vector size increases while a
+		    soundfile is being played...   arrange for the "request" condition to be signalled 16
+		    times per buffer  in a loop, wait for the fifo to get hungry and feed it  if the head is >= the tail, we can immediately read
+		    	to the end of the fifo.  Unless, that is, we would
+			read all the way to the end of the buffer and the 
+			"tail" is zero; this would fill the buffer completely
+			which isn't allowed because you can't tell a completely
+			full buffer from an empty one.  otherwise check if there are at least READSIZE
+			bytes to read.  If not, wait and loop back.  signal parent in case it's waiting for data  fell out of read loop: close file if necessary,
+		set EOF and signal once more ******* the object proper runs in the calling (parent) thread *** if there's a partial buffer left, copy it out.  then zero out the (rest of the) output  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a variable?  open method.  Called as:
+    open filename [skipframes headersize channels bytespersamp endianness]
+    	(if headersize is zero, header is taken to be automatically
+	detected; thus, use the special "-1" to mean a truly headerless file.)
+     request QUIT and wait for acknowledge ****************************** writesf ****************** just re-use the structure ************* the child thread which performs file I/O ********** copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  check if another request has been made; if so, field it  in a loop, wait for the fifo to have data and write it
+	    	    to disk  if the head is < the tail, we can immediately write
+		    from tail to end of fifo to disk; otherwise we hold off
+		    writing until there are at least WRITESIZE bytes in the
+		    buffer  signal parent in case it's waiting for data ******* the object proper runs in the calling (parent) thread *** no callback needed here  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a Svariable?  open method.  Called as: open [args] filename with args as in
+    	soundfiler_writeargparse().
+     set fifosize from bufsize.  fifosize must be a
+	multiple of the number of bytes eaten for each DSP
+	tick.   arrange for the "request" condition to be signalled 16
+	    times per buffer  request QUIT and wait for acknowledge  post("stopping writesf thread...");  post("signalling...");  post("... done.");  ------------------------ global setup routine -------------------------  Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.   this file contains, first, a collection of soundfile access routines, a
+sort of soundfile library.  Second, the "soundfiler" object is defined which
+uses the routines to read or write soundfiles, synchronously, from garrays.
+These operations are not to be done in "real time" as they may have to wait
+for disk accesses (even the write routine.)  Finally, the realtime objects
+readsf~ and writesf~ are defined which confine disk operations to a separate
+thread so that they can be used in real time.  The readsf~ and writesf~
+objects use Posix-like threads.   ROCKBOX  ROCKBOX **************** soundfile header structures *********************** the NeXTStep sound header structure; can be big or little endian   magic number '.snd' if file is big-endian  byte offset of first sample  length of sound in bytes  format; see below  sample rate  number of channels  comment  the WAVE header.  All Wave files are little endian.  We assume
+    the "fmt" chunk comes first which is usually the case but perhaps not
+    always; same for AIFF and the "COMM" chunk.    chunk id 'RIFF'             chunk size                  wave chunk id 'WAVE'        format chunk id 'fmt '      format chunk size           format tag (WAV_INT etc)    number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  data chunk id 'data'        length of data chunk        format chunk  format tag, 1 for PCM       number of channels          sample rate in hz           average bytes per second    number of bytes per frame   number of bits in a sample  ... and the last two items  data chunk id, e.g., 'data' or 'fmt '  length of data chunk        the AIFF header.  I'm assuming AIFC is compatible but don't really know
+    that.  data chunk id 'SSND'        length of data chunk        number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  this version is more convenient for writing them out:  chunk id 'FORM'             chunk size                  aiff chunk id 'AIFF'        format chunk id 'COMM'      format chunk size, 18       number of channels          # of sample frames (hi)     # of sample frames (lo)     bits per sample             sample rate, 80-bit float!  probably not what sizeof() gives  header size including first chunk hdr  assume MAXPDSTRING is bigger than headers  this routine returns 1 if the high order byte comes at the lower
+address on our architecture (big-endianness.).  It's 1 for Motorola,
+0 for Intel:  byte swappers ******************* soundfile access routines ********************* This routine opens a file, looks for either a nextstep or "wave" header,
+* seeks to end of it, and fills in bytes per sample and number of channels.
+* Only 2- and 3-byte fixed-point samples and 4-byte floating point samples
+* are supported.  If "headersize" is nonzero, the
+* caller should supply the number of channels, endinanness, and bytes per
+* sample; the header is ignored.  Otherwise, the routine tries to read the
+* header and fill in the properties.
+ header detection overridden  nextstep header  wave header   This is awful.  You have to skip over chunks,
+	       except that if one happens to be a "fmt" chunk, you want to
+	       find out the format from that one.  The case where the
+	       "fmt" chunk comes after the audio isn't handled.  First we guess a number of channels, etc., in case there's
+	    	no "fmt" chunk to follow.  copy the first chunk header to beginnning of buffer.  post("chunk %c %c %c %c",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3]);  read chunks in loop until we get to the data chunk  post("new chunk %c %c %c %c at %d",
+		    ((t_wavechunk *)buf)->wc_id[0],
+		    ((t_wavechunk *)buf)->wc_id[1],
+		    ((t_wavechunk *)buf)->wc_id[2],
+		    ((t_wavechunk *)buf)->wc_id[3], seekto);  AIFF.  same as WAVE; actually predates it.  Disgusting.  First we guess a number of channels, etc., in case there's
+	    	no COMM block to follow.  copy the first chunk header to beginnning of buffer.  read chunks in loop until we get to the data chunk  post("chunk %c %c %c %c seek %d",
+		    ((t_datachunk *)buf)->dc_id[0],
+		    ((t_datachunk *)buf)->dc_id[1],
+		    ((t_datachunk *)buf)->dc_id[2],
+		    ((t_datachunk *)buf)->dc_id[3], seekto);  seek past header and any sample frames to skip  copy sample format back to caller  the header wasn't recognized.  We're threadable here so let's not
+	print out the error...  zero out other outputs  soundfiler_write ...
+ 
+    usage: write [flags] filename table ...
+    flags:
+	-nframes <frames>
+	-skip <frames>
+	-bytes <bytes per sample>
+	-normalize
+	-nextstep
+	-wave
+	-big
+	-little
+     the routine which actually does the work should LATER also be called
+    from garray_write16.  Parse arguments for writing.  The "obj" argument is only for flagging
+    errors.  For streaming to a file the "normalize", "onset" and "nframes"
+    arguments shouldn't be set but the calling routine flags this.  check if format not specified and fill in  don't handle AIFF floating point samples  for WAVE force little endian; for nextstep use machine native  WAVE format  try to fix size fields in header  do it the lazy way: just set the size field to 'unknown size' ROCKBOX  ROCKBOX  ROCKBOX  ROCKBOX  ------- soundfiler - reads and writes soundfiles to/from "garrays" ----  default maximum 16 MB per channel  soundfiler_read ...
+    
+    usage: read [flags] filename table ...
+    flags:
+    	-skip <frames> ... frames to skip in file
+	-nframes <frames>
+	-onset <frames> ... onset in table to read into (NOT DONE YET)
+	-raw <headersize channels bytes endian>
+	-resize
+	-maxsize <max-size>
+     maxsize implies resize.  figure out what to resize to  for sanity's sake let's clear the save-in-patch flag here  if the resize failed, garray_resize reported the error  zero out remaining elements of vectors  zero out vectors in excess of number of channels  do all graphics updates  this is broken out from soundfiler_write below so garray_write can
+    call it too... not done yet though. ************************ readsf object ***************************** READSF uses the Posix threads package; for the moment we're Linux
+only although this should be portable to the other platforms.
+
+Each instance of readsf~ owns a "child" thread for doing the UNIX (MSW?) file
+reading.  The parent thread signals the child each time:
+    (1) a file wants opening or closing;
+    (2) we've eaten another 1/16 of the shared buffer (so that the
+    	child thread should check if it's time to read some more.)
+The child signals the parent whenever a read has completed.  Signalling
+is done by setting "conditions" and putting data in mutex-controlled common
+areas.
+ arbitrary; just don't want to hang malloc  soundfile buffer  buffer size in bytes  number of audio outlets  audio vectors  vector size for transfers  bang-on-done outlet  opened, running, or idle  sample rate of input signal if known  parameters to communicate with subthread  pending request from parent to I/O thread  file to open (string is permanently allocated)  slot for "errno" return  size of header we'll skip  bytes per sample (2 or 3)  true if file is big-endian  number of channels in soundfile  sample rate of soundfile  number of sample frames to skip  max number of data bytes to read  filedesc  buffer size appropriately rounded down  index of next byte to get from file  index of next byte the ugen will read  true if fifohead has stopped changing  counter for signalling child for more data  number of ticks per signal  writesf~ only; type of file to create  writesf~ only; items writen  writesf~ only; true if byte swapping  writesf~ only; scalar for signal inlet ************* the child thread which performs file I/O ********** debug routine  debugging version...  copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  copy back into the instance structure.  check if another request has been made; if so, field it  set fifosize from bufsize.  fifosize must be a
+		    multiple of the number of bytes eaten for each DSP
+		    tick.  We pessimistically assume MAXVECSIZE samples
+		    per tick since that could change.  There could be a
+		    problem here if the vector size increases while a
+		    soundfile is being played...   arrange for the "request" condition to be signalled 16
+		    times per buffer  in a loop, wait for the fifo to get hungry and feed it  if the head is >= the tail, we can immediately read
+		    	to the end of the fifo.  Unless, that is, we would
+			read all the way to the end of the buffer and the 
+			"tail" is zero; this would fill the buffer completely
+			which isn't allowed because you can't tell a completely
+			full buffer from an empty one.  otherwise check if there are at least READSIZE
+			bytes to read.  If not, wait and loop back.  signal parent in case it's waiting for data  fell out of read loop: close file if necessary,
+		set EOF and signal once more ******* the object proper runs in the calling (parent) thread *** if there's a partial buffer left, copy it out.  then zero out the (rest of the) output  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a variable?  open method.  Called as:
+    open filename [skipframes headersize channels bytespersamp endianness]
+    	(if headersize is zero, header is taken to be automatically
+	detected; thus, use the special "-1" to mean a truly headerless file.)
+     request QUIT and wait for acknowledge ****************************** writesf ****************** just re-use the structure ************* the child thread which performs file I/O ********** copy file stuff out of the data structure so we can
+		relinquish the mutex while we're in open_soundfile().  alter the request code so that an ensuing "open" will get
+		noticed.  if there's already a file open, close it  open the soundfile with the mutex unlocked  check if another request has been made; if so, field it  in a loop, wait for the fifo to have data and write it
+	    	    to disk  if the head is < the tail, we can immediately write
+		    from tail to end of fifo to disk; otherwise we hold off
+		    writing until there are at least WRITESIZE bytes in the
+		    buffer  signal parent in case it's waiting for data ******* the object proper runs in the calling (parent) thread *** no callback needed here  start making output.  If we're in the "startup" state change
+    to the "running" state.  LATER rethink whether you need the mutex just to set a Svariable?  open method.  Called as: open [args] filename with args as in
+    	soundfiler_writeargparse().
+     set fifosize from bufsize.  fifosize must be a
+	multiple of the number of bytes eaten for each DSP
+	tick.   arrange for the "request" condition to be signalled 16
+	    times per buffer  request QUIT and wait for acknowledge  post("stopping writesf thread...");  post("signalling...");  post("... done.");  ------------------------ global setup routine ------------------------- 

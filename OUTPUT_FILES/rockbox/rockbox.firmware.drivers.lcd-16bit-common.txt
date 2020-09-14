@@ -1,0 +1,205 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Dave Chapman
+ *
+ * Rockbox driver for 16-bit colour LCDs
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** to be #included by lcd-16bit*.c  Clear the current viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen ** low-level drawing functions ** Fill a rectangular area ******************* In viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  drawmode and optimisation  DRMODE_COMPLEMENT  About Rockbox' internal monochrome bitmap format:
+ *
+ * A bitmap contains one bit for every pixel that defines if that pixel is
+ * black (1) or white (0). Bits within a byte are arranged vertically, LSB
+ * at top.
+ * The bytes are stored in row-major order, with byte 0 being top left,
+ * byte 1 2nd from left etc. The first row of bytes defines pixel rows
+ * 0..7, the second row defines pixel row 8..15 etc.
+ *
+ * This is the mono bitmap format used on all other targets so far; the
+ * pixel packing doesn't really matter on a 8bit+ target.  Draw a partial monochrome bitmap  bit 8 == sentinel ******************* Image in viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  move starting point  bit 8 == sentinel  mask out inversevid  Use extra bit to avoid if () in the switch-cases below  go through each column and update each pixel   Draw a full monochrome bitmap  About Rockbox' internal alpha channel format (for ALPHA_COLOR_FONT_DEPTH == 2)
+ *
+ * For each pixel, 4bit of alpha information is stored in a byte-stream,
+ * so two pixels are packed into one byte.
+ * The lower nibble is the first pixel, the upper one the second. The stride is
+ * horizontal. E.g row0: pixel0: byte0[0:3], pixel1: byte0[4:7], pixel2: byte1[0:3],...
+ * The format is independant of the internal display orientation and color
+ * representation, as to support the same font files on all displays.
+ * The values go linear from 0 (fully opaque) to 15 (fully transparent)
+ * (note how this is the opposite of the alpha channel in the ARGB format).
+ *
+ * This might suggest that rows need to have an even number of pixels.
+ * However this is generally not the case. lcd_alpha_bitmap_part_mix() can deal
+ * with uneven colums (i.e. two rows can share one byte). And font files do
+ * exploit this.
+ * However, this is difficult to do for image files, especially bottom-up bitmaps,
+ * so lcd_bmp() do expect even rows.
+  Blend the given two colors  Blend an image with an alpha channel
+ * if image is NULL, drawing will happen according to the drawmode
+ * src is the alpha channel (4bit per pixel)  nothing to draw?  initialize blending  clipping  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  the following drawmode combinations are possible:
+     * 1) COMPLEMENT: just negates the framebuffer contents
+     * 2) BG and BG+backdrop: draws _only_ background pixels with either
+     *    the background color or the backdrop (if any). The backdrop
+     *    is an image in native lcd format
+     * 3) FG and FG+image: draws _only_ foreground pixels with either
+     *    the foreground color or an image buffer. The image is in
+     *    native lcd format
+     * 4) SOLID, SOLID+backdrop, SOLID+image, SOLID+backdrop+image, i.e. all
+     *    possible combinations of 2) and 3). Draws both, fore- and background,
+     *    pixels. The rules of 2) and 3) apply.
+     *
+     * INVERSEVID swaps fore- and background pixels, i.e. background pixels
+     * become foreground ones and vice versa.
+      mask out inversevid  Use extra bits to avoid if () in the switch-cases below  image is only accessed in DRMODE_INT_IMG cases, i.e. when non-NULL.
+     * Therefore NULL accesses are impossible and we can increment
+     * unconditionally (applies for stride at the end of the loop as well)  go through the rows and update each pixel  saving current_vp->fg/bg_pattern and lcd_backdrop_offset into these
+         * temp vars just before the loop helps gcc to opimize the loop better
+         * (testing showed ~15% speedup) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Dave Chapman
+ *
+ * Rockbox driver for 16-bit colour LCDs
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** to be #included by lcd-16bit*.c  Clear the current viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen ** low-level drawing functions ** Fill a rectangular area ******************* In viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  drawmode and optimisation  DRMODE_COMPLEMENT  About Rockbox' internal monochrome bitmap format:
+ *
+ * A bitmap contains one bit for every pixel that defines if that pixel is
+ * black (1) or white (0). Bits within a byte are arranged vertically, LSB
+ * at top.
+ * The bytes are stored in row-major order, with byte 0 being top left,
+ * byte 1 2nd from left etc. The first row of bytes defines pixel rows
+ * 0..7, the second row defines pixel row 8..15 etc.
+ *
+ * This is the mono bitmap format used on all other targets so far; the
+ * pixel packing doesn't really matter on a 8bit+ target.  Draw a partial monochrome bitmap  bit 8 == sentinel ******************* Image in viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  move starting point  bit 8 == sentinel  mask out inversevid  Use extra bit to avoid if () in the switch-cases below  go through each column and update each pixel   Draw a full monochrome bitmap  About Rockbox' internal alpha channel format (for ALPHA_COLOR_FONT_DEPTH == 2)
+ *
+ * For each pixel, 4bit of alpha information is stored in a byte-stream,
+ * so two pixels are packed into one byte.
+ * The lower nibble is the first pixel, the upper one the second. The stride is
+ * horizontal. E.g row0: pixel0: byte0[0:3], pixel1: byte0[4:7], pixel2: byte1[0:3],...
+ * The format is independant of the internal display orientation and color
+ * representation, as to support the same font files on all displays.
+ * The values go linear from 0 (fully opaque) to 15 (fully transparent)
+ * (note how this is the opposite of the alpha channel in the ARGB format).
+ *
+ * This might suggest that rows need to have an even number of pixels.
+ * However this is generally not the case. lcd_alpha_bitmap_part_mix() can deal
+ * with uneven colums (i.e. two rows can share one byte). And font files do
+ * exploit this.
+ * However, this is difficult to do for image files, especially bottom-up bitmaps,
+ * so lcd_bmp() do expect even rows.
+  Blend the given two colors  Blend an image with an alpha channel
+ * if image is NULL, drawing will happen according to the drawmode
+ * src is the alpha channel (4bit per pixel)  nothing to draw?  initialize blending  clipping  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  the following drawmode combinations are possible:
+     * 1) COMPLEMENT: just negates the framebuffer contents
+     * 2) BG and BG+backdrop: draws _only_ background pixels with either
+     *    the background color or the backdrop (if any). The backdrop
+     *    is an image in native lcd format
+     * 3) FG and FG+image: draws _only_ foreground pixels with either
+     *    the foreground color or an image buffer. The image is in
+     *    native lcd format
+     * 4) SOLID, SOLID+backdrop, SOLID+image, SOLID+backdrop+image, i.e. all
+     *    possible combinations of 2) and 3). Draws both, fore- and background,
+     *    pixels. The rules of 2) and 3) apply.
+     *
+     * INVERSEVID swaps fore- and background pixels, i.e. background pixels
+     * become foreground ones and vice versa.
+      mask out inversevid  Use extra bits to avoid if () in the switch-cases below  image is only accessed in DRMODE_INT_IMG cases, i.e. when non-NULL.
+     * Therefore NULL accesses are impossible and we can increment
+     * unconditionally (applies for stride at the end of the loop as well)  go through the rows and update each pixel  saving current_vp->fg/bg_pattern and lcd_backdrop_offset into these
+         * temp vars just before the loop helps gcc to opimize the loop better
+         * (testing showed ~15% speedup) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Dave Chapman
+ *
+ * Rockbox driver for 16-bit colour LCDs
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** to be #included by lcd-16bit*.c  Clear the current viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen ** low-level drawing functions ** Fill a rectangular area ******************* In viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  drawmode and optimisation  DRMODE_COMPLEMENT  About Rockbox' internal monochrome bitmap format:
+ *
+ * A bitmap contains one bit for every pixel that defines if that pixel is
+ * black (1) or white (0). Bits within a byte are arranged vertically, LSB
+ * at top.
+ * The bytes are stored in row-major order, with byte 0 being top left,
+ * byte 1 2nd from left etc. The first row of bytes defines pixel rows
+ * 0..7, the second row defines pixel row 8..15 etc.
+ *
+ * This is the mono bitmap format used on all other targets so far; the
+ * pixel packing doesn't really matter on a 8bit+ target.  Draw a partial monochrome bitmap  bit 8 == sentinel ******************* Image in viewport clipping ********************* nothing to draw?  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  move starting point  bit 8 == sentinel  mask out inversevid  Use extra bit to avoid if () in the switch-cases below  go through each column and update each pixel   Draw a full monochrome bitmap  About Rockbox' internal alpha channel format (for ALPHA_COLOR_FONT_DEPTH == 2)
+ *
+ * For each pixel, 4bit of alpha information is stored in a byte-stream,
+ * so two pixels are packed into one byte.
+ * The lower nibble is the first pixel, the upper one the second. The stride is
+ * horizontal. E.g row0: pixel0: byte0[0:3], pixel1: byte0[4:7], pixel2: byte1[0:3],...
+ * The format is independant of the internal display orientation and color
+ * representation, as to support the same font files on all displays.
+ * The values go linear from 0 (fully opaque) to 15 (fully transparent)
+ * (note how this is the opposite of the alpha channel in the ARGB format).
+ *
+ * This might suggest that rows need to have an even number of pixels.
+ * However this is generally not the case. lcd_alpha_bitmap_part_mix() can deal
+ * with uneven colums (i.e. two rows can share one byte). And font files do
+ * exploit this.
+ * However, this is difficult to do for image files, especially bottom-up bitmaps,
+ * so lcd_bmp() do expect even rows.
+  Blend the given two colors  Blend an image with an alpha channel
+ * if image is NULL, drawing will happen according to the drawmode
+ * src is the alpha channel (4bit per pixel)  nothing to draw?  initialize blending  clipping  adjust for viewport ******************** Viewport on screen clipping ******************* nothing to draw?  clip image in viewport in screen  the following drawmode combinations are possible:
+     * 1) COMPLEMENT: just negates the framebuffer contents
+     * 2) BG and BG+backdrop: draws _only_ background pixels with either
+     *    the background color or the backdrop (if any). The backdrop
+     *    is an image in native lcd format
+     * 3) FG and FG+image: draws _only_ foreground pixels with either
+     *    the foreground color or an image buffer. The image is in
+     *    native lcd format
+     * 4) SOLID, SOLID+backdrop, SOLID+image, SOLID+backdrop+image, i.e. all
+     *    possible combinations of 2) and 3). Draws both, fore- and background,
+     *    pixels. The rules of 2) and 3) apply.
+     *
+     * INVERSEVID swaps fore- and background pixels, i.e. background pixels
+     * become foreground ones and vice versa.
+      mask out inversevid  Use extra bits to avoid if () in the switch-cases below  image is only accessed in DRMODE_INT_IMG cases, i.e. when non-NULL.
+     * Therefore NULL accesses are impossible and we can increment
+     * unconditionally (applies for stride at the end of the loop as well)  go through the rows and update each pixel  saving current_vp->fg/bg_pattern and lcd_backdrop_offset into these
+         * temp vars just before the loop helps gcc to opimize the loop better
+         * (testing showed ~15% speedup) 

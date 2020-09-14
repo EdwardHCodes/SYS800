@@ -1,0 +1,1522 @@
+
+ * galaxies.c: implementation of 'Tentai Show' from Nikoli,
+ *             also sometimes called 'Spiral Galaxies'.
+ *
+ * Notes:
+ *
+ * Grid is stored as size (2n-1), holding edges as well as spaces
+ * (and thus vertices too, at edge intersections).
+ *
+ * Any dot will thus be positioned at one of our grid points,
+ * which saves any faffing with half-of-a-square stuff.
+ *
+ * Edges have on/off state; obviously the actual edges of the
+ * board are fixed to on, and everything else starts as off.
+ *
+ * TTD:
+   * Cleverer solver
+   * Think about how to display remote groups of tiles?
+ *
+ * Bugs:
+ *
+ * Notable puzzle IDs:
+ *
+ * Nikoli's example [web site has wrong highlighting]
+ * (at http://www.nikoli.co.jp/en/puzzles/astronomical_show/):
+ *  5x5:eBbbMlaBbOEnf
+ *
+ * The 'spiral galaxies puzzles are NP-complete' paper
+ * (at http://www.stetson.edu/~efriedma/papers/spiral.pdf):
+ *  7x7:chpgdqqqoezdddki
+ *
+ * Puzzle competition pdf examples
+ * (at http://www.puzzleratings.org/Yurekli2006puz.pdf):
+ *  6x6:EDbaMucCohbrecEi
+ *  10x10:beFbufEEzowDlxldibMHezBQzCdcFzjlci
+ *  13x13:dCemIHFFkJajjgDfdbdBzdzEgjccoPOcztHjBczLDjczqktJjmpreivvNcggFi
+ *
+ 
+ * Dirty hack to enable the generator to construct a game ID which
+ * solves to a specified black-and-white bitmap. We define a global
+ * variable here which gives the desired colour of each square, and
+ * we arrange that the grid generator never merges squares of
+ * different colours.
+ *
+ * The bitmap as stored here is a simple int array (at these sizes
+ * it isn't worth doing fiddly bit-packing). picture[y*w+x] is 1
+ * iff the pixel at (x,y) is intended to be black.
+ *
+ * (It might be nice to be able to specify some pixels as
+ * don't-care, to give the generator more leeway. But that might be
+ * fiddly.)
+  X and Y is the area of the board as seen by
+     * the user, not the (2n+1) area the game uses.  there's a dot here  the edge is set  this tile is associated with a dot.  (ui only) dot is black.  scratch flag  its position  if flags & F_TILE_ASSOC  if flags & F_DOT  size from params  allocated size, (2x-1)*(2y-1)  to call supersede_game_desc  difficulty of current puzzle (for status bar),
+                           or -1 if stale.  ----------------------------------------------------------
+ * Game parameters and presets
+  make up some sensible default sizes  structure copy  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      ----------------------------------------------------------
+ * Game utility functions.
+ debug(("add_assoc sp %d %d --> dot %d,%d, new nassoc %d.\n",
+           tile->x, tile->y, dot->x, dot->y, dot->nassoc)); association with not-a-dot.  Space-enumeration callbacks should all return 1 for 'progress made',
+ * -1 for 'impossible', and 0 otherwise.  0 if not same or not both associated.  opposite would be off grid  opposite already associated with diff. dot  this function needs optimising.  Returns a move string for use by 'solve', including the initial
+ * 'S' if issolve is true.  Both associated; change association, if different  Only src associated; remove.  Only dest associated; add.  edge flags are different; flip them.  Returns true if a dot here would not be too close to any other dots
+ * (and would avoid other game furniture). 
+             * Check that all the squares we're looking at have the
+             * same colour.
+              colour mismatch  Other than our own square, no dots nearby.  We don't want edges within our rectangle
+             * (but don't care about edges on the edge)  ----------------------------------------------------------
+ * Game generation, structure creation, and descriptions.
+  filled in by new_game.  don't erase edge flags around outline!  Game description is a sequence of letters representing the number
+ * of spaces (a = 0, y = 24) before the next dot; a-y for a white dot,
+ * and A-Y for a black dot. 'z' is 25 spaces (and no dot).
+ *
+ * I know it's a bitch to generate by hand, so we provide
+ * an edit mode.
+  a/A is 0 spaces between, b/B is 1 space, ...
+             * y/Y is 24 spaces, za/zA is 25 spaces, ...
+             * It's easier to count from 0 because we then
+             * don't have to special-case the top left-hand corner
+             * (which could be a dot with 0 spaces before it).  If the tile is associated with the old dot, check its
+        * opposite wrt the _new_ dot is empty or same assoc.  no new opposite  associated, but wrong dot. 
+	    * Reject if either tile and the dot don't match in colour.
+	     Move dot associations: anything that was associated
+        * with the old dot, and its opposite wrt the new dot,
+        * become associated with the new dot.  we did something!  For the given dot, first see if we could expand it into all the given
+ * extra spaces (by checking for empty spaces on the far side), and then
+ * see if we can move the dot to shift the CoG to include the new spaces.
+ 
+	 * Reject the expansion totally if any of the new tiles are
+	 * the wrong colour.
+	  First off, could we just expand the current dot's tile to cover
+     * the space(s) passed in and their opposites? 
+	     * The opposite tiles have to be the right colour as well.
+	      OK, all spaces have valid empty opposites: associate spaces and
+     * opposites with our dot.  Otherwise, try to move dot so as to encompass given spaces:  first, calculate the 'centre of gravity' of the new dot.  number of tiles assoc. with new dot.  If the CoG isn't a whole number, it's not possible.  Check whether all spaces in the old tile would have a good
+     * opposite wrt the new dot.  Also check whether all spaces we're adding would have a good
+     * opposite wrt the new dot.  If we've got here, we're ok. First, associate all of 'toadd'
+     * with the _old_ dot (so they'll get fixed up, with their opposites,
+     * in the next step).  Finally, move the dot and fix up all the old associations.  Hard-code to a max. of 2x2 squares, for speed (less malloc)  We limit the maximum size of tiles to be ~2*sqrt(area); so,
+     * a 5x5 grid shouldn't have anything >10 tiles, a 20x20 grid
+     * nothing >40 tiles.  Make a static list of the spaces; if any space is already
+     * associated then quit immediately.  Make a list of the spaces outside of our block, and shuffle it.  This bug took me a, er, little while to track down. On PalmOS,
+     * which has 16-bit signed ints, puzzles over about 9x9 started
+     * failing to generate because the nspc calculation would start
+     * to overflow, causing the dots not to be filled in properly.  heuristic; expanding from vertices tends to generate lots of
+             * too-big regions of tiles.  we expanded successfully.  If we've got here we might want to put a dot down. Check
+         * if we can, and add one if so.  Random list of squares to try and process, one-by-one.  generate_pass(state, rs, scratch, 10, GP_DOTS);  generate_pass(state, rs, scratch, 100, 0); 
+         * We'll grudgingly accept a too-easy puzzle, but we must
+         * _not_ permit a too-hard one (one which the solver
+         * couldn't handle at all).
+         
+     * Postprocessing pass to prevent excessive numbers of adjacent
+     * singletons. Iterate over all edges in random shuffled order;
+     * for each edge that separates two regions, investigate
+     * whether removing that edge and merging the regions would
+     * still yield a valid and soluble puzzle. (The two regions
+     * must also be the same colour, of course.) If so, do it.
+     * 
+     * This postprocessing pass is slow (due to repeated solver
+     * invocations), and seems to be unnecessary during normal
+     * unconstrained game generation. However, when generating a
+     * game under colour constraints, excessive singletons seem to
+     * turn up more often, so it's worth doing this.
+      Coordinates of edge space  Coordinates of square spaces on either side of edge  round down to next odd number  and reflect about x to get x1  outermost edge of grid  tiles _already_ owned by same dot  different colours: cannot merge 
+	     * Work out where the centre of gravity of the new
+	     * region would be.
+	      CoG not at integer coordinates 
+	     * Ensure that the CoG would actually be _in_ the new
+	     * region, by verifying that all its surrounding tiles
+	     * belong to one or other of our two dots.
+	      round down to next odd number  and reflect about cx to get cx1 
+	     * Verify that for every tile in either source region,
+	     * that tile's image in the new CoG is also in one of
+	     * the two source regions.
+	      not part of these tiles anyway 
+	     * Now we're clear to attempt the merge. We take a copy
+	     * of the game state first, so we can revert it easily
+	     * if the resulting puzzle turns out to have become
+	     * insoluble.
+	      not part of these tiles anyway  Still just as soluble. Let the merge stand.  Became insoluble. Revert.  Quick-and-dirty check, using half the solver:
+     * solver_obvious will only fail if the dots are
+     * too close together, so dot-proximity associations
+     * overlap.  if we got here we incremented i and have a dot to add.  ----------------------------------------------------------
+ * Solver and all its little wizards.
+  state->sx * state->sy  size sz  Solver ideas so far:
+     *
+     * For any empty space, work out how many dots it could associate
+     * with:
+       * it needs line-of-sight
+       * it needs an empty space on the far side
+       * any adjacent lines need corresponding line possibilities.
+      The solver_ctx should keep a list of dot positions, for quicker looping.
+ *
+ * Solver techniques, in order of difficulty:
+   * obvious adjacency to dots
+   * transferring tiles to opposite side
+   * transferring lines to opposite side
+   * one possible dot for a given tile based on opposite availability
+   * tile with 3 definite edges next to an associated tile must associate
+      with same dot.
+   *
+   * one possible dot for a given tile based on line-of-sight
+  no-op  if tiles[0] && tiles[1] && they're both associated
+     * and they're both associated with different dots,
+     * ensure the line is set.  No edge, but the two adjacent tiles are both
+         * associated with different dots; add the edge.  edge of tile has no opposite edge (off grid?);
+             * this is impossible.  Empty tile. If each edge is either set, or associated with
+     * the same dot, we must also associate with dot.  If an adjacent tile is empty we can't make any deductions. If an adjacent tile is assoc. with a different dot
+             * we can't make any deductions.  really should have done something.  Improved algorithm for tracking line-of-sight from dots, and not spaces.
+ *
+ * The solver_ctx already stores a list of dots: the algorithm proceeds by
+ * expanding outwards from each dot in turn, expanding first to the boundary
+ * of its currently-connected tile and then to all empty tiles that could see
+ * it. Empty tiles will be flagged with a 'can see dot <x,y>' sticker.
+ *
+ * Expansion will happen by (symmetrically opposite) pairs of squares; if
+ * a square hasn't an opposite number there's no point trying to expand through
+ * it. Empty tiles will therefore also be tagged in pairs.
+ *
+ * If an empty tile already has a 'can see dot <x,y>' tag from a previous dot,
+ * it (and its partner) gets untagged (or, rather, a 'can see two dots' tag)
+ * because we're looking for single-dot possibilities.
+ *
+ * Once we've gone through all the dots, any which still have a 'can see dot'
+ * tag get associated with that dot (because it must have been the only one);
+ * any without any tag (i.e. that could see _no_ dots) cause an impossibility
+ * marked.
+ *
+ * The expansion will happen each time with a stored list of (space *) pairs,
+ * rather than a mark-and-sweep idea; that's horrifically inefficient.
+ *
+ * expansion algorithm:
+ *
+ * * allocate list of (space *) the size of s->sx*s->sy.
+ * * allocate second grid for (flags, dotx, doty) size of sx*sy.
+ *
+ * clear second grid (flags = 0, all dotx and doty = 0)
+ * flags: F_REACHABLE, F_MULTIPLE
+ *
+ *
+ * * for each dot, start with one pair of tiles that are associated with it --
+ *   * vertex --> (dx+1, dy+1), (dx-1, dy-1)
+ *   * edge --> (adj1, adj2)
+ *   * tile --> (tile, tile) ???
+ * * mark that pair of tiles with F_MARK, clear all other F_MARKs.
+ * * add two tiles to start of list.
+ *
+ * set start = 0, end = next = 2
+ *
+ * from (start to end-1, step 2) {
+ * * we have two tiles (t1, t2), opposites wrt our dot.
+ * * for each (at1) sensible adjacent tile to t1 (i.e. not past an edge):
+ *   * work out at2 as the opposite to at1
+ *   * assert at1 and at2 have the same F_MARK values.
+ *   * if at1 & F_MARK ignore it (we've been there on a previous sweep)
+ *   * if either are associated with a different dot
+ *     * mark both with F_MARK (so we ignore them later)
+ *   * otherwise (assoc. with our dot, or empty):
+ *     * mark both with F_MARK
+ *     * add their space * values to the end of the list, set next += 2.
+ * }
+ *
+ * if (end == next)
+ * * we didn't add any new squares; exit the loop.
+ * else
+ * * set start = next+1, end = next. go round again
+ *
+ * We've finished expanding from the dot. Now, for each square we have
+ * in our list (--> each square with F_MARK):
+ * * if the tile is empty:
+ *   * if F_REACHABLE was already set
+ *     * set F_MULTIPLE
+ *   * otherwise
+ *     * set F_REACHABLE, set dotx and doty to our dot.
+ *
+ * Then, continue the whole thing for each dot in turn.
+ *
+ * Once we've done for each dot, go through the entire grid looking for
+ * empty tiles: for each empty tile:
+   * if F_REACHABLE and not F_MULTIPLE, set that dot (and its double)
+   * if !F_REACHABLE, return as impossible.
+ *
+  Returns true if this tile is either already associated with this dot,
+ * or blank.  Clear the grid of the (space) flags we'll use.  This is well optimised; analysis showed that:
+        for (i = 0; i < sctx->sz; i++) state->grid[i].flags &= ~F_MARK;
+       took up ~85% of the total function time!  Seed the list of marked squares with two that must be associated
+     * with our dot (possibly the same space)  pick two of the opposite ones arbitrarily. , *t2 = sctx->scratch[i+1] seen before.  We have a tile adjacent to t1; find its opposite.  no opposite, so mark for next time.  If the tile had an opposite we should have either seen both of
+             * these, or neither of these, before.  Both tiles could associate with this dot; add them to
+                 * our list.  Either way, we've seen these tiles already so mark them.  We added more squares; go back and try again.  We've expanded as far as we can go. Now we update the main flags
+     * on all tiles we've expanded into -- if they were empty, we have
+     * found possible associations for this dot.  This is (at least) the second dot this tile could
+             * associate with.  This is the first (possibly only) dot.  We're unassociated: count up all the dots we could associate with.  Work out the cell to recurse on; go through all unassociated tiles
+     * and find which one has the most possible dots it could associate
+     * with.  or assert?  set cell (temporarily) pointing to that dot.  we found our first solved grid; copy it away.  reset cell back to unassociated.  no change  precisely one solution  if we've found >1 solution, or ran out of recursion,
+         * give up immediately.  we found (at least one) soln; copy it back to state  hack, hack: set picture to NULL during solving so that add_assoc
+     * won't complain when we attempt recursive guessing and guess wrong  harder still?  if we reach here, we've made no deductions, so we terminate. 
+     * Clear tile associations: the solution will only include the
+     * edges.
+      ----------------------------------------------------------
+ * User interface.
+  pixel coords of drag pos.  grid coords of dot we're dragging from.  grid coords of drag start 
+ * Round FP coordinates to the centre of the nearest edge.
+ 
+     * Find the nearest square-centre.
+     
+     * Find the nearest grid vertex.
+     
+     * Determine whether the horizontal or vertical edge from that
+     * vertex alongside that square is closer to us, by comparing
+     * distances from the square cente.
+      Vertical edge: x-coord of corner,
+         * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+         * y-coord of corner.  UI operations (play mode):
+     *
+     * Toggle edge (set/unset) (left-click on edge)
+     * Associate space with dot (left-drag from dot)
+     * Unassociate space (left-drag from space off grid)
+     * Autofill lines around shape? (right-click?)
+     *
+     * (edit mode; will clear all lines/associations)
+     *
+     * Add or remove dot (left-click)
+     
+         * If there's a dot anywhere nearby, we pick up an arrow
+         * pointing at that dot.
+         
+                     * Found a dot. Begin a drag from it.
+                      multi-level break 
+         * Otherwise, find the nearest _square_, and pick up the
+         * same arrow as it's got on it, if any.
+         
+         * Now, if we've managed to find a dot, begin a drag.
+          just move the drag coords. 
+         * Drags are always targeted at a single square.
+         
+	 * Dragging an arrow on to the same square it started from
+	 * is a null move; just update the ui and finish.
+	 
+	 * Otherwise, we remove the arrow from its starting
+	 * square if we didn't start from a dot...
+	 
+	 * ... and if the square we're moving it _to_ is valid, we
+	 * add one there instead.
+	 
+             * Exception: if it's not actually legal to add an arrow
+             * and its opposite at this position, we don't try,
+             * because otherwise we'd append an empty entry to the
+             * undo chain.
+             
+     * During actual game play, completion checking is done on the
+     * basis of the edges rather than the square associations. So
+     * first we must go through the grid figuring out the connected
+     * components into which the edges divide it.
+     
+     * That gives us our connected components. Now, for each
+     * component, decide whether it's _valid_. A valid component is
+     * one which:
+     *
+     *  - is 180-degree rotationally symmetric
+     *  - has a dot at its centre of symmetry
+     *  - has no other dots anywhere within it (including on its
+     *    boundary)
+     *  - contains no internal edges (i.e. edges separating two
+     *    squares which are both part of the component).
+     
+     * First, go through the grid finding the bounding box of each
+     * component.
+     
+     * Now we're in a position to loop over each actual component
+     * and figure out where its centre of symmetry has to be if
+     * it's anywhere.
+      no dot at centre of symmetry  dot at cx,cy isn't ours 
+     * Now we loop over the whole grid again, this time finding
+     * extraneous dots (any dot which wholly or partially overlaps
+     * a square and is not at the centre of symmetry of that
+     * square's component disqualifies the component from validity)
+     * and extraneous edges (any edge separating two squares
+     * belonging to the same component also disqualifies that
+     * component).
+     
+                 * There's a dot here. Use it to disqualify any
+                 * component which deserves it.
+                 
+                 * There's an edge here. Use it to disqualify a
+                 * component if necessary.
+                 
+     * And finally we test rotational symmetry: for each square in
+     * the grid, find which component it's in, test that that
+     * component also has a square in the symmetric position, and
+     * disqualify it if it doesn't.
+     
+     * That's it. We now have all the connected components marked
+     * as valid or not valid. So now we return a `colours' array if
+     * we were asked for one, and also we return an overall
+     * true/false value depending on whether _every_ square in the
+     * grid is part of a valid component.
+      if we clicked 'white dot':
+                 *   white --> empty, empty --> white, black --> white.
+                 * if we clicked 'black dot':
+                 *   black --> empty, empty --> black, white --> black.
+                  edit-mode disallows associations.  The solver doesn't assume we'll mirror things  The solver doesn't assume we'll mirror things  ----------------------------------------------------------------------
+ * Drawing routines.
+  Lines will be much smaller size than squares; say, 1/8 the size?
+ *
+ * Need a 'top-left corner of location XxY' to take this into account;
+ * alternaticaly, that could give the middle of that location, and the
+ * drawing code would just know the expected dimensions.
+ *
+ * We also need something to take a click and work out what it was
+ * we were interested in. Clicking on vertices is required because
+ * we may want to drag from them, for example.
+ 
+     * We call game_mkhighlight to ensure the background colour
+     * isn't completely white. We don't actually use the high- and
+     * lowlight colours it generates.
+     
+         * Currently, white dots and white-background squares are
+         * both pure white.
+         
+         * But black-background squares are a dark grey, whereas
+         * black dots are really black.
+         
+         * In unfilled squares, we draw a faint gridwork.
+         
+         * Edges and arrows are filled in in pure black.
+          tinge the edit background to bluey 
+ * Draw an arrow centred on (cx,cy), pointing in the direction
+ * (ddx,ddy). (I.e. pointing at the point (cx+ddx, cy+ddy).
+ 
+     * Draw the tile background.
+     
+     * Draw the grid.
+     
+     * Draw the arrow, if present, or the cursor, if here.
+     
+     * Draw the edges.
+     
+     * Draw the dots.
+      oppositex - dotx = dotx - x <=> oppositex = 2 * dotx - x 
+             * Set up the flags for this square. Firstly, see if we
+             * have edges.
+             
+             * Also, mark corners of neighbouring edges.
+             
+             * If this square is part of a valid region, paint it
+             * that region's colour. Exception: if we're flashing,
+             * everything goes briefly back to background colour.
+             
+             * If this square is associated with a dot but it isn't
+             * part of a valid region, draw an arrow in it pointing
+             * in the direction of that dot.
+	     * 
+	     * Exception: if this is the source point of an active
+	     * drag, we don't draw the arrow.
+              tile is the source, don't do it  opposite tile is the source, don't do it 
+             * Now go through the nine possible places we could
+             * have dots.
+             
+             * Now work out if we have to draw a cursor for this square;
+             * cursors-on-lines are taken care of below.
+             
+             * Now we have everything we're going to need. Draw the
+             * square.
+             
+     * Draw a cursor. This secondary blitter is much less invasive than trying
+     * to fix up all of the rest of the code with sufficient flags to be able to
+     * display this sensibly.
+      draw a red dot (over the top of whatever would be there already)  draw an edge/vertex square; tile cursors are dealt with above. 
+    * 8mm squares by default. (There isn't all that much detail
+    * that needs to go in each square.)
+     Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Get the completion information.
+     
+     * Draw the grid.
+     
+     * Shade the completed regions. Just in case any particular
+     * printing platform deals badly with adjacent
+     * similarly-hatched regions, we'll fill each one as a single
+     * polygon.
+     
+	     * This is the first square we've run into belonging to
+	     * this polyomino, which means an edge of the polyomino
+	     * is certain to be to our left. (After we finish
+	     * tracing round it, we'll set the colours[] entry to
+	     * zero to prevent accidentally doing it again.)
+	     
+		 * We are currently sitting on square (x,y), which
+		 * we know to be in our polyomino, and we also know
+		 * that (x+dx,y+dy) is not. The way I visualise
+		 * this is that we're standing to the right of a
+		 * boundary line, stretching our left arm out to
+		 * point to the exterior square on the far side.
+		 
+		 * First, check if we've gone round the entire
+		 * polyomino.
+		 
+		 * Add to our coordinate list the coordinate
+		 * backwards and to the left of where we are.
+		 
+		 * Follow the edge round. If the square directly in
+		 * front of us is not part of the polyomino, we
+		 * turn right; if it is and so is the square in
+		 * front of (x+dx,y+dy), we turn left; otherwise we
+		 * go straight on.
+		  Turn right.  Turn left.  Straight on. 
+	     * Now we have our polygon complete, so fill it.
+	     
+	     * And mark this polyomino as done.
+	     
+     * Draw the edges.
+     
+     * Draw the dots.
+      game_request_keys  wants_statusbar  wants_statusbar  flags 
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./galaxiespicture < badly-drawn-cat.xbm
+ *   11x11:eloMBLzFeEzLNMWifhaWYdDbixCymBbBMLoDdewGg
+ *
+ * If you want a puzzle with a non-standard difficulty level, pass
+ * a partial parameters string as a command-line argument (e.g.
+ * `./galaxiespicture du < foo.xbm', where `du' is the same suffix
+ * which if it appeared in a random-seed game ID would set the
+ * difficulty level to Unreasonable). However, be aware that if the
+ * generator fails to produce an adequately difficult puzzle too
+ * many times then it will give up and return an easier one (just
+ * as it does during normal GUI play). To be sure you really have
+ * the difficulty you asked for, use galaxiessolver to
+ * double-check.
+ * 
+ * (Perhaps I ought to include an option to make this standalone
+ * generator carry on looping until it really does get the right
+ * difficulty. Hmmm.)
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 
+ * galaxies.c: implementation of 'Tentai Show' from Nikoli,
+ *             also sometimes called 'Spiral Galaxies'.
+ *
+ * Notes:
+ *
+ * Grid is stored as size (2n-1), holding edges as well as spaces
+ * (and thus vertices too, at edge intersections).
+ *
+ * Any dot will thus be positioned at one of our grid points,
+ * which saves any faffing with half-of-a-square stuff.
+ *
+ * Edges have on/off state; obviously the actual edges of the
+ * board are fixed to on, and everything else starts as off.
+ *
+ * TTD:
+   * Cleverer solver
+   * Think about how to display remote groups of tiles?
+ *
+ * Bugs:
+ *
+ * Notable puzzle IDs:
+ *
+ * Nikoli's example [web site has wrong highlighting]
+ * (at http://www.nikoli.co.jp/en/puzzles/astronomical_show/):
+ *  5x5:eBbbMlaBbOEnf
+ *
+ * The 'spiral galaxies puzzles are NP-complete' paper
+ * (at http://www.stetson.edu/~efriedma/papers/spiral.pdf):
+ *  7x7:chpgdqqqoezdddki
+ *
+ * Puzzle competition pdf examples
+ * (at http://www.puzzleratings.org/Yurekli2006puz.pdf):
+ *  6x6:EDbaMucCohbrecEi
+ *  10x10:beFbufEEzowDlxldibMHezBQzCdcFzjlci
+ *  13x13:dCemIHFFkJajjgDfdbdBzdzEgjccoPOcztHjBczLDjczqktJjmpreivvNcggFi
+ *
+ 
+ * Dirty hack to enable the generator to construct a game ID which
+ * solves to a specified black-and-white bitmap. We define a global
+ * variable here which gives the desired colour of each square, and
+ * we arrange that the grid generator never merges squares of
+ * different colours.
+ *
+ * The bitmap as stored here is a simple int array (at these sizes
+ * it isn't worth doing fiddly bit-packing). picture[y*w+x] is 1
+ * iff the pixel at (x,y) is intended to be black.
+ *
+ * (It might be nice to be able to specify some pixels as
+ * don't-care, to give the generator more leeway. But that might be
+ * fiddly.)
+  X and Y is the area of the board as seen by
+     * the user, not the (2n+1) area the game uses.  there's a dot here  the edge is set  this tile is associated with a dot.  (ui only) dot is black.  scratch flag  its position  if flags & F_TILE_ASSOC  if flags & F_DOT  size from params  allocated size, (2x-1)*(2y-1)  to call supersede_game_desc  difficulty of current puzzle (for status bar),
+                           or -1 if stale.  ----------------------------------------------------------
+ * Game parameters and presets
+  make up some sensible default sizes  structure copy  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      ----------------------------------------------------------
+ * Game utility functions.
+ debug(("add_assoc sp %d %d --> dot %d,%d, new nassoc %d.\n",
+           tile->x, tile->y, dot->x, dot->y, dot->nassoc)); association with not-a-dot.  Space-enumeration callbacks should all return 1 for 'progress made',
+ * -1 for 'impossible', and 0 otherwise.  0 if not same or not both associated.  opposite would be off grid  opposite already associated with diff. dot  this function needs optimising.  Returns a move string for use by 'solve', including the initial
+ * 'S' if issolve is true.  Both associated; change association, if different  Only src associated; remove.  Only dest associated; add.  edge flags are different; flip them.  Returns true if a dot here would not be too close to any other dots
+ * (and would avoid other game furniture). 
+             * Check that all the squares we're looking at have the
+             * same colour.
+              colour mismatch  Other than our own square, no dots nearby.  We don't want edges within our rectangle
+             * (but don't care about edges on the edge)  ----------------------------------------------------------
+ * Game generation, structure creation, and descriptions.
+  filled in by new_game.  don't erase edge flags around outline!  Game description is a sequence of letters representing the number
+ * of spaces (a = 0, y = 24) before the next dot; a-y for a white dot,
+ * and A-Y for a black dot. 'z' is 25 spaces (and no dot).
+ *
+ * I know it's a bitch to generate by hand, so we provide
+ * an edit mode.
+  a/A is 0 spaces between, b/B is 1 space, ...
+             * y/Y is 24 spaces, za/zA is 25 spaces, ...
+             * It's easier to count from 0 because we then
+             * don't have to special-case the top left-hand corner
+             * (which could be a dot with 0 spaces before it).  If the tile is associated with the old dot, check its
+        * opposite wrt the _new_ dot is empty or same assoc.  no new opposite  associated, but wrong dot. 
+	    * Reject if either tile and the dot don't match in colour.
+	     Move dot associations: anything that was associated
+        * with the old dot, and its opposite wrt the new dot,
+        * become associated with the new dot.  we did something!  For the given dot, first see if we could expand it into all the given
+ * extra spaces (by checking for empty spaces on the far side), and then
+ * see if we can move the dot to shift the CoG to include the new spaces.
+ 
+	 * Reject the expansion totally if any of the new tiles are
+	 * the wrong colour.
+	  First off, could we just expand the current dot's tile to cover
+     * the space(s) passed in and their opposites? 
+	     * The opposite tiles have to be the right colour as well.
+	      OK, all spaces have valid empty opposites: associate spaces and
+     * opposites with our dot.  Otherwise, try to move dot so as to encompass given spaces:  first, calculate the 'centre of gravity' of the new dot.  number of tiles assoc. with new dot.  If the CoG isn't a whole number, it's not possible.  Check whether all spaces in the old tile would have a good
+     * opposite wrt the new dot.  Also check whether all spaces we're adding would have a good
+     * opposite wrt the new dot.  If we've got here, we're ok. First, associate all of 'toadd'
+     * with the _old_ dot (so they'll get fixed up, with their opposites,
+     * in the next step).  Finally, move the dot and fix up all the old associations.  Hard-code to a max. of 2x2 squares, for speed (less malloc)  We limit the maximum size of tiles to be ~2*sqrt(area); so,
+     * a 5x5 grid shouldn't have anything >10 tiles, a 20x20 grid
+     * nothing >40 tiles.  Make a static list of the spaces; if any space is already
+     * associated then quit immediately.  Make a list of the spaces outside of our block, and shuffle it.  This bug took me a, er, little while to track down. On PalmOS,
+     * which has 16-bit signed ints, puzzles over about 9x9 started
+     * failing to generate because the nspc calculation would start
+     * to overflow, causing the dots not to be filled in properly.  heuristic; expanding from vertices tends to generate lots of
+             * too-big regions of tiles.  we expanded successfully.  If we've got here we might want to put a dot down. Check
+         * if we can, and add one if so.  Random list of squares to try and process, one-by-one.  generate_pass(state, rs, scratch, 10, GP_DOTS);  generate_pass(state, rs, scratch, 100, 0); 
+         * We'll grudgingly accept a too-easy puzzle, but we must
+         * _not_ permit a too-hard one (one which the solver
+         * couldn't handle at all).
+         
+     * Postprocessing pass to prevent excessive numbers of adjacent
+     * singletons. Iterate over all edges in random shuffled order;
+     * for each edge that separates two regions, investigate
+     * whether removing that edge and merging the regions would
+     * still yield a valid and soluble puzzle. (The two regions
+     * must also be the same colour, of course.) If so, do it.
+     * 
+     * This postprocessing pass is slow (due to repeated solver
+     * invocations), and seems to be unnecessary during normal
+     * unconstrained game generation. However, when generating a
+     * game under colour constraints, excessive singletons seem to
+     * turn up more often, so it's worth doing this.
+      Coordinates of edge space  Coordinates of square spaces on either side of edge  round down to next odd number  and reflect about x to get x1  outermost edge of grid  tiles _already_ owned by same dot  different colours: cannot merge 
+	     * Work out where the centre of gravity of the new
+	     * region would be.
+	      CoG not at integer coordinates 
+	     * Ensure that the CoG would actually be _in_ the new
+	     * region, by verifying that all its surrounding tiles
+	     * belong to one or other of our two dots.
+	      round down to next odd number  and reflect about cx to get cx1 
+	     * Verify that for every tile in either source region,
+	     * that tile's image in the new CoG is also in one of
+	     * the two source regions.
+	      not part of these tiles anyway 
+	     * Now we're clear to attempt the merge. We take a copy
+	     * of the game state first, so we can revert it easily
+	     * if the resulting puzzle turns out to have become
+	     * insoluble.
+	      not part of these tiles anyway  Still just as soluble. Let the merge stand.  Became insoluble. Revert.  Quick-and-dirty check, using half the solver:
+     * solver_obvious will only fail if the dots are
+     * too close together, so dot-proximity associations
+     * overlap.  if we got here we incremented i and have a dot to add.  ----------------------------------------------------------
+ * Solver and all its little wizards.
+  state->sx * state->sy  size sz  Solver ideas so far:
+     *
+     * For any empty space, work out how many dots it could associate
+     * with:
+       * it needs line-of-sight
+       * it needs an empty space on the far side
+       * any adjacent lines need corresponding line possibilities.
+      The solver_ctx should keep a list of dot positions, for quicker looping.
+ *
+ * Solver techniques, in order of difficulty:
+   * obvious adjacency to dots
+   * transferring tiles to opposite side
+   * transferring lines to opposite side
+   * one possible dot for a given tile based on opposite availability
+   * tile with 3 definite edges next to an associated tile must associate
+      with same dot.
+   *
+   * one possible dot for a given tile based on line-of-sight
+  no-op  if tiles[0] && tiles[1] && they're both associated
+     * and they're both associated with different dots,
+     * ensure the line is set.  No edge, but the two adjacent tiles are both
+         * associated with different dots; add the edge.  edge of tile has no opposite edge (off grid?);
+             * this is impossible.  Empty tile. If each edge is either set, or associated with
+     * the same dot, we must also associate with dot.  If an adjacent tile is empty we can't make any deductions. If an adjacent tile is assoc. with a different dot
+             * we can't make any deductions.  really should have done something.  Improved algorithm for tracking line-of-sight from dots, and not spaces.
+ *
+ * The solver_ctx already stores a list of dots: the algorithm proceeds by
+ * expanding outwards from each dot in turn, expanding first to the boundary
+ * of its currently-connected tile and then to all empty tiles that could see
+ * it. Empty tiles will be flagged with a 'can see dot <x,y>' sticker.
+ *
+ * Expansion will happen by (symmetrically opposite) pairs of squares; if
+ * a square hasn't an opposite number there's no point trying to expand through
+ * it. Empty tiles will therefore also be tagged in pairs.
+ *
+ * If an empty tile already has a 'can see dot <x,y>' tag from a previous dot,
+ * it (and its partner) gets untagged (or, rather, a 'can see two dots' tag)
+ * because we're looking for single-dot possibilities.
+ *
+ * Once we've gone through all the dots, any which still have a 'can see dot'
+ * tag get associated with that dot (because it must have been the only one);
+ * any without any tag (i.e. that could see _no_ dots) cause an impossibility
+ * marked.
+ *
+ * The expansion will happen each time with a stored list of (space *) pairs,
+ * rather than a mark-and-sweep idea; that's horrifically inefficient.
+ *
+ * expansion algorithm:
+ *
+ * * allocate list of (space *) the size of s->sx*s->sy.
+ * * allocate second grid for (flags, dotx, doty) size of sx*sy.
+ *
+ * clear second grid (flags = 0, all dotx and doty = 0)
+ * flags: F_REACHABLE, F_MULTIPLE
+ *
+ *
+ * * for each dot, start with one pair of tiles that are associated with it --
+ *   * vertex --> (dx+1, dy+1), (dx-1, dy-1)
+ *   * edge --> (adj1, adj2)
+ *   * tile --> (tile, tile) ???
+ * * mark that pair of tiles with F_MARK, clear all other F_MARKs.
+ * * add two tiles to start of list.
+ *
+ * set start = 0, end = next = 2
+ *
+ * from (start to end-1, step 2) {
+ * * we have two tiles (t1, t2), opposites wrt our dot.
+ * * for each (at1) sensible adjacent tile to t1 (i.e. not past an edge):
+ *   * work out at2 as the opposite to at1
+ *   * assert at1 and at2 have the same F_MARK values.
+ *   * if at1 & F_MARK ignore it (we've been there on a previous sweep)
+ *   * if either are associated with a different dot
+ *     * mark both with F_MARK (so we ignore them later)
+ *   * otherwise (assoc. with our dot, or empty):
+ *     * mark both with F_MARK
+ *     * add their space * values to the end of the list, set next += 2.
+ * }
+ *
+ * if (end == next)
+ * * we didn't add any new squares; exit the loop.
+ * else
+ * * set start = next+1, end = next. go round again
+ *
+ * We've finished expanding from the dot. Now, for each square we have
+ * in our list (--> each square with F_MARK):
+ * * if the tile is empty:
+ *   * if F_REACHABLE was already set
+ *     * set F_MULTIPLE
+ *   * otherwise
+ *     * set F_REACHABLE, set dotx and doty to our dot.
+ *
+ * Then, continue the whole thing for each dot in turn.
+ *
+ * Once we've done for each dot, go through the entire grid looking for
+ * empty tiles: for each empty tile:
+   * if F_REACHABLE and not F_MULTIPLE, set that dot (and its double)
+   * if !F_REACHABLE, return as impossible.
+ *
+  Returns true if this tile is either already associated with this dot,
+ * or blank.  Clear the grid of the (space) flags we'll use.  This is well optimised; analysis showed that:
+        for (i = 0; i < sctx->sz; i++) state->grid[i].flags &= ~F_MARK;
+       took up ~85% of the total function time!  Seed the list of marked squares with two that must be associated
+     * with our dot (possibly the same space)  pick two of the opposite ones arbitrarily. , *t2 = sctx->scratch[i+1] seen before.  We have a tile adjacent to t1; find its opposite.  no opposite, so mark for next time.  If the tile had an opposite we should have either seen both of
+             * these, or neither of these, before.  Both tiles could associate with this dot; add them to
+                 * our list.  Either way, we've seen these tiles already so mark them.  We added more squares; go back and try again.  We've expanded as far as we can go. Now we update the main flags
+     * on all tiles we've expanded into -- if they were empty, we have
+     * found possible associations for this dot.  This is (at least) the second dot this tile could
+             * associate with.  This is the first (possibly only) dot.  We're unassociated: count up all the dots we could associate with.  Work out the cell to recurse on; go through all unassociated tiles
+     * and find which one has the most possible dots it could associate
+     * with.  or assert?  set cell (temporarily) pointing to that dot.  we found our first solved grid; copy it away.  reset cell back to unassociated.  no change  precisely one solution  if we've found >1 solution, or ran out of recursion,
+         * give up immediately.  we found (at least one) soln; copy it back to state  hack, hack: set picture to NULL during solving so that add_assoc
+     * won't complain when we attempt recursive guessing and guess wrong  harder still?  if we reach here, we've made no deductions, so we terminate. 
+     * Clear tile associations: the solution will only include the
+     * edges.
+      ----------------------------------------------------------
+ * User interface.
+  pixel coords of drag pos.  grid coords of dot we're dragging from.  grid coords of drag start 
+ * Round FP coordinates to the centre of the nearest edge.
+ 
+     * Find the nearest square-centre.
+     
+     * Find the nearest grid vertex.
+     
+     * Determine whether the horizontal or vertical edge from that
+     * vertex alongside that square is closer to us, by comparing
+     * distances from the square cente.
+      Vertical edge: x-coord of corner,
+         * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+         * y-coord of corner.  UI operations (play mode):
+     *
+     * Toggle edge (set/unset) (left-click on edge)
+     * Associate space with dot (left-drag from dot)
+     * Unassociate space (left-drag from space off grid)
+     * Autofill lines around shape? (right-click?)
+     *
+     * (edit mode; will clear all lines/associations)
+     *
+     * Add or remove dot (left-click)
+     
+         * If there's a dot anywhere nearby, we pick up an arrow
+         * pointing at that dot.
+         
+                     * Found a dot. Begin a drag from it.
+                      multi-level break 
+         * Otherwise, find the nearest _square_, and pick up the
+         * same arrow as it's got on it, if any.
+         
+         * Now, if we've managed to find a dot, begin a drag.
+          just move the drag coords. 
+         * Drags are always targeted at a single square.
+         
+	 * Dragging an arrow on to the same square it started from
+	 * is a null move; just update the ui and finish.
+	 
+	 * Otherwise, we remove the arrow from its starting
+	 * square if we didn't start from a dot...
+	 
+	 * ... and if the square we're moving it _to_ is valid, we
+	 * add one there instead.
+	 
+             * Exception: if it's not actually legal to add an arrow
+             * and its opposite at this position, we don't try,
+             * because otherwise we'd append an empty entry to the
+             * undo chain.
+             
+     * During actual game play, completion checking is done on the
+     * basis of the edges rather than the square associations. So
+     * first we must go through the grid figuring out the connected
+     * components into which the edges divide it.
+     
+     * That gives us our connected components. Now, for each
+     * component, decide whether it's _valid_. A valid component is
+     * one which:
+     *
+     *  - is 180-degree rotationally symmetric
+     *  - has a dot at its centre of symmetry
+     *  - has no other dots anywhere within it (including on its
+     *    boundary)
+     *  - contains no internal edges (i.e. edges separating two
+     *    squares which are both part of the component).
+     
+     * First, go through the grid finding the bounding box of each
+     * component.
+     
+     * Now we're in a position to loop over each actual component
+     * and figure out where its centre of symmetry has to be if
+     * it's anywhere.
+      no dot at centre of symmetry  dot at cx,cy isn't ours 
+     * Now we loop over the whole grid again, this time finding
+     * extraneous dots (any dot which wholly or partially overlaps
+     * a square and is not at the centre of symmetry of that
+     * square's component disqualifies the component from validity)
+     * and extraneous edges (any edge separating two squares
+     * belonging to the same component also disqualifies that
+     * component).
+     
+                 * There's a dot here. Use it to disqualify any
+                 * component which deserves it.
+                 
+                 * There's an edge here. Use it to disqualify a
+                 * component if necessary.
+                 
+     * And finally we test rotational symmetry: for each square in
+     * the grid, find which component it's in, test that that
+     * component also has a square in the symmetric position, and
+     * disqualify it if it doesn't.
+     
+     * That's it. We now have all the connected components marked
+     * as valid or not valid. So now we return a `colours' array if
+     * we were asked for one, and also we return an overall
+     * true/false value depending on whether _every_ square in the
+     * grid is part of a valid component.
+      if we clicked 'white dot':
+                 *   white --> empty, empty --> white, black --> white.
+                 * if we clicked 'black dot':
+                 *   black --> empty, empty --> black, white --> black.
+                  edit-mode disallows associations.  The solver doesn't assume we'll mirror things  The solver doesn't assume we'll mirror things  ----------------------------------------------------------------------
+ * Drawing routines.
+  Lines will be much smaller size than squares; say, 1/8 the size?
+ *
+ * Need a 'top-left corner of location XxY' to take this into account;
+ * alternaticaly, that could give the middle of that location, and the
+ * drawing code would just know the expected dimensions.
+ *
+ * We also need something to take a click and work out what it was
+ * we were interested in. Clicking on vertices is required because
+ * we may want to drag from them, for example.
+ 
+     * We call game_mkhighlight to ensure the background colour
+     * isn't completely white. We don't actually use the high- and
+     * lowlight colours it generates.
+     
+         * Currently, white dots and white-background squares are
+         * both pure white.
+         
+         * But black-background squares are a dark grey, whereas
+         * black dots are really black.
+         
+         * In unfilled squares, we draw a faint gridwork.
+         
+         * Edges and arrows are filled in in pure black.
+          tinge the edit background to bluey 
+ * Draw an arrow centred on (cx,cy), pointing in the direction
+ * (ddx,ddy). (I.e. pointing at the point (cx+ddx, cy+ddy).
+ 
+     * Draw the tile background.
+     
+     * Draw the grid.
+     
+     * Draw the arrow, if present, or the cursor, if here.
+     
+     * Draw the edges.
+     
+     * Draw the dots.
+      oppositex - dotx = dotx - x <=> oppositex = 2 * dotx - x 
+             * Set up the flags for this square. Firstly, see if we
+             * have edges.
+             
+             * Also, mark corners of neighbouring edges.
+             
+             * If this square is part of a valid region, paint it
+             * that region's colour. Exception: if we're flashing,
+             * everything goes briefly back to background colour.
+             
+             * If this square is associated with a dot but it isn't
+             * part of a valid region, draw an arrow in it pointing
+             * in the direction of that dot.
+	     * 
+	     * Exception: if this is the source point of an active
+	     * drag, we don't draw the arrow.
+              tile is the source, don't do it  opposite tile is the source, don't do it 
+             * Now go through the nine possible places we could
+             * have dots.
+             
+             * Now work out if we have to draw a cursor for this square;
+             * cursors-on-lines are taken care of below.
+             
+             * Now we have everything we're going to need. Draw the
+             * square.
+             
+     * Draw a cursor. This secondary blitter is much less invasive than trying
+     * to fix up all of the rest of the code with sufficient flags to be able to
+     * display this sensibly.
+      draw a red dot (over the top of whatever would be there already)  draw an edge/vertex square; tile cursors are dealt with above. 
+    * 8mm squares by default. (There isn't all that much detail
+    * that needs to go in each square.)
+     Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Get the completion information.
+     
+     * Draw the grid.
+     
+     * Shade the completed regions. Just in case any particular
+     * printing platform deals badly with adjacent
+     * similarly-hatched regions, we'll fill each one as a single
+     * polygon.
+     
+	     * This is the first square we've run into belonging to
+	     * this polyomino, which means an edge of the polyomino
+	     * is certain to be to our left. (After we finish
+	     * tracing round it, we'll set the colours[] entry to
+	     * zero to prevent accidentally doing it again.)
+	     
+		 * We are currently sitting on square (x,y), which
+		 * we know to be in our polyomino, and we also know
+		 * that (x+dx,y+dy) is not. The way I visualise
+		 * this is that we're standing to the right of a
+		 * boundary line, stretching our left arm out to
+		 * point to the exterior square on the far side.
+		 
+		 * First, check if we've gone round the entire
+		 * polyomino.
+		 
+		 * Add to our coordinate list the coordinate
+		 * backwards and to the left of where we are.
+		 
+		 * Follow the edge round. If the square directly in
+		 * front of us is not part of the polyomino, we
+		 * turn right; if it is and so is the square in
+		 * front of (x+dx,y+dy), we turn left; otherwise we
+		 * go straight on.
+		  Turn right.  Turn left.  Straight on. 
+	     * Now we have our polygon complete, so fill it.
+	     
+	     * And mark this polyomino as done.
+	     
+     * Draw the edges.
+     
+     * Draw the dots.
+      game_request_keys  wants_statusbar  wants_statusbar  flags 
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./galaxiespicture < badly-drawn-cat.xbm
+ *   11x11:eloMBLzFeEzLNMWifhaWYdDbixCymBbBMLoDdewGg
+ *
+ * If you want a puzzle with a non-standard difficulty level, pass
+ * a partial parameters string as a command-line argument (e.g.
+ * `./galaxiespicture du < foo.xbm', where `du' is the same suffix
+ * which if it appeared in a random-seed game ID would set the
+ * difficulty level to Unreasonable). However, be aware that if the
+ * generator fails to produce an adequately difficult puzzle too
+ * many times then it will give up and return an easier one (just
+ * as it does during normal GUI play). To be sure you really have
+ * the difficulty you asked for, use galaxiessolver to
+ * double-check.
+ * 
+ * (Perhaps I ought to include an option to make this standalone
+ * generator carry on looping until it really does get the right
+ * difficulty. Hmmm.)
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 
+ * galaxies.c: implementation of 'Tentai Show' from Nikoli,
+ *             also sometimes called 'Spiral Galaxies'.
+ *
+ * Notes:
+ *
+ * Grid is stored as size (2n-1), holding edges as well as spaces
+ * (and thus vertices too, at edge intersections).
+ *
+ * Any dot will thus be positioned at one of our grid points,
+ * which saves any faffing with half-of-a-square stuff.
+ *
+ * Edges have on/off state; obviously the actual edges of the
+ * board are fixed to on, and everything else starts as off.
+ *
+ * TTD:
+   * Cleverer solver
+   * Think about how to display remote groups of tiles?
+ *
+ * Bugs:
+ *
+ * Notable puzzle IDs:
+ *
+ * Nikoli's example [web site has wrong highlighting]
+ * (at http://www.nikoli.co.jp/en/puzzles/astronomical_show/):
+ *  5x5:eBbbMlaBbOEnf
+ *
+ * The 'spiral galaxies puzzles are NP-complete' paper
+ * (at http://www.stetson.edu/~efriedma/papers/spiral.pdf):
+ *  7x7:chpgdqqqoezdddki
+ *
+ * Puzzle competition pdf examples
+ * (at http://www.puzzleratings.org/Yurekli2006puz.pdf):
+ *  6x6:EDbaMucCohbrecEi
+ *  10x10:beFbufEEzowDlxldibMHezBQzCdcFzjlci
+ *  13x13:dCemIHFFkJajjgDfdbdBzdzEgjccoPOcztHjBczLDjczqktJjmpreivvNcggFi
+ *
+ 
+ * Dirty hack to enable the generator to construct a game ID which
+ * solves to a specified black-and-white bitmap. We define a global
+ * variable here which gives the desired colour of each square, and
+ * we arrange that the grid generator never merges squares of
+ * different colours.
+ *
+ * The bitmap as stored here is a simple int array (at these sizes
+ * it isn't worth doing fiddly bit-packing). picture[y*w+x] is 1
+ * iff the pixel at (x,y) is intended to be black.
+ *
+ * (It might be nice to be able to specify some pixels as
+ * don't-care, to give the generator more leeway. But that might be
+ * fiddly.)
+  X and Y is the area of the board as seen by
+     * the user, not the (2n+1) area the game uses.  there's a dot here  the edge is set  this tile is associated with a dot.  (ui only) dot is black.  scratch flag  its position  if flags & F_TILE_ASSOC  if flags & F_DOT  size from params  allocated size, (2x-1)*(2y-1)  to call supersede_game_desc  difficulty of current puzzle (for status bar),
+                           or -1 if stale.  ----------------------------------------------------------
+ * Game parameters and presets
+  make up some sensible default sizes  structure copy  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      ----------------------------------------------------------
+ * Game utility functions.
+ debug(("add_assoc sp %d %d --> dot %d,%d, new nassoc %d.\n",
+           tile->x, tile->y, dot->x, dot->y, dot->nassoc)); association with not-a-dot.  Space-enumeration callbacks should all return 1 for 'progress made',
+ * -1 for 'impossible', and 0 otherwise.  0 if not same or not both associated.  opposite would be off grid  opposite already associated with diff. dot  this function needs optimising.  Returns a move string for use by 'solve', including the initial
+ * 'S' if issolve is true.  Both associated; change association, if different  Only src associated; remove.  Only dest associated; add.  edge flags are different; flip them.  Returns true if a dot here would not be too close to any other dots
+ * (and would avoid other game furniture). 
+             * Check that all the squares we're looking at have the
+             * same colour.
+              colour mismatch  Other than our own square, no dots nearby.  We don't want edges within our rectangle
+             * (but don't care about edges on the edge)  ----------------------------------------------------------
+ * Game generation, structure creation, and descriptions.
+  filled in by new_game.  don't erase edge flags around outline!  Game description is a sequence of letters representing the number
+ * of spaces (a = 0, y = 24) before the next dot; a-y for a white dot,
+ * and A-Y for a black dot. 'z' is 25 spaces (and no dot).
+ *
+ * I know it's a bitch to generate by hand, so we provide
+ * an edit mode.
+  a/A is 0 spaces between, b/B is 1 space, ...
+             * y/Y is 24 spaces, za/zA is 25 spaces, ...
+             * It's easier to count from 0 because we then
+             * don't have to special-case the top left-hand corner
+             * (which could be a dot with 0 spaces before it).  If the tile is associated with the old dot, check its
+        * opposite wrt the _new_ dot is empty or same assoc.  no new opposite  associated, but wrong dot. 
+	    * Reject if either tile and the dot don't match in colour.
+	     Move dot associations: anything that was associated
+        * with the old dot, and its opposite wrt the new dot,
+        * become associated with the new dot.  we did something!  For the given dot, first see if we could expand it into all the given
+ * extra spaces (by checking for empty spaces on the far side), and then
+ * see if we can move the dot to shift the CoG to include the new spaces.
+ 
+	 * Reject the expansion totally if any of the new tiles are
+	 * the wrong colour.
+	  First off, could we just expand the current dot's tile to cover
+     * the space(s) passed in and their opposites? 
+	     * The opposite tiles have to be the right colour as well.
+	      OK, all spaces have valid empty opposites: associate spaces and
+     * opposites with our dot.  Otherwise, try to move dot so as to encompass given spaces:  first, calculate the 'centre of gravity' of the new dot.  number of tiles assoc. with new dot.  If the CoG isn't a whole number, it's not possible.  Check whether all spaces in the old tile would have a good
+     * opposite wrt the new dot.  Also check whether all spaces we're adding would have a good
+     * opposite wrt the new dot.  If we've got here, we're ok. First, associate all of 'toadd'
+     * with the _old_ dot (so they'll get fixed up, with their opposites,
+     * in the next step).  Finally, move the dot and fix up all the old associations.  Hard-code to a max. of 2x2 squares, for speed (less malloc)  We limit the maximum size of tiles to be ~2*sqrt(area); so,
+     * a 5x5 grid shouldn't have anything >10 tiles, a 20x20 grid
+     * nothing >40 tiles.  Make a static list of the spaces; if any space is already
+     * associated then quit immediately.  Make a list of the spaces outside of our block, and shuffle it.  This bug took me a, er, little while to track down. On PalmOS,
+     * which has 16-bit signed ints, puzzles over about 9x9 started
+     * failing to generate because the nspc calculation would start
+     * to overflow, causing the dots not to be filled in properly.  heuristic; expanding from vertices tends to generate lots of
+             * too-big regions of tiles.  we expanded successfully.  If we've got here we might want to put a dot down. Check
+         * if we can, and add one if so.  Random list of squares to try and process, one-by-one.  generate_pass(state, rs, scratch, 10, GP_DOTS);  generate_pass(state, rs, scratch, 100, 0); 
+         * We'll grudgingly accept a too-easy puzzle, but we must
+         * _not_ permit a too-hard one (one which the solver
+         * couldn't handle at all).
+         
+     * Postprocessing pass to prevent excessive numbers of adjacent
+     * singletons. Iterate over all edges in random shuffled order;
+     * for each edge that separates two regions, investigate
+     * whether removing that edge and merging the regions would
+     * still yield a valid and soluble puzzle. (The two regions
+     * must also be the same colour, of course.) If so, do it.
+     * 
+     * This postprocessing pass is slow (due to repeated solver
+     * invocations), and seems to be unnecessary during normal
+     * unconstrained game generation. However, when generating a
+     * game under colour constraints, excessive singletons seem to
+     * turn up more often, so it's worth doing this.
+      Coordinates of edge space  Coordinates of square spaces on either side of edge  round down to next odd number  and reflect about x to get x1  outermost edge of grid  tiles _already_ owned by same dot  different colours: cannot merge 
+	     * Work out where the centre of gravity of the new
+	     * region would be.
+	      CoG not at integer coordinates 
+	     * Ensure that the CoG would actually be _in_ the new
+	     * region, by verifying that all its surrounding tiles
+	     * belong to one or other of our two dots.
+	      round down to next odd number  and reflect about cx to get cx1 
+	     * Verify that for every tile in either source region,
+	     * that tile's image in the new CoG is also in one of
+	     * the two source regions.
+	      not part of these tiles anyway 
+	     * Now we're clear to attempt the merge. We take a copy
+	     * of the game state first, so we can revert it easily
+	     * if the resulting puzzle turns out to have become
+	     * insoluble.
+	      not part of these tiles anyway  Still just as soluble. Let the merge stand.  Became insoluble. Revert.  Quick-and-dirty check, using half the solver:
+     * solver_obvious will only fail if the dots are
+     * too close together, so dot-proximity associations
+     * overlap.  if we got here we incremented i and have a dot to add.  ----------------------------------------------------------
+ * Solver and all its little wizards.
+  state->sx * state->sy  size sz  Solver ideas so far:
+     *
+     * For any empty space, work out how many dots it could associate
+     * with:
+       * it needs line-of-sight
+       * it needs an empty space on the far side
+       * any adjacent lines need corresponding line possibilities.
+      The solver_ctx should keep a list of dot positions, for quicker looping.
+ *
+ * Solver techniques, in order of difficulty:
+   * obvious adjacency to dots
+   * transferring tiles to opposite side
+   * transferring lines to opposite side
+   * one possible dot for a given tile based on opposite availability
+   * tile with 3 definite edges next to an associated tile must associate
+      with same dot.
+   *
+   * one possible dot for a given tile based on line-of-sight
+  no-op  if tiles[0] && tiles[1] && they're both associated
+     * and they're both associated with different dots,
+     * ensure the line is set.  No edge, but the two adjacent tiles are both
+         * associated with different dots; add the edge.  edge of tile has no opposite edge (off grid?);
+             * this is impossible.  Empty tile. If each edge is either set, or associated with
+     * the same dot, we must also associate with dot.  If an adjacent tile is empty we can't make any deductions. If an adjacent tile is assoc. with a different dot
+             * we can't make any deductions.  really should have done something.  Improved algorithm for tracking line-of-sight from dots, and not spaces.
+ *
+ * The solver_ctx already stores a list of dots: the algorithm proceeds by
+ * expanding outwards from each dot in turn, expanding first to the boundary
+ * of its currently-connected tile and then to all empty tiles that could see
+ * it. Empty tiles will be flagged with a 'can see dot <x,y>' sticker.
+ *
+ * Expansion will happen by (symmetrically opposite) pairs of squares; if
+ * a square hasn't an opposite number there's no point trying to expand through
+ * it. Empty tiles will therefore also be tagged in pairs.
+ *
+ * If an empty tile already has a 'can see dot <x,y>' tag from a previous dot,
+ * it (and its partner) gets untagged (or, rather, a 'can see two dots' tag)
+ * because we're looking for single-dot possibilities.
+ *
+ * Once we've gone through all the dots, any which still have a 'can see dot'
+ * tag get associated with that dot (because it must have been the only one);
+ * any without any tag (i.e. that could see _no_ dots) cause an impossibility
+ * marked.
+ *
+ * The expansion will happen each time with a stored list of (space *) pairs,
+ * rather than a mark-and-sweep idea; that's horrifically inefficient.
+ *
+ * expansion algorithm:
+ *
+ * * allocate list of (space *) the size of s->sx*s->sy.
+ * * allocate second grid for (flags, dotx, doty) size of sx*sy.
+ *
+ * clear second grid (flags = 0, all dotx and doty = 0)
+ * flags: F_REACHABLE, F_MULTIPLE
+ *
+ *
+ * * for each dot, start with one pair of tiles that are associated with it --
+ *   * vertex --> (dx+1, dy+1), (dx-1, dy-1)
+ *   * edge --> (adj1, adj2)
+ *   * tile --> (tile, tile) ???
+ * * mark that pair of tiles with F_MARK, clear all other F_MARKs.
+ * * add two tiles to start of list.
+ *
+ * set start = 0, end = next = 2
+ *
+ * from (start to end-1, step 2) {
+ * * we have two tiles (t1, t2), opposites wrt our dot.
+ * * for each (at1) sensible adjacent tile to t1 (i.e. not past an edge):
+ *   * work out at2 as the opposite to at1
+ *   * assert at1 and at2 have the same F_MARK values.
+ *   * if at1 & F_MARK ignore it (we've been there on a previous sweep)
+ *   * if either are associated with a different dot
+ *     * mark both with F_MARK (so we ignore them later)
+ *   * otherwise (assoc. with our dot, or empty):
+ *     * mark both with F_MARK
+ *     * add their space * values to the end of the list, set next += 2.
+ * }
+ *
+ * if (end == next)
+ * * we didn't add any new squares; exit the loop.
+ * else
+ * * set start = next+1, end = next. go round again
+ *
+ * We've finished expanding from the dot. Now, for each square we have
+ * in our list (--> each square with F_MARK):
+ * * if the tile is empty:
+ *   * if F_REACHABLE was already set
+ *     * set F_MULTIPLE
+ *   * otherwise
+ *     * set F_REACHABLE, set dotx and doty to our dot.
+ *
+ * Then, continue the whole thing for each dot in turn.
+ *
+ * Once we've done for each dot, go through the entire grid looking for
+ * empty tiles: for each empty tile:
+   * if F_REACHABLE and not F_MULTIPLE, set that dot (and its double)
+   * if !F_REACHABLE, return as impossible.
+ *
+  Returns true if this tile is either already associated with this dot,
+ * or blank.  Clear the grid of the (space) flags we'll use.  This is well optimised; analysis showed that:
+        for (i = 0; i < sctx->sz; i++) state->grid[i].flags &= ~F_MARK;
+       took up ~85% of the total function time!  Seed the list of marked squares with two that must be associated
+     * with our dot (possibly the same space)  pick two of the opposite ones arbitrarily. , *t2 = sctx->scratch[i+1] seen before.  We have a tile adjacent to t1; find its opposite.  no opposite, so mark for next time.  If the tile had an opposite we should have either seen both of
+             * these, or neither of these, before.  Both tiles could associate with this dot; add them to
+                 * our list.  Either way, we've seen these tiles already so mark them.  We added more squares; go back and try again.  We've expanded as far as we can go. Now we update the main flags
+     * on all tiles we've expanded into -- if they were empty, we have
+     * found possible associations for this dot.  This is (at least) the second dot this tile could
+             * associate with.  This is the first (possibly only) dot.  We're unassociated: count up all the dots we could associate with.  Work out the cell to recurse on; go through all unassociated tiles
+     * and find which one has the most possible dots it could associate
+     * with.  or assert?  set cell (temporarily) pointing to that dot.  we found our first solved grid; copy it away.  reset cell back to unassociated.  no change  precisely one solution  if we've found >1 solution, or ran out of recursion,
+         * give up immediately.  we found (at least one) soln; copy it back to state  hack, hack: set picture to NULL during solving so that add_assoc
+     * won't complain when we attempt recursive guessing and guess wrong  harder still?  if we reach here, we've made no deductions, so we terminate. 
+     * Clear tile associations: the solution will only include the
+     * edges.
+      ----------------------------------------------------------
+ * User interface.
+  pixel coords of drag pos.  grid coords of dot we're dragging from.  grid coords of drag start 
+ * Round FP coordinates to the centre of the nearest edge.
+ 
+     * Find the nearest square-centre.
+     
+     * Find the nearest grid vertex.
+     
+     * Determine whether the horizontal or vertical edge from that
+     * vertex alongside that square is closer to us, by comparing
+     * distances from the square cente.
+      Vertical edge: x-coord of corner,
+         * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+         * y-coord of corner.  UI operations (play mode):
+     *
+     * Toggle edge (set/unset) (left-click on edge)
+     * Associate space with dot (left-drag from dot)
+     * Unassociate space (left-drag from space off grid)
+     * Autofill lines around shape? (right-click?)
+     *
+     * (edit mode; will clear all lines/associations)
+     *
+     * Add or remove dot (left-click)
+     
+         * If there's a dot anywhere nearby, we pick up an arrow
+         * pointing at that dot.
+         
+                     * Found a dot. Begin a drag from it.
+                      multi-level break 
+         * Otherwise, find the nearest _square_, and pick up the
+         * same arrow as it's got on it, if any.
+         
+         * Now, if we've managed to find a dot, begin a drag.
+          just move the drag coords. 
+         * Drags are always targeted at a single square.
+         
+	 * Dragging an arrow on to the same square it started from
+	 * is a null move; just update the ui and finish.
+	 
+	 * Otherwise, we remove the arrow from its starting
+	 * square if we didn't start from a dot...
+	 
+	 * ... and if the square we're moving it _to_ is valid, we
+	 * add one there instead.
+	 
+             * Exception: if it's not actually legal to add an arrow
+             * and its opposite at this position, we don't try,
+             * because otherwise we'd append an empty entry to the
+             * undo chain.
+             
+     * During actual game play, completion checking is done on the
+     * basis of the edges rather than the square associations. So
+     * first we must go through the grid figuring out the connected
+     * components into which the edges divide it.
+     
+     * That gives us our connected components. Now, for each
+     * component, decide whether it's _valid_. A valid component is
+     * one which:
+     *
+     *  - is 180-degree rotationally symmetric
+     *  - has a dot at its centre of symmetry
+     *  - has no other dots anywhere within it (including on its
+     *    boundary)
+     *  - contains no internal edges (i.e. edges separating two
+     *    squares which are both part of the component).
+     
+     * First, go through the grid finding the bounding box of each
+     * component.
+     
+     * Now we're in a position to loop over each actual component
+     * and figure out where its centre of symmetry has to be if
+     * it's anywhere.
+      no dot at centre of symmetry  dot at cx,cy isn't ours 
+     * Now we loop over the whole grid again, this time finding
+     * extraneous dots (any dot which wholly or partially overlaps
+     * a square and is not at the centre of symmetry of that
+     * square's component disqualifies the component from validity)
+     * and extraneous edges (any edge separating two squares
+     * belonging to the same component also disqualifies that
+     * component).
+     
+                 * There's a dot here. Use it to disqualify any
+                 * component which deserves it.
+                 
+                 * There's an edge here. Use it to disqualify a
+                 * component if necessary.
+                 
+     * And finally we test rotational symmetry: for each square in
+     * the grid, find which component it's in, test that that
+     * component also has a square in the symmetric position, and
+     * disqualify it if it doesn't.
+     
+     * That's it. We now have all the connected components marked
+     * as valid or not valid. So now we return a `colours' array if
+     * we were asked for one, and also we return an overall
+     * true/false value depending on whether _every_ square in the
+     * grid is part of a valid component.
+      if we clicked 'white dot':
+                 *   white --> empty, empty --> white, black --> white.
+                 * if we clicked 'black dot':
+                 *   black --> empty, empty --> black, white --> black.
+                  edit-mode disallows associations.  The solver doesn't assume we'll mirror things  The solver doesn't assume we'll mirror things  ----------------------------------------------------------------------
+ * Drawing routines.
+  Lines will be much smaller size than squares; say, 1/8 the size?
+ *
+ * Need a 'top-left corner of location XxY' to take this into account;
+ * alternaticaly, that could give the middle of that location, and the
+ * drawing code would just know the expected dimensions.
+ *
+ * We also need something to take a click and work out what it was
+ * we were interested in. Clicking on vertices is required because
+ * we may want to drag from them, for example.
+ 
+     * We call game_mkhighlight to ensure the background colour
+     * isn't completely white. We don't actually use the high- and
+     * lowlight colours it generates.
+     
+         * Currently, white dots and white-background squares are
+         * both pure white.
+         
+         * But black-background squares are a dark grey, whereas
+         * black dots are really black.
+         
+         * In unfilled squares, we draw a faint gridwork.
+         
+         * Edges and arrows are filled in in pure black.
+          tinge the edit background to bluey 
+ * Draw an arrow centred on (cx,cy), pointing in the direction
+ * (ddx,ddy). (I.e. pointing at the point (cx+ddx, cy+ddy).
+ 
+     * Draw the tile background.
+     
+     * Draw the grid.
+     
+     * Draw the arrow, if present, or the cursor, if here.
+     
+     * Draw the edges.
+     
+     * Draw the dots.
+      oppositex - dotx = dotx - x <=> oppositex = 2 * dotx - x 
+             * Set up the flags for this square. Firstly, see if we
+             * have edges.
+             
+             * Also, mark corners of neighbouring edges.
+             
+             * If this square is part of a valid region, paint it
+             * that region's colour. Exception: if we're flashing,
+             * everything goes briefly back to background colour.
+             
+             * If this square is associated with a dot but it isn't
+             * part of a valid region, draw an arrow in it pointing
+             * in the direction of that dot.
+	     * 
+	     * Exception: if this is the source point of an active
+	     * drag, we don't draw the arrow.
+              tile is the source, don't do it  opposite tile is the source, don't do it 
+             * Now go through the nine possible places we could
+             * have dots.
+             
+             * Now work out if we have to draw a cursor for this square;
+             * cursors-on-lines are taken care of below.
+             
+             * Now we have everything we're going to need. Draw the
+             * square.
+             
+     * Draw a cursor. This secondary blitter is much less invasive than trying
+     * to fix up all of the rest of the code with sufficient flags to be able to
+     * display this sensibly.
+      draw a red dot (over the top of whatever would be there already)  draw an edge/vertex square; tile cursors are dealt with above. 
+    * 8mm squares by default. (There isn't all that much detail
+    * that needs to go in each square.)
+     Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Get the completion information.
+     
+     * Draw the grid.
+     
+     * Shade the completed regions. Just in case any particular
+     * printing platform deals badly with adjacent
+     * similarly-hatched regions, we'll fill each one as a single
+     * polygon.
+     
+	     * This is the first square we've run into belonging to
+	     * this polyomino, which means an edge of the polyomino
+	     * is certain to be to our left. (After we finish
+	     * tracing round it, we'll set the colours[] entry to
+	     * zero to prevent accidentally doing it again.)
+	     
+		 * We are currently sitting on square (x,y), which
+		 * we know to be in our polyomino, and we also know
+		 * that (x+dx,y+dy) is not. The way I visualise
+		 * this is that we're standing to the right of a
+		 * boundary line, stretching our left arm out to
+		 * point to the exterior square on the far side.
+		 
+		 * First, check if we've gone round the entire
+		 * polyomino.
+		 
+		 * Add to our coordinate list the coordinate
+		 * backwards and to the left of where we are.
+		 
+		 * Follow the edge round. If the square directly in
+		 * front of us is not part of the polyomino, we
+		 * turn right; if it is and so is the square in
+		 * front of (x+dx,y+dy), we turn left; otherwise we
+		 * go straight on.
+		  Turn right.  Turn left.  Straight on. 
+	     * Now we have our polygon complete, so fill it.
+	     
+	     * And mark this polyomino as done.
+	     
+     * Draw the edges.
+     
+     * Draw the dots.
+      game_request_keys  wants_statusbar  wants_statusbar  flags 
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./galaxiespicture < badly-drawn-cat.xbm
+ *   11x11:eloMBLzFeEzLNMWifhaWYdDbixCymBbBMLoDdewGg
+ *
+ * If you want a puzzle with a non-standard difficulty level, pass
+ * a partial parameters string as a command-line argument (e.g.
+ * `./galaxiespicture du < foo.xbm', where `du' is the same suffix
+ * which if it appeared in a random-seed game ID would set the
+ * difficulty level to Unreasonable). However, be aware that if the
+ * generator fails to produce an adequately difficult puzzle too
+ * many times then it will give up and return an easier one (just
+ * as it does during normal GUI play). To be sure you really have
+ * the difficulty you asked for, use galaxiessolver to
+ * double-check.
+ * 
+ * (Perhaps I ought to include an option to make this standalone
+ * generator carry on looping until it really does get the right
+ * difficulty. Hmmm.)
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 

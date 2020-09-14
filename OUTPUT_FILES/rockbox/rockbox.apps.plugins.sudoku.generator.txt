@@ -1,0 +1,466 @@
+ sudoku.c - sudoku game
+ *
+ * Writing a fun Su-Do-Ku game has turned out to be a difficult exercise.
+ * The biggest difficulty is keeping the game fun - and this means allowing
+ * the user to make mistakes. The game is not much fun if it prevents the
+ * user from making moves, or if it informs them of an incorrect move.
+ * With movement constraints, the 'game' is little more than an automated
+ * solver (and no fun at all).
+ *
+ * Another challenge is generating good puzzles that are entertaining to
+ * solve. It is certainly true that there is an art to creating good
+ * Su-Do-Ku puzzles, and that good hand generated puzzles are more
+ * entertaining than many computer generated puzzles - I just hope that
+ * the algorithm implemented here provides fun puzzles. It is an area
+ * that needs work. The puzzle classification is very simple, and could
+ * also do with work. Finally, understanding the automatically generated
+ * hints is sometimes more work than solving the puzzle - a better, and
+ * more human friendly, mechanism is needed.
+ *
+ * Comments, suggestions, and contributions are always welcome - send email
+ * to: mike 'at' laurasia.com.au. Note that this code assumes a single
+ * threaded process, makes extensive use of global variables, and has
+ * not been written to be reused in other applications. The code makes no
+ * use of dynamic memory allocation, and hence, requires no heap. It should
+ * also run with minimal stack space.
+ *
+ * This code and accompanying files have been placed into the public domain
+ * by Michael Kennett, July 2005. It is provided without any warranty
+ * whatsoever, and in no event shall Michael Kennett be liable for
+ * any damages of any kind, however caused, arising from this software.
+  Common state encoding in a 32-bit integer:
+ *   bits  0-6    index
+ *         7-15   state  [bit high signals digits not possible]
+ *        16-19   digit
+ *           20   fixed  [set if digit initially fixed]
+ *           21   choice [set if solver chose this digit]
+ *           22   ignore [set if ignored by reapply()]
+ *           23   unused
+ *        24-26   hint
+ *        27-31   unused
+  digits 1..9  Hint codes (c.f. singles(), pairs(), findmoves())  For a general board it may be necessary to do backtracking (i.e. to
+ * rewind the board to an earlier state), and make choices during the
+ * solution process. This can be implemented naturally using recursion,
+ * but it is more efficient to maintain a single board.
+  Addressing board elements: linear array 0..80  Blocks indexed 0..9  Board state  Record move history, and maintain a counter for the current
+ * move number. Concessions are made for the user interface, and
+ * allow digit 0 to indicate clearing a square. The move history
+ * is used to support 'undo's for the user interface, and hence
+ * is larger than required - there is sufficient space to solve
+ * the puzzle, undo every move, and then redo the puzzle - and
+ * if the user requires more space, then the full history will be
+ * lost.
+  Possible moves for a given board (c.f. fillmoves()).
+ * Also used by choice() when the deterministic solver has failed,
+ * and for calculating user hints. The number of hints is stored
+ * in num_hints, or -1 if no hints calculated. The number of hints
+ * requested by the user since their last move is stored in req_hints;
+ * if the user keeps requesting hints, start giving more information.
+ * Finally, record the last hint issued to the user; attempt to give
+ * different hints each time.
+  count # passes of deterministic solver  Support for template file  Template indices  Number of template indices  Reset global state  Management of the move history - compression  Management of the move history - adding a move  Never ignore the last move  Ignore all previous references to idx  Iteration over rows/columns/blocks handled by specialised code.
+ * Each function returns a block index - call must manage element/idx.
+  Index within a row  Index within a column  Index within a block  Update board state after setting a digit (clearing not handled)
+  filled - no choice possible  Digit cannot appear in row, column or block  Refresh board state, given move history. Note that this can yield
+ * an incorrect state if the user has made errors - return -1 if an
+ * incorrect state is generated; else return 0 for a correct state.
+  Clear moves, leaving fixed squares
+  # digits expressed in element square  Count of digits (c.f. count_set_digits())  Count # set bits (within STATE_MASK)  Fill square with given digit, and update state.
+ * Returns 0 on success, else -1 on error (i.e. invalid fill)
+  Find all squares with a single digit allowed -- do not mutate board  Digit 'i+1' appears just once in the element  8 digits are masked at this position - just one remaining  Given the board state, find all possible 'moves' (i.e. squares with just
+ * a single digit).
+ *
+ * Returns the number of (deterministic) moves (and fills the moves array),
+ * or 0 if no moves are possible. This function does not mutate the board
+ * state, and hence, can return the same move multiple times (with
+ * different hints).
+  Strategies for refining the board state
+ *  - 'pairs'     if there are two unfilled squares in a given row/column/
+ *                block with the same state, and just two possibilities,
+ *                then all other unfilled squares in the row/column/block
+ *                CANNOT be either of these digits.
+ *  - 'block'     if the unknown squares in a block all appear in the same
+ *                row or column, then all unknown squares outside the block
+ *                and in the same row/column cannot be any of the unknown
+ *                squares in the block.
+ *  - 'common'    if all possible locations for a digit in a block appear
+ *                in a row or column, then that digit cannot appear outside
+ *                the block in the same row or column.
+ *  - 'position2' if the positions of 2 unknown digits in a block match
+ *                identically in precisely 2 positions, then those 2 positions
+ *                can only contain the 2 unknown digits.
+ *
+ * Recall that each state bit uses a 1 to prevent a digit from
+ * filling that square.
+  2 digits unknown  Found a row/column pair - mask other entries  now processed  Worker: mask elements outside block  Worker for block()  By assumption, all unknown squares in the block appear in the
+     * same row/column, so to construct a mask for these squares, it
+     * is sufficient to invert the mask for the known squares in the
+     * block.
+      Find first unknown square  Value '9' indicates invalid  Digit possible?  Digit appears in multiple rows  Digit appears in multiple columns  Encoding of positions of a digit (c.f. position2()) - abuse DIGIT_STATE  Calculate positions of each digit within block  Find pairs of matching positions, and mask  Find some moves for the board; starts with a simple approach (finding
+ * singles), and if no moves found, starts using more involved strategies
+ * until a move is found. The more advanced strategies can mask states
+ * in the board, making this an efficient mechanism, but difficult for
+ * a human to understand.
+  Helper: sort based on index  unused function  Return number of hints. The hints mechanism should attempt to find
+ * 'easy' moves first, and if none are possible, then try for more
+ * cryptic moves.
+  Each call to pairs() can mutate the board state, making the
+         * hints very, very cryptic... so later undo the mutations.
+          Sort the possible moves, and allow just one hint per square  Let the user make mistakes - do not assume the
+                 * board is in a consistent state.
+                  Undo any mutations of the board state  unused function  Deterministic solver; return 0 on success, else -1 on error.
+  Return index of square for choice.
+ *
+ * If no choice is possible (i.e. board solved or inconsistent),
+ * return -1.
+ *
+ * The current implementation finds a square with the minimum
+ * number of unknown digits (i.e. maximum # masked digits).
+  Inconsistency if square unknown, but nothing possible  All squares known  Choose a digit for the given square.
+ * The starting digit is passed as a parameter.
+ * Returns -1 if no choice possible.
+  Backtrack to a previous choice point, and attempt to reseed
+ * the search. Return -1 if no further choice possible, or
+ * the index of the changed square.
+ *
+ * Assumes that the move history and board are valid.
+  Remember the last choice, and advance  Attempt to solve 'board'; return 0 on success else -1 on error.
+ *
+ * The solution process attempts to fill-in deterministically as
+ * much of the board as possible. Once that is no longer possible,
+ * need to choose a square to fill in.
+  Solved, make a new choice, or rewind a previous choice  rewind to a previous choice  Consume grid - allow leading spaces and comments at end  Construct move history for a template  Finally, markup all of these moves as 'fixed'  Classify a SuDoKu, given its solution.
+ *
+ * The classification is based on the average number of possible moves
+ * for each pass of the deterministic solver - it is a rather simplistic
+ * measure, but gives reasonable results. Note also that the classification
+ * is based on the first solution found (but does handle the pathological
+ * case of multiple solutions). Note that the average moves per pass
+ * depends just on the number of squares initially set... this simplifies
+ * the statistics collection immensely, requiring just the number of passes
+ * to be counted.
+ *
+ * Return 0 on error, else a string classification.
+  exchange disjoint, identical length blocks of data  rotate left  rotate right  Generalised left rotation - there is a naturally recursive
+ * solution that is best implementation using iteration.
+ * Note that it is not necessary to do repeated unit rotations.
+ *
+ * This function is analogous to 'cutting' a 'pack of cards'.
+ *
+ * On entry: 0 < idx < len
+  0 < delta  Shuffle an array of integers  Generate a SuDoKu puzzle
+ *
+ * The generation process selects a random template, and then attempts
+ * to fill in the exposed squares to generate a board. The order of the
+ * digits and of filling in the exposed squares are random.
+  Select random template; sets tmplt, len_tmplt  Allow the user to abort generation by pressing any button  construct a new board  Allow the user to abort generation by pressing any button  Allow the user to abort generation by pressing any button  Construct fixed squares  User has aborted with a button press  sudoku.c - sudoku game
+ *
+ * Writing a fun Su-Do-Ku game has turned out to be a difficult exercise.
+ * The biggest difficulty is keeping the game fun - and this means allowing
+ * the user to make mistakes. The game is not much fun if it prevents the
+ * user from making moves, or if it informs them of an incorrect move.
+ * With movement constraints, the 'game' is little more than an automated
+ * solver (and no fun at all).
+ *
+ * Another challenge is generating good puzzles that are entertaining to
+ * solve. It is certainly true that there is an art to creating good
+ * Su-Do-Ku puzzles, and that good hand generated puzzles are more
+ * entertaining than many computer generated puzzles - I just hope that
+ * the algorithm implemented here provides fun puzzles. It is an area
+ * that needs work. The puzzle classification is very simple, and could
+ * also do with work. Finally, understanding the automatically generated
+ * hints is sometimes more work than solving the puzzle - a better, and
+ * more human friendly, mechanism is needed.
+ *
+ * Comments, suggestions, and contributions are always welcome - send email
+ * to: mike 'at' laurasia.com.au. Note that this code assumes a single
+ * threaded process, makes extensive use of global variables, and has
+ * not been written to be reused in other applications. The code makes no
+ * use of dynamic memory allocation, and hence, requires no heap. It should
+ * also run with minimal stack space.
+ *
+ * This code and accompanying files have been placed into the public domain
+ * by Michael Kennett, July 2005. It is provided without any warranty
+ * whatsoever, and in no event shall Michael Kennett be liable for
+ * any damages of any kind, however caused, arising from this software.
+  Common state encoding in a 32-bit integer:
+ *   bits  0-6    index
+ *         7-15   state  [bit high signals digits not possible]
+ *        16-19   digit
+ *           20   fixed  [set if digit initially fixed]
+ *           21   choice [set if solver chose this digit]
+ *           22   ignore [set if ignored by reapply()]
+ *           23   unused
+ *        24-26   hint
+ *        27-31   unused
+  digits 1..9  Hint codes (c.f. singles(), pairs(), findmoves())  For a general board it may be necessary to do backtracking (i.e. to
+ * rewind the board to an earlier state), and make choices during the
+ * solution process. This can be implemented naturally using recursion,
+ * but it is more efficient to maintain a single board.
+  Addressing board elements: linear array 0..80  Blocks indexed 0..9  Board state  Record move history, and maintain a counter for the current
+ * move number. Concessions are made for the user interface, and
+ * allow digit 0 to indicate clearing a square. The move history
+ * is used to support 'undo's for the user interface, and hence
+ * is larger than required - there is sufficient space to solve
+ * the puzzle, undo every move, and then redo the puzzle - and
+ * if the user requires more space, then the full history will be
+ * lost.
+  Possible moves for a given board (c.f. fillmoves()).
+ * Also used by choice() when the deterministic solver has failed,
+ * and for calculating user hints. The number of hints is stored
+ * in num_hints, or -1 if no hints calculated. The number of hints
+ * requested by the user since their last move is stored in req_hints;
+ * if the user keeps requesting hints, start giving more information.
+ * Finally, record the last hint issued to the user; attempt to give
+ * different hints each time.
+  count # passes of deterministic solver  Support for template file  Template indices  Number of template indices  Reset global state  Management of the move history - compression  Management of the move history - adding a move  Never ignore the last move  Ignore all previous references to idx  Iteration over rows/columns/blocks handled by specialised code.
+ * Each function returns a block index - call must manage element/idx.
+  Index within a row  Index within a column  Index within a block  Update board state after setting a digit (clearing not handled)
+  filled - no choice possible  Digit cannot appear in row, column or block  Refresh board state, given move history. Note that this can yield
+ * an incorrect state if the user has made errors - return -1 if an
+ * incorrect state is generated; else return 0 for a correct state.
+  Clear moves, leaving fixed squares
+  # digits expressed in element square  Count of digits (c.f. count_set_digits())  Count # set bits (within STATE_MASK)  Fill square with given digit, and update state.
+ * Returns 0 on success, else -1 on error (i.e. invalid fill)
+  Find all squares with a single digit allowed -- do not mutate board  Digit 'i+1' appears just once in the element  8 digits are masked at this position - just one remaining  Given the board state, find all possible 'moves' (i.e. squares with just
+ * a single digit).
+ *
+ * Returns the number of (deterministic) moves (and fills the moves array),
+ * or 0 if no moves are possible. This function does not mutate the board
+ * state, and hence, can return the same move multiple times (with
+ * different hints).
+  Strategies for refining the board state
+ *  - 'pairs'     if there are two unfilled squares in a given row/column/
+ *                block with the same state, and just two possibilities,
+ *                then all other unfilled squares in the row/column/block
+ *                CANNOT be either of these digits.
+ *  - 'block'     if the unknown squares in a block all appear in the same
+ *                row or column, then all unknown squares outside the block
+ *                and in the same row/column cannot be any of the unknown
+ *                squares in the block.
+ *  - 'common'    if all possible locations for a digit in a block appear
+ *                in a row or column, then that digit cannot appear outside
+ *                the block in the same row or column.
+ *  - 'position2' if the positions of 2 unknown digits in a block match
+ *                identically in precisely 2 positions, then those 2 positions
+ *                can only contain the 2 unknown digits.
+ *
+ * Recall that each state bit uses a 1 to prevent a digit from
+ * filling that square.
+  2 digits unknown  Found a row/column pair - mask other entries  now processed  Worker: mask elements outside block  Worker for block()  By assumption, all unknown squares in the block appear in the
+     * same row/column, so to construct a mask for these squares, it
+     * is sufficient to invert the mask for the known squares in the
+     * block.
+      Find first unknown square  Value '9' indicates invalid  Digit possible?  Digit appears in multiple rows  Digit appears in multiple columns  Encoding of positions of a digit (c.f. position2()) - abuse DIGIT_STATE  Calculate positions of each digit within block  Find pairs of matching positions, and mask  Find some moves for the board; starts with a simple approach (finding
+ * singles), and if no moves found, starts using more involved strategies
+ * until a move is found. The more advanced strategies can mask states
+ * in the board, making this an efficient mechanism, but difficult for
+ * a human to understand.
+  Helper: sort based on index  unused function  Return number of hints. The hints mechanism should attempt to find
+ * 'easy' moves first, and if none are possible, then try for more
+ * cryptic moves.
+  Each call to pairs() can mutate the board state, making the
+         * hints very, very cryptic... so later undo the mutations.
+          Sort the possible moves, and allow just one hint per square  Let the user make mistakes - do not assume the
+                 * board is in a consistent state.
+                  Undo any mutations of the board state  unused function  Deterministic solver; return 0 on success, else -1 on error.
+  Return index of square for choice.
+ *
+ * If no choice is possible (i.e. board solved or inconsistent),
+ * return -1.
+ *
+ * The current implementation finds a square with the minimum
+ * number of unknown digits (i.e. maximum # masked digits).
+  Inconsistency if square unknown, but nothing possible  All squares known  Choose a digit for the given square.
+ * The starting digit is passed as a parameter.
+ * Returns -1 if no choice possible.
+  Backtrack to a previous choice point, and attempt to reseed
+ * the search. Return -1 if no further choice possible, or
+ * the index of the changed square.
+ *
+ * Assumes that the move history and board are valid.
+  Remember the last choice, and advance  Attempt to solve 'board'; return 0 on success else -1 on error.
+ *
+ * The solution process attempts to fill-in deterministically as
+ * much of the board as possible. Once that is no longer possible,
+ * need to choose a square to fill in.
+  Solved, make a new choice, or rewind a previous choice  rewind to a previous choice  Consume grid - allow leading spaces and comments at end  Construct move history for a template  Finally, markup all of these moves as 'fixed'  Classify a SuDoKu, given its solution.
+ *
+ * The classification is based on the average number of possible moves
+ * for each pass of the deterministic solver - it is a rather simplistic
+ * measure, but gives reasonable results. Note also that the classification
+ * is based on the first solution found (but does handle the pathological
+ * case of multiple solutions). Note that the average moves per pass
+ * depends just on the number of squares initially set... this simplifies
+ * the statistics collection immensely, requiring just the number of passes
+ * to be counted.
+ *
+ * Return 0 on error, else a string classification.
+  exchange disjoint, identical length blocks of data  rotate left  rotate right  Generalised left rotation - there is a naturally recursive
+ * solution that is best implementation using iteration.
+ * Note that it is not necessary to do repeated unit rotations.
+ *
+ * This function is analogous to 'cutting' a 'pack of cards'.
+ *
+ * On entry: 0 < idx < len
+  0 < delta  Shuffle an array of integers  Generate a SuDoKu puzzle
+ *
+ * The generation process selects a random template, and then attempts
+ * to fill in the exposed squares to generate a board. The order of the
+ * digits and of filling in the exposed squares are random.
+  Select random template; sets tmplt, len_tmplt  Allow the user to abort generation by pressing any button  construct a new board  Allow the user to abort generation by pressing any button  Allow the user to abort generation by pressing any button  Construct fixed squares  User has aborted with a button press  sudoku.c - sudoku game
+ *
+ * Writing a fun Su-Do-Ku game has turned out to be a difficult exercise.
+ * The biggest difficulty is keeping the game fun - and this means allowing
+ * the user to make mistakes. The game is not much fun if it prevents the
+ * user from making moves, or if it informs them of an incorrect move.
+ * With movement constraints, the 'game' is little more than an automated
+ * solver (and no fun at all).
+ *
+ * Another challenge is generating good puzzles that are entertaining to
+ * solve. It is certainly true that there is an art to creating good
+ * Su-Do-Ku puzzles, and that good hand generated puzzles are more
+ * entertaining than many computer generated puzzles - I just hope that
+ * the algorithm implemented here provides fun puzzles. It is an area
+ * that needs work. The puzzle classification is very simple, and could
+ * also do with work. Finally, understanding the automatically generated
+ * hints is sometimes more work than solving the puzzle - a better, and
+ * more human friendly, mechanism is needed.
+ *
+ * Comments, suggestions, and contributions are always welcome - send email
+ * to: mike 'at' laurasia.com.au. Note that this code assumes a single
+ * threaded process, makes extensive use of global variables, and has
+ * not been written to be reused in other applications. The code makes no
+ * use of dynamic memory allocation, and hence, requires no heap. It should
+ * also run with minimal stack space.
+ *
+ * This code and accompanying files have been placed into the public domain
+ * by Michael Kennett, July 2005. It is provided without any warranty
+ * whatsoever, and in no event shall Michael Kennett be liable for
+ * any damages of any kind, however caused, arising from this software.
+  Common state encoding in a 32-bit integer:
+ *   bits  0-6    index
+ *         7-15   state  [bit high signals digits not possible]
+ *        16-19   digit
+ *           20   fixed  [set if digit initially fixed]
+ *           21   choice [set if solver chose this digit]
+ *           22   ignore [set if ignored by reapply()]
+ *           23   unused
+ *        24-26   hint
+ *        27-31   unused
+  digits 1..9  Hint codes (c.f. singles(), pairs(), findmoves())  For a general board it may be necessary to do backtracking (i.e. to
+ * rewind the board to an earlier state), and make choices during the
+ * solution process. This can be implemented naturally using recursion,
+ * but it is more efficient to maintain a single board.
+  Addressing board elements: linear array 0..80  Blocks indexed 0..9  Board state  Record move history, and maintain a counter for the current
+ * move number. Concessions are made for the user interface, and
+ * allow digit 0 to indicate clearing a square. The move history
+ * is used to support 'undo's for the user interface, and hence
+ * is larger than required - there is sufficient space to solve
+ * the puzzle, undo every move, and then redo the puzzle - and
+ * if the user requires more space, then the full history will be
+ * lost.
+  Possible moves for a given board (c.f. fillmoves()).
+ * Also used by choice() when the deterministic solver has failed,
+ * and for calculating user hints. The number of hints is stored
+ * in num_hints, or -1 if no hints calculated. The number of hints
+ * requested by the user since their last move is stored in req_hints;
+ * if the user keeps requesting hints, start giving more information.
+ * Finally, record the last hint issued to the user; attempt to give
+ * different hints each time.
+  count # passes of deterministic solver  Support for template file  Template indices  Number of template indices  Reset global state  Management of the move history - compression  Management of the move history - adding a move  Never ignore the last move  Ignore all previous references to idx  Iteration over rows/columns/blocks handled by specialised code.
+ * Each function returns a block index - call must manage element/idx.
+  Index within a row  Index within a column  Index within a block  Update board state after setting a digit (clearing not handled)
+  filled - no choice possible  Digit cannot appear in row, column or block  Refresh board state, given move history. Note that this can yield
+ * an incorrect state if the user has made errors - return -1 if an
+ * incorrect state is generated; else return 0 for a correct state.
+  Clear moves, leaving fixed squares
+  # digits expressed in element square  Count of digits (c.f. count_set_digits())  Count # set bits (within STATE_MASK)  Fill square with given digit, and update state.
+ * Returns 0 on success, else -1 on error (i.e. invalid fill)
+  Find all squares with a single digit allowed -- do not mutate board  Digit 'i+1' appears just once in the element  8 digits are masked at this position - just one remaining  Given the board state, find all possible 'moves' (i.e. squares with just
+ * a single digit).
+ *
+ * Returns the number of (deterministic) moves (and fills the moves array),
+ * or 0 if no moves are possible. This function does not mutate the board
+ * state, and hence, can return the same move multiple times (with
+ * different hints).
+  Strategies for refining the board state
+ *  - 'pairs'     if there are two unfilled squares in a given row/column/
+ *                block with the same state, and just two possibilities,
+ *                then all other unfilled squares in the row/column/block
+ *                CANNOT be either of these digits.
+ *  - 'block'     if the unknown squares in a block all appear in the same
+ *                row or column, then all unknown squares outside the block
+ *                and in the same row/column cannot be any of the unknown
+ *                squares in the block.
+ *  - 'common'    if all possible locations for a digit in a block appear
+ *                in a row or column, then that digit cannot appear outside
+ *                the block in the same row or column.
+ *  - 'position2' if the positions of 2 unknown digits in a block match
+ *                identically in precisely 2 positions, then those 2 positions
+ *                can only contain the 2 unknown digits.
+ *
+ * Recall that each state bit uses a 1 to prevent a digit from
+ * filling that square.
+  2 digits unknown  Found a row/column pair - mask other entries  now processed  Worker: mask elements outside block  Worker for block()  By assumption, all unknown squares in the block appear in the
+     * same row/column, so to construct a mask for these squares, it
+     * is sufficient to invert the mask for the known squares in the
+     * block.
+      Find first unknown square  Value '9' indicates invalid  Digit possible?  Digit appears in multiple rows  Digit appears in multiple columns  Encoding of positions of a digit (c.f. position2()) - abuse DIGIT_STATE  Calculate positions of each digit within block  Find pairs of matching positions, and mask  Find some moves for the board; starts with a simple approach (finding
+ * singles), and if no moves found, starts using more involved strategies
+ * until a move is found. The more advanced strategies can mask states
+ * in the board, making this an efficient mechanism, but difficult for
+ * a human to understand.
+  Helper: sort based on index  unused function  Return number of hints. The hints mechanism should attempt to find
+ * 'easy' moves first, and if none are possible, then try for more
+ * cryptic moves.
+  Each call to pairs() can mutate the board state, making the
+         * hints very, very cryptic... so later undo the mutations.
+          Sort the possible moves, and allow just one hint per square  Let the user make mistakes - do not assume the
+                 * board is in a consistent state.
+                  Undo any mutations of the board state  unused function  Deterministic solver; return 0 on success, else -1 on error.
+  Return index of square for choice.
+ *
+ * If no choice is possible (i.e. board solved or inconsistent),
+ * return -1.
+ *
+ * The current implementation finds a square with the minimum
+ * number of unknown digits (i.e. maximum # masked digits).
+  Inconsistency if square unknown, but nothing possible  All squares known  Choose a digit for the given square.
+ * The starting digit is passed as a parameter.
+ * Returns -1 if no choice possible.
+  Backtrack to a previous choice point, and attempt to reseed
+ * the search. Return -1 if no further choice possible, or
+ * the index of the changed square.
+ *
+ * Assumes that the move history and board are valid.
+  Remember the last choice, and advance  Attempt to solve 'board'; return 0 on success else -1 on error.
+ *
+ * The solution process attempts to fill-in deterministically as
+ * much of the board as possible. Once that is no longer possible,
+ * need to choose a square to fill in.
+  Solved, make a new choice, or rewind a previous choice  rewind to a previous choice  Consume grid - allow leading spaces and comments at end  Construct move history for a template  Finally, markup all of these moves as 'fixed'  Classify a SuDoKu, given its solution.
+ *
+ * The classification is based on the average number of possible moves
+ * for each pass of the deterministic solver - it is a rather simplistic
+ * measure, but gives reasonable results. Note also that the classification
+ * is based on the first solution found (but does handle the pathological
+ * case of multiple solutions). Note that the average moves per pass
+ * depends just on the number of squares initially set... this simplifies
+ * the statistics collection immensely, requiring just the number of passes
+ * to be counted.
+ *
+ * Return 0 on error, else a string classification.
+  exchange disjoint, identical length blocks of data  rotate left  rotate right  Generalised left rotation - there is a naturally recursive
+ * solution that is best implementation using iteration.
+ * Note that it is not necessary to do repeated unit rotations.
+ *
+ * This function is analogous to 'cutting' a 'pack of cards'.
+ *
+ * On entry: 0 < idx < len
+  0 < delta  Shuffle an array of integers  Generate a SuDoKu puzzle
+ *
+ * The generation process selects a random template, and then attempts
+ * to fill in the exposed squares to generate a board. The order of the
+ * digits and of filling in the exposed squares are random.
+  Select random template; sets tmplt, len_tmplt  Allow the user to abort generation by pressing any button  construct a new board  Allow the user to abort generation by pressing any button  Allow the user to abort generation by pressing any button  Construct fixed squares  User has aborted with a button press 

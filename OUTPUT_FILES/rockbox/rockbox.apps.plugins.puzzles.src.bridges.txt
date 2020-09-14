@@ -1,0 +1,862 @@
+
+ * bridges.c: Implementation of the Nikoli game 'Bridges'.
+ *
+ * Things still to do:
+ *
+ *  - The solver's algorithmic design is not really ideal. It makes
+ *    use of the same data representation as gameplay uses, which
+ *    often looks like a tempting reuse of code but isn't always a
+ *    good idea. In this case, it's unpleasant that each edge of the
+ *    graph ends up represented as multiple squares on a grid, with
+ *    flags indicating when edges and non-edges cross; that's useful
+ *    when the result can be directly translated into positions of
+ *    graphics on the display, but in purely internal work it makes
+ *    even simple manipulations during solving more painful than they
+ *    should be, and complex ones have no choice but to modify the
+ *    data structures temporarily, test things, and put them back. I
+ *    envisage a complete solver rewrite along the following lines:
+ *     + We have a collection of vertices (islands) and edges
+ *       (potential bridge locations, i.e. pairs of horizontal or
+ *       vertical islands with no other island in between).
+ *     + Each edge has an associated list of edges that cross it, and
+ *       hence with which it is mutually exclusive.
+ *     + For each edge, we track the min and max number of bridges we
+ *       currently think possible.
+ *     + For each vertex, we track the number of _liberties_ it has,
+ *       i.e. its clue number minus the min bridge count for each edge
+ *       out of it.
+ *     + We also maintain a dsf that identifies sets of vertices which
+ *       are connected components of the puzzle so far, and for each
+ *       equivalence class we track the total number of liberties for
+ *       that component. (The dsf mechanism will also already track
+ *       the size of each component, i.e. number of islands.)
+ *     + So incrementing the min for an edge requires processing along
+ *       the lines of:
+ *        - set the max for all edges crossing that one to zero
+ *        - decrement the liberty count for the vertex at each end,
+ *          and also for each vertex's equivalence class (NB they may
+ *          be the same class)
+ *        - unify the two equivalence classes if they're not already,
+ *          and if so, set the liberty count for the new class to be
+ *          the sum of the previous two.
+ *     + Decrementing the max is much easier, however.
+ *     + With this data structure the really fiddly stuff in stage3()
+ *       becomes more or less trivial, because it's now a quick job to
+ *       find out whether an island would form an isolated subgraph if
+ *       connected to a given subset of its neighbours:
+ *        - identify the connected components containing the test
+ *          vertex and its putative new neighbours (but be careful not
+ *          to count a component more than once if two or more of the
+ *          vertices involved are already in the same one)
+ *        - find the sum of those components' liberty counts, and also
+ *          the total number of islands involved
+ *        - if the total liberty count of the connected components is
+ *          exactly equal to twice the number of edges we'd be adding
+ *          (of course each edge destroys two liberties, one at each
+ *          end) then these components would become a subgraph with
+ *          zero liberties if connected together.
+ *        - therefore, if that subgraph also contains fewer than the
+ *          total number of islands, it's disallowed.
+ *        - As mentioned in stage3(), once we've identified such a
+ *          disallowed pattern, we have two choices for what to do
+ *          with it: if the candidate set of neighbours has size 1 we
+ *          can reduce the max for the edge to that one neighbour,
+ *          whereas if its complement has size 1 we can increase the
+ *          min for the edge to the _omitted_ neighbour.
+ *
+ *  - write a recursive solver?
+  Turn this on for hints about which lines are considered possibilities.  --- structures for params, state, etc. ---  %age of island squares, %age chance of expansion  general flags used by all structs  contains a vert. line  contains a horiz. line (mutex with LINEV)  flags used by the error checker  flags used by the solver etc.  change me later if we invent > 16 bits of flags.  state->gridi is an optimisation; it stores the pointer to the island
+ * structs indexed by (x,y). It's not strictly necessary (we could use
+ * find234 instead), but Purify showed that board generation (mostly the solver)
+ * was spending 60% of its time in find234.  cloned from lightup.c  used by the aux solver.  refcounted  --- island struct and tree support functions ---  gaah, want a double-bar. static void debug_possibles(game_state *state)
+{
+    int x, y;
+    debug(("possh followed by possv\n"));
+    for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+        for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+} fills in the rest of the 'surrounds' structure, assuming
+     * all other islands are now in place. debug(("island (%d,%d) has orth is. %d*(%d,%d) away at (%d,%d).\n",
+                       is->x, is->y, off, dx, dy,
+                       ISLAND_ORTHX(is,i), ISLAND_ORTHY(is,i))); n = -1 means 'flip NOLINE flags [and set line to 0].'  Counts the number of bridges currently attached to the island. debug(("island count for (%d,%d) is %d.\n", is->x, is->y, c)); Counts the number of bridge spaces left around the island;
+ * expects the possibles to be up-to-date.  Returns a bridge count rather than a boolean  If we're marked (i.e. the thing to attach to is complete)
+         * only count an adjacency if we're already attached.  If we're unmarked, count possible adjacency iff it's
+         * flagged as POSSIBLE.  Counts the no. of possible adjacent islands (including islands
+ * we're already connected to).  mark the island...  ...remove all marks on non-island squares...  ...and add marks to squares around marked islands.  if this direction takes us to another island, mark all
+             * squares between the two islands.  too many bridges  impossible to create enough bridges  not enough bridges and island is locked  Count spaces in surrounding islands. 
+	     * ifree is the number of bridges unfilled in the other
+	     * island, which is clearly an upper bound on the number
+	     * of extra bridges this island may run to it.
+	     *
+	     * Another upper bound is the number of bridges unfilled
+	     * on the specific line between here and there. We must
+	     * take the minimum of both.
+	      not enough spaces around surrounding islands to fill this one.  --- Game parameter functions ---  structure copy  keep up-to-date with
+                                                * MAX_BRIDGES  --- Game encoding and differences ---  more paranoia  --- Game setup and solving utilities ---  This function is optimised; a Quantify showed that lots of grid-generation time
+ * (>50%) was spent in here. Hence the IDX() stuff.  Run down vertical stripes [un]setting possv...  placate optimiser  Unset possible flags until we find an island.  ...and now do horizontal stripes [un]setting possh.  can we lose this clone'n'hack?  placate optimiser  Non-island squares with edges in should never be
+             * pointing off the edge of the grid.  Initialise dsf.  For each island, find connected islands right or down
+     * and merge the dsf for the island squares as well as the
+     * bridge squares.  for group_full.  only want right/down  we have a loop. See comment in map_hasloops.  However, we still want to merge all squares joining
+                     * this side-that-makes-a-loop.  merge all squares between island 1 and island 2.  we're full and this island group isn't the whole set.
+         * Mark all squares with this dsf canon as ERR.  NB this assumes map_group (or sth else) has cleared G_SWEEP.  Check for loops, if necessary.  Place islands into island groups and check for early
+     * satisfied-groups.  clears WARN and SWEEP  clear most flags; might want to be slightly more careful here.  for DINDEX debug(("...joining (%d,%d) to (%d,%d) with %d bridge(s).\n",
+           is->x, is->y, is_orth->x, is_orth->y, n)); already attached; do nothing.  for each unmarked adjacent, make sure we convert every possible bridge
+     * to a real one, and then work out the possibles afresh.  very like island_countspaces. debug(("island at (%d,%d) filled %d/%d (%d spc) nadj %d\n",
+           is->x, is->y, bridges, is->count, nspaces, nadj)); We only ever add bridges when we're sure they fit, or that's
+         * the only place they can go. If we've added bridges such that
+         * another island has become wrong, the puzzle must not have had
+         * a solution.  This island is full. Make sure it's marked (and update
+         * possibles if we did).  island has been marked unfinished; no solution from here.  This is the interesting bit; we try and fill in more information
+         * about this island.  must have at least one bridge in each possible direction.  returns true if a new line here would cause a loop.  don't care anyway  already has a bridge  no adj island  two islands are connected already; don't join them. debug(("stage2: navail for (%d,%d) direction (%d,%d) is %d.\n",
+                   is->x, is->y,
+                   is->adj.points[i].dx, is->adj.points[i].dy,
+                   island_isadj(is, i)));debug(("island at (%d,%d) navail %d: checking...\n", is->x, is->y, navail)); we couldn't now complete the island without at
+                 * least one bridge here; put it in. debug(("nadj %d, navail %d, is->count %d.\n",
+                       nadj, navail, is->count));debug_state(is->state);
+                debug_possibles(is->state); if is isn't full, return 0.  if is_join isn't full, return 0.  Check group membership for is->dsf; if it's full return 1.  we have a full subgroup that isn't the whole set.
+             * This isn't allowed.  If any islands are impossible, return 1.  Bear in mind that this function is really rather inefficient.  Now we know that this island could have more bridges,
+         * to bring the total from curr+1 to curr+spc.  We have to squirrel the dsf away and restore it afterwards;
+         * it is additive only, and can't be removed from.  put back to before. debug_state(is->state); we can't have any bridges here. 
+         * Now check to see if any currently empty direction must have
+         * at least one bridge in order to avoid forming an isolated
+         * subgraph. This differs from the check above in that it
+         * considers multiple target islands. For example:
+         *
+         *   2   2    4
+         *                                  1     3     2
+         *       3
+         *                                        4
+         *
+         * The example on the left can be handled by the above loop:
+         * it will observe that connecting the central 2 twice to the
+         * left would form an isolated subgraph, and hence it will
+         * restrict that 2 to at most one bridge in that direction.
+         * But the example on the right won't be handled by that loop,
+         * because the deduction requires us to imagine connecting the
+         * 3 to _both_ the 1 and 2 at once to form an isolated
+         * subgraph.
+         *
+         * This pass is necessary _as well_ as the above one, because
+         * neither can do the other's job. In the left one,
+         * restricting the direction which _would_ cause trouble can
+         * be done even if it's not yet clear which of the remaining
+         * directions has to have a compensatory bridge; whereas the
+         * pass below that can handle the right-hand example does need
+         * to know what direction to point the necessary bridge in.
+         *
+         * Neither pass can handle the most general case, in which we
+         * observe that an arbitrary subset of an island's neighbours
+         * would form an isolated subgraph with it if it connected
+         * maximally to them, and hence that at least one bridge must
+         * point to some neighbour outside that subset but we don't
+         * know which neighbour. To handle that, we'd have to have a
+         * richer data format for the solver, which could cope with
+         * recording the idea that at least one of two edges must have
+         * a bridge.
+          this idea is pointless otherwise  island full, don't try fixing it  First island iteration: things we can work out by looking at
+         * properties of the island as a whole.  Second island iteration: thing we can work out by looking at
+         * properties of individual island connections.  Third island iteration: things we can only work out by looking
+         * at groups of islands.  If we can be bothered, write a recursive solver to finish here.  solved it  --- New game functions ---  pick a first island position randomly.  Pick a random island to try and extend from.  Pick a random direction to extend in.  Find out limits of where we could put a new island.  closest is 2 units away.  already a line next to the island, continue.  got past the edge; put a possible at the island
+                 * and exit.  could join up to an existing island...  ... or make a new one 2 spaces away.  could make a new one 1 space away from the line.  Now we know where we could either put a new island
+         * (between min and max), or (if loops are allowed) could join on
+         * to an existing island (at join).  check we're not next to island in the other orthogonal direction.  Must get is again at this point; the array might have
+         * been realloced by island_add...  ...but order will not change.  Check we have at least one island on each extremity of the grid.  ... tobuild is now solved. We rely on this making the diff for aux.  OK  plus the i++  OK  OK  empty square  source; -1 means no drag  src's closest orth island.  cursor position 
+ * The contents of ds->grid are complicated, because of the circular
+ * islands which overlap their own grid square into neighbouring
+ * squares. An island square can contain pieces of the bridges in all
+ * directions, and conversely a bridge square can be intruded on by
+ * islands from any direction.
+ *
+ * So we define one group of flags describing what's important about
+ * an island, and another describing a bridge. Island squares' entries
+ * in ds->grid contain one of the former and four of the latter; bridge
+ * squares, four of the former and _two_ of the latter - because a
+ * horizontal and vertical 'bridge' can cross, when one of them is a
+ * 'no bridge here' pencil mark.
+ *
+ * Bridge flags need to indicate 0-4 actual bridges (3 bits), a 'no
+ * bridge' row of crosses, or a grey hint line; that's 7
+ * possibilities, so 3 bits suffice. But then we also need to vary the
+ * colours: the bridges can turn COL_WARNING if they're part of a loop
+ * in no-loops mode, COL_HIGHLIGHT during a victory flash, or
+ * COL_SELECTED if they're the bridge the user is currently dragging,
+ * so that's 2 more bits for foreground colour. Also bridges can be
+ * backed by COL_MARK if they're locked by the user, so that's one
+ * more bit, making 6 bits per bridge direction.
+ *
+ * Island flags omit the actual island clue (it never changes during
+ * the game, so doesn't have to be stored in ds->grid to check against
+ * the previous version), so they just need to include 2 bits for
+ * foreground colour (an island can be normal, COL_HIGHLIGHT during
+ * victory, COL_WARNING if its clue is unsatisfiable, or COL_SELECTED
+ * if it's part of the user's drag) and 2 bits for background (normal,
+ * COL_MARK for a locked island, COL_CURSOR for the keyboard cursor).
+ * That's 4 bits per island direction. We must also indicate whether
+ * no island is present at all (in the case where the island is
+ * potentially intruding into the side of a line square), which we do
+ * using the unused 4th value of the background field.
+ *
+ * So an island square needs 4 + 4*6 = 28 bits, while a bridge square
+ * needs 4*4 + 2*6 = 28 bits too. Both only just fit in 32 bits, which
+ * is handy, because otherwise we'd have to faff around forever with
+ * little structs!
+  Flags for line data  Flags for island data  Shift counts for the format of a 32-bit word in an island square  Shift counts for the format of a 32-bit word in a line square  work out which of the four directions we're closest to...  ... and see if there's an island off in that direction.  don't allow changes to marked lines.  no no-line where already a line  no line if !possible.  can't have a bridge where there's a no-line. debug(("update_drag src (%d,%d) d(%d,%d) dst (%d,%d)\n",
+           ui->dragx_src, ui->dragy_src, dx, dy,
+           ui->dragx_dst, ui->dragy_dst)); cancel a drag when we go back to the starting point  'orthorder' is a tweak to ensure that if you press RIGHT and
+             * happen to move upwards, when you press LEFT you then tend
+             * downwards (rather than upwards again).  This attempts to find an island in the direction you're
+             * asking for, broadly speaking. If you ask to go right, for
+             * example, it'll look for islands to the right and slightly
+             * above or below your current horiz. position, allowing
+             * further above/below the further away it searches.  currently this is depth-first (so orthogonally-adjacent
+             * islands across the other side of the grid will be moved to
+             * before closer islands slightly offset). Swap the order of
+             * these two loops to change to breadth-first search.  only search in cone outwards.  not reached  jump to island with .count == number closest to cur_{x,y}  new_game() reads the islands in row-major order, so by
+             * breaking ties in favor of `first in state->islands' we
+             * also break ties by `lexicographically smallest (y, x)'.
+             * Thus, there's a stable pattern to how ties are broken
+             * which the user can learn and use to navigate faster.  solve with max strength...  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes debug(("lvlh: (%d,%d) v 0x%x lv %d lh %d.\n", x, y, v, lv, lh));
+     * Draw one direction of lines in a square. To permit the same
+     * code to handle horizontal and vertical lines, fx,fy are the
+     * 'forward' direction (along the lines) and ax,ay are the
+     * 'across' direction.
+     *
+     * We draw the white background for a locked bridge if (which &
+     * 1), and draw the bridges themselves if (which & 2). This
+     * permits us to get two overlapping locked bridges right without
+     * one of them erasing part of the other.
+      draw a thick circle 
+     * Because of the possibility of incoming bridges just about
+     * meeting at one corner, we must split the line-drawing into
+     * background and foreground segments.
+     
+     * We have to think about which of the horizontal and vertical
+     * line to draw first, if both exist.
+     *
+     * The rule is that hint lines are drawn at the bottom, then
+     * NOLINE crosses, then actual bridges. The enumeration in the
+     * DL_COUNTMASK field is set up so that this drops out of a
+     * straight comparison between the two.
+     *
+     * Since lines crossing in this type of square cannot both be
+     * actual bridges, there's no need to pass a nontrivial 'which'
+     * parameter to draw_[hv]line.
+     
+     * The islands drawn at the edges of a line tile don't need clue
+     * numbers.
+      Clear screen, if required. 
+     * Set up ds->newgrid with the current grid contents.
+     
+                 * An island square. Compute the drawing data for the
+                 * island, and put it in this square and surrounding
+                 * squares.
+                 
+                 * A line (non-island) square. Compute the drawing
+                 * data for any horizontal and vertical lines in the
+                 * square, and put them in this square's entry and
+                 * optionally those for neighbouring islands too.
+                 
+     * Now go through and draw any changed grid square.
+     
+                     * If this tile is right at the edge of the grid,
+                     * we must also draw the part of the island that
+                     * goes completely out of bounds. We don't bother
+                     * keeping separate entries in ds->newgrid for
+                     * these tiles; it's easier just to redraw them
+                     * iff we redraw their parent island tile.
+                      10mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  I don't think this wants a border.  Bridges  Islands  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * bridges.c: Implementation of the Nikoli game 'Bridges'.
+ *
+ * Things still to do:
+ *
+ *  - The solver's algorithmic design is not really ideal. It makes
+ *    use of the same data representation as gameplay uses, which
+ *    often looks like a tempting reuse of code but isn't always a
+ *    good idea. In this case, it's unpleasant that each edge of the
+ *    graph ends up represented as multiple squares on a grid, with
+ *    flags indicating when edges and non-edges cross; that's useful
+ *    when the result can be directly translated into positions of
+ *    graphics on the display, but in purely internal work it makes
+ *    even simple manipulations during solving more painful than they
+ *    should be, and complex ones have no choice but to modify the
+ *    data structures temporarily, test things, and put them back. I
+ *    envisage a complete solver rewrite along the following lines:
+ *     + We have a collection of vertices (islands) and edges
+ *       (potential bridge locations, i.e. pairs of horizontal or
+ *       vertical islands with no other island in between).
+ *     + Each edge has an associated list of edges that cross it, and
+ *       hence with which it is mutually exclusive.
+ *     + For each edge, we track the min and max number of bridges we
+ *       currently think possible.
+ *     + For each vertex, we track the number of _liberties_ it has,
+ *       i.e. its clue number minus the min bridge count for each edge
+ *       out of it.
+ *     + We also maintain a dsf that identifies sets of vertices which
+ *       are connected components of the puzzle so far, and for each
+ *       equivalence class we track the total number of liberties for
+ *       that component. (The dsf mechanism will also already track
+ *       the size of each component, i.e. number of islands.)
+ *     + So incrementing the min for an edge requires processing along
+ *       the lines of:
+ *        - set the max for all edges crossing that one to zero
+ *        - decrement the liberty count for the vertex at each end,
+ *          and also for each vertex's equivalence class (NB they may
+ *          be the same class)
+ *        - unify the two equivalence classes if they're not already,
+ *          and if so, set the liberty count for the new class to be
+ *          the sum of the previous two.
+ *     + Decrementing the max is much easier, however.
+ *     + With this data structure the really fiddly stuff in stage3()
+ *       becomes more or less trivial, because it's now a quick job to
+ *       find out whether an island would form an isolated subgraph if
+ *       connected to a given subset of its neighbours:
+ *        - identify the connected components containing the test
+ *          vertex and its putative new neighbours (but be careful not
+ *          to count a component more than once if two or more of the
+ *          vertices involved are already in the same one)
+ *        - find the sum of those components' liberty counts, and also
+ *          the total number of islands involved
+ *        - if the total liberty count of the connected components is
+ *          exactly equal to twice the number of edges we'd be adding
+ *          (of course each edge destroys two liberties, one at each
+ *          end) then these components would become a subgraph with
+ *          zero liberties if connected together.
+ *        - therefore, if that subgraph also contains fewer than the
+ *          total number of islands, it's disallowed.
+ *        - As mentioned in stage3(), once we've identified such a
+ *          disallowed pattern, we have two choices for what to do
+ *          with it: if the candidate set of neighbours has size 1 we
+ *          can reduce the max for the edge to that one neighbour,
+ *          whereas if its complement has size 1 we can increase the
+ *          min for the edge to the _omitted_ neighbour.
+ *
+ *  - write a recursive solver?
+  Turn this on for hints about which lines are considered possibilities.  --- structures for params, state, etc. ---  %age of island squares, %age chance of expansion  general flags used by all structs  contains a vert. line  contains a horiz. line (mutex with LINEV)  flags used by the error checker  flags used by the solver etc.  change me later if we invent > 16 bits of flags.  state->gridi is an optimisation; it stores the pointer to the island
+ * structs indexed by (x,y). It's not strictly necessary (we could use
+ * find234 instead), but Purify showed that board generation (mostly the solver)
+ * was spending 60% of its time in find234.  cloned from lightup.c  used by the aux solver.  refcounted  --- island struct and tree support functions ---  gaah, want a double-bar. static void debug_possibles(game_state *state)
+{
+    int x, y;
+    debug(("possh followed by possv\n"));
+    for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+        for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+} fills in the rest of the 'surrounds' structure, assuming
+     * all other islands are now in place. debug(("island (%d,%d) has orth is. %d*(%d,%d) away at (%d,%d).\n",
+                       is->x, is->y, off, dx, dy,
+                       ISLAND_ORTHX(is,i), ISLAND_ORTHY(is,i))); n = -1 means 'flip NOLINE flags [and set line to 0].'  Counts the number of bridges currently attached to the island. debug(("island count for (%d,%d) is %d.\n", is->x, is->y, c)); Counts the number of bridge spaces left around the island;
+ * expects the possibles to be up-to-date.  Returns a bridge count rather than a boolean  If we're marked (i.e. the thing to attach to is complete)
+         * only count an adjacency if we're already attached.  If we're unmarked, count possible adjacency iff it's
+         * flagged as POSSIBLE.  Counts the no. of possible adjacent islands (including islands
+ * we're already connected to).  mark the island...  ...remove all marks on non-island squares...  ...and add marks to squares around marked islands.  if this direction takes us to another island, mark all
+             * squares between the two islands.  too many bridges  impossible to create enough bridges  not enough bridges and island is locked  Count spaces in surrounding islands. 
+	     * ifree is the number of bridges unfilled in the other
+	     * island, which is clearly an upper bound on the number
+	     * of extra bridges this island may run to it.
+	     *
+	     * Another upper bound is the number of bridges unfilled
+	     * on the specific line between here and there. We must
+	     * take the minimum of both.
+	      not enough spaces around surrounding islands to fill this one.  --- Game parameter functions ---  structure copy  keep up-to-date with
+                                                * MAX_BRIDGES  --- Game encoding and differences ---  more paranoia  --- Game setup and solving utilities ---  This function is optimised; a Quantify showed that lots of grid-generation time
+ * (>50%) was spent in here. Hence the IDX() stuff.  Run down vertical stripes [un]setting possv...  placate optimiser  Unset possible flags until we find an island.  ...and now do horizontal stripes [un]setting possh.  can we lose this clone'n'hack?  placate optimiser  Non-island squares with edges in should never be
+             * pointing off the edge of the grid.  Initialise dsf.  For each island, find connected islands right or down
+     * and merge the dsf for the island squares as well as the
+     * bridge squares.  for group_full.  only want right/down  we have a loop. See comment in map_hasloops.  However, we still want to merge all squares joining
+                     * this side-that-makes-a-loop.  merge all squares between island 1 and island 2.  we're full and this island group isn't the whole set.
+         * Mark all squares with this dsf canon as ERR.  NB this assumes map_group (or sth else) has cleared G_SWEEP.  Check for loops, if necessary.  Place islands into island groups and check for early
+     * satisfied-groups.  clears WARN and SWEEP  clear most flags; might want to be slightly more careful here.  for DINDEX debug(("...joining (%d,%d) to (%d,%d) with %d bridge(s).\n",
+           is->x, is->y, is_orth->x, is_orth->y, n)); already attached; do nothing.  for each unmarked adjacent, make sure we convert every possible bridge
+     * to a real one, and then work out the possibles afresh.  very like island_countspaces. debug(("island at (%d,%d) filled %d/%d (%d spc) nadj %d\n",
+           is->x, is->y, bridges, is->count, nspaces, nadj)); We only ever add bridges when we're sure they fit, or that's
+         * the only place they can go. If we've added bridges such that
+         * another island has become wrong, the puzzle must not have had
+         * a solution.  This island is full. Make sure it's marked (and update
+         * possibles if we did).  island has been marked unfinished; no solution from here.  This is the interesting bit; we try and fill in more information
+         * about this island.  must have at least one bridge in each possible direction.  returns true if a new line here would cause a loop.  don't care anyway  already has a bridge  no adj island  two islands are connected already; don't join them. debug(("stage2: navail for (%d,%d) direction (%d,%d) is %d.\n",
+                   is->x, is->y,
+                   is->adj.points[i].dx, is->adj.points[i].dy,
+                   island_isadj(is, i)));debug(("island at (%d,%d) navail %d: checking...\n", is->x, is->y, navail)); we couldn't now complete the island without at
+                 * least one bridge here; put it in. debug(("nadj %d, navail %d, is->count %d.\n",
+                       nadj, navail, is->count));debug_state(is->state);
+                debug_possibles(is->state); if is isn't full, return 0.  if is_join isn't full, return 0.  Check group membership for is->dsf; if it's full return 1.  we have a full subgroup that isn't the whole set.
+             * This isn't allowed.  If any islands are impossible, return 1.  Bear in mind that this function is really rather inefficient.  Now we know that this island could have more bridges,
+         * to bring the total from curr+1 to curr+spc.  We have to squirrel the dsf away and restore it afterwards;
+         * it is additive only, and can't be removed from.  put back to before. debug_state(is->state); we can't have any bridges here. 
+         * Now check to see if any currently empty direction must have
+         * at least one bridge in order to avoid forming an isolated
+         * subgraph. This differs from the check above in that it
+         * considers multiple target islands. For example:
+         *
+         *   2   2    4
+         *                                  1     3     2
+         *       3
+         *                                        4
+         *
+         * The example on the left can be handled by the above loop:
+         * it will observe that connecting the central 2 twice to the
+         * left would form an isolated subgraph, and hence it will
+         * restrict that 2 to at most one bridge in that direction.
+         * But the example on the right won't be handled by that loop,
+         * because the deduction requires us to imagine connecting the
+         * 3 to _both_ the 1 and 2 at once to form an isolated
+         * subgraph.
+         *
+         * This pass is necessary _as well_ as the above one, because
+         * neither can do the other's job. In the left one,
+         * restricting the direction which _would_ cause trouble can
+         * be done even if it's not yet clear which of the remaining
+         * directions has to have a compensatory bridge; whereas the
+         * pass below that can handle the right-hand example does need
+         * to know what direction to point the necessary bridge in.
+         *
+         * Neither pass can handle the most general case, in which we
+         * observe that an arbitrary subset of an island's neighbours
+         * would form an isolated subgraph with it if it connected
+         * maximally to them, and hence that at least one bridge must
+         * point to some neighbour outside that subset but we don't
+         * know which neighbour. To handle that, we'd have to have a
+         * richer data format for the solver, which could cope with
+         * recording the idea that at least one of two edges must have
+         * a bridge.
+          this idea is pointless otherwise  island full, don't try fixing it  First island iteration: things we can work out by looking at
+         * properties of the island as a whole.  Second island iteration: thing we can work out by looking at
+         * properties of individual island connections.  Third island iteration: things we can only work out by looking
+         * at groups of islands.  If we can be bothered, write a recursive solver to finish here.  solved it  --- New game functions ---  pick a first island position randomly.  Pick a random island to try and extend from.  Pick a random direction to extend in.  Find out limits of where we could put a new island.  closest is 2 units away.  already a line next to the island, continue.  got past the edge; put a possible at the island
+                 * and exit.  could join up to an existing island...  ... or make a new one 2 spaces away.  could make a new one 1 space away from the line.  Now we know where we could either put a new island
+         * (between min and max), or (if loops are allowed) could join on
+         * to an existing island (at join).  check we're not next to island in the other orthogonal direction.  Must get is again at this point; the array might have
+         * been realloced by island_add...  ...but order will not change.  Check we have at least one island on each extremity of the grid.  ... tobuild is now solved. We rely on this making the diff for aux.  OK  plus the i++  OK  OK  empty square  source; -1 means no drag  src's closest orth island.  cursor position 
+ * The contents of ds->grid are complicated, because of the circular
+ * islands which overlap their own grid square into neighbouring
+ * squares. An island square can contain pieces of the bridges in all
+ * directions, and conversely a bridge square can be intruded on by
+ * islands from any direction.
+ *
+ * So we define one group of flags describing what's important about
+ * an island, and another describing a bridge. Island squares' entries
+ * in ds->grid contain one of the former and four of the latter; bridge
+ * squares, four of the former and _two_ of the latter - because a
+ * horizontal and vertical 'bridge' can cross, when one of them is a
+ * 'no bridge here' pencil mark.
+ *
+ * Bridge flags need to indicate 0-4 actual bridges (3 bits), a 'no
+ * bridge' row of crosses, or a grey hint line; that's 7
+ * possibilities, so 3 bits suffice. But then we also need to vary the
+ * colours: the bridges can turn COL_WARNING if they're part of a loop
+ * in no-loops mode, COL_HIGHLIGHT during a victory flash, or
+ * COL_SELECTED if they're the bridge the user is currently dragging,
+ * so that's 2 more bits for foreground colour. Also bridges can be
+ * backed by COL_MARK if they're locked by the user, so that's one
+ * more bit, making 6 bits per bridge direction.
+ *
+ * Island flags omit the actual island clue (it never changes during
+ * the game, so doesn't have to be stored in ds->grid to check against
+ * the previous version), so they just need to include 2 bits for
+ * foreground colour (an island can be normal, COL_HIGHLIGHT during
+ * victory, COL_WARNING if its clue is unsatisfiable, or COL_SELECTED
+ * if it's part of the user's drag) and 2 bits for background (normal,
+ * COL_MARK for a locked island, COL_CURSOR for the keyboard cursor).
+ * That's 4 bits per island direction. We must also indicate whether
+ * no island is present at all (in the case where the island is
+ * potentially intruding into the side of a line square), which we do
+ * using the unused 4th value of the background field.
+ *
+ * So an island square needs 4 + 4*6 = 28 bits, while a bridge square
+ * needs 4*4 + 2*6 = 28 bits too. Both only just fit in 32 bits, which
+ * is handy, because otherwise we'd have to faff around forever with
+ * little structs!
+  Flags for line data  Flags for island data  Shift counts for the format of a 32-bit word in an island square  Shift counts for the format of a 32-bit word in a line square  work out which of the four directions we're closest to...  ... and see if there's an island off in that direction.  don't allow changes to marked lines.  no no-line where already a line  no line if !possible.  can't have a bridge where there's a no-line. debug(("update_drag src (%d,%d) d(%d,%d) dst (%d,%d)\n",
+           ui->dragx_src, ui->dragy_src, dx, dy,
+           ui->dragx_dst, ui->dragy_dst)); cancel a drag when we go back to the starting point  'orthorder' is a tweak to ensure that if you press RIGHT and
+             * happen to move upwards, when you press LEFT you then tend
+             * downwards (rather than upwards again).  This attempts to find an island in the direction you're
+             * asking for, broadly speaking. If you ask to go right, for
+             * example, it'll look for islands to the right and slightly
+             * above or below your current horiz. position, allowing
+             * further above/below the further away it searches.  currently this is depth-first (so orthogonally-adjacent
+             * islands across the other side of the grid will be moved to
+             * before closer islands slightly offset). Swap the order of
+             * these two loops to change to breadth-first search.  only search in cone outwards.  not reached  jump to island with .count == number closest to cur_{x,y}  new_game() reads the islands in row-major order, so by
+             * breaking ties in favor of `first in state->islands' we
+             * also break ties by `lexicographically smallest (y, x)'.
+             * Thus, there's a stable pattern to how ties are broken
+             * which the user can learn and use to navigate faster.  solve with max strength...  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes debug(("lvlh: (%d,%d) v 0x%x lv %d lh %d.\n", x, y, v, lv, lh));
+     * Draw one direction of lines in a square. To permit the same
+     * code to handle horizontal and vertical lines, fx,fy are the
+     * 'forward' direction (along the lines) and ax,ay are the
+     * 'across' direction.
+     *
+     * We draw the white background for a locked bridge if (which &
+     * 1), and draw the bridges themselves if (which & 2). This
+     * permits us to get two overlapping locked bridges right without
+     * one of them erasing part of the other.
+      draw a thick circle 
+     * Because of the possibility of incoming bridges just about
+     * meeting at one corner, we must split the line-drawing into
+     * background and foreground segments.
+     
+     * We have to think about which of the horizontal and vertical
+     * line to draw first, if both exist.
+     *
+     * The rule is that hint lines are drawn at the bottom, then
+     * NOLINE crosses, then actual bridges. The enumeration in the
+     * DL_COUNTMASK field is set up so that this drops out of a
+     * straight comparison between the two.
+     *
+     * Since lines crossing in this type of square cannot both be
+     * actual bridges, there's no need to pass a nontrivial 'which'
+     * parameter to draw_[hv]line.
+     
+     * The islands drawn at the edges of a line tile don't need clue
+     * numbers.
+      Clear screen, if required. 
+     * Set up ds->newgrid with the current grid contents.
+     
+                 * An island square. Compute the drawing data for the
+                 * island, and put it in this square and surrounding
+                 * squares.
+                 
+                 * A line (non-island) square. Compute the drawing
+                 * data for any horizontal and vertical lines in the
+                 * square, and put them in this square's entry and
+                 * optionally those for neighbouring islands too.
+                 
+     * Now go through and draw any changed grid square.
+     
+                     * If this tile is right at the edge of the grid,
+                     * we must also draw the part of the island that
+                     * goes completely out of bounds. We don't bother
+                     * keeping separate entries in ds->newgrid for
+                     * these tiles; it's easier just to redraw them
+                     * iff we redraw their parent island tile.
+                      10mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  I don't think this wants a border.  Bridges  Islands  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * bridges.c: Implementation of the Nikoli game 'Bridges'.
+ *
+ * Things still to do:
+ *
+ *  - The solver's algorithmic design is not really ideal. It makes
+ *    use of the same data representation as gameplay uses, which
+ *    often looks like a tempting reuse of code but isn't always a
+ *    good idea. In this case, it's unpleasant that each edge of the
+ *    graph ends up represented as multiple squares on a grid, with
+ *    flags indicating when edges and non-edges cross; that's useful
+ *    when the result can be directly translated into positions of
+ *    graphics on the display, but in purely internal work it makes
+ *    even simple manipulations during solving more painful than they
+ *    should be, and complex ones have no choice but to modify the
+ *    data structures temporarily, test things, and put them back. I
+ *    envisage a complete solver rewrite along the following lines:
+ *     + We have a collection of vertices (islands) and edges
+ *       (potential bridge locations, i.e. pairs of horizontal or
+ *       vertical islands with no other island in between).
+ *     + Each edge has an associated list of edges that cross it, and
+ *       hence with which it is mutually exclusive.
+ *     + For each edge, we track the min and max number of bridges we
+ *       currently think possible.
+ *     + For each vertex, we track the number of _liberties_ it has,
+ *       i.e. its clue number minus the min bridge count for each edge
+ *       out of it.
+ *     + We also maintain a dsf that identifies sets of vertices which
+ *       are connected components of the puzzle so far, and for each
+ *       equivalence class we track the total number of liberties for
+ *       that component. (The dsf mechanism will also already track
+ *       the size of each component, i.e. number of islands.)
+ *     + So incrementing the min for an edge requires processing along
+ *       the lines of:
+ *        - set the max for all edges crossing that one to zero
+ *        - decrement the liberty count for the vertex at each end,
+ *          and also for each vertex's equivalence class (NB they may
+ *          be the same class)
+ *        - unify the two equivalence classes if they're not already,
+ *          and if so, set the liberty count for the new class to be
+ *          the sum of the previous two.
+ *     + Decrementing the max is much easier, however.
+ *     + With this data structure the really fiddly stuff in stage3()
+ *       becomes more or less trivial, because it's now a quick job to
+ *       find out whether an island would form an isolated subgraph if
+ *       connected to a given subset of its neighbours:
+ *        - identify the connected components containing the test
+ *          vertex and its putative new neighbours (but be careful not
+ *          to count a component more than once if two or more of the
+ *          vertices involved are already in the same one)
+ *        - find the sum of those components' liberty counts, and also
+ *          the total number of islands involved
+ *        - if the total liberty count of the connected components is
+ *          exactly equal to twice the number of edges we'd be adding
+ *          (of course each edge destroys two liberties, one at each
+ *          end) then these components would become a subgraph with
+ *          zero liberties if connected together.
+ *        - therefore, if that subgraph also contains fewer than the
+ *          total number of islands, it's disallowed.
+ *        - As mentioned in stage3(), once we've identified such a
+ *          disallowed pattern, we have two choices for what to do
+ *          with it: if the candidate set of neighbours has size 1 we
+ *          can reduce the max for the edge to that one neighbour,
+ *          whereas if its complement has size 1 we can increase the
+ *          min for the edge to the _omitted_ neighbour.
+ *
+ *  - write a recursive solver?
+  Turn this on for hints about which lines are considered possibilities.  --- structures for params, state, etc. ---  %age of island squares, %age chance of expansion  general flags used by all structs  contains a vert. line  contains a horiz. line (mutex with LINEV)  flags used by the error checker  flags used by the solver etc.  change me later if we invent > 16 bits of flags.  state->gridi is an optimisation; it stores the pointer to the island
+ * structs indexed by (x,y). It's not strictly necessary (we could use
+ * find234 instead), but Purify showed that board generation (mostly the solver)
+ * was spending 60% of its time in find234.  cloned from lightup.c  used by the aux solver.  refcounted  --- island struct and tree support functions ---  gaah, want a double-bar. static void debug_possibles(game_state *state)
+{
+    int x, y;
+    debug(("possh followed by possv\n"));
+    for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", POSSIBLES(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+        for (y = 0; y < state->h; y++) {
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 1, x, y)));
+        }
+        debug((" "));
+        for (x = 0; x < state->w; x++) {
+            debug(("%d", MAXIMUM(state, 0, x, y)));
+        }
+        debug(("\n"));
+    }
+    debug(("\n"));
+} fills in the rest of the 'surrounds' structure, assuming
+     * all other islands are now in place. debug(("island (%d,%d) has orth is. %d*(%d,%d) away at (%d,%d).\n",
+                       is->x, is->y, off, dx, dy,
+                       ISLAND_ORTHX(is,i), ISLAND_ORTHY(is,i))); n = -1 means 'flip NOLINE flags [and set line to 0].'  Counts the number of bridges currently attached to the island. debug(("island count for (%d,%d) is %d.\n", is->x, is->y, c)); Counts the number of bridge spaces left around the island;
+ * expects the possibles to be up-to-date.  Returns a bridge count rather than a boolean  If we're marked (i.e. the thing to attach to is complete)
+         * only count an adjacency if we're already attached.  If we're unmarked, count possible adjacency iff it's
+         * flagged as POSSIBLE.  Counts the no. of possible adjacent islands (including islands
+ * we're already connected to).  mark the island...  ...remove all marks on non-island squares...  ...and add marks to squares around marked islands.  if this direction takes us to another island, mark all
+             * squares between the two islands.  too many bridges  impossible to create enough bridges  not enough bridges and island is locked  Count spaces in surrounding islands. 
+	     * ifree is the number of bridges unfilled in the other
+	     * island, which is clearly an upper bound on the number
+	     * of extra bridges this island may run to it.
+	     *
+	     * Another upper bound is the number of bridges unfilled
+	     * on the specific line between here and there. We must
+	     * take the minimum of both.
+	      not enough spaces around surrounding islands to fill this one.  --- Game parameter functions ---  structure copy  keep up-to-date with
+                                                * MAX_BRIDGES  --- Game encoding and differences ---  more paranoia  --- Game setup and solving utilities ---  This function is optimised; a Quantify showed that lots of grid-generation time
+ * (>50%) was spent in here. Hence the IDX() stuff.  Run down vertical stripes [un]setting possv...  placate optimiser  Unset possible flags until we find an island.  ...and now do horizontal stripes [un]setting possh.  can we lose this clone'n'hack?  placate optimiser  Non-island squares with edges in should never be
+             * pointing off the edge of the grid.  Initialise dsf.  For each island, find connected islands right or down
+     * and merge the dsf for the island squares as well as the
+     * bridge squares.  for group_full.  only want right/down  we have a loop. See comment in map_hasloops.  However, we still want to merge all squares joining
+                     * this side-that-makes-a-loop.  merge all squares between island 1 and island 2.  we're full and this island group isn't the whole set.
+         * Mark all squares with this dsf canon as ERR.  NB this assumes map_group (or sth else) has cleared G_SWEEP.  Check for loops, if necessary.  Place islands into island groups and check for early
+     * satisfied-groups.  clears WARN and SWEEP  clear most flags; might want to be slightly more careful here.  for DINDEX debug(("...joining (%d,%d) to (%d,%d) with %d bridge(s).\n",
+           is->x, is->y, is_orth->x, is_orth->y, n)); already attached; do nothing.  for each unmarked adjacent, make sure we convert every possible bridge
+     * to a real one, and then work out the possibles afresh.  very like island_countspaces. debug(("island at (%d,%d) filled %d/%d (%d spc) nadj %d\n",
+           is->x, is->y, bridges, is->count, nspaces, nadj)); We only ever add bridges when we're sure they fit, or that's
+         * the only place they can go. If we've added bridges such that
+         * another island has become wrong, the puzzle must not have had
+         * a solution.  This island is full. Make sure it's marked (and update
+         * possibles if we did).  island has been marked unfinished; no solution from here.  This is the interesting bit; we try and fill in more information
+         * about this island.  must have at least one bridge in each possible direction.  returns true if a new line here would cause a loop.  don't care anyway  already has a bridge  no adj island  two islands are connected already; don't join them. debug(("stage2: navail for (%d,%d) direction (%d,%d) is %d.\n",
+                   is->x, is->y,
+                   is->adj.points[i].dx, is->adj.points[i].dy,
+                   island_isadj(is, i)));debug(("island at (%d,%d) navail %d: checking...\n", is->x, is->y, navail)); we couldn't now complete the island without at
+                 * least one bridge here; put it in. debug(("nadj %d, navail %d, is->count %d.\n",
+                       nadj, navail, is->count));debug_state(is->state);
+                debug_possibles(is->state); if is isn't full, return 0.  if is_join isn't full, return 0.  Check group membership for is->dsf; if it's full return 1.  we have a full subgroup that isn't the whole set.
+             * This isn't allowed.  If any islands are impossible, return 1.  Bear in mind that this function is really rather inefficient.  Now we know that this island could have more bridges,
+         * to bring the total from curr+1 to curr+spc.  We have to squirrel the dsf away and restore it afterwards;
+         * it is additive only, and can't be removed from.  put back to before. debug_state(is->state); we can't have any bridges here. 
+         * Now check to see if any currently empty direction must have
+         * at least one bridge in order to avoid forming an isolated
+         * subgraph. This differs from the check above in that it
+         * considers multiple target islands. For example:
+         *
+         *   2   2    4
+         *                                  1     3     2
+         *       3
+         *                                        4
+         *
+         * The example on the left can be handled by the above loop:
+         * it will observe that connecting the central 2 twice to the
+         * left would form an isolated subgraph, and hence it will
+         * restrict that 2 to at most one bridge in that direction.
+         * But the example on the right won't be handled by that loop,
+         * because the deduction requires us to imagine connecting the
+         * 3 to _both_ the 1 and 2 at once to form an isolated
+         * subgraph.
+         *
+         * This pass is necessary _as well_ as the above one, because
+         * neither can do the other's job. In the left one,
+         * restricting the direction which _would_ cause trouble can
+         * be done even if it's not yet clear which of the remaining
+         * directions has to have a compensatory bridge; whereas the
+         * pass below that can handle the right-hand example does need
+         * to know what direction to point the necessary bridge in.
+         *
+         * Neither pass can handle the most general case, in which we
+         * observe that an arbitrary subset of an island's neighbours
+         * would form an isolated subgraph with it if it connected
+         * maximally to them, and hence that at least one bridge must
+         * point to some neighbour outside that subset but we don't
+         * know which neighbour. To handle that, we'd have to have a
+         * richer data format for the solver, which could cope with
+         * recording the idea that at least one of two edges must have
+         * a bridge.
+          this idea is pointless otherwise  island full, don't try fixing it  First island iteration: things we can work out by looking at
+         * properties of the island as a whole.  Second island iteration: thing we can work out by looking at
+         * properties of individual island connections.  Third island iteration: things we can only work out by looking
+         * at groups of islands.  If we can be bothered, write a recursive solver to finish here.  solved it  --- New game functions ---  pick a first island position randomly.  Pick a random island to try and extend from.  Pick a random direction to extend in.  Find out limits of where we could put a new island.  closest is 2 units away.  already a line next to the island, continue.  got past the edge; put a possible at the island
+                 * and exit.  could join up to an existing island...  ... or make a new one 2 spaces away.  could make a new one 1 space away from the line.  Now we know where we could either put a new island
+         * (between min and max), or (if loops are allowed) could join on
+         * to an existing island (at join).  check we're not next to island in the other orthogonal direction.  Must get is again at this point; the array might have
+         * been realloced by island_add...  ...but order will not change.  Check we have at least one island on each extremity of the grid.  ... tobuild is now solved. We rely on this making the diff for aux.  OK  plus the i++  OK  OK  empty square  source; -1 means no drag  src's closest orth island.  cursor position 
+ * The contents of ds->grid are complicated, because of the circular
+ * islands which overlap their own grid square into neighbouring
+ * squares. An island square can contain pieces of the bridges in all
+ * directions, and conversely a bridge square can be intruded on by
+ * islands from any direction.
+ *
+ * So we define one group of flags describing what's important about
+ * an island, and another describing a bridge. Island squares' entries
+ * in ds->grid contain one of the former and four of the latter; bridge
+ * squares, four of the former and _two_ of the latter - because a
+ * horizontal and vertical 'bridge' can cross, when one of them is a
+ * 'no bridge here' pencil mark.
+ *
+ * Bridge flags need to indicate 0-4 actual bridges (3 bits), a 'no
+ * bridge' row of crosses, or a grey hint line; that's 7
+ * possibilities, so 3 bits suffice. But then we also need to vary the
+ * colours: the bridges can turn COL_WARNING if they're part of a loop
+ * in no-loops mode, COL_HIGHLIGHT during a victory flash, or
+ * COL_SELECTED if they're the bridge the user is currently dragging,
+ * so that's 2 more bits for foreground colour. Also bridges can be
+ * backed by COL_MARK if they're locked by the user, so that's one
+ * more bit, making 6 bits per bridge direction.
+ *
+ * Island flags omit the actual island clue (it never changes during
+ * the game, so doesn't have to be stored in ds->grid to check against
+ * the previous version), so they just need to include 2 bits for
+ * foreground colour (an island can be normal, COL_HIGHLIGHT during
+ * victory, COL_WARNING if its clue is unsatisfiable, or COL_SELECTED
+ * if it's part of the user's drag) and 2 bits for background (normal,
+ * COL_MARK for a locked island, COL_CURSOR for the keyboard cursor).
+ * That's 4 bits per island direction. We must also indicate whether
+ * no island is present at all (in the case where the island is
+ * potentially intruding into the side of a line square), which we do
+ * using the unused 4th value of the background field.
+ *
+ * So an island square needs 4 + 4*6 = 28 bits, while a bridge square
+ * needs 4*4 + 2*6 = 28 bits too. Both only just fit in 32 bits, which
+ * is handy, because otherwise we'd have to faff around forever with
+ * little structs!
+  Flags for line data  Flags for island data  Shift counts for the format of a 32-bit word in an island square  Shift counts for the format of a 32-bit word in a line square  work out which of the four directions we're closest to...  ... and see if there's an island off in that direction.  don't allow changes to marked lines.  no no-line where already a line  no line if !possible.  can't have a bridge where there's a no-line. debug(("update_drag src (%d,%d) d(%d,%d) dst (%d,%d)\n",
+           ui->dragx_src, ui->dragy_src, dx, dy,
+           ui->dragx_dst, ui->dragy_dst)); cancel a drag when we go back to the starting point  'orthorder' is a tweak to ensure that if you press RIGHT and
+             * happen to move upwards, when you press LEFT you then tend
+             * downwards (rather than upwards again).  This attempts to find an island in the direction you're
+             * asking for, broadly speaking. If you ask to go right, for
+             * example, it'll look for islands to the right and slightly
+             * above or below your current horiz. position, allowing
+             * further above/below the further away it searches.  currently this is depth-first (so orthogonally-adjacent
+             * islands across the other side of the grid will be moved to
+             * before closer islands slightly offset). Swap the order of
+             * these two loops to change to breadth-first search.  only search in cone outwards.  not reached  jump to island with .count == number closest to cur_{x,y}  new_game() reads the islands in row-major order, so by
+             * breaking ties in favor of `first in state->islands' we
+             * also break ties by `lexicographically smallest (y, x)'.
+             * Thus, there's a stable pattern to how ties are broken
+             * which the user can learn and use to navigate faster.  solve with max strength...  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes debug(("lvlh: (%d,%d) v 0x%x lv %d lh %d.\n", x, y, v, lv, lh));
+     * Draw one direction of lines in a square. To permit the same
+     * code to handle horizontal and vertical lines, fx,fy are the
+     * 'forward' direction (along the lines) and ax,ay are the
+     * 'across' direction.
+     *
+     * We draw the white background for a locked bridge if (which &
+     * 1), and draw the bridges themselves if (which & 2). This
+     * permits us to get two overlapping locked bridges right without
+     * one of them erasing part of the other.
+      draw a thick circle 
+     * Because of the possibility of incoming bridges just about
+     * meeting at one corner, we must split the line-drawing into
+     * background and foreground segments.
+     
+     * We have to think about which of the horizontal and vertical
+     * line to draw first, if both exist.
+     *
+     * The rule is that hint lines are drawn at the bottom, then
+     * NOLINE crosses, then actual bridges. The enumeration in the
+     * DL_COUNTMASK field is set up so that this drops out of a
+     * straight comparison between the two.
+     *
+     * Since lines crossing in this type of square cannot both be
+     * actual bridges, there's no need to pass a nontrivial 'which'
+     * parameter to draw_[hv]line.
+     
+     * The islands drawn at the edges of a line tile don't need clue
+     * numbers.
+      Clear screen, if required. 
+     * Set up ds->newgrid with the current grid contents.
+     
+                 * An island square. Compute the drawing data for the
+                 * island, and put it in this square and surrounding
+                 * squares.
+                 
+                 * A line (non-island) square. Compute the drawing
+                 * data for any horizontal and vertical lines in the
+                 * square, and put them in this square's entry and
+                 * optionally those for neighbouring islands too.
+                 
+     * Now go through and draw any changed grid square.
+     
+                     * If this tile is right at the edge of the grid,
+                     * we must also draw the part of the island that
+                     * goes completely out of bounds. We don't bother
+                     * keeping separate entries in ds->newgrid for
+                     * these tiles; it's easier just to redraw them
+                     * iff we redraw their parent island tile.
+                      10mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  I don't think this wants a border.  Bridges  Islands  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

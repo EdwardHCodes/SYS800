@@ -1,0 +1,106 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Gary Czvitkovicz
+ * Copyright (C) 2017 by Michael A. Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Only the Quake plugin needs float formatting  turn everything on  these are the defaults if no other preference is given  FMT_LENMOD  FMT_RADIX * Length modifier and radix flags * compulsory length modifiers: NONE
+ * however a compatible 'l' or 'll' must be defined if another requires it  signed/unsigned short (%h<radix>)  signed/unsigned char (%hh<radix>)  intmax_t/uintmax_t (%j<radix>)  signed/unsigned long (%l<radix>)  signed/unsigned long long (%ll<radix>)  signed/unsigned ptrdiff_t (%t<radix>)  size_t/ssize_t (%z<radix>)  long double (instead of double)  compulsory radixes: c, d, i, u, s  single character (%c)  signed integer type, decimal (%d %i)  bytes output so far (%n)  unsigned integer type, octal (%o)  pointer (%p %P)  string (%s)  unsigned integer type, decimal (%u)  unsigned integer type, hex (%x %X)  hex floating point "[-]0xh.hhhhp±d"  floating point with exponent "[-]d.ddde±dd"  floating point "[-]ddd.ddd"  floating point exponent or decimal depending
+                                  upon value and precision  TODO: 'a' 'A'  Assumes IEEE 754 double-precision, native-endian; replace to parse and init
+   for some other format  avoid defining redundant functions if two or more types can use the same
+ * something not getting a macro means it gets assigned its own value and
+ * formatter  l  unique  LONG_  unique  ULONG_  ll  unique  LLONG_  unique  ULLONG_  char/short parameter type promotions  some macros to have conditional work inside macros  synthesize multicharacter constant  'hh'  'll'  select type-compatible length modifier
+ * (a bit hacky; it should be range-based)  call formatting function for the compatible integer type  execute formatting branch for the compatible integer type  second character of formatter after '%'  length of formatted text (non-numeric)
+                              or prefix (numeric)  work buffer  buffer end marker and guard '0'  %d %i  %o %u %x %X  %ld %li  format_ld  %lo %lu %lx %lX  format_lu  FMT_LENMOD_l  %lld %lli  format_lld  %llo %llu %llx %llX  format_llu  FMT_LENMOD_ll  %c  wchar_t support for now  %s  wchar_t support for now  string length may be specified by precision instead of \0-
+       terminated; however, don't go past a \0 if one is there  %n  int only for now  FMT_RADIX_n  %p %P  format as %#x or %#X  format as %s  FMT_RADIX_p  find out how many uint32_t chunks need to be allocated, if any
+ * if none are needed, finish the init for the number here  -1023..1024  -8 to +63  integer, fraction and manipulations fit in uint64_t  -8 to -1 - fraction  int - none  frac  0 to +51 - integer|fraction  int  go up + possibly 1 longer  frac  +52 to +63 - integer  int  frac - none  -1023 to -9 - fraction  int - none  frac - left-justify on bit 31 of the chunk of the MSb  normal  subnormal (including zero)  zero  +64 to +1023 - integer  int - right-justify on bit 0 of the first chunk  frac - none  +1024: INF, NAN  construct the arbitrary-precision value in the provided allocation  format inf, nan strings  certain special values  they also have a sign  %e %E %f %F %g %G  default precision is 6 for all formats  %g, %G  %e, %E  large integer required  log rollover + round rollover + leading zeros (%g)  no lead zeros  handles 0e+0 too  large integer required  carried left  slide everything left by 1  g, G  'g' is some weird crap  now that the final exponent is known and everything rounded,
+               it is possible to decide whether to format similarly to
+               'e' or 'f'  P > X >= -4  integer digits will be in the buffer  we didn't keep leading zeros and need to regenerate
+                       them; space was reserved just in case  suppress exponent  strip any trailing zeros from the fraction  suppress trailing precision fill  build exponent string: 'e±dd'  left padding  space-padded width -- before sign  zero-padded width -- after sign  integer part  decimal point  fractional part  precision 0-padding  exponent  right padding  FMT_RADIX_floats  parse fixed width or precision field  call 'push()' for each output letter  macrofied identifiers share a variable with another  set to defaults ** flags ** <space> before non-negative value (signed conversion)  '+' before non-negative value (signed conversion)  '+' overrides ' '  left-justify in field  zero-pad to fill field  '-' overrides '0'  number prefix (nonzero %o:'0' %x/%X:'0x')  indicate; formatter updates with actual length  digit grouping (non-monetary) ** width ** variable width  negative width is width with implied '-'  fixed width ** precision ** variable precision; negative precision is ignored  fixed precision ** length modifier ** doesn't matter if jj, tt or zz happen; they will be rejected
+               by the radix handler  FMT_LENMOD ** radix *** non-numeric * no output * non-integer * any floats gets all of them (except with 'L' and %a, %A for now)  LENMOD_L isn't supported for now and will be rejected automatically  floating point has very different spec interpretations to other
+               formats and requires special handling * signed integer * macrofied labels share a formatter with another * unsigned integer * format "uptrdiff_t" as size_t (unless it becomes standard)  macrofied labels share a formatter with another * padding * numeric formats into fmt_buf.buf  explicit precision  default precision  width zero-fill  non-numeric: supress prefix and precision; keep length and
+                   width  format not accepted; print it literally * push all the stuff * left padding  prefix  0-padding  field  right padding **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Gary Czvitkovicz
+ * Copyright (C) 2017 by Michael A. Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Only the Quake plugin needs float formatting  turn everything on  these are the defaults if no other preference is given  FMT_LENMOD  FMT_RADIX * Length modifier and radix flags * compulsory length modifiers: NONE
+ * however a compatible 'l' or 'll' must be defined if another requires it  signed/unsigned short (%h<radix>)  signed/unsigned char (%hh<radix>)  intmax_t/uintmax_t (%j<radix>)  signed/unsigned long (%l<radix>)  signed/unsigned long long (%ll<radix>)  signed/unsigned ptrdiff_t (%t<radix>)  size_t/ssize_t (%z<radix>)  long double (instead of double)  compulsory radixes: c, d, i, u, s  single character (%c)  signed integer type, decimal (%d %i)  bytes output so far (%n)  unsigned integer type, octal (%o)  pointer (%p %P)  string (%s)  unsigned integer type, decimal (%u)  unsigned integer type, hex (%x %X)  hex floating point "[-]0xh.hhhhp±d"  floating point with exponent "[-]d.ddde±dd"  floating point "[-]ddd.ddd"  floating point exponent or decimal depending
+                                  upon value and precision  TODO: 'a' 'A'  Assumes IEEE 754 double-precision, native-endian; replace to parse and init
+   for some other format  avoid defining redundant functions if two or more types can use the same
+ * something not getting a macro means it gets assigned its own value and
+ * formatter  l  unique  LONG_  unique  ULONG_  ll  unique  LLONG_  unique  ULLONG_  char/short parameter type promotions  some macros to have conditional work inside macros  synthesize multicharacter constant  'hh'  'll'  select type-compatible length modifier
+ * (a bit hacky; it should be range-based)  call formatting function for the compatible integer type  execute formatting branch for the compatible integer type  second character of formatter after '%'  length of formatted text (non-numeric)
+                              or prefix (numeric)  work buffer  buffer end marker and guard '0'  %d %i  %o %u %x %X  %ld %li  format_ld  %lo %lu %lx %lX  format_lu  FMT_LENMOD_l  %lld %lli  format_lld  %llo %llu %llx %llX  format_llu  FMT_LENMOD_ll  %c  wchar_t support for now  %s  wchar_t support for now  string length may be specified by precision instead of \0-
+       terminated; however, don't go past a \0 if one is there  %n  int only for now  FMT_RADIX_n  %p %P  format as %#x or %#X  format as %s  FMT_RADIX_p  find out how many uint32_t chunks need to be allocated, if any
+ * if none are needed, finish the init for the number here  -1023..1024  -8 to +63  integer, fraction and manipulations fit in uint64_t  -8 to -1 - fraction  int - none  frac  0 to +51 - integer|fraction  int  go up + possibly 1 longer  frac  +52 to +63 - integer  int  frac - none  -1023 to -9 - fraction  int - none  frac - left-justify on bit 31 of the chunk of the MSb  normal  subnormal (including zero)  zero  +64 to +1023 - integer  int - right-justify on bit 0 of the first chunk  frac - none  +1024: INF, NAN  construct the arbitrary-precision value in the provided allocation  format inf, nan strings  certain special values  they also have a sign  %e %E %f %F %g %G  default precision is 6 for all formats  %g, %G  %e, %E  large integer required  log rollover + round rollover + leading zeros (%g)  no lead zeros  handles 0e+0 too  large integer required  carried left  slide everything left by 1  g, G  'g' is some weird crap  now that the final exponent is known and everything rounded,
+               it is possible to decide whether to format similarly to
+               'e' or 'f'  P > X >= -4  integer digits will be in the buffer  we didn't keep leading zeros and need to regenerate
+                       them; space was reserved just in case  suppress exponent  strip any trailing zeros from the fraction  suppress trailing precision fill  build exponent string: 'e±dd'  left padding  space-padded width -- before sign  zero-padded width -- after sign  integer part  decimal point  fractional part  precision 0-padding  exponent  right padding  FMT_RADIX_floats  parse fixed width or precision field  call 'push()' for each output letter  macrofied identifiers share a variable with another  set to defaults ** flags ** <space> before non-negative value (signed conversion)  '+' before non-negative value (signed conversion)  '+' overrides ' '  left-justify in field  zero-pad to fill field  '-' overrides '0'  number prefix (nonzero %o:'0' %x/%X:'0x')  indicate; formatter updates with actual length  digit grouping (non-monetary) ** width ** variable width  negative width is width with implied '-'  fixed width ** precision ** variable precision; negative precision is ignored  fixed precision ** length modifier ** doesn't matter if jj, tt or zz happen; they will be rejected
+               by the radix handler  FMT_LENMOD ** radix *** non-numeric * no output * non-integer * any floats gets all of them (except with 'L' and %a, %A for now)  LENMOD_L isn't supported for now and will be rejected automatically  floating point has very different spec interpretations to other
+               formats and requires special handling * signed integer * macrofied labels share a formatter with another * unsigned integer * format "uptrdiff_t" as size_t (unless it becomes standard)  macrofied labels share a formatter with another * padding * numeric formats into fmt_buf.buf  explicit precision  default precision  width zero-fill  non-numeric: supress prefix and precision; keep length and
+                   width  format not accepted; print it literally * push all the stuff * left padding  prefix  0-padding  field  right padding **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Gary Czvitkovicz
+ * Copyright (C) 2017 by Michael A. Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Only the Quake plugin needs float formatting  turn everything on  these are the defaults if no other preference is given  FMT_LENMOD  FMT_RADIX * Length modifier and radix flags * compulsory length modifiers: NONE
+ * however a compatible 'l' or 'll' must be defined if another requires it  signed/unsigned short (%h<radix>)  signed/unsigned char (%hh<radix>)  intmax_t/uintmax_t (%j<radix>)  signed/unsigned long (%l<radix>)  signed/unsigned long long (%ll<radix>)  signed/unsigned ptrdiff_t (%t<radix>)  size_t/ssize_t (%z<radix>)  long double (instead of double)  compulsory radixes: c, d, i, u, s  single character (%c)  signed integer type, decimal (%d %i)  bytes output so far (%n)  unsigned integer type, octal (%o)  pointer (%p %P)  string (%s)  unsigned integer type, decimal (%u)  unsigned integer type, hex (%x %X)  hex floating point "[-]0xh.hhhhp±d"  floating point with exponent "[-]d.ddde±dd"  floating point "[-]ddd.ddd"  floating point exponent or decimal depending
+                                  upon value and precision  TODO: 'a' 'A'  Assumes IEEE 754 double-precision, native-endian; replace to parse and init
+   for some other format  avoid defining redundant functions if two or more types can use the same
+ * something not getting a macro means it gets assigned its own value and
+ * formatter  l  unique  LONG_  unique  ULONG_  ll  unique  LLONG_  unique  ULLONG_  char/short parameter type promotions  some macros to have conditional work inside macros  synthesize multicharacter constant  'hh'  'll'  select type-compatible length modifier
+ * (a bit hacky; it should be range-based)  call formatting function for the compatible integer type  execute formatting branch for the compatible integer type  second character of formatter after '%'  length of formatted text (non-numeric)
+                              or prefix (numeric)  work buffer  buffer end marker and guard '0'  %d %i  %o %u %x %X  %ld %li  format_ld  %lo %lu %lx %lX  format_lu  FMT_LENMOD_l  %lld %lli  format_lld  %llo %llu %llx %llX  format_llu  FMT_LENMOD_ll  %c  wchar_t support for now  %s  wchar_t support for now  string length may be specified by precision instead of \0-
+       terminated; however, don't go past a \0 if one is there  %n  int only for now  FMT_RADIX_n  %p %P  format as %#x or %#X  format as %s  FMT_RADIX_p  find out how many uint32_t chunks need to be allocated, if any
+ * if none are needed, finish the init for the number here  -1023..1024  -8 to +63  integer, fraction and manipulations fit in uint64_t  -8 to -1 - fraction  int - none  frac  0 to +51 - integer|fraction  int  go up + possibly 1 longer  frac  +52 to +63 - integer  int  frac - none  -1023 to -9 - fraction  int - none  frac - left-justify on bit 31 of the chunk of the MSb  normal  subnormal (including zero)  zero  +64 to +1023 - integer  int - right-justify on bit 0 of the first chunk  frac - none  +1024: INF, NAN  construct the arbitrary-precision value in the provided allocation  format inf, nan strings  certain special values  they also have a sign  %e %E %f %F %g %G  default precision is 6 for all formats  %g, %G  %e, %E  large integer required  log rollover + round rollover + leading zeros (%g)  no lead zeros  handles 0e+0 too  large integer required  carried left  slide everything left by 1  g, G  'g' is some weird crap  now that the final exponent is known and everything rounded,
+               it is possible to decide whether to format similarly to
+               'e' or 'f'  P > X >= -4  integer digits will be in the buffer  we didn't keep leading zeros and need to regenerate
+                       them; space was reserved just in case  suppress exponent  strip any trailing zeros from the fraction  suppress trailing precision fill  build exponent string: 'e±dd'  left padding  space-padded width -- before sign  zero-padded width -- after sign  integer part  decimal point  fractional part  precision 0-padding  exponent  right padding  FMT_RADIX_floats  parse fixed width or precision field  call 'push()' for each output letter  macrofied identifiers share a variable with another  set to defaults ** flags ** <space> before non-negative value (signed conversion)  '+' before non-negative value (signed conversion)  '+' overrides ' '  left-justify in field  zero-pad to fill field  '-' overrides '0'  number prefix (nonzero %o:'0' %x/%X:'0x')  indicate; formatter updates with actual length  digit grouping (non-monetary) ** width ** variable width  negative width is width with implied '-'  fixed width ** precision ** variable precision; negative precision is ignored  fixed precision ** length modifier ** doesn't matter if jj, tt or zz happen; they will be rejected
+               by the radix handler  FMT_LENMOD ** radix *** non-numeric * no output * non-integer * any floats gets all of them (except with 'L' and %a, %A for now)  LENMOD_L isn't supported for now and will be rejected automatically  floating point has very different spec interpretations to other
+               formats and requires special handling * signed integer * macrofied labels share a formatter with another * unsigned integer * format "uptrdiff_t" as size_t (unless it becomes standard)  macrofied labels share a formatter with another * padding * numeric formats into fmt_buf.buf  explicit precision  default precision  width zero-fill  non-numeric: supress prefix and precision; keep length and
+                   width  format not accepted; print it literally * push all the stuff * left padding  prefix  0-padding  field  right padding 

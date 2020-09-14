@@ -1,0 +1,316 @@
+ This file is part of libmspack.
+ * (C) 2003-2013 Stuart Caie.
+ *
+ * The LZX method was created by Jonathan Forbes and Tomi Poutanen, adapted
+ * by Microsoft Corporation.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  LZX decompression implementation  Microsoft's LZX document (in cab-sdk.exe) and their implementation
+ * of the com.ms.util.cab Java package do not concur.
+ *
+ * In the LZX document, there is a table showing the correlation between
+ * window size and the number of position slots. It states that the 1MB
+ * window = 40 slots and the 2MB window = 42 slots. In the implementation,
+ * 1MB = 42 slots, 2MB = 50 slots. The actual calculation is 'find the
+ * first slot whose position base is equal to or more than the required
+ * window size'. This would explain why other tables in the document refer
+ * to 50 slots rather than 42.
+ *
+ * The constant NUM_PRIMARY_LENGTHS used in the decompression pseudocode
+ * is not defined in the specification.
+ *
+ * The LZX document does not state the uncompressed block has an
+ * uncompressed length field. Where does this length field come from, so
+ * we can know how large the block is? The implementation has it as the 24
+ * bits following after the 3 blocktype bits, before the alignment
+ * padding.
+ *
+ * The LZX document states that aligned offset blocks have their aligned
+ * offset huffman tree AFTER the main and length trees. The implementation
+ * suggests that the aligned offset tree is BEFORE the main and length
+ * trees.
+ *
+ * The LZX document decoding algorithm states that, in an aligned offset
+ * block, if an extra_bits value is 1, 2 or 3, then that number of bits
+ * should be read and the result added to the match offset. This is
+ * correct for 1 and 2, but not 3, where just a huffman symbol (using the
+ * aligned tree) should be read.
+ *
+ * Regarding the E8 preprocessing, the LZX document states 'No translation
+ * may be performed on the last 6 bytes of the input block'. This is
+ * correct.  However, the pseudocode provided checks for the *E8 leader*
+ * up to the last 6 bytes. If the leader appears between -10 and -7 bytes
+ * from the end, this would cause the next four bytes to be modified, at
+ * least one of which would be in the last 6 bytes, which is not allowed
+ * according to the spec.
+ *
+ * The specification states that the huffman trees must always contain at
+ * least one element. However, many CAB files contain blocks where the
+ * length tree is completely empty (because there are no matches), and
+ * this is expected to succeed.
+ *
+ * The errors in LZX documentation appear have been corrected in the
+ * new documentation for the LZX DELTA format.
+ *
+ *     http://msdn.microsoft.com/en-us/library/cc483133.aspx
+ *
+ * However, this is a different format, an extension of regular LZX.
+ * I have noticed the following differences, there may be more:
+ *
+ * The maximum window size has increased from 2MB to 32MB. This also
+ * increases the maximum number of position slots, etc.
+ *
+ * If the match length is 257 (the maximum possible), this signals
+ * a further length decoding step, that allows for matches up to
+ * 33024 bytes long.
+ *
+ * The format now allows for "reference data", supplied by the caller.
+ * If match offsets go further back than the number of bytes
+ * decompressed so far, that is them accessing the reference data.
+  import bit-reading macros and code  import huffman-reading macros and code  BUILD_TABLE(tbl) builds a huffman lookup table from code lengths  empty tree - allow it, but don't decode symbols with it  READ_LENGTHS(tablename, first, last) reads in code lengths for symbols
+ * first to last in the given table. The code lengths are stored in their
+ * own special LZX way.
+  bit buffer and huffman symbol decode variables  read lengths for pretree (20 symbols, lengths stored in fixed 4 bits)  code = 17, run of ([read 4 bits]+4) zeros  code = 18, run of ([read 5 bits]+20) zeros  code = 19, run of ([read 1 bit]+4) [read huffman symbol]  code = 0 to 16, delta current length entry  LZX static data tables:
+ *
+ * LZX uses 'position slots' to represent match offsets.  For every match,
+ * a small 'position slot' number and a small offset from that slot are
+ * encoded instead of one large offset.
+ *
+ * The number of slots is decided by how many are needed to encode the
+ * largest offset for a given window size. This is easy when the gap between
+ * slots is less than 128Kb, it's a linear relationship. But when extra_bits
+ * reaches its limit of 17 (because LZX can only ensure reading 17 bits of
+ * data at a time), we can only jump 128Kb at a time and have to start
+ * using more and more position slots as each window size doubles.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * They are calculated as follows:
+ * extra_bits[i] = 0 where i < 4
+ * extra_bits[i] = floor(i/2)-1 where i >= 4 && i < 36
+ * extra_bits[i] = 17 where i >= 36
+ * position_base[0] = 0
+ * position_base[i] = position_base[i-1] + (1 << extra_bits[i-1])
+  initialise tables to 0 (because deltas will be applied to them) -------- main LZX code -------- LZX DELTA window sizes are between 2^17 (128KiB) and 2^25 (32MiB),
+   * regular LZX windows are between 2^15 (32KiB) and 2^21 (2MiB)
+    round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  copy reference data  length can't be more than 2^25, so no signedness problem  bitstream and huffman reading variables  easy answers  flush out any stored-up bytes before we begin  restore local state  have we reached the reset interval? (if there is one?)  this is a file format error, we can make a best effort to extract what we can  re-read the intel header and reset the huffman lengths  LZX DELTA format has chunk_size, not present in LZX format  read header if necessary  read 1 bit. if bit=0, intel filesize = 0.
+       * if bit=1, read intel filesize (32 bits)  calculate size of frame: all frames are 32k except the final frame
+     * which is 32kb or less. this can only be calculated when lzx->length
+     * has been filled in.  decode until one more frame is available  initialise new block, if one is needed  realign if previous block was an odd-sized UNCOMPRESSED block  read block type (3 bits) and block length (24 bits) D(("new block t%d len %u", lzx->block_type, lzx->block_length)) read individual block headers  read lengths of and build aligned huffman decoding tree  rest of aligned header is same as verbatim @fallthrough@ read lengths of and build main huffman decoding tree  if the literal 0xE8 is anywhere in the block...  read lengths of and build lengths huffman decoding tree  because we can't assume otherwise  read 1-16 (not 0-15) bits to align to bytes  read 12 bytes of stored R0 / R1 / R2 values  decode more of the block:
+       * run = min(what's available, what's needed)  assume we decode exactly this_run bytes, for now  decode at least this_run bytes  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  verbatim and aligned bits  aligned bits only  extra==1, extra==2  verbatim bits only  extra == 0  ??? not defined in LZX specification!  update repeated offset LRU queue  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  as this_run is limited not to wrap a frame, this also means it
+         * won't wrap the window (as the window is a multiple of 32k)  might as well  did the final match overrun our desired this_run length?  while (bytes_todo > 0)  streams don't extend over frame boundaries  re-align input bitstream  check that we've used all of the previous frame first  does this intel block _really_ need decoding?  copy e8 block to the e8 buffer and tweak if needed  write a frame  advance frame start position  wrap window / frame position pointers  while (lzx->frame < end_frame)  store local state  This file is part of libmspack.
+ * (C) 2003-2013 Stuart Caie.
+ *
+ * The LZX method was created by Jonathan Forbes and Tomi Poutanen, adapted
+ * by Microsoft Corporation.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  LZX decompression implementation  Microsoft's LZX document (in cab-sdk.exe) and their implementation
+ * of the com.ms.util.cab Java package do not concur.
+ *
+ * In the LZX document, there is a table showing the correlation between
+ * window size and the number of position slots. It states that the 1MB
+ * window = 40 slots and the 2MB window = 42 slots. In the implementation,
+ * 1MB = 42 slots, 2MB = 50 slots. The actual calculation is 'find the
+ * first slot whose position base is equal to or more than the required
+ * window size'. This would explain why other tables in the document refer
+ * to 50 slots rather than 42.
+ *
+ * The constant NUM_PRIMARY_LENGTHS used in the decompression pseudocode
+ * is not defined in the specification.
+ *
+ * The LZX document does not state the uncompressed block has an
+ * uncompressed length field. Where does this length field come from, so
+ * we can know how large the block is? The implementation has it as the 24
+ * bits following after the 3 blocktype bits, before the alignment
+ * padding.
+ *
+ * The LZX document states that aligned offset blocks have their aligned
+ * offset huffman tree AFTER the main and length trees. The implementation
+ * suggests that the aligned offset tree is BEFORE the main and length
+ * trees.
+ *
+ * The LZX document decoding algorithm states that, in an aligned offset
+ * block, if an extra_bits value is 1, 2 or 3, then that number of bits
+ * should be read and the result added to the match offset. This is
+ * correct for 1 and 2, but not 3, where just a huffman symbol (using the
+ * aligned tree) should be read.
+ *
+ * Regarding the E8 preprocessing, the LZX document states 'No translation
+ * may be performed on the last 6 bytes of the input block'. This is
+ * correct.  However, the pseudocode provided checks for the *E8 leader*
+ * up to the last 6 bytes. If the leader appears between -10 and -7 bytes
+ * from the end, this would cause the next four bytes to be modified, at
+ * least one of which would be in the last 6 bytes, which is not allowed
+ * according to the spec.
+ *
+ * The specification states that the huffman trees must always contain at
+ * least one element. However, many CAB files contain blocks where the
+ * length tree is completely empty (because there are no matches), and
+ * this is expected to succeed.
+ *
+ * The errors in LZX documentation appear have been corrected in the
+ * new documentation for the LZX DELTA format.
+ *
+ *     http://msdn.microsoft.com/en-us/library/cc483133.aspx
+ *
+ * However, this is a different format, an extension of regular LZX.
+ * I have noticed the following differences, there may be more:
+ *
+ * The maximum window size has increased from 2MB to 32MB. This also
+ * increases the maximum number of position slots, etc.
+ *
+ * If the match length is 257 (the maximum possible), this signals
+ * a further length decoding step, that allows for matches up to
+ * 33024 bytes long.
+ *
+ * The format now allows for "reference data", supplied by the caller.
+ * If match offsets go further back than the number of bytes
+ * decompressed so far, that is them accessing the reference data.
+  import bit-reading macros and code  import huffman-reading macros and code  BUILD_TABLE(tbl) builds a huffman lookup table from code lengths  empty tree - allow it, but don't decode symbols with it  READ_LENGTHS(tablename, first, last) reads in code lengths for symbols
+ * first to last in the given table. The code lengths are stored in their
+ * own special LZX way.
+  bit buffer and huffman symbol decode variables  read lengths for pretree (20 symbols, lengths stored in fixed 4 bits)  code = 17, run of ([read 4 bits]+4) zeros  code = 18, run of ([read 5 bits]+20) zeros  code = 19, run of ([read 1 bit]+4) [read huffman symbol]  code = 0 to 16, delta current length entry  LZX static data tables:
+ *
+ * LZX uses 'position slots' to represent match offsets.  For every match,
+ * a small 'position slot' number and a small offset from that slot are
+ * encoded instead of one large offset.
+ *
+ * The number of slots is decided by how many are needed to encode the
+ * largest offset for a given window size. This is easy when the gap between
+ * slots is less than 128Kb, it's a linear relationship. But when extra_bits
+ * reaches its limit of 17 (because LZX can only ensure reading 17 bits of
+ * data at a time), we can only jump 128Kb at a time and have to start
+ * using more and more position slots as each window size doubles.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * They are calculated as follows:
+ * extra_bits[i] = 0 where i < 4
+ * extra_bits[i] = floor(i/2)-1 where i >= 4 && i < 36
+ * extra_bits[i] = 17 where i >= 36
+ * position_base[0] = 0
+ * position_base[i] = position_base[i-1] + (1 << extra_bits[i-1])
+  initialise tables to 0 (because deltas will be applied to them) -------- main LZX code -------- LZX DELTA window sizes are between 2^17 (128KiB) and 2^25 (32MiB),
+   * regular LZX windows are between 2^15 (32KiB) and 2^21 (2MiB)
+    round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  copy reference data  length can't be more than 2^25, so no signedness problem  bitstream and huffman reading variables  easy answers  flush out any stored-up bytes before we begin  restore local state  have we reached the reset interval? (if there is one?)  this is a file format error, we can make a best effort to extract what we can  re-read the intel header and reset the huffman lengths  LZX DELTA format has chunk_size, not present in LZX format  read header if necessary  read 1 bit. if bit=0, intel filesize = 0.
+       * if bit=1, read intel filesize (32 bits)  calculate size of frame: all frames are 32k except the final frame
+     * which is 32kb or less. this can only be calculated when lzx->length
+     * has been filled in.  decode until one more frame is available  initialise new block, if one is needed  realign if previous block was an odd-sized UNCOMPRESSED block  read block type (3 bits) and block length (24 bits) D(("new block t%d len %u", lzx->block_type, lzx->block_length)) read individual block headers  read lengths of and build aligned huffman decoding tree  rest of aligned header is same as verbatim @fallthrough@ read lengths of and build main huffman decoding tree  if the literal 0xE8 is anywhere in the block...  read lengths of and build lengths huffman decoding tree  because we can't assume otherwise  read 1-16 (not 0-15) bits to align to bytes  read 12 bytes of stored R0 / R1 / R2 values  decode more of the block:
+       * run = min(what's available, what's needed)  assume we decode exactly this_run bytes, for now  decode at least this_run bytes  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  verbatim and aligned bits  aligned bits only  extra==1, extra==2  verbatim bits only  extra == 0  ??? not defined in LZX specification!  update repeated offset LRU queue  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  as this_run is limited not to wrap a frame, this also means it
+         * won't wrap the window (as the window is a multiple of 32k)  might as well  did the final match overrun our desired this_run length?  while (bytes_todo > 0)  streams don't extend over frame boundaries  re-align input bitstream  check that we've used all of the previous frame first  does this intel block _really_ need decoding?  copy e8 block to the e8 buffer and tweak if needed  write a frame  advance frame start position  wrap window / frame position pointers  while (lzx->frame < end_frame)  store local state  This file is part of libmspack.
+ * (C) 2003-2013 Stuart Caie.
+ *
+ * The LZX method was created by Jonathan Forbes and Tomi Poutanen, adapted
+ * by Microsoft Corporation.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  LZX decompression implementation  Microsoft's LZX document (in cab-sdk.exe) and their implementation
+ * of the com.ms.util.cab Java package do not concur.
+ *
+ * In the LZX document, there is a table showing the correlation between
+ * window size and the number of position slots. It states that the 1MB
+ * window = 40 slots and the 2MB window = 42 slots. In the implementation,
+ * 1MB = 42 slots, 2MB = 50 slots. The actual calculation is 'find the
+ * first slot whose position base is equal to or more than the required
+ * window size'. This would explain why other tables in the document refer
+ * to 50 slots rather than 42.
+ *
+ * The constant NUM_PRIMARY_LENGTHS used in the decompression pseudocode
+ * is not defined in the specification.
+ *
+ * The LZX document does not state the uncompressed block has an
+ * uncompressed length field. Where does this length field come from, so
+ * we can know how large the block is? The implementation has it as the 24
+ * bits following after the 3 blocktype bits, before the alignment
+ * padding.
+ *
+ * The LZX document states that aligned offset blocks have their aligned
+ * offset huffman tree AFTER the main and length trees. The implementation
+ * suggests that the aligned offset tree is BEFORE the main and length
+ * trees.
+ *
+ * The LZX document decoding algorithm states that, in an aligned offset
+ * block, if an extra_bits value is 1, 2 or 3, then that number of bits
+ * should be read and the result added to the match offset. This is
+ * correct for 1 and 2, but not 3, where just a huffman symbol (using the
+ * aligned tree) should be read.
+ *
+ * Regarding the E8 preprocessing, the LZX document states 'No translation
+ * may be performed on the last 6 bytes of the input block'. This is
+ * correct.  However, the pseudocode provided checks for the *E8 leader*
+ * up to the last 6 bytes. If the leader appears between -10 and -7 bytes
+ * from the end, this would cause the next four bytes to be modified, at
+ * least one of which would be in the last 6 bytes, which is not allowed
+ * according to the spec.
+ *
+ * The specification states that the huffman trees must always contain at
+ * least one element. However, many CAB files contain blocks where the
+ * length tree is completely empty (because there are no matches), and
+ * this is expected to succeed.
+ *
+ * The errors in LZX documentation appear have been corrected in the
+ * new documentation for the LZX DELTA format.
+ *
+ *     http://msdn.microsoft.com/en-us/library/cc483133.aspx
+ *
+ * However, this is a different format, an extension of regular LZX.
+ * I have noticed the following differences, there may be more:
+ *
+ * The maximum window size has increased from 2MB to 32MB. This also
+ * increases the maximum number of position slots, etc.
+ *
+ * If the match length is 257 (the maximum possible), this signals
+ * a further length decoding step, that allows for matches up to
+ * 33024 bytes long.
+ *
+ * The format now allows for "reference data", supplied by the caller.
+ * If match offsets go further back than the number of bytes
+ * decompressed so far, that is them accessing the reference data.
+  import bit-reading macros and code  import huffman-reading macros and code  BUILD_TABLE(tbl) builds a huffman lookup table from code lengths  empty tree - allow it, but don't decode symbols with it  READ_LENGTHS(tablename, first, last) reads in code lengths for symbols
+ * first to last in the given table. The code lengths are stored in their
+ * own special LZX way.
+  bit buffer and huffman symbol decode variables  read lengths for pretree (20 symbols, lengths stored in fixed 4 bits)  code = 17, run of ([read 4 bits]+4) zeros  code = 18, run of ([read 5 bits]+20) zeros  code = 19, run of ([read 1 bit]+4) [read huffman symbol]  code = 0 to 16, delta current length entry  LZX static data tables:
+ *
+ * LZX uses 'position slots' to represent match offsets.  For every match,
+ * a small 'position slot' number and a small offset from that slot are
+ * encoded instead of one large offset.
+ *
+ * The number of slots is decided by how many are needed to encode the
+ * largest offset for a given window size. This is easy when the gap between
+ * slots is less than 128Kb, it's a linear relationship. But when extra_bits
+ * reaches its limit of 17 (because LZX can only ensure reading 17 bits of
+ * data at a time), we can only jump 128Kb at a time and have to start
+ * using more and more position slots as each window size doubles.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * They are calculated as follows:
+ * extra_bits[i] = 0 where i < 4
+ * extra_bits[i] = floor(i/2)-1 where i >= 4 && i < 36
+ * extra_bits[i] = 17 where i >= 36
+ * position_base[0] = 0
+ * position_base[i] = position_base[i-1] + (1 << extra_bits[i-1])
+  initialise tables to 0 (because deltas will be applied to them) -------- main LZX code -------- LZX DELTA window sizes are between 2^17 (128KiB) and 2^25 (32MiB),
+   * regular LZX windows are between 2^15 (32KiB) and 2^21 (2MiB)
+    round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  copy reference data  length can't be more than 2^25, so no signedness problem  bitstream and huffman reading variables  easy answers  flush out any stored-up bytes before we begin  restore local state  have we reached the reset interval? (if there is one?)  this is a file format error, we can make a best effort to extract what we can  re-read the intel header and reset the huffman lengths  LZX DELTA format has chunk_size, not present in LZX format  read header if necessary  read 1 bit. if bit=0, intel filesize = 0.
+       * if bit=1, read intel filesize (32 bits)  calculate size of frame: all frames are 32k except the final frame
+     * which is 32kb or less. this can only be calculated when lzx->length
+     * has been filled in.  decode until one more frame is available  initialise new block, if one is needed  realign if previous block was an odd-sized UNCOMPRESSED block  read block type (3 bits) and block length (24 bits) D(("new block t%d len %u", lzx->block_type, lzx->block_length)) read individual block headers  read lengths of and build aligned huffman decoding tree  rest of aligned header is same as verbatim @fallthrough@ read lengths of and build main huffman decoding tree  if the literal 0xE8 is anywhere in the block...  read lengths of and build lengths huffman decoding tree  because we can't assume otherwise  read 1-16 (not 0-15) bits to align to bytes  read 12 bytes of stored R0 / R1 / R2 values  decode more of the block:
+       * run = min(what's available, what's needed)  assume we decode exactly this_run bytes, for now  decode at least this_run bytes  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  literal: 0 to LZX_NUM_CHARS-1  match: LZX_NUM_CHARS + ((slot<<3) | length_header (3 bits))  get match length  get match offset  verbatim and aligned bits  aligned bits only  extra==1, extra==2  verbatim bits only  extra == 0  ??? not defined in LZX specification!  update repeated offset LRU queue  LZX DELTA uses max match length to signal even longer match  4 entry huffman tree  '0' -> 8 extra length bits  '10' -> 10 extra length bits + 0x100  '110' -> 12 extra length bits + 0x500  '111' -> 15 extra length bits  copy match  does match offset wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  while (this_run > 0)  as this_run is limited not to wrap a frame, this also means it
+         * won't wrap the window (as the window is a multiple of 32k)  might as well  did the final match overrun our desired this_run length?  while (bytes_todo > 0)  streams don't extend over frame boundaries  re-align input bitstream  check that we've used all of the previous frame first  does this intel block _really_ need decoding?  copy e8 block to the e8 buffer and tweak if needed  write a frame  advance frame start position  wrap window / frame position pointers  while (lzx->frame < end_frame)  store local state 

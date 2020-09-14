@@ -1,0 +1,439 @@
+
+ * signpost.c: implementation of the janko game 'arrow path'
+  background colours  mid arrow colours  dim arrow colours  dim arrow colours  direction enums, size n  numbers, size n  flags, size n  links to other cell indexes, size n (-1 absent)  connects regions with a dsf.  for each number, which index is it in? (-1 absent)  --- Generally useful functions ---  limit to (-1, 0, 1)  ditto  (by convention) squares do not point to themselves.  the final number points to nothing.  not reached  Taking the number 'num', work out the gap between it and the next
+ * available number up or down (depending on d). Return true if the
+ * region at (x,y) will fit in that gap.  The 'gap' is the number of missing numbers in the grid between
+     * our number and the next one in the sequence (up or down), or
+     * the end of the sequence (if we happen not to have 1/n present)  empty loop  no gap, so the only allowable move is that that directly
+         * links the two numbers.  single unconnected square, always OK  can only move where we point  can't move _from_ the preset final number, or _to_ the preset 1.  can't create a new connection between cells in the same region
+     * as that would create a loop.  if both cells are actual numbers, can't drag if we're not
+     * one digit apart.  two digits only!  --- Game parameter/presets functions ---  structure copy  The UI doesn't let us move these from unsolved to solved,
+	 * so we disallow generating (but not playing) them.  --- Game description string generation and unpicking ---  sth went wrong.  --- Game generation ---  Fills in preallocated arrays ai (indices) and ad (directions)
+ * showing all non-numbered cells adjacent to index i, returns length  This function has been somewhat optimised...  Try and expand _from_ headi; keep going if there's only one
+         * place to go to.  Try and expand _to_ taili; keep going if there's only one
+         * place to go to.  If we get here we have headi and taili set but unconnected
+     * by direction: we need to set headi's direction so as to point
+     * at taili.  it could happen that our last two weren't in line; if that's the
+     * case, we have to start again.  Better generator: with the 'generate, sprinkle numbers, solve,
+ * repeat' algorithm we're _never_ generating anything greater than
+ * 6x6, and spending all of our time in new_game_fill (and very little
+ * in solve_state).
+ *
+ * So, new generator steps:
+   * generate the grid, at random (same as now). Numbers 1 and N get
+      immutable flag immediately.
+   * squirrel that away for the solved state.
+   *
+   * (solve:) Try and solve it.
+   * If we solved it, we're done:
+     * generate the description from current immutable numbers,
+     * free stuff that needs freeing,
+     * return description + solved state.
+   * If we didn't solve it:
+     * count #tiles in state we've made deductions about.
+     * while (1):
+       * randomise a scratch array.
+       * for each index in scratch (in turn):
+         * if the cell isn't empty, continue (through scratch array)
+         * set number + immutable in state.
+         * try and solve state.
+         * if we've solved it, we're done.
+         * otherwise, count #tiles. If it's more than we had before:
+           * good, break from this loop and re-randomise.
+         * otherwise (number didn't help):
+           * remove number and try next in scratch array.
+       * if we've got to the end of the scratch array, no luck:
+          free everything we need to, and go back to regenerate the grid.
+    Expects a fully-numbered game_state on input, and makes sure
+ * FLAG_IMMUTABLE is only set on those numbers we need to solve
+ * (as for a real new-game); returns true if it managed
+ * this (such that it could solve it), or false if not.  This is scungy. It might just be quick enough.
+     * It goes through, adding set numbers in empty squares
+     * until either we run out of empty squares (in the one
+     * we're half-solving) or else we solve it properly.
+     * NB that we run the entire solver each time, which
+     * strips the grid beforehand; we will save time if we
+     * avoid that.  already solved to a real number here.  Since we added basically at random, try now to remove numbers
+     * and see if we can still solve it; if we can (still), really
+     * remove the number. Make sure we don't remove the anchor numbers
+     * 1 and N.  this shouldn't happen (validate_params), but let's play it safe  keep trying until we fill successfully.  This will have filled in directions and _all_ numbers.
+     * Store the game definition for this, as the solved-state.  --- Linked-list and numbers array ---  Assuming numbers are always up-to-date, there are only four possibilities
+ * for regions changing after a single valid move:
+ *
+ * 1) two differently-coloured regions being combined (the resulting colouring
+ *     should be based on the larger of the two regions)
+ * 2) a numbered region having a single number added to the start (the
+ *     region's colour will remain, and the numbers will shift by 1)
+ * 3) a numbered region having a single number added to the end (the
+ *     region's colour and numbering remains as-is)
+ * 4) two unnumbered squares being joined (will pick the smallest unused set
+ *     of colours to use for the new region).
+ *
+ * There should never be any complications with regions containing 3 colours
+ * being combined, since two of those colours should have been merged on a
+ * previous move.
+ *
+ * Most of the complications are in ensuring we don't accidentally set two
+ * regions with the same colour (e.g. if a region was split). If this happens
+ * we always try and give the largest original portion the original colour.
+  position  size of region  region start number preferred, or 0 if !preference  0 if we have no preference (and should just pick one)  Insist we really were passed the head of a chain.  Search through this chain looking for real numbers, checking that
+     * they match up (if there are more than one).  we have created a loop, obviously wrong  (probably) empty cell onto the head of a coloured region:
+         * make sure we start at a 0 offset.  if we're 0 we're probably just blank -- but even if we're a
+         * (real) numbered region, we don't have an immutable number
+         * in it (any more) otherwise it'd have been caught above, so
+         * reassign the colour.  If we got here then we may have split a region into
+         * two; make sure we don't assign a colour we've already used.  not convinced this shouldn't be an assertion failure here.  Heads with preferred colours first...  ...then heads with low colours first...  ... then large regions first...  ... then position.  NB start at 1: colour 0 is real numbers  Construct an array of the heads of all current regions, together
+     * with their preferred colours.  Look for a cell that is the start of a chain
+         * (has a next but no prev).  Sort that array:
+     * - heads with preferred colours first, then
+     * - heads with low colours first, then
+     * - large regions first
+      Remove duplicate-coloured regions.  order is important!  We have a duplicate-coloured region: since we're
+             * sorted in size order and this is not the first
+             * of its colour it's not the largest: recolour it.  '-1' means 'was duplicate'  loop?! debug_numbers(state); NB This only marks errors that are possible to perpetrate with
+     * the current UI in interpret_move. Things like forming loops in
+     * linked sections and having numbers not add up should be forbidden
+     * by the code elsewhere, so we don't bother marking those (because
+     * it would add lots of tricky drawing code for very little gain).  Search for repeated numbers.  Search and mark numbers n not pointing to n+1; if any numbers
+     * are missing we know we've not completed.  make sure the link is explicitly made here; for instance, this
+             * is nice if the user drags from 2 out (making 3) and a 4 is also
+             * visible; this ensures that the link from 3 to 4 is also made.  Search and mark numbers less than 0, or 0 with links.  update any auto-links  --- Solver ---  If a tile has a single tile it can link _to_, or there's only a single
+ * location that can link to a given tile, fill that link in.  The from array is a list of 'which square can link _to_ us';
+     * we start off with from as '-1' (meaning 'not found'); if we find
+     * something that can link to us it is set to that index, and then if
+     * we find another we set it to -2.  poss is 'can I link to anything' with the same meanings.  no next from last no.  can't link to somewhere with a back-link we would have to
+             * break (the solver just doesn't work like this).  if there's been a valid move already, we have to move on;
+             * we can't make any deductions here.  Modify the from array as described above (which is enumerating
+             * what points to 'j' in a similar way). debug(("Solver: (%d,%d) has multiple possible next squares.", sx, sy)); no prev from 1st no. debug(("Solver: (%d,%d) has multiple possible prev squares.", x, y)); Returns 1 if we managed to solve it, 0 otherwise.  --- UI and move routines. ---  grid coords of start cell  pixel coords of drag posn  NB: if this is ever changed to as to require more than a structure
+     * copy to clone, there's code that needs fixing in game_redraw too.  disallow dragging from the final number.  disallow dragging to the first number.  single click  else if (button == 'H' || button == 'h')
+        return dupstr("H");  Unlink the single cell we dragged from the board.  Unlink all cells in the same set as the one we dragged
+                 * from the board.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Colours chosen from the webby palette to work as a background to black text,
+ * W then some plausible approximation to pastelly ROYGBIV; we then interpolate
+ * between consecutive pairs to give another 8 (and then the drawing routine
+ * will reuse backgrounds).  white  lightsalmon  green  aquamarine  medium purple  orange  lightskyblue  yellow  I assume here that COL_ARROW and COL_NUMBER are the same.
+	 * Otherwise I'd need two sets of COL_M*.  cx, cy are top-left corner. sz is the 'radius' of the arrow.
+ * ang is in radians, clockwise from 0 == straight up.  cx, cy are centre coordinates..  hack to accomodate rockbox's concave polygon drawing  We're rotating the point at (0, -r) by a degrees  Cursor on this tile.  Tile is source of a drag.  Tile marked in error.  Tile (number) is immutable.  Tile points to other tile  Other tile points in here.  Tile is dim 
+         * We don't display text in empty cells: typically these are
+         * signified by num=0. However, in some cases a cell could
+         * have had the number 0 assigned to it if the user made an
+         * error (e.g. tried to connect a chain of length 5 to the
+         * immutable number 4) so we _do_ display the 0 if the cell
+         * has a link in or a link out.
+          Calculate colours. 
+	 * We're printing, so just do everything in black.
+	  placate optimiser  Clear tile background  Draw large (outwards-pointing) arrow.  'radius' of arrow/star.  centre x  centre y  Draw dot iff this tile requires a predecessor and doesn't have one.  Draw text (number or set).  Just to get the length...  If we could move here, lock the arrow to the appropriate direction.  similar to calculation in draw_arrow_dir.  Draw an arrow pointing away from/towards the origin cell.  point to origin, not away from.  If an in-progress drag would make a valid move if finished, we
+     * reflect that move in the board display. We let interpret_move do
+     * most of the heavy lifting for us: we have to copy the game_ui so
+     * as not to stomp on the real UI's drag state.  Currently the direction here is from our square _back_
+                 * to its previous. We could change this to give the opposite
+                 * sense to the direction. 
+                     * Trivial and foolish configurable option done on
+                     * purest whim. With this option enabled, the
+                     * victory flash is done by rotating each square
+                     * in the opposite direction from its immediate
+                     * neighbours, so that they behave like a field of
+                     * interlocking gears. With it disabled, they all
+                     * rotate in the same direction. Choose for
+                     * yourself which is more brain-twisting :-)
+                      Fake up just enough of a drawstate 
+     * Border and grid.
+     
+     * Arrows and numbers.
+      game_request_keys  wants_statusbar  flags  Parameters and description passed on cmd-line:
+             * try and solve it.  No description passed on cmd-line: decode parameters
+             * (with optional seed too)  We have a set of valid parameters; either soak with it
+             * or generate a single game description and print to stdout.  vim: set shiftwidth=4 tabstop=8: 
+ * signpost.c: implementation of the janko game 'arrow path'
+  background colours  mid arrow colours  dim arrow colours  dim arrow colours  direction enums, size n  numbers, size n  flags, size n  links to other cell indexes, size n (-1 absent)  connects regions with a dsf.  for each number, which index is it in? (-1 absent)  --- Generally useful functions ---  limit to (-1, 0, 1)  ditto  (by convention) squares do not point to themselves.  the final number points to nothing.  not reached  Taking the number 'num', work out the gap between it and the next
+ * available number up or down (depending on d). Return true if the
+ * region at (x,y) will fit in that gap.  The 'gap' is the number of missing numbers in the grid between
+     * our number and the next one in the sequence (up or down), or
+     * the end of the sequence (if we happen not to have 1/n present)  empty loop  no gap, so the only allowable move is that that directly
+         * links the two numbers.  single unconnected square, always OK  can only move where we point  can't move _from_ the preset final number, or _to_ the preset 1.  can't create a new connection between cells in the same region
+     * as that would create a loop.  if both cells are actual numbers, can't drag if we're not
+     * one digit apart.  two digits only!  --- Game parameter/presets functions ---  structure copy  The UI doesn't let us move these from unsolved to solved,
+	 * so we disallow generating (but not playing) them.  --- Game description string generation and unpicking ---  sth went wrong.  --- Game generation ---  Fills in preallocated arrays ai (indices) and ad (directions)
+ * showing all non-numbered cells adjacent to index i, returns length  This function has been somewhat optimised...  Try and expand _from_ headi; keep going if there's only one
+         * place to go to.  Try and expand _to_ taili; keep going if there's only one
+         * place to go to.  If we get here we have headi and taili set but unconnected
+     * by direction: we need to set headi's direction so as to point
+     * at taili.  it could happen that our last two weren't in line; if that's the
+     * case, we have to start again.  Better generator: with the 'generate, sprinkle numbers, solve,
+ * repeat' algorithm we're _never_ generating anything greater than
+ * 6x6, and spending all of our time in new_game_fill (and very little
+ * in solve_state).
+ *
+ * So, new generator steps:
+   * generate the grid, at random (same as now). Numbers 1 and N get
+      immutable flag immediately.
+   * squirrel that away for the solved state.
+   *
+   * (solve:) Try and solve it.
+   * If we solved it, we're done:
+     * generate the description from current immutable numbers,
+     * free stuff that needs freeing,
+     * return description + solved state.
+   * If we didn't solve it:
+     * count #tiles in state we've made deductions about.
+     * while (1):
+       * randomise a scratch array.
+       * for each index in scratch (in turn):
+         * if the cell isn't empty, continue (through scratch array)
+         * set number + immutable in state.
+         * try and solve state.
+         * if we've solved it, we're done.
+         * otherwise, count #tiles. If it's more than we had before:
+           * good, break from this loop and re-randomise.
+         * otherwise (number didn't help):
+           * remove number and try next in scratch array.
+       * if we've got to the end of the scratch array, no luck:
+          free everything we need to, and go back to regenerate the grid.
+    Expects a fully-numbered game_state on input, and makes sure
+ * FLAG_IMMUTABLE is only set on those numbers we need to solve
+ * (as for a real new-game); returns true if it managed
+ * this (such that it could solve it), or false if not.  This is scungy. It might just be quick enough.
+     * It goes through, adding set numbers in empty squares
+     * until either we run out of empty squares (in the one
+     * we're half-solving) or else we solve it properly.
+     * NB that we run the entire solver each time, which
+     * strips the grid beforehand; we will save time if we
+     * avoid that.  already solved to a real number here.  Since we added basically at random, try now to remove numbers
+     * and see if we can still solve it; if we can (still), really
+     * remove the number. Make sure we don't remove the anchor numbers
+     * 1 and N.  this shouldn't happen (validate_params), but let's play it safe  keep trying until we fill successfully.  This will have filled in directions and _all_ numbers.
+     * Store the game definition for this, as the solved-state.  --- Linked-list and numbers array ---  Assuming numbers are always up-to-date, there are only four possibilities
+ * for regions changing after a single valid move:
+ *
+ * 1) two differently-coloured regions being combined (the resulting colouring
+ *     should be based on the larger of the two regions)
+ * 2) a numbered region having a single number added to the start (the
+ *     region's colour will remain, and the numbers will shift by 1)
+ * 3) a numbered region having a single number added to the end (the
+ *     region's colour and numbering remains as-is)
+ * 4) two unnumbered squares being joined (will pick the smallest unused set
+ *     of colours to use for the new region).
+ *
+ * There should never be any complications with regions containing 3 colours
+ * being combined, since two of those colours should have been merged on a
+ * previous move.
+ *
+ * Most of the complications are in ensuring we don't accidentally set two
+ * regions with the same colour (e.g. if a region was split). If this happens
+ * we always try and give the largest original portion the original colour.
+  position  size of region  region start number preferred, or 0 if !preference  0 if we have no preference (and should just pick one)  Insist we really were passed the head of a chain.  Search through this chain looking for real numbers, checking that
+     * they match up (if there are more than one).  we have created a loop, obviously wrong  (probably) empty cell onto the head of a coloured region:
+         * make sure we start at a 0 offset.  if we're 0 we're probably just blank -- but even if we're a
+         * (real) numbered region, we don't have an immutable number
+         * in it (any more) otherwise it'd have been caught above, so
+         * reassign the colour.  If we got here then we may have split a region into
+         * two; make sure we don't assign a colour we've already used.  not convinced this shouldn't be an assertion failure here.  Heads with preferred colours first...  ...then heads with low colours first...  ... then large regions first...  ... then position.  NB start at 1: colour 0 is real numbers  Construct an array of the heads of all current regions, together
+     * with their preferred colours.  Look for a cell that is the start of a chain
+         * (has a next but no prev).  Sort that array:
+     * - heads with preferred colours first, then
+     * - heads with low colours first, then
+     * - large regions first
+      Remove duplicate-coloured regions.  order is important!  We have a duplicate-coloured region: since we're
+             * sorted in size order and this is not the first
+             * of its colour it's not the largest: recolour it.  '-1' means 'was duplicate'  loop?! debug_numbers(state); NB This only marks errors that are possible to perpetrate with
+     * the current UI in interpret_move. Things like forming loops in
+     * linked sections and having numbers not add up should be forbidden
+     * by the code elsewhere, so we don't bother marking those (because
+     * it would add lots of tricky drawing code for very little gain).  Search for repeated numbers.  Search and mark numbers n not pointing to n+1; if any numbers
+     * are missing we know we've not completed.  make sure the link is explicitly made here; for instance, this
+             * is nice if the user drags from 2 out (making 3) and a 4 is also
+             * visible; this ensures that the link from 3 to 4 is also made.  Search and mark numbers less than 0, or 0 with links.  update any auto-links  --- Solver ---  If a tile has a single tile it can link _to_, or there's only a single
+ * location that can link to a given tile, fill that link in.  The from array is a list of 'which square can link _to_ us';
+     * we start off with from as '-1' (meaning 'not found'); if we find
+     * something that can link to us it is set to that index, and then if
+     * we find another we set it to -2.  poss is 'can I link to anything' with the same meanings.  no next from last no.  can't link to somewhere with a back-link we would have to
+             * break (the solver just doesn't work like this).  if there's been a valid move already, we have to move on;
+             * we can't make any deductions here.  Modify the from array as described above (which is enumerating
+             * what points to 'j' in a similar way). debug(("Solver: (%d,%d) has multiple possible next squares.", sx, sy)); no prev from 1st no. debug(("Solver: (%d,%d) has multiple possible prev squares.", x, y)); Returns 1 if we managed to solve it, 0 otherwise.  --- UI and move routines. ---  grid coords of start cell  pixel coords of drag posn  NB: if this is ever changed to as to require more than a structure
+     * copy to clone, there's code that needs fixing in game_redraw too.  disallow dragging from the final number.  disallow dragging to the first number.  single click  else if (button == 'H' || button == 'h')
+        return dupstr("H");  Unlink the single cell we dragged from the board.  Unlink all cells in the same set as the one we dragged
+                 * from the board.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Colours chosen from the webby palette to work as a background to black text,
+ * W then some plausible approximation to pastelly ROYGBIV; we then interpolate
+ * between consecutive pairs to give another 8 (and then the drawing routine
+ * will reuse backgrounds).  white  lightsalmon  green  aquamarine  medium purple  orange  lightskyblue  yellow  I assume here that COL_ARROW and COL_NUMBER are the same.
+	 * Otherwise I'd need two sets of COL_M*.  cx, cy are top-left corner. sz is the 'radius' of the arrow.
+ * ang is in radians, clockwise from 0 == straight up.  cx, cy are centre coordinates..  hack to accomodate rockbox's concave polygon drawing  We're rotating the point at (0, -r) by a degrees  Cursor on this tile.  Tile is source of a drag.  Tile marked in error.  Tile (number) is immutable.  Tile points to other tile  Other tile points in here.  Tile is dim 
+         * We don't display text in empty cells: typically these are
+         * signified by num=0. However, in some cases a cell could
+         * have had the number 0 assigned to it if the user made an
+         * error (e.g. tried to connect a chain of length 5 to the
+         * immutable number 4) so we _do_ display the 0 if the cell
+         * has a link in or a link out.
+          Calculate colours. 
+	 * We're printing, so just do everything in black.
+	  placate optimiser  Clear tile background  Draw large (outwards-pointing) arrow.  'radius' of arrow/star.  centre x  centre y  Draw dot iff this tile requires a predecessor and doesn't have one.  Draw text (number or set).  Just to get the length...  If we could move here, lock the arrow to the appropriate direction.  similar to calculation in draw_arrow_dir.  Draw an arrow pointing away from/towards the origin cell.  point to origin, not away from.  If an in-progress drag would make a valid move if finished, we
+     * reflect that move in the board display. We let interpret_move do
+     * most of the heavy lifting for us: we have to copy the game_ui so
+     * as not to stomp on the real UI's drag state.  Currently the direction here is from our square _back_
+                 * to its previous. We could change this to give the opposite
+                 * sense to the direction. 
+                     * Trivial and foolish configurable option done on
+                     * purest whim. With this option enabled, the
+                     * victory flash is done by rotating each square
+                     * in the opposite direction from its immediate
+                     * neighbours, so that they behave like a field of
+                     * interlocking gears. With it disabled, they all
+                     * rotate in the same direction. Choose for
+                     * yourself which is more brain-twisting :-)
+                      Fake up just enough of a drawstate 
+     * Border and grid.
+     
+     * Arrows and numbers.
+      game_request_keys  wants_statusbar  flags  Parameters and description passed on cmd-line:
+             * try and solve it.  No description passed on cmd-line: decode parameters
+             * (with optional seed too)  We have a set of valid parameters; either soak with it
+             * or generate a single game description and print to stdout.  vim: set shiftwidth=4 tabstop=8: 
+ * signpost.c: implementation of the janko game 'arrow path'
+  background colours  mid arrow colours  dim arrow colours  dim arrow colours  direction enums, size n  numbers, size n  flags, size n  links to other cell indexes, size n (-1 absent)  connects regions with a dsf.  for each number, which index is it in? (-1 absent)  --- Generally useful functions ---  limit to (-1, 0, 1)  ditto  (by convention) squares do not point to themselves.  the final number points to nothing.  not reached  Taking the number 'num', work out the gap between it and the next
+ * available number up or down (depending on d). Return true if the
+ * region at (x,y) will fit in that gap.  The 'gap' is the number of missing numbers in the grid between
+     * our number and the next one in the sequence (up or down), or
+     * the end of the sequence (if we happen not to have 1/n present)  empty loop  no gap, so the only allowable move is that that directly
+         * links the two numbers.  single unconnected square, always OK  can only move where we point  can't move _from_ the preset final number, or _to_ the preset 1.  can't create a new connection between cells in the same region
+     * as that would create a loop.  if both cells are actual numbers, can't drag if we're not
+     * one digit apart.  two digits only!  --- Game parameter/presets functions ---  structure copy  The UI doesn't let us move these from unsolved to solved,
+	 * so we disallow generating (but not playing) them.  --- Game description string generation and unpicking ---  sth went wrong.  --- Game generation ---  Fills in preallocated arrays ai (indices) and ad (directions)
+ * showing all non-numbered cells adjacent to index i, returns length  This function has been somewhat optimised...  Try and expand _from_ headi; keep going if there's only one
+         * place to go to.  Try and expand _to_ taili; keep going if there's only one
+         * place to go to.  If we get here we have headi and taili set but unconnected
+     * by direction: we need to set headi's direction so as to point
+     * at taili.  it could happen that our last two weren't in line; if that's the
+     * case, we have to start again.  Better generator: with the 'generate, sprinkle numbers, solve,
+ * repeat' algorithm we're _never_ generating anything greater than
+ * 6x6, and spending all of our time in new_game_fill (and very little
+ * in solve_state).
+ *
+ * So, new generator steps:
+   * generate the grid, at random (same as now). Numbers 1 and N get
+      immutable flag immediately.
+   * squirrel that away for the solved state.
+   *
+   * (solve:) Try and solve it.
+   * If we solved it, we're done:
+     * generate the description from current immutable numbers,
+     * free stuff that needs freeing,
+     * return description + solved state.
+   * If we didn't solve it:
+     * count #tiles in state we've made deductions about.
+     * while (1):
+       * randomise a scratch array.
+       * for each index in scratch (in turn):
+         * if the cell isn't empty, continue (through scratch array)
+         * set number + immutable in state.
+         * try and solve state.
+         * if we've solved it, we're done.
+         * otherwise, count #tiles. If it's more than we had before:
+           * good, break from this loop and re-randomise.
+         * otherwise (number didn't help):
+           * remove number and try next in scratch array.
+       * if we've got to the end of the scratch array, no luck:
+          free everything we need to, and go back to regenerate the grid.
+    Expects a fully-numbered game_state on input, and makes sure
+ * FLAG_IMMUTABLE is only set on those numbers we need to solve
+ * (as for a real new-game); returns true if it managed
+ * this (such that it could solve it), or false if not.  This is scungy. It might just be quick enough.
+     * It goes through, adding set numbers in empty squares
+     * until either we run out of empty squares (in the one
+     * we're half-solving) or else we solve it properly.
+     * NB that we run the entire solver each time, which
+     * strips the grid beforehand; we will save time if we
+     * avoid that.  already solved to a real number here.  Since we added basically at random, try now to remove numbers
+     * and see if we can still solve it; if we can (still), really
+     * remove the number. Make sure we don't remove the anchor numbers
+     * 1 and N.  this shouldn't happen (validate_params), but let's play it safe  keep trying until we fill successfully.  This will have filled in directions and _all_ numbers.
+     * Store the game definition for this, as the solved-state.  --- Linked-list and numbers array ---  Assuming numbers are always up-to-date, there are only four possibilities
+ * for regions changing after a single valid move:
+ *
+ * 1) two differently-coloured regions being combined (the resulting colouring
+ *     should be based on the larger of the two regions)
+ * 2) a numbered region having a single number added to the start (the
+ *     region's colour will remain, and the numbers will shift by 1)
+ * 3) a numbered region having a single number added to the end (the
+ *     region's colour and numbering remains as-is)
+ * 4) two unnumbered squares being joined (will pick the smallest unused set
+ *     of colours to use for the new region).
+ *
+ * There should never be any complications with regions containing 3 colours
+ * being combined, since two of those colours should have been merged on a
+ * previous move.
+ *
+ * Most of the complications are in ensuring we don't accidentally set two
+ * regions with the same colour (e.g. if a region was split). If this happens
+ * we always try and give the largest original portion the original colour.
+  position  size of region  region start number preferred, or 0 if !preference  0 if we have no preference (and should just pick one)  Insist we really were passed the head of a chain.  Search through this chain looking for real numbers, checking that
+     * they match up (if there are more than one).  we have created a loop, obviously wrong  (probably) empty cell onto the head of a coloured region:
+         * make sure we start at a 0 offset.  if we're 0 we're probably just blank -- but even if we're a
+         * (real) numbered region, we don't have an immutable number
+         * in it (any more) otherwise it'd have been caught above, so
+         * reassign the colour.  If we got here then we may have split a region into
+         * two; make sure we don't assign a colour we've already used.  not convinced this shouldn't be an assertion failure here.  Heads with preferred colours first...  ...then heads with low colours first...  ... then large regions first...  ... then position.  NB start at 1: colour 0 is real numbers  Construct an array of the heads of all current regions, together
+     * with their preferred colours.  Look for a cell that is the start of a chain
+         * (has a next but no prev).  Sort that array:
+     * - heads with preferred colours first, then
+     * - heads with low colours first, then
+     * - large regions first
+      Remove duplicate-coloured regions.  order is important!  We have a duplicate-coloured region: since we're
+             * sorted in size order and this is not the first
+             * of its colour it's not the largest: recolour it.  '-1' means 'was duplicate'  loop?! debug_numbers(state); NB This only marks errors that are possible to perpetrate with
+     * the current UI in interpret_move. Things like forming loops in
+     * linked sections and having numbers not add up should be forbidden
+     * by the code elsewhere, so we don't bother marking those (because
+     * it would add lots of tricky drawing code for very little gain).  Search for repeated numbers.  Search and mark numbers n not pointing to n+1; if any numbers
+     * are missing we know we've not completed.  make sure the link is explicitly made here; for instance, this
+             * is nice if the user drags from 2 out (making 3) and a 4 is also
+             * visible; this ensures that the link from 3 to 4 is also made.  Search and mark numbers less than 0, or 0 with links.  update any auto-links  --- Solver ---  If a tile has a single tile it can link _to_, or there's only a single
+ * location that can link to a given tile, fill that link in.  The from array is a list of 'which square can link _to_ us';
+     * we start off with from as '-1' (meaning 'not found'); if we find
+     * something that can link to us it is set to that index, and then if
+     * we find another we set it to -2.  poss is 'can I link to anything' with the same meanings.  no next from last no.  can't link to somewhere with a back-link we would have to
+             * break (the solver just doesn't work like this).  if there's been a valid move already, we have to move on;
+             * we can't make any deductions here.  Modify the from array as described above (which is enumerating
+             * what points to 'j' in a similar way). debug(("Solver: (%d,%d) has multiple possible next squares.", sx, sy)); no prev from 1st no. debug(("Solver: (%d,%d) has multiple possible prev squares.", x, y)); Returns 1 if we managed to solve it, 0 otherwise.  --- UI and move routines. ---  grid coords of start cell  pixel coords of drag posn  NB: if this is ever changed to as to require more than a structure
+     * copy to clone, there's code that needs fixing in game_redraw too.  disallow dragging from the final number.  disallow dragging to the first number.  single click  else if (button == 'H' || button == 'h')
+        return dupstr("H");  Unlink the single cell we dragged from the board.  Unlink all cells in the same set as the one we dragged
+                 * from the board.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Colours chosen from the webby palette to work as a background to black text,
+ * W then some plausible approximation to pastelly ROYGBIV; we then interpolate
+ * between consecutive pairs to give another 8 (and then the drawing routine
+ * will reuse backgrounds).  white  lightsalmon  green  aquamarine  medium purple  orange  lightskyblue  yellow  I assume here that COL_ARROW and COL_NUMBER are the same.
+	 * Otherwise I'd need two sets of COL_M*.  cx, cy are top-left corner. sz is the 'radius' of the arrow.
+ * ang is in radians, clockwise from 0 == straight up.  cx, cy are centre coordinates..  hack to accomodate rockbox's concave polygon drawing  We're rotating the point at (0, -r) by a degrees  Cursor on this tile.  Tile is source of a drag.  Tile marked in error.  Tile (number) is immutable.  Tile points to other tile  Other tile points in here.  Tile is dim 
+         * We don't display text in empty cells: typically these are
+         * signified by num=0. However, in some cases a cell could
+         * have had the number 0 assigned to it if the user made an
+         * error (e.g. tried to connect a chain of length 5 to the
+         * immutable number 4) so we _do_ display the 0 if the cell
+         * has a link in or a link out.
+          Calculate colours. 
+	 * We're printing, so just do everything in black.
+	  placate optimiser  Clear tile background  Draw large (outwards-pointing) arrow.  'radius' of arrow/star.  centre x  centre y  Draw dot iff this tile requires a predecessor and doesn't have one.  Draw text (number or set).  Just to get the length...  If we could move here, lock the arrow to the appropriate direction.  similar to calculation in draw_arrow_dir.  Draw an arrow pointing away from/towards the origin cell.  point to origin, not away from.  If an in-progress drag would make a valid move if finished, we
+     * reflect that move in the board display. We let interpret_move do
+     * most of the heavy lifting for us: we have to copy the game_ui so
+     * as not to stomp on the real UI's drag state.  Currently the direction here is from our square _back_
+                 * to its previous. We could change this to give the opposite
+                 * sense to the direction. 
+                     * Trivial and foolish configurable option done on
+                     * purest whim. With this option enabled, the
+                     * victory flash is done by rotating each square
+                     * in the opposite direction from its immediate
+                     * neighbours, so that they behave like a field of
+                     * interlocking gears. With it disabled, they all
+                     * rotate in the same direction. Choose for
+                     * yourself which is more brain-twisting :-)
+                      Fake up just enough of a drawstate 
+     * Border and grid.
+     
+     * Arrows and numbers.
+      game_request_keys  wants_statusbar  flags  Parameters and description passed on cmd-line:
+             * try and solve it.  No description passed on cmd-line: decode parameters
+             * (with optional seed too)  We have a set of valid parameters; either soak with it
+             * or generate a single game description and print to stdout.  vim: set shiftwidth=4 tabstop=8: 

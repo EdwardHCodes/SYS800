@@ -1,0 +1,1828 @@
+
+ * loopy.c:
+ *
+ * An implementation of the Nikoli game 'Loop the loop'.
+ * (c) Mike Pinna, 2005, 2006
+ * Substantially rewritten to allowing for more general types of grid.
+ * (c) Lambros Lambrou 2008
+ *
+ * vim: set shiftwidth=4 :set textwidth=80:
+ 
+ * Possible future solver enhancements:
+ * 
+ *  - There's an interesting deductive technique which makes use
+ *    of topology rather than just graph theory. Each _face_ in
+ *    the grid is either inside or outside the loop; you can tell
+ *    that two faces are on the same side of the loop if they're
+ *    separated by a LINE_NO (or, more generally, by a path
+ *    crossing no LINE_UNKNOWNs and an even number of LINE_YESes),
+ *    and on the opposite side of the loop if they're separated by
+ *    a LINE_YES (or an odd number of LINE_YESes and no
+ *    LINE_UNKNOWNs). Oh, and any face separated from the outside
+ *    of the grid by a LINE_YES or a LINE_NO is on the inside or
+ *    outside respectively. So if you can track this for all
+ *    faces, you figure out the state of the line between a pair
+ *    once their relative insideness is known.
+ *     + The way I envisage this working is simply to keep an edsf
+ * 	 of all _faces_, which indicates whether they're on
+ * 	 opposite sides of the loop from one another. We also
+ * 	 include a special entry in the edsf for the infinite
+ * 	 exterior "face".
+ *     + So, the simple way to do this is to just go through the
+ * 	 edges: every time we see an edge in a state other than
+ * 	 LINE_UNKNOWN which separates two faces that aren't in the
+ * 	 same edsf class, we can rectify that by merging the
+ * 	 classes. Then, conversely, an edge in LINE_UNKNOWN state
+ * 	 which separates two faces that _are_ in the same edsf
+ * 	 class can immediately have its state determined.
+ *     + But you can go one better, if you're prepared to loop
+ * 	 over all _pairs_ of edges. Suppose we have edges A and B,
+ * 	 which respectively separate faces A1,A2 and B1,B2.
+ * 	 Suppose that A,B are in the same edge-edsf class and that
+ * 	 A1,B1 (wlog) are in the same face-edsf class; then we can
+ * 	 immediately place A2,B2 into the same face-edsf class (as
+ * 	 each other, not as A1 and A2) one way round or the other.
+ * 	 And conversely again, if A1,B1 are in the same face-edsf
+ * 	 class and so are A2,B2, then we can put A,B into the same
+ * 	 face-edsf class.
+ * 	  * Of course, this deduction requires a quadratic-time
+ * 	    loop over all pairs of edges in the grid, so it should
+ * 	    be reserved until there's nothing easier left to be
+ * 	    done.
+ * 
+ *  - The generalised grid support has made me (SGT) notice a
+ *    possible extension to the loop-avoidance code. When you have
+ *    a path of connected edges such that no other edges at all
+ *    are incident on any vertex in the middle of the path - or,
+ *    alternatively, such that any such edges are already known to
+ *    be LINE_NO - then you know those edges are either all
+ *    LINE_YES or all LINE_NO. Hence you can mentally merge the
+ *    entire path into a single long curly edge for the purposes
+ *    of loop avoidance, and look directly at whether or not the
+ *    extreme endpoints of the path are connected by some other
+ *    route. I find this coming up fairly often when I play on the
+ *    octagonal grid setting, so it might be worth implementing in
+ *    the solver.
+ *
+ *  - (Just a speed optimisation.)  Consider some todo list queue where every
+ *    time we modify something we mark it for consideration by other bits of
+ *    the solver, to save iteration over things that have already been done.
+  Debugging options 
+#define DEBUG_CACHES
+#define SHOW_WORKING
+#define DEBUG_DLINES
+ ----------------------------------------------------------------------
+ * Struct, enum and function declarations
+  ref-counted (internally)  Put -1 in a face that doesn't get a clue  Array of line states, to store whether each line is
+     * YES, NO or UNKNOWN  Used in game_text_format(), so that it knows what type of
+     * grid it's trying to render as ASCII text.  This is the only solution the solver could find  This is definitely not a solution  This _might_ be an ambiguous solution  This may be a partial solution  ------ Solver state ------  NB looplen is the number of dots that are joined together at a point, ie a
+     * looplen of 1 means there are no lines to a particular dot  Difficulty level of solver.  Used by solver functions that want to
+     * vary their behaviour depending on the requested difficulty level.  caches  Information for Normal level deductions:
+     * For each dline, store a bitmask for whether we know:
+     * (bit 0) at least one is YES
+     * (bit 1) at most one is YES  Hard level information 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Solver routines, sorted roughly in order of computational cost.
+ * The solver will run the faster deductions first, and slower deductions are
+ * only invoked when the faster deductions are unable to make progress.
+ * Each function is associated with a difficulty level, so that the generated
+ * puzzles are solvable by applying only the functions with the chosen
+ * difficulty level or lower.
+  line_drawstate is the same as line_state, but with the extra ERROR
+ * possibility.  The drawing code copies line_state to line_drawstate,
+ * except in the case that the line is an error. 
+ * Grid type config options available in Loopy.
+ *
+ * Annoyingly, we have to use an enum here which doesn't match up
+ * exactly to the grid-type enum in grid.h. Values in params->types
+ * are given by names such as LOOPY_GRID_SQUARE, which shouldn't be
+ * confused with GRID_SQUARE which is the value you pass to grid_new()
+ * and friends. So beware!
+ *
+ * (This is partly for historical reasons - Loopy's version of the
+ * enum is encoded in game parameter strings, so we keep it for
+ * backwards compatibility. But also, we need to store additional data
+ * here alongside each enum value, such as names for the presets menu,
+ * which isn't stored in grid.h; so we have to have our own list macro
+ * here anyway, and C doesn't make it easy to enforce that that lines
+ * up exactly with grid.h.)
+ *
+ * Do not add values to this list _except_ at the end, or old game ids
+ * will stop working!
+  end of list  Generates a (dynamically allocated) new grid, according to the
+ * type and size requested in params.  Does nothing if the grid is already
+ * generated.  ----------------------------------------------------------------------
+ * Preprocessor magic
+  General constants  ----------------------------------------------------------------------
+ * General struct manipulation and other straightforward code
+  OK, because sfree(NULL) is a no-op  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      Returns a newly allocated string describing the current puzzle  Splits up a (optional) grid_desc from the game desc. Returns the
+ * grid_desc (which needs freeing) and updates the desc pointer to
+ * start of real desc, or returns NULL if no desc.  We require that the params pass the test in validate_params and that the
+ * description fills the entire game area  It's pretty inefficient to do this just for validation. All we need to
+     * know is the precise number of faces.  Sums the lengths of the numbers in range [0,n)  See equivalent function in solo.c for justification of this.  Counting 0 as a bit of a special case  This is going to return a string representing the moves needed to set
+     * every line in a grid to be the same as the ones in 'state'.  The exact
+     * length of this string is predictable.  Count the 'S' prefix  Numbers in all lines  For each line we also have a letter  No point in doing sums like that if they're going to be wrong  multiply first to minimise rounding error on integer division 
+     * We want COL_LINEUNKNOWN to be a yellow which is a bit darker
+     * than the background. (I previously set it to 0.8,0.8,0, but
+     * found that this went badly with the 0.8,0.8,0.8 favoured as a
+     * background by the Java frontend.)
+      We want the faint lines to be a bit darker than the background.
+     * Except if the background is pretty dark already; then it ought to be a
+     * bit lighter.  Oy vey.
+      Work out the basic size unit  first face  The dots are ordered clockwise, so the two opposite
+     * corners are guaranteed to span the square  Create a blank "canvas" to "draw" on  Fill in edge info  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates (canvas coordinates are just twice
+         * cell coordinates)  already a space  Fill in clues  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates  ----------------------------------------------------------------------
+ * Debug code
+  DEBUG_CACHES  ----------------------------------------------------------------------
+ * Solver utility functions
+  Sets the line (with index i) to the new state 'line_new', and updates
+ * the cached counts of any affected faces and dots.
+ * Returns true if this actually changed the line's state.  nothing changed  Update the cache for both dots and both faces affected by this. 
+ * Merge two dots due to the existence of an edge between them.
+ * Updates the dsf tracking equivalence classes, and keeps track of
+ * the length of path each dot is currently a part of.
+ * Returns true if the dots were already linked, ie if they are part of a
+ * closed loop, and false otherwise.
+  Merge two lines because the solver has deduced that they must be either
+ * identical or opposite.   Returns true if this is new information, otherwise
+ * false.  Count the number of lines of a particular type currently going into the
+ * given dot.  Count the number of lines of a particular type currently surrounding the
+ * given face  Set all lines bordering a dot of type old_type to type new_type
+ * Return value tells caller whether this function actually did anything  Set all lines bordering a face of type old_type to type new_type  ----------------------------------------------------------------------
+ * Loop generation and clue removal
+  Fill out all the clues by initialising to 0, then iterating over
+     * all edges and incrementing each clue as we find edges that border
+     * between BLACK/WHITE faces.  While we're at it, we verify that the
+     * algorithm does work, and there aren't any GREY faces still there.  Remove clues one at a time at random.  We need to remove some clues.  We'll do this by forming a list of all
+     * available clues, shuffling it, then going along one at a
+     * time clearing each clue in turn for which doing so doesn't render the
+     * board unsolvable.  solution and description both use run-length encoding in obvious ways  Get a new random solvable board with all its clues filled in.  Yes, this
+     * can loop for ever if the params are suitably unfavourable, but
+     * preventing games smaller than 4x4 seems to stop this happening  Calculates the line_errors data, and checks if the current state is a
+ * solution 
+     * Find loops in the grid, and determine whether the puzzle is
+     * solved.
+     *
+     * Loopy is a bit more complicated than most puzzles that care
+     * about loop detection. In most of them, loops are simply
+     * _forbidden_; so the obviously right way to do
+     * error-highlighting during play is to light up a graph edge red
+     * iff it is part of a loop, which is exactly what the centralised
+     * findloop.c makes easy.
+     *
+     * But Loopy is unusual in that you're _supposed_ to be making a
+     * loop - and yet _some_ loops are not the right loop. So we need
+     * to be more discriminating, by identifying loops one by one and
+     * then thinking about which ones to highlight, and so findloop.c
+     * isn't quite the right tool for the job in this case.
+     *
+     * Worse still, consider situations in which the grid contains a
+     * loop and also some non-loop edges: there are some cases like
+     * this in which the user's intuitive expectation would be to
+     * highlight the loop (if you're only about half way through the
+     * puzzle and have accidentally made a little loop in some corner
+     * of the grid), and others in which they'd be more likely to
+     * expect you to highlight the non-loop edges (if you've just
+     * closed off a whole loop that you thought was the entire
+     * solution, but forgot some disconnected edges in a corner
+     * somewhere). So while it's easy enough to check whether the
+     * solution is _right_, highlighting the wrong parts is a tricky
+     * problem for this puzzle!
+     *
+     * I'd quite like, in some situations, to identify the largest
+     * loop among the player's YES edges, and then light up everything
+     * other than that. But finding the longest cycle in a graph is an
+     * NP-complete problem (because, in particular, it must return a
+     * Hamilton cycle if one exists).
+     *
+     * However, I think we can make the problem tractable by
+     * exercising the Puzzles principle that it isn't absolutely
+     * necessary to highlight _all_ errors: the key point is that by
+     * the time the user has filled in the whole grid, they should
+     * either have seen a completion flash, or have _some_ error
+     * highlight showing them why the solution isn't right. So in
+     * principle it would be *just about* good enough to highlight
+     * just one error in the whole grid, if there was really no better
+     * way. But we'd like to highlight as many errors as possible.
+     *
+     * In this case, I think the simple approach is to make use of the
+     * fact that no vertex may have degree > 2, and that's really
+     * simple to detect. So the plan goes like this:
+     *
+     *  - Form the dsf of connected components of the graph vertices.
+     *
+     *  - Highlight an error at any vertex with degree > 2. (It so
+     *    happens that we do this by lighting up all the edges
+     *    incident to that vertex, but that's an output detail.)
+     *
+     *  - Any component that contains such a vertex is now excluded
+     *    from further consideration, because it already has a
+     *    highlight.
+     *
+     *  - The remaining components have no vertex with degree > 2, and
+     *    hence they all consist of either a simple loop, or a simple
+     *    path with two endpoints.
+     *
+     *  - For these purposes, group together all the paths and imagine
+     *    them to be a single component (because in most normal
+     *    situations the player will gradually build up the solution
+     *    _not_ all in one connected segment, but as lots of separate
+     *    little path pieces that gradually connect to each other).
+     *
+     *  - After doing that, if there is exactly one (sensible)
+     *    component - be it a collection of paths or a loop - then
+     *    highlight no further edge errors. (The former case is normal
+     *    during play, and the latter is a potentially solved puzzle.)
+     *
+     *  - Otherwise, find the largest of the sensible components,
+     *    leave that one unhighlighted, and light the rest up in red.
+      Build the dsf.  Initialise a state variable for each connected component.  Check for dots with degree > 3. Here we also spot dots of
+     * degree 1 in which the user has marked all the non-edges as
+     * LINE_NO, because those are also clear vertex-level errors, so
+     * we give them the same treatment of excluding their connected
+     * component from the subsequent loop analysis.  violation, so mark all YES edges as errors  And mark this component as not worthy of further
+             * consideration.  A completely isolated dot must also be excluded it from
+             * the subsequent loop highlighting pass, but we tag it
+             * with a different enum value to avoid it counting
+             * towards the components that inhibit returning a win
+             * status.  A dot with degree 1 that didn't fall into the 'clearly
+             * erroneous' case above indicates that this connected
+             * component will be a path rather than a loop - unless
+             * something worse elsewhere in the component has
+             * classified it as silly.  Count up the components. Also, find the largest sensible
+     * component. (Tie-breaking condition is derived from the order of
+     * vertices in the grid data structure, which is fairly arbitrary
+     * but at least stays stable throughout the game.)  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight all edges in every sensible
+         * component that is not the largest one.
+          either endpoint is good enough 
+         * If there is exactly one component and it is a loop, then
+         * the puzzle is potentially complete, so check the clues.
+         
+         * Also, whether or not the puzzle is actually complete, set
+         * the flag that says this game_state has exactly one loop and
+         * nothing else, which will be used to vary the semantics of
+         * clue highlighting at display time.
+          ----------------------------------------------------------------------
+ * Solver logic
+ *
+ * Our solver modes operate as follows.  Each mode also uses the modes above it.
+ *
+ *   Easy Mode
+ *   Just implement the rules of the game.
+ *
+ *   Normal and Tricky Modes
+ *   For each (adjacent) pair of lines through each dot we store a bit for
+ *   whether at least one of them is on and whether at most one is on.  (If we
+ *   know both or neither is on that's already stored more directly.)
+ *
+ *   Advanced Mode
+ *   Use edsf data structure to make equivalence classes of lines that are
+ *   known identical to or opposite to one another.
+  DLines:
+ * For general grids, we consider "dlines" to be pairs of lines joined
+ * at a dot.  The lines must be adjacent around the dot, so we can think of
+ * a dline as being a dot+face combination.  Or, a dot+edge combination where
+ * the second edge is taken to be the next clockwise edge from the dot.
+ * Original loopy code didn't have this extra restriction of the lines being
+ * adjacent.  From my tests with square grids, this extra restriction seems to
+ * take little, if anything, away from the quality of the puzzles.
+ * A dline can be uniquely identified by an edge/dot combination, given that
+ * a dline-pair always goes clockwise around its common dot.  The edge/dot
+ * combination can be represented by an edge/bool combination - if bool is
+ * true, use edge->dot1 else use edge->dot2.  So the total number of dlines is
+ * exactly twice the number of edges in the grid - although the dlines
+ * spanning the infinite face are not all that useful to the solver.
+ * Note that, by convention, a dline goes clockwise around its common dot,
+ * which means the dline goes anti-clockwise around its common face.
+  Helper functions for obtaining an index into an array of dlines, given
+ * various information.  We assume the grid layout conventions about how
+ * the various lists are interleaved - see grid_make_consistent() for
+ * details.  i points to the first edge of the dline pair, reading clockwise around
+ * the dot.  i points to the second edge of the dline pair, reading clockwise around
+ * the face.  That is, the edges of the dline, starting at edge{i}, read
+ * anti-clockwise around the face.  By layout conventions, the common dot
+ * of the dline will be f->dots[i]  Helper, called when doing dline dot deductions, in the case where we
+ * have 4 UNKNOWNs, and two of them (adjacent) have *exactly* one YES between
+ * them (because of dline atmostone/atleastone).
+ * On entry, edge points to the first of these two UNKNOWNs.  This function
+ * will find the opposite UNKNOWNS (if they are adjacent to one another)
+ * and set their corresponding dline to atleastone.  (Setting atmostone
+ * already happens in earlier dline deductions)  Check if opp, opp2 point to LINE_UNKNOWNs  Found opposite UNKNOWNS and they're next to each other  Set pairs of lines around this face which are known to be identical, to
+ * the given line_state  can[dir] contains the canonical line associated with the line in
+     * direction dir from the square in question.  Similarly inv[dir] is
+     * whether or not the line in question is inverse to its canonical
+     * element.  Found two UNKNOWNS  Given a dot or face, and a count of LINE_UNKNOWNs, find them and
+ * return the edge indices into e.  Edge list to search (from a face or a dot)  Number of UNKNOWNs (comes from solver's cache)  Returned edge indices  If we have a list of edges, and we know whether the number of YESs should
+ * be odd or even, and there are only a few UNKNOWNs, we can do some simple
+ * linedsf deductions.  This can be used for both face and dot deductions.
+ * Returns the difficulty level of the next solver that should be used,
+ * or DIFF_MAX if no progress was made.  Edge list (from a face or a dot)  Expected number of YESs modulo 2 (either 0 or 1)  Lines are known alike/opposite, depending on inv.  canonical edges  whether can[x] is inverse to e[x]  canonical edges  whether can[x] is inverse to e[x] 
+ * These are the main solver functions.
+ *
+ * Their return values are diff values corresponding to the lowest mode solver
+ * that would notice the work that they have done.  For example if the normal
+ * mode solver adds actual lines or crosses, it will return DIFF_EASY as the
+ * easy mode solver might be able to make progress using that.  It doesn't make
+ * sense for one of them to return a diff value higher than that of the
+ * function itself.
+ *
+ * Each function returns the lowest value it can, as early as possible, in
+ * order to try and pass as much work as possible back to the lower level
+ * solvers which progress more quickly.
+  PROPOSED NEW DESIGN:
+ * We have a work queue consisting of 'events' notifying us that something has
+ * happened that a particular solver mode might be interested in.  For example
+ * the hard mode solver might do something that helps the normal mode solver at
+ * dot [x,y] in which case it will enqueue an event recording this fact.  Then
+ * we pull events off the work queue, and hand each in turn to the solver that
+ * is interested in them.  If a solver reports that it failed we pass the same
+ * event on to progressively more advanced solvers and the loop detector.  Once
+ * we've exhausted an event, or it has helped us progress, we drop it and
+ * continue to the next one.  The events are sorted first in order of solver
+ * complexity (easy first) then order of insertion (oldest first).
+ * Once we run out of events we loop over each permitted solver in turn
+ * (easiest first) until either a deduction is made (and an event therefore
+ * emerges) or no further deductions can be made (in which case we've failed).
+ *
+ * QUESTIONS:
+ *    * How do we 'loop over' a solver when both dots and squares are concerned.
+ *      Answer: first all squares then all dots.
+  Per-face deductions 
+         * This code checks whether the numeric clue on a face is so
+         * large as to permit all its remaining LINE_UNKNOWNs to be
+         * filled in as LINE_YES, or alternatively so small as to
+         * permit them all to be filled in as LINE_NO.
+         
+             * One small refinement to the above: we also look for any
+             * adjacent pair of LINE_UNKNOWNs around the face with
+             * some LINE_YES incident on it from elsewhere. If we find
+             * one, then we know that pair of LINE_UNKNOWNs can't
+             * _both_ be LINE_YES, and hence that pushes us one line
+             * closer to being able to determine all the rest.
+              multi-level break 
+             * If we get here, we've found such a pair of edges, and
+             * they're e1 and e2.
+              Per-dot deductions  ------ Face deductions ------  Given a set of dline atmostone/atleastone constraints, need to figure
+     * out if we can deduce any further info.  For more general faces than
+     * squares, this turns out to be a tricky problem.
+     * The approach taken here is to define (per face) NxN matrices:
+     * "maxs" and "mins".
+     * The entries maxs(j,k) and mins(j,k) define the upper and lower limits
+     * for the possible number of edges that are YES between positions j and k
+     * going clockwise around the face.  Can think of j and k as marking dots
+     * around the face (recall the labelling scheme: edge0 joins dot0 to dot1,
+     * edge1 joins dot1 to dot2 etc).
+     * Trivially, mins(j,j) = maxs(j,j) = 0, and we don't even bother storing
+     * these.  mins(j,j+1) and maxs(j,j+1) are determined by whether edge{j}
+     * is YES, NO or UNKNOWN.  mins(j,j+2) and maxs(j,j+2) are related to
+     * the dline atmostone/atleastone status for edges j and j+1.
+     *
+     * Then we calculate the remaining entries recursively.  We definitely
+     * know that
+     * mins(j,k) >= { mins(j,u) + mins(u,k) } for any u between j and k.
+     * This is because any valid placement of YESs between j and k must give
+     * a valid placement between j and u, and also between u and k.
+     * I believe it's sufficient to use just the two values of u:
+     * j+1 and j+2.  Seems to work well in practice - the bounds we compute
+     * are rigorous, even if they might not be best-possible.
+     *
+     * Once we have maxs and mins calculated, we can make inferences about
+     * each dline{j,j+1} by looking at the possible complementary edge-counts
+     * mins(j+2,j) and maxs(j+2,j) and comparing these with the face clue.
+     * As well as dlines, we can make similar inferences about single edges.
+     * For example, consider a pentagon with clue 3, and we know at most one
+     * of (edge0, edge1) is YES, and at most one of (edge2, edge3) is YES.
+     * We could then deduce edge4 is YES, because maxs(0,4) would be 2, so
+     * that final edge would have to be YES to make the count up to 3.
+      Much quicker to allocate arrays on the stack than the heap, so
+     * define the largest possible face size, and base our array allocations
+     * on that.  We check this with an assertion, in case someone decides to
+     * make a grid which has larger faces than this.  Note, this algorithm
+     * could get quite expensive if there are many large faces.  Calculate the (j,j+1) entries  Calculate the (j,j+2) entries  max  min  Calculate the (j,j+m) entries for m between 3 and N-1  See if we can make any deductions  minimum YESs in the complement of this edge  setting this edge to YES would make at least
+                 * (clue+1) edges - contradiction  Only way to satisfy the clue is to set edge{j} as YES  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example, 3-2-...-2-3
+             * in square grids.  Now see if we can make dline deduction for edges{j,j+1}  Only worth doing this for an UNKNOWN,UNKNOWN pair.
+                     * Dlines where one of the edges is known, are handled in the
+                     * dot-deductions  minimum YESs in the complement of this dline  Adding 2 YESs would break the clue  maximum YESs in the complement of this dline  Adding 2 NOs would mean not enough YESs  ------ Dot deductions ------  Infer dline state from line state  Infer line state from dline state  Deductions that depend on the numbers of lines.
+             * Only bother if both lines are UNKNOWN, otherwise the
+             * easy-mode solver (or deductions above) would have taken
+             * care of it.  Both these unknowns must be identical.  If we know
+                 * atmostone or atleastone, we can make progress.  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example: 3-2-...-2-3
+             * in square grids.  If we have atleastone set for this dline, infer
+                 * atmostone for each "opposite" dline (that is, each
+                 * dline without edges in common with this one).
+                 * Again, this test is only worth doing if both these
+                 * lines are UNKNOWN.  For if one of these lines were YES,
+                 * the (yes == 1) test above would kick in instead.  This dline has *exactly* one YES and there are no
+                         * other YESs.  This allows more deductions.  Third unknown must be YES  Exactly one of opposite UNKNOWNS is YES.  We've
+                             * already set atmostone, so set atleastone as
+                             * well.
+                              ------ Face deductions ------  A fully-general linedsf deduction seems overly complicated
+     * (I suspect the problem is NP-complete, though in practice it might just
+     * be doable because faces are limited in size).
+     * For simplicity, we only consider *pairs* of LINE_UNKNOWNS that are
+     * known to be identical.  If setting them both to YES (or NO) would break
+     * the clue, set them to NO (or YES).  Reload YES count, it might have changed  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Dot deductions ------  Go through dlines, and do any dline<->linedsf deductions wherever
+         * we find two UNKNOWNS.  Infer dline flags from linedsf  These are opposites, so set dline atmostone/atleastone  Infer linedsf from dline flags  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Edge dsf deductions ------  If the state of a line is known, deduce the state of its canonical line
+     * too, and vice versa. 
+     * Go through the grid and update for all the new edges.
+     * Since merge_dots() is idempotent, the simplest way to
+     * do this is just to update for _all_ the edges.
+     * Also, while we're here, we count the edges.
+     
+     * Count the clues, count the satisfied clues, and count the
+     * satisfied-minus-one clues.
+      This discovery clearly counts as progress, even if we haven't
+         * just added any lines or anything 
+     * Now go through looking for LINE_UNKNOWN edges which
+     * connect two dots that are already in the same
+     * equivalence class. If we find one, test to see if the
+     * loop it would create is a solution.
+      loop is bad until proven otherwise 
+         * This edge would form a loop. Next
+         * question: how long would the loop be?
+         * Would it equal the total number of edges
+         * (plus the one we'd be adding if we added
+         * it)?
+         
+             * This edge would form a loop which
+             * took in all the edges in the entire
+             * grid. So now we need to work out
+             * whether it would be a valid solution
+             * to the puzzle, which means we have to
+             * check if it satisfies all the clues.
+             * This means that every clue must be
+             * either satisfied or satisfied-minus-
+             * 1, and also that the number of
+             * satisfied-minus-1 clues must be at
+             * most two and they must lie on either
+             * side of this edge.
+              loop is good! 
+         * Right. Now we know that adding this edge
+         * would form a loop, and we know whether
+         * that loop would be a viable solution or
+         * not.
+         *
+         * If adding this edge produces a solution,
+         * then we know we've found _a_ solution but
+         * we don't know that it's _the_ solution -
+         * if it were provably the solution then
+         * we'd have deduced this edge some time ago
+         * without the need to do loop detection. So
+         * in this state we return SOLVER_AMBIGUOUS,
+         * which has the effect that hitting Solve
+         * on a user-provided puzzle will fill in a
+         * solution but using the solver to
+         * construct new puzzles won't consider this
+         * a reasonable deduction for the user to
+         * make.
+          This will return a dynamically allocated solver_state containing the (more)
+ * solved grid  Index of the solver we should call next.  As a speed-optimisation, we avoid re-running solvers that we know
+     * won't make any progress.  This happens when a high-difficulty
+     * solver makes a deduction that can only help other high-difficulty
+     * solvers.
+     * For example: if a new 'dline' flag is set by dline_deductions, the
+     * trivial_deductions solver cannot do anything with this information.
+     * If we've already run the trivial_deductions solver (because it's
+     * earlier in the list), there's no point running it again.
+     *
+     * Therefore: if a solver is earlier in the list than "threshold_index",
+     * we don't bother running it if it's difficulty level is less than
+     * "threshold_diff".
+      solver finished  current_solver is eligible, so use it  solver made progress, so use new thresholds and
+                * start again at top of list.  current_solver is ineligible, or failed to make progress, so
+         * go to the next solver in the list  s/LINE_UNKNOWN/LINE_NO/g *error = "Solver found ambiguous solutions"; *error = "Solver failed";  ----------------------------------------------------------------------
+ * Drawing and mouse-handling
+  Convert mouse-click (x,y) to grid coordinates  I think it's only possible to play this game with mouse clicks, sorry  Maybe will add mouse drag support some time 
+                         * Special case: we might have come all the
+                         * way round a loop and found our way back to
+                         * the same edge we started from. In that
+                         * situation, we must terminate not only this
+                         * while loop, but the 'for' outside it that
+                         * was tracing in both directions from the
+                         * starting edge, because if we let it trace
+                         * in the second direction then we'll only
+                         * find ourself traversing the same loop in
+                         * the other order and generate an encoded
+                         * move string that mentions the same set of
+                         * edges twice.
+                         
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Convert from grid coordinates to screen coordinates  Returns (into x,y) position of centre of face for rendering the text clue.
+ 
+     * Return the cached position for this face, if we've already
+     * worked it out.
+     
+     * Otherwise, use the incentre computed by grid.c and convert it
+     * to screen coordinates.
+      There seems to be a certain amount of trial-and-error involved
+     * in working out the correct bounding-box for the text.  Allow extra margin for dots, and thickness of lines  Convert from grid to screen coordinates 
+     * Two intervals intersect iff neither is wholly on one side of
+     * the other. Two boxes intersect iff their horizontal and
+     * vertical intervals both intersect.
+      Somewhat arbitrary tradeoff  Redrawing is somewhat involved.
+     *
+     * An update can theoretically affect an arbitrary number of edges
+     * (consider, for example, completing or breaking a cycle which doesn't
+     * satisfy all the clues -- we'll switch many edges between error and
+     * normal states).  On the other hand, redrawing the whole grid takes a
+     * while, making the game feel sluggish, and many updates are actually
+     * quite well localized.
+     *
+     * This redraw algorithm attempts to cope with both situations gracefully
+     * and correctly.  For localized changes, we set a clip rectangle, fill
+     * it with background, and then redraw (a plausible but conservative
+     * guess at) the objects which intersect the rectangle; if several
+     * objects need redrawing, we'll do them individually.  However, if lots
+     * of objects are affected, we'll just redraw everything.
+     *
+     * The reason for all of this is that it's just not safe to do the redraw
+     * piecemeal.  If you try to draw an antialiased diagonal line over
+     * itself, you get a slightly thicker antialiased diagonal line, which
+     * looks rather ugly after a while.
+     *
+     * So, we take two passes over the grid.  The first attempts to work out
+     * what needs doing, and the second actually does it.
+     
+         * But we must still go through the upcoming loops, so that we
+         * set up stuff in ds correctly for the initial redraw.
+          First, trundle through the faces. 
+             * Special case: if the set of LINE_YES edges in the grid
+             * consists of exactly one loop and nothing else, then we
+             * switch to treating LINE_UNKNOWN the same as LINE_NO for
+             * purposes of clue checking.
+             *
+             * This is because some people like to play Loopy without
+             * using the right-click, i.e. never setting anything to
+             * LINE_NO. Without this special case, if a person playing
+             * in that style fills in what they think is a correct
+             * solution loop but in fact it has an underfilled clue,
+             * then we will display no victory flash and also no error
+             * highlight explaining why not. With this special case,
+             * we light up underfilled clues at the instant the loop
+             * is closed. (Of course, *overfilled* clues are fine
+             * either way.)
+             *
+             * (It might still be considered unfortunate that we can't
+             * warn this style of player any earlier, if they make a
+             * mistake very near the beginning which doesn't show up
+             * until they close the last edge of the loop. One other
+             * thing we _could_ do here is to treat any LINE_UNKNOWN
+             * as LINE_NO if either of its endpoints has yes-degree 2,
+             * reflecting the fact that setting that line to YES would
+             * be an obvious error. But I don't think even that could
+             * catch _all_ clue errors in a timely manner; I think
+             * there are some that won't be displayed until the loop
+             * is filled in, even so, and there's no way to avoid that
+             * with complete reliability except to switch to being a
+             * player who sets things to LINE_NO.)
+              Work out what the flash state needs to be.  Now, trundle through the edges.  Pass one is now done.  Now we do the actual drawing.  Right.  Now we roll up our sleeves. 
+     * I'll use 7mm "squares" by default.
+     
+     * Clues.
+     
+     * Lines.
+      (dx, dy) points from (x1, y1) to (x2, y2).
+             * The line is then "fattened" in a perpendicular
+             * direction to create a thin rectangle.  Draw a dotted line  Weighted average  game_request_keys  wants_statusbar  mouse_priorities 
+ * Half-hearted standalone solver. It can't output the solution to
+ * anything but a square puzzle, and it can't log the deductions
+ * it makes either. But it can solve square puzzles, and more
+ * importantly it can use its solver to grade the difficulty of
+ * any puzzle you give it.
+  verbose solver not supported here (yet)  verbose solver not supported here (yet) 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  If we supported a verbose solver, we'd set verbosity here  vim: set shiftwidth=4 tabstop=8: 
+ * loopy.c:
+ *
+ * An implementation of the Nikoli game 'Loop the loop'.
+ * (c) Mike Pinna, 2005, 2006
+ * Substantially rewritten to allowing for more general types of grid.
+ * (c) Lambros Lambrou 2008
+ *
+ * vim: set shiftwidth=4 :set textwidth=80:
+ 
+ * Possible future solver enhancements:
+ * 
+ *  - There's an interesting deductive technique which makes use
+ *    of topology rather than just graph theory. Each _face_ in
+ *    the grid is either inside or outside the loop; you can tell
+ *    that two faces are on the same side of the loop if they're
+ *    separated by a LINE_NO (or, more generally, by a path
+ *    crossing no LINE_UNKNOWNs and an even number of LINE_YESes),
+ *    and on the opposite side of the loop if they're separated by
+ *    a LINE_YES (or an odd number of LINE_YESes and no
+ *    LINE_UNKNOWNs). Oh, and any face separated from the outside
+ *    of the grid by a LINE_YES or a LINE_NO is on the inside or
+ *    outside respectively. So if you can track this for all
+ *    faces, you figure out the state of the line between a pair
+ *    once their relative insideness is known.
+ *     + The way I envisage this working is simply to keep an edsf
+ * 	 of all _faces_, which indicates whether they're on
+ * 	 opposite sides of the loop from one another. We also
+ * 	 include a special entry in the edsf for the infinite
+ * 	 exterior "face".
+ *     + So, the simple way to do this is to just go through the
+ * 	 edges: every time we see an edge in a state other than
+ * 	 LINE_UNKNOWN which separates two faces that aren't in the
+ * 	 same edsf class, we can rectify that by merging the
+ * 	 classes. Then, conversely, an edge in LINE_UNKNOWN state
+ * 	 which separates two faces that _are_ in the same edsf
+ * 	 class can immediately have its state determined.
+ *     + But you can go one better, if you're prepared to loop
+ * 	 over all _pairs_ of edges. Suppose we have edges A and B,
+ * 	 which respectively separate faces A1,A2 and B1,B2.
+ * 	 Suppose that A,B are in the same edge-edsf class and that
+ * 	 A1,B1 (wlog) are in the same face-edsf class; then we can
+ * 	 immediately place A2,B2 into the same face-edsf class (as
+ * 	 each other, not as A1 and A2) one way round or the other.
+ * 	 And conversely again, if A1,B1 are in the same face-edsf
+ * 	 class and so are A2,B2, then we can put A,B into the same
+ * 	 face-edsf class.
+ * 	  * Of course, this deduction requires a quadratic-time
+ * 	    loop over all pairs of edges in the grid, so it should
+ * 	    be reserved until there's nothing easier left to be
+ * 	    done.
+ * 
+ *  - The generalised grid support has made me (SGT) notice a
+ *    possible extension to the loop-avoidance code. When you have
+ *    a path of connected edges such that no other edges at all
+ *    are incident on any vertex in the middle of the path - or,
+ *    alternatively, such that any such edges are already known to
+ *    be LINE_NO - then you know those edges are either all
+ *    LINE_YES or all LINE_NO. Hence you can mentally merge the
+ *    entire path into a single long curly edge for the purposes
+ *    of loop avoidance, and look directly at whether or not the
+ *    extreme endpoints of the path are connected by some other
+ *    route. I find this coming up fairly often when I play on the
+ *    octagonal grid setting, so it might be worth implementing in
+ *    the solver.
+ *
+ *  - (Just a speed optimisation.)  Consider some todo list queue where every
+ *    time we modify something we mark it for consideration by other bits of
+ *    the solver, to save iteration over things that have already been done.
+  Debugging options 
+#define DEBUG_CACHES
+#define SHOW_WORKING
+#define DEBUG_DLINES
+ ----------------------------------------------------------------------
+ * Struct, enum and function declarations
+  ref-counted (internally)  Put -1 in a face that doesn't get a clue  Array of line states, to store whether each line is
+     * YES, NO or UNKNOWN  Used in game_text_format(), so that it knows what type of
+     * grid it's trying to render as ASCII text.  This is the only solution the solver could find  This is definitely not a solution  This _might_ be an ambiguous solution  This may be a partial solution  ------ Solver state ------  NB looplen is the number of dots that are joined together at a point, ie a
+     * looplen of 1 means there are no lines to a particular dot  Difficulty level of solver.  Used by solver functions that want to
+     * vary their behaviour depending on the requested difficulty level.  caches  Information for Normal level deductions:
+     * For each dline, store a bitmask for whether we know:
+     * (bit 0) at least one is YES
+     * (bit 1) at most one is YES  Hard level information 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Solver routines, sorted roughly in order of computational cost.
+ * The solver will run the faster deductions first, and slower deductions are
+ * only invoked when the faster deductions are unable to make progress.
+ * Each function is associated with a difficulty level, so that the generated
+ * puzzles are solvable by applying only the functions with the chosen
+ * difficulty level or lower.
+  line_drawstate is the same as line_state, but with the extra ERROR
+ * possibility.  The drawing code copies line_state to line_drawstate,
+ * except in the case that the line is an error. 
+ * Grid type config options available in Loopy.
+ *
+ * Annoyingly, we have to use an enum here which doesn't match up
+ * exactly to the grid-type enum in grid.h. Values in params->types
+ * are given by names such as LOOPY_GRID_SQUARE, which shouldn't be
+ * confused with GRID_SQUARE which is the value you pass to grid_new()
+ * and friends. So beware!
+ *
+ * (This is partly for historical reasons - Loopy's version of the
+ * enum is encoded in game parameter strings, so we keep it for
+ * backwards compatibility. But also, we need to store additional data
+ * here alongside each enum value, such as names for the presets menu,
+ * which isn't stored in grid.h; so we have to have our own list macro
+ * here anyway, and C doesn't make it easy to enforce that that lines
+ * up exactly with grid.h.)
+ *
+ * Do not add values to this list _except_ at the end, or old game ids
+ * will stop working!
+  end of list  Generates a (dynamically allocated) new grid, according to the
+ * type and size requested in params.  Does nothing if the grid is already
+ * generated.  ----------------------------------------------------------------------
+ * Preprocessor magic
+  General constants  ----------------------------------------------------------------------
+ * General struct manipulation and other straightforward code
+  OK, because sfree(NULL) is a no-op  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      Returns a newly allocated string describing the current puzzle  Splits up a (optional) grid_desc from the game desc. Returns the
+ * grid_desc (which needs freeing) and updates the desc pointer to
+ * start of real desc, or returns NULL if no desc.  We require that the params pass the test in validate_params and that the
+ * description fills the entire game area  It's pretty inefficient to do this just for validation. All we need to
+     * know is the precise number of faces.  Sums the lengths of the numbers in range [0,n)  See equivalent function in solo.c for justification of this.  Counting 0 as a bit of a special case  This is going to return a string representing the moves needed to set
+     * every line in a grid to be the same as the ones in 'state'.  The exact
+     * length of this string is predictable.  Count the 'S' prefix  Numbers in all lines  For each line we also have a letter  No point in doing sums like that if they're going to be wrong  multiply first to minimise rounding error on integer division 
+     * We want COL_LINEUNKNOWN to be a yellow which is a bit darker
+     * than the background. (I previously set it to 0.8,0.8,0, but
+     * found that this went badly with the 0.8,0.8,0.8 favoured as a
+     * background by the Java frontend.)
+      We want the faint lines to be a bit darker than the background.
+     * Except if the background is pretty dark already; then it ought to be a
+     * bit lighter.  Oy vey.
+      Work out the basic size unit  first face  The dots are ordered clockwise, so the two opposite
+     * corners are guaranteed to span the square  Create a blank "canvas" to "draw" on  Fill in edge info  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates (canvas coordinates are just twice
+         * cell coordinates)  already a space  Fill in clues  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates  ----------------------------------------------------------------------
+ * Debug code
+  DEBUG_CACHES  ----------------------------------------------------------------------
+ * Solver utility functions
+  Sets the line (with index i) to the new state 'line_new', and updates
+ * the cached counts of any affected faces and dots.
+ * Returns true if this actually changed the line's state.  nothing changed  Update the cache for both dots and both faces affected by this. 
+ * Merge two dots due to the existence of an edge between them.
+ * Updates the dsf tracking equivalence classes, and keeps track of
+ * the length of path each dot is currently a part of.
+ * Returns true if the dots were already linked, ie if they are part of a
+ * closed loop, and false otherwise.
+  Merge two lines because the solver has deduced that they must be either
+ * identical or opposite.   Returns true if this is new information, otherwise
+ * false.  Count the number of lines of a particular type currently going into the
+ * given dot.  Count the number of lines of a particular type currently surrounding the
+ * given face  Set all lines bordering a dot of type old_type to type new_type
+ * Return value tells caller whether this function actually did anything  Set all lines bordering a face of type old_type to type new_type  ----------------------------------------------------------------------
+ * Loop generation and clue removal
+  Fill out all the clues by initialising to 0, then iterating over
+     * all edges and incrementing each clue as we find edges that border
+     * between BLACK/WHITE faces.  While we're at it, we verify that the
+     * algorithm does work, and there aren't any GREY faces still there.  Remove clues one at a time at random.  We need to remove some clues.  We'll do this by forming a list of all
+     * available clues, shuffling it, then going along one at a
+     * time clearing each clue in turn for which doing so doesn't render the
+     * board unsolvable.  solution and description both use run-length encoding in obvious ways  Get a new random solvable board with all its clues filled in.  Yes, this
+     * can loop for ever if the params are suitably unfavourable, but
+     * preventing games smaller than 4x4 seems to stop this happening  Calculates the line_errors data, and checks if the current state is a
+ * solution 
+     * Find loops in the grid, and determine whether the puzzle is
+     * solved.
+     *
+     * Loopy is a bit more complicated than most puzzles that care
+     * about loop detection. In most of them, loops are simply
+     * _forbidden_; so the obviously right way to do
+     * error-highlighting during play is to light up a graph edge red
+     * iff it is part of a loop, which is exactly what the centralised
+     * findloop.c makes easy.
+     *
+     * But Loopy is unusual in that you're _supposed_ to be making a
+     * loop - and yet _some_ loops are not the right loop. So we need
+     * to be more discriminating, by identifying loops one by one and
+     * then thinking about which ones to highlight, and so findloop.c
+     * isn't quite the right tool for the job in this case.
+     *
+     * Worse still, consider situations in which the grid contains a
+     * loop and also some non-loop edges: there are some cases like
+     * this in which the user's intuitive expectation would be to
+     * highlight the loop (if you're only about half way through the
+     * puzzle and have accidentally made a little loop in some corner
+     * of the grid), and others in which they'd be more likely to
+     * expect you to highlight the non-loop edges (if you've just
+     * closed off a whole loop that you thought was the entire
+     * solution, but forgot some disconnected edges in a corner
+     * somewhere). So while it's easy enough to check whether the
+     * solution is _right_, highlighting the wrong parts is a tricky
+     * problem for this puzzle!
+     *
+     * I'd quite like, in some situations, to identify the largest
+     * loop among the player's YES edges, and then light up everything
+     * other than that. But finding the longest cycle in a graph is an
+     * NP-complete problem (because, in particular, it must return a
+     * Hamilton cycle if one exists).
+     *
+     * However, I think we can make the problem tractable by
+     * exercising the Puzzles principle that it isn't absolutely
+     * necessary to highlight _all_ errors: the key point is that by
+     * the time the user has filled in the whole grid, they should
+     * either have seen a completion flash, or have _some_ error
+     * highlight showing them why the solution isn't right. So in
+     * principle it would be *just about* good enough to highlight
+     * just one error in the whole grid, if there was really no better
+     * way. But we'd like to highlight as many errors as possible.
+     *
+     * In this case, I think the simple approach is to make use of the
+     * fact that no vertex may have degree > 2, and that's really
+     * simple to detect. So the plan goes like this:
+     *
+     *  - Form the dsf of connected components of the graph vertices.
+     *
+     *  - Highlight an error at any vertex with degree > 2. (It so
+     *    happens that we do this by lighting up all the edges
+     *    incident to that vertex, but that's an output detail.)
+     *
+     *  - Any component that contains such a vertex is now excluded
+     *    from further consideration, because it already has a
+     *    highlight.
+     *
+     *  - The remaining components have no vertex with degree > 2, and
+     *    hence they all consist of either a simple loop, or a simple
+     *    path with two endpoints.
+     *
+     *  - For these purposes, group together all the paths and imagine
+     *    them to be a single component (because in most normal
+     *    situations the player will gradually build up the solution
+     *    _not_ all in one connected segment, but as lots of separate
+     *    little path pieces that gradually connect to each other).
+     *
+     *  - After doing that, if there is exactly one (sensible)
+     *    component - be it a collection of paths or a loop - then
+     *    highlight no further edge errors. (The former case is normal
+     *    during play, and the latter is a potentially solved puzzle.)
+     *
+     *  - Otherwise, find the largest of the sensible components,
+     *    leave that one unhighlighted, and light the rest up in red.
+      Build the dsf.  Initialise a state variable for each connected component.  Check for dots with degree > 3. Here we also spot dots of
+     * degree 1 in which the user has marked all the non-edges as
+     * LINE_NO, because those are also clear vertex-level errors, so
+     * we give them the same treatment of excluding their connected
+     * component from the subsequent loop analysis.  violation, so mark all YES edges as errors  And mark this component as not worthy of further
+             * consideration.  A completely isolated dot must also be excluded it from
+             * the subsequent loop highlighting pass, but we tag it
+             * with a different enum value to avoid it counting
+             * towards the components that inhibit returning a win
+             * status.  A dot with degree 1 that didn't fall into the 'clearly
+             * erroneous' case above indicates that this connected
+             * component will be a path rather than a loop - unless
+             * something worse elsewhere in the component has
+             * classified it as silly.  Count up the components. Also, find the largest sensible
+     * component. (Tie-breaking condition is derived from the order of
+     * vertices in the grid data structure, which is fairly arbitrary
+     * but at least stays stable throughout the game.)  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight all edges in every sensible
+         * component that is not the largest one.
+          either endpoint is good enough 
+         * If there is exactly one component and it is a loop, then
+         * the puzzle is potentially complete, so check the clues.
+         
+         * Also, whether or not the puzzle is actually complete, set
+         * the flag that says this game_state has exactly one loop and
+         * nothing else, which will be used to vary the semantics of
+         * clue highlighting at display time.
+          ----------------------------------------------------------------------
+ * Solver logic
+ *
+ * Our solver modes operate as follows.  Each mode also uses the modes above it.
+ *
+ *   Easy Mode
+ *   Just implement the rules of the game.
+ *
+ *   Normal and Tricky Modes
+ *   For each (adjacent) pair of lines through each dot we store a bit for
+ *   whether at least one of them is on and whether at most one is on.  (If we
+ *   know both or neither is on that's already stored more directly.)
+ *
+ *   Advanced Mode
+ *   Use edsf data structure to make equivalence classes of lines that are
+ *   known identical to or opposite to one another.
+  DLines:
+ * For general grids, we consider "dlines" to be pairs of lines joined
+ * at a dot.  The lines must be adjacent around the dot, so we can think of
+ * a dline as being a dot+face combination.  Or, a dot+edge combination where
+ * the second edge is taken to be the next clockwise edge from the dot.
+ * Original loopy code didn't have this extra restriction of the lines being
+ * adjacent.  From my tests with square grids, this extra restriction seems to
+ * take little, if anything, away from the quality of the puzzles.
+ * A dline can be uniquely identified by an edge/dot combination, given that
+ * a dline-pair always goes clockwise around its common dot.  The edge/dot
+ * combination can be represented by an edge/bool combination - if bool is
+ * true, use edge->dot1 else use edge->dot2.  So the total number of dlines is
+ * exactly twice the number of edges in the grid - although the dlines
+ * spanning the infinite face are not all that useful to the solver.
+ * Note that, by convention, a dline goes clockwise around its common dot,
+ * which means the dline goes anti-clockwise around its common face.
+  Helper functions for obtaining an index into an array of dlines, given
+ * various information.  We assume the grid layout conventions about how
+ * the various lists are interleaved - see grid_make_consistent() for
+ * details.  i points to the first edge of the dline pair, reading clockwise around
+ * the dot.  i points to the second edge of the dline pair, reading clockwise around
+ * the face.  That is, the edges of the dline, starting at edge{i}, read
+ * anti-clockwise around the face.  By layout conventions, the common dot
+ * of the dline will be f->dots[i]  Helper, called when doing dline dot deductions, in the case where we
+ * have 4 UNKNOWNs, and two of them (adjacent) have *exactly* one YES between
+ * them (because of dline atmostone/atleastone).
+ * On entry, edge points to the first of these two UNKNOWNs.  This function
+ * will find the opposite UNKNOWNS (if they are adjacent to one another)
+ * and set their corresponding dline to atleastone.  (Setting atmostone
+ * already happens in earlier dline deductions)  Check if opp, opp2 point to LINE_UNKNOWNs  Found opposite UNKNOWNS and they're next to each other  Set pairs of lines around this face which are known to be identical, to
+ * the given line_state  can[dir] contains the canonical line associated with the line in
+     * direction dir from the square in question.  Similarly inv[dir] is
+     * whether or not the line in question is inverse to its canonical
+     * element.  Found two UNKNOWNS  Given a dot or face, and a count of LINE_UNKNOWNs, find them and
+ * return the edge indices into e.  Edge list to search (from a face or a dot)  Number of UNKNOWNs (comes from solver's cache)  Returned edge indices  If we have a list of edges, and we know whether the number of YESs should
+ * be odd or even, and there are only a few UNKNOWNs, we can do some simple
+ * linedsf deductions.  This can be used for both face and dot deductions.
+ * Returns the difficulty level of the next solver that should be used,
+ * or DIFF_MAX if no progress was made.  Edge list (from a face or a dot)  Expected number of YESs modulo 2 (either 0 or 1)  Lines are known alike/opposite, depending on inv.  canonical edges  whether can[x] is inverse to e[x]  canonical edges  whether can[x] is inverse to e[x] 
+ * These are the main solver functions.
+ *
+ * Their return values are diff values corresponding to the lowest mode solver
+ * that would notice the work that they have done.  For example if the normal
+ * mode solver adds actual lines or crosses, it will return DIFF_EASY as the
+ * easy mode solver might be able to make progress using that.  It doesn't make
+ * sense for one of them to return a diff value higher than that of the
+ * function itself.
+ *
+ * Each function returns the lowest value it can, as early as possible, in
+ * order to try and pass as much work as possible back to the lower level
+ * solvers which progress more quickly.
+  PROPOSED NEW DESIGN:
+ * We have a work queue consisting of 'events' notifying us that something has
+ * happened that a particular solver mode might be interested in.  For example
+ * the hard mode solver might do something that helps the normal mode solver at
+ * dot [x,y] in which case it will enqueue an event recording this fact.  Then
+ * we pull events off the work queue, and hand each in turn to the solver that
+ * is interested in them.  If a solver reports that it failed we pass the same
+ * event on to progressively more advanced solvers and the loop detector.  Once
+ * we've exhausted an event, or it has helped us progress, we drop it and
+ * continue to the next one.  The events are sorted first in order of solver
+ * complexity (easy first) then order of insertion (oldest first).
+ * Once we run out of events we loop over each permitted solver in turn
+ * (easiest first) until either a deduction is made (and an event therefore
+ * emerges) or no further deductions can be made (in which case we've failed).
+ *
+ * QUESTIONS:
+ *    * How do we 'loop over' a solver when both dots and squares are concerned.
+ *      Answer: first all squares then all dots.
+  Per-face deductions 
+         * This code checks whether the numeric clue on a face is so
+         * large as to permit all its remaining LINE_UNKNOWNs to be
+         * filled in as LINE_YES, or alternatively so small as to
+         * permit them all to be filled in as LINE_NO.
+         
+             * One small refinement to the above: we also look for any
+             * adjacent pair of LINE_UNKNOWNs around the face with
+             * some LINE_YES incident on it from elsewhere. If we find
+             * one, then we know that pair of LINE_UNKNOWNs can't
+             * _both_ be LINE_YES, and hence that pushes us one line
+             * closer to being able to determine all the rest.
+              multi-level break 
+             * If we get here, we've found such a pair of edges, and
+             * they're e1 and e2.
+              Per-dot deductions  ------ Face deductions ------  Given a set of dline atmostone/atleastone constraints, need to figure
+     * out if we can deduce any further info.  For more general faces than
+     * squares, this turns out to be a tricky problem.
+     * The approach taken here is to define (per face) NxN matrices:
+     * "maxs" and "mins".
+     * The entries maxs(j,k) and mins(j,k) define the upper and lower limits
+     * for the possible number of edges that are YES between positions j and k
+     * going clockwise around the face.  Can think of j and k as marking dots
+     * around the face (recall the labelling scheme: edge0 joins dot0 to dot1,
+     * edge1 joins dot1 to dot2 etc).
+     * Trivially, mins(j,j) = maxs(j,j) = 0, and we don't even bother storing
+     * these.  mins(j,j+1) and maxs(j,j+1) are determined by whether edge{j}
+     * is YES, NO or UNKNOWN.  mins(j,j+2) and maxs(j,j+2) are related to
+     * the dline atmostone/atleastone status for edges j and j+1.
+     *
+     * Then we calculate the remaining entries recursively.  We definitely
+     * know that
+     * mins(j,k) >= { mins(j,u) + mins(u,k) } for any u between j and k.
+     * This is because any valid placement of YESs between j and k must give
+     * a valid placement between j and u, and also between u and k.
+     * I believe it's sufficient to use just the two values of u:
+     * j+1 and j+2.  Seems to work well in practice - the bounds we compute
+     * are rigorous, even if they might not be best-possible.
+     *
+     * Once we have maxs and mins calculated, we can make inferences about
+     * each dline{j,j+1} by looking at the possible complementary edge-counts
+     * mins(j+2,j) and maxs(j+2,j) and comparing these with the face clue.
+     * As well as dlines, we can make similar inferences about single edges.
+     * For example, consider a pentagon with clue 3, and we know at most one
+     * of (edge0, edge1) is YES, and at most one of (edge2, edge3) is YES.
+     * We could then deduce edge4 is YES, because maxs(0,4) would be 2, so
+     * that final edge would have to be YES to make the count up to 3.
+      Much quicker to allocate arrays on the stack than the heap, so
+     * define the largest possible face size, and base our array allocations
+     * on that.  We check this with an assertion, in case someone decides to
+     * make a grid which has larger faces than this.  Note, this algorithm
+     * could get quite expensive if there are many large faces.  Calculate the (j,j+1) entries  Calculate the (j,j+2) entries  max  min  Calculate the (j,j+m) entries for m between 3 and N-1  See if we can make any deductions  minimum YESs in the complement of this edge  setting this edge to YES would make at least
+                 * (clue+1) edges - contradiction  Only way to satisfy the clue is to set edge{j} as YES  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example, 3-2-...-2-3
+             * in square grids.  Now see if we can make dline deduction for edges{j,j+1}  Only worth doing this for an UNKNOWN,UNKNOWN pair.
+                     * Dlines where one of the edges is known, are handled in the
+                     * dot-deductions  minimum YESs in the complement of this dline  Adding 2 YESs would break the clue  maximum YESs in the complement of this dline  Adding 2 NOs would mean not enough YESs  ------ Dot deductions ------  Infer dline state from line state  Infer line state from dline state  Deductions that depend on the numbers of lines.
+             * Only bother if both lines are UNKNOWN, otherwise the
+             * easy-mode solver (or deductions above) would have taken
+             * care of it.  Both these unknowns must be identical.  If we know
+                 * atmostone or atleastone, we can make progress.  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example: 3-2-...-2-3
+             * in square grids.  If we have atleastone set for this dline, infer
+                 * atmostone for each "opposite" dline (that is, each
+                 * dline without edges in common with this one).
+                 * Again, this test is only worth doing if both these
+                 * lines are UNKNOWN.  For if one of these lines were YES,
+                 * the (yes == 1) test above would kick in instead.  This dline has *exactly* one YES and there are no
+                         * other YESs.  This allows more deductions.  Third unknown must be YES  Exactly one of opposite UNKNOWNS is YES.  We've
+                             * already set atmostone, so set atleastone as
+                             * well.
+                              ------ Face deductions ------  A fully-general linedsf deduction seems overly complicated
+     * (I suspect the problem is NP-complete, though in practice it might just
+     * be doable because faces are limited in size).
+     * For simplicity, we only consider *pairs* of LINE_UNKNOWNS that are
+     * known to be identical.  If setting them both to YES (or NO) would break
+     * the clue, set them to NO (or YES).  Reload YES count, it might have changed  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Dot deductions ------  Go through dlines, and do any dline<->linedsf deductions wherever
+         * we find two UNKNOWNS.  Infer dline flags from linedsf  These are opposites, so set dline atmostone/atleastone  Infer linedsf from dline flags  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Edge dsf deductions ------  If the state of a line is known, deduce the state of its canonical line
+     * too, and vice versa. 
+     * Go through the grid and update for all the new edges.
+     * Since merge_dots() is idempotent, the simplest way to
+     * do this is just to update for _all_ the edges.
+     * Also, while we're here, we count the edges.
+     
+     * Count the clues, count the satisfied clues, and count the
+     * satisfied-minus-one clues.
+      This discovery clearly counts as progress, even if we haven't
+         * just added any lines or anything 
+     * Now go through looking for LINE_UNKNOWN edges which
+     * connect two dots that are already in the same
+     * equivalence class. If we find one, test to see if the
+     * loop it would create is a solution.
+      loop is bad until proven otherwise 
+         * This edge would form a loop. Next
+         * question: how long would the loop be?
+         * Would it equal the total number of edges
+         * (plus the one we'd be adding if we added
+         * it)?
+         
+             * This edge would form a loop which
+             * took in all the edges in the entire
+             * grid. So now we need to work out
+             * whether it would be a valid solution
+             * to the puzzle, which means we have to
+             * check if it satisfies all the clues.
+             * This means that every clue must be
+             * either satisfied or satisfied-minus-
+             * 1, and also that the number of
+             * satisfied-minus-1 clues must be at
+             * most two and they must lie on either
+             * side of this edge.
+              loop is good! 
+         * Right. Now we know that adding this edge
+         * would form a loop, and we know whether
+         * that loop would be a viable solution or
+         * not.
+         *
+         * If adding this edge produces a solution,
+         * then we know we've found _a_ solution but
+         * we don't know that it's _the_ solution -
+         * if it were provably the solution then
+         * we'd have deduced this edge some time ago
+         * without the need to do loop detection. So
+         * in this state we return SOLVER_AMBIGUOUS,
+         * which has the effect that hitting Solve
+         * on a user-provided puzzle will fill in a
+         * solution but using the solver to
+         * construct new puzzles won't consider this
+         * a reasonable deduction for the user to
+         * make.
+          This will return a dynamically allocated solver_state containing the (more)
+ * solved grid  Index of the solver we should call next.  As a speed-optimisation, we avoid re-running solvers that we know
+     * won't make any progress.  This happens when a high-difficulty
+     * solver makes a deduction that can only help other high-difficulty
+     * solvers.
+     * For example: if a new 'dline' flag is set by dline_deductions, the
+     * trivial_deductions solver cannot do anything with this information.
+     * If we've already run the trivial_deductions solver (because it's
+     * earlier in the list), there's no point running it again.
+     *
+     * Therefore: if a solver is earlier in the list than "threshold_index",
+     * we don't bother running it if it's difficulty level is less than
+     * "threshold_diff".
+      solver finished  current_solver is eligible, so use it  solver made progress, so use new thresholds and
+                * start again at top of list.  current_solver is ineligible, or failed to make progress, so
+         * go to the next solver in the list  s/LINE_UNKNOWN/LINE_NO/g *error = "Solver found ambiguous solutions"; *error = "Solver failed";  ----------------------------------------------------------------------
+ * Drawing and mouse-handling
+  Convert mouse-click (x,y) to grid coordinates  I think it's only possible to play this game with mouse clicks, sorry  Maybe will add mouse drag support some time 
+                         * Special case: we might have come all the
+                         * way round a loop and found our way back to
+                         * the same edge we started from. In that
+                         * situation, we must terminate not only this
+                         * while loop, but the 'for' outside it that
+                         * was tracing in both directions from the
+                         * starting edge, because if we let it trace
+                         * in the second direction then we'll only
+                         * find ourself traversing the same loop in
+                         * the other order and generate an encoded
+                         * move string that mentions the same set of
+                         * edges twice.
+                         
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Convert from grid coordinates to screen coordinates  Returns (into x,y) position of centre of face for rendering the text clue.
+ 
+     * Return the cached position for this face, if we've already
+     * worked it out.
+     
+     * Otherwise, use the incentre computed by grid.c and convert it
+     * to screen coordinates.
+      There seems to be a certain amount of trial-and-error involved
+     * in working out the correct bounding-box for the text.  Allow extra margin for dots, and thickness of lines  Convert from grid to screen coordinates 
+     * Two intervals intersect iff neither is wholly on one side of
+     * the other. Two boxes intersect iff their horizontal and
+     * vertical intervals both intersect.
+      Somewhat arbitrary tradeoff  Redrawing is somewhat involved.
+     *
+     * An update can theoretically affect an arbitrary number of edges
+     * (consider, for example, completing or breaking a cycle which doesn't
+     * satisfy all the clues -- we'll switch many edges between error and
+     * normal states).  On the other hand, redrawing the whole grid takes a
+     * while, making the game feel sluggish, and many updates are actually
+     * quite well localized.
+     *
+     * This redraw algorithm attempts to cope with both situations gracefully
+     * and correctly.  For localized changes, we set a clip rectangle, fill
+     * it with background, and then redraw (a plausible but conservative
+     * guess at) the objects which intersect the rectangle; if several
+     * objects need redrawing, we'll do them individually.  However, if lots
+     * of objects are affected, we'll just redraw everything.
+     *
+     * The reason for all of this is that it's just not safe to do the redraw
+     * piecemeal.  If you try to draw an antialiased diagonal line over
+     * itself, you get a slightly thicker antialiased diagonal line, which
+     * looks rather ugly after a while.
+     *
+     * So, we take two passes over the grid.  The first attempts to work out
+     * what needs doing, and the second actually does it.
+     
+         * But we must still go through the upcoming loops, so that we
+         * set up stuff in ds correctly for the initial redraw.
+          First, trundle through the faces. 
+             * Special case: if the set of LINE_YES edges in the grid
+             * consists of exactly one loop and nothing else, then we
+             * switch to treating LINE_UNKNOWN the same as LINE_NO for
+             * purposes of clue checking.
+             *
+             * This is because some people like to play Loopy without
+             * using the right-click, i.e. never setting anything to
+             * LINE_NO. Without this special case, if a person playing
+             * in that style fills in what they think is a correct
+             * solution loop but in fact it has an underfilled clue,
+             * then we will display no victory flash and also no error
+             * highlight explaining why not. With this special case,
+             * we light up underfilled clues at the instant the loop
+             * is closed. (Of course, *overfilled* clues are fine
+             * either way.)
+             *
+             * (It might still be considered unfortunate that we can't
+             * warn this style of player any earlier, if they make a
+             * mistake very near the beginning which doesn't show up
+             * until they close the last edge of the loop. One other
+             * thing we _could_ do here is to treat any LINE_UNKNOWN
+             * as LINE_NO if either of its endpoints has yes-degree 2,
+             * reflecting the fact that setting that line to YES would
+             * be an obvious error. But I don't think even that could
+             * catch _all_ clue errors in a timely manner; I think
+             * there are some that won't be displayed until the loop
+             * is filled in, even so, and there's no way to avoid that
+             * with complete reliability except to switch to being a
+             * player who sets things to LINE_NO.)
+              Work out what the flash state needs to be.  Now, trundle through the edges.  Pass one is now done.  Now we do the actual drawing.  Right.  Now we roll up our sleeves. 
+     * I'll use 7mm "squares" by default.
+     
+     * Clues.
+     
+     * Lines.
+      (dx, dy) points from (x1, y1) to (x2, y2).
+             * The line is then "fattened" in a perpendicular
+             * direction to create a thin rectangle.  Draw a dotted line  Weighted average  game_request_keys  wants_statusbar  mouse_priorities 
+ * Half-hearted standalone solver. It can't output the solution to
+ * anything but a square puzzle, and it can't log the deductions
+ * it makes either. But it can solve square puzzles, and more
+ * importantly it can use its solver to grade the difficulty of
+ * any puzzle you give it.
+  verbose solver not supported here (yet)  verbose solver not supported here (yet) 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  If we supported a verbose solver, we'd set verbosity here  vim: set shiftwidth=4 tabstop=8: 
+ * loopy.c:
+ *
+ * An implementation of the Nikoli game 'Loop the loop'.
+ * (c) Mike Pinna, 2005, 2006
+ * Substantially rewritten to allowing for more general types of grid.
+ * (c) Lambros Lambrou 2008
+ *
+ * vim: set shiftwidth=4 :set textwidth=80:
+ 
+ * Possible future solver enhancements:
+ * 
+ *  - There's an interesting deductive technique which makes use
+ *    of topology rather than just graph theory. Each _face_ in
+ *    the grid is either inside or outside the loop; you can tell
+ *    that two faces are on the same side of the loop if they're
+ *    separated by a LINE_NO (or, more generally, by a path
+ *    crossing no LINE_UNKNOWNs and an even number of LINE_YESes),
+ *    and on the opposite side of the loop if they're separated by
+ *    a LINE_YES (or an odd number of LINE_YESes and no
+ *    LINE_UNKNOWNs). Oh, and any face separated from the outside
+ *    of the grid by a LINE_YES or a LINE_NO is on the inside or
+ *    outside respectively. So if you can track this for all
+ *    faces, you figure out the state of the line between a pair
+ *    once their relative insideness is known.
+ *     + The way I envisage this working is simply to keep an edsf
+ * 	 of all _faces_, which indicates whether they're on
+ * 	 opposite sides of the loop from one another. We also
+ * 	 include a special entry in the edsf for the infinite
+ * 	 exterior "face".
+ *     + So, the simple way to do this is to just go through the
+ * 	 edges: every time we see an edge in a state other than
+ * 	 LINE_UNKNOWN which separates two faces that aren't in the
+ * 	 same edsf class, we can rectify that by merging the
+ * 	 classes. Then, conversely, an edge in LINE_UNKNOWN state
+ * 	 which separates two faces that _are_ in the same edsf
+ * 	 class can immediately have its state determined.
+ *     + But you can go one better, if you're prepared to loop
+ * 	 over all _pairs_ of edges. Suppose we have edges A and B,
+ * 	 which respectively separate faces A1,A2 and B1,B2.
+ * 	 Suppose that A,B are in the same edge-edsf class and that
+ * 	 A1,B1 (wlog) are in the same face-edsf class; then we can
+ * 	 immediately place A2,B2 into the same face-edsf class (as
+ * 	 each other, not as A1 and A2) one way round or the other.
+ * 	 And conversely again, if A1,B1 are in the same face-edsf
+ * 	 class and so are A2,B2, then we can put A,B into the same
+ * 	 face-edsf class.
+ * 	  * Of course, this deduction requires a quadratic-time
+ * 	    loop over all pairs of edges in the grid, so it should
+ * 	    be reserved until there's nothing easier left to be
+ * 	    done.
+ * 
+ *  - The generalised grid support has made me (SGT) notice a
+ *    possible extension to the loop-avoidance code. When you have
+ *    a path of connected edges such that no other edges at all
+ *    are incident on any vertex in the middle of the path - or,
+ *    alternatively, such that any such edges are already known to
+ *    be LINE_NO - then you know those edges are either all
+ *    LINE_YES or all LINE_NO. Hence you can mentally merge the
+ *    entire path into a single long curly edge for the purposes
+ *    of loop avoidance, and look directly at whether or not the
+ *    extreme endpoints of the path are connected by some other
+ *    route. I find this coming up fairly often when I play on the
+ *    octagonal grid setting, so it might be worth implementing in
+ *    the solver.
+ *
+ *  - (Just a speed optimisation.)  Consider some todo list queue where every
+ *    time we modify something we mark it for consideration by other bits of
+ *    the solver, to save iteration over things that have already been done.
+  Debugging options 
+#define DEBUG_CACHES
+#define SHOW_WORKING
+#define DEBUG_DLINES
+ ----------------------------------------------------------------------
+ * Struct, enum and function declarations
+  ref-counted (internally)  Put -1 in a face that doesn't get a clue  Array of line states, to store whether each line is
+     * YES, NO or UNKNOWN  Used in game_text_format(), so that it knows what type of
+     * grid it's trying to render as ASCII text.  This is the only solution the solver could find  This is definitely not a solution  This _might_ be an ambiguous solution  This may be a partial solution  ------ Solver state ------  NB looplen is the number of dots that are joined together at a point, ie a
+     * looplen of 1 means there are no lines to a particular dot  Difficulty level of solver.  Used by solver functions that want to
+     * vary their behaviour depending on the requested difficulty level.  caches  Information for Normal level deductions:
+     * For each dline, store a bitmask for whether we know:
+     * (bit 0) at least one is YES
+     * (bit 1) at most one is YES  Hard level information 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+ * Solver routines, sorted roughly in order of computational cost.
+ * The solver will run the faster deductions first, and slower deductions are
+ * only invoked when the faster deductions are unable to make progress.
+ * Each function is associated with a difficulty level, so that the generated
+ * puzzles are solvable by applying only the functions with the chosen
+ * difficulty level or lower.
+  line_drawstate is the same as line_state, but with the extra ERROR
+ * possibility.  The drawing code copies line_state to line_drawstate,
+ * except in the case that the line is an error. 
+ * Grid type config options available in Loopy.
+ *
+ * Annoyingly, we have to use an enum here which doesn't match up
+ * exactly to the grid-type enum in grid.h. Values in params->types
+ * are given by names such as LOOPY_GRID_SQUARE, which shouldn't be
+ * confused with GRID_SQUARE which is the value you pass to grid_new()
+ * and friends. So beware!
+ *
+ * (This is partly for historical reasons - Loopy's version of the
+ * enum is encoded in game parameter strings, so we keep it for
+ * backwards compatibility. But also, we need to store additional data
+ * here alongside each enum value, such as names for the presets menu,
+ * which isn't stored in grid.h; so we have to have our own list macro
+ * here anyway, and C doesn't make it easy to enforce that that lines
+ * up exactly with grid.h.)
+ *
+ * Do not add values to this list _except_ at the end, or old game ids
+ * will stop working!
+  end of list  Generates a (dynamically allocated) new grid, according to the
+ * type and size requested in params.  Does nothing if the grid is already
+ * generated.  ----------------------------------------------------------------------
+ * Preprocessor magic
+  General constants  ----------------------------------------------------------------------
+ * General struct manipulation and other straightforward code
+  OK, because sfree(NULL) is a no-op  structure copy 
+     * This shouldn't be able to happen at all, since decode_params
+     * and custom_params will never generate anything that isn't
+     * within range.
+      Returns a newly allocated string describing the current puzzle  Splits up a (optional) grid_desc from the game desc. Returns the
+ * grid_desc (which needs freeing) and updates the desc pointer to
+ * start of real desc, or returns NULL if no desc.  We require that the params pass the test in validate_params and that the
+ * description fills the entire game area  It's pretty inefficient to do this just for validation. All we need to
+     * know is the precise number of faces.  Sums the lengths of the numbers in range [0,n)  See equivalent function in solo.c for justification of this.  Counting 0 as a bit of a special case  This is going to return a string representing the moves needed to set
+     * every line in a grid to be the same as the ones in 'state'.  The exact
+     * length of this string is predictable.  Count the 'S' prefix  Numbers in all lines  For each line we also have a letter  No point in doing sums like that if they're going to be wrong  multiply first to minimise rounding error on integer division 
+     * We want COL_LINEUNKNOWN to be a yellow which is a bit darker
+     * than the background. (I previously set it to 0.8,0.8,0, but
+     * found that this went badly with the 0.8,0.8,0.8 favoured as a
+     * background by the Java frontend.)
+      We want the faint lines to be a bit darker than the background.
+     * Except if the background is pretty dark already; then it ought to be a
+     * bit lighter.  Oy vey.
+      Work out the basic size unit  first face  The dots are ordered clockwise, so the two opposite
+     * corners are guaranteed to span the square  Create a blank "canvas" to "draw" on  Fill in edge info  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates (canvas coordinates are just twice
+         * cell coordinates)  already a space  Fill in clues  Cell coordinates, from (0,0) to (w-1,h-1)  Midpoint, in canvas coordinates  ----------------------------------------------------------------------
+ * Debug code
+  DEBUG_CACHES  ----------------------------------------------------------------------
+ * Solver utility functions
+  Sets the line (with index i) to the new state 'line_new', and updates
+ * the cached counts of any affected faces and dots.
+ * Returns true if this actually changed the line's state.  nothing changed  Update the cache for both dots and both faces affected by this. 
+ * Merge two dots due to the existence of an edge between them.
+ * Updates the dsf tracking equivalence classes, and keeps track of
+ * the length of path each dot is currently a part of.
+ * Returns true if the dots were already linked, ie if they are part of a
+ * closed loop, and false otherwise.
+  Merge two lines because the solver has deduced that they must be either
+ * identical or opposite.   Returns true if this is new information, otherwise
+ * false.  Count the number of lines of a particular type currently going into the
+ * given dot.  Count the number of lines of a particular type currently surrounding the
+ * given face  Set all lines bordering a dot of type old_type to type new_type
+ * Return value tells caller whether this function actually did anything  Set all lines bordering a face of type old_type to type new_type  ----------------------------------------------------------------------
+ * Loop generation and clue removal
+  Fill out all the clues by initialising to 0, then iterating over
+     * all edges and incrementing each clue as we find edges that border
+     * between BLACK/WHITE faces.  While we're at it, we verify that the
+     * algorithm does work, and there aren't any GREY faces still there.  Remove clues one at a time at random.  We need to remove some clues.  We'll do this by forming a list of all
+     * available clues, shuffling it, then going along one at a
+     * time clearing each clue in turn for which doing so doesn't render the
+     * board unsolvable.  solution and description both use run-length encoding in obvious ways  Get a new random solvable board with all its clues filled in.  Yes, this
+     * can loop for ever if the params are suitably unfavourable, but
+     * preventing games smaller than 4x4 seems to stop this happening  Calculates the line_errors data, and checks if the current state is a
+ * solution 
+     * Find loops in the grid, and determine whether the puzzle is
+     * solved.
+     *
+     * Loopy is a bit more complicated than most puzzles that care
+     * about loop detection. In most of them, loops are simply
+     * _forbidden_; so the obviously right way to do
+     * error-highlighting during play is to light up a graph edge red
+     * iff it is part of a loop, which is exactly what the centralised
+     * findloop.c makes easy.
+     *
+     * But Loopy is unusual in that you're _supposed_ to be making a
+     * loop - and yet _some_ loops are not the right loop. So we need
+     * to be more discriminating, by identifying loops one by one and
+     * then thinking about which ones to highlight, and so findloop.c
+     * isn't quite the right tool for the job in this case.
+     *
+     * Worse still, consider situations in which the grid contains a
+     * loop and also some non-loop edges: there are some cases like
+     * this in which the user's intuitive expectation would be to
+     * highlight the loop (if you're only about half way through the
+     * puzzle and have accidentally made a little loop in some corner
+     * of the grid), and others in which they'd be more likely to
+     * expect you to highlight the non-loop edges (if you've just
+     * closed off a whole loop that you thought was the entire
+     * solution, but forgot some disconnected edges in a corner
+     * somewhere). So while it's easy enough to check whether the
+     * solution is _right_, highlighting the wrong parts is a tricky
+     * problem for this puzzle!
+     *
+     * I'd quite like, in some situations, to identify the largest
+     * loop among the player's YES edges, and then light up everything
+     * other than that. But finding the longest cycle in a graph is an
+     * NP-complete problem (because, in particular, it must return a
+     * Hamilton cycle if one exists).
+     *
+     * However, I think we can make the problem tractable by
+     * exercising the Puzzles principle that it isn't absolutely
+     * necessary to highlight _all_ errors: the key point is that by
+     * the time the user has filled in the whole grid, they should
+     * either have seen a completion flash, or have _some_ error
+     * highlight showing them why the solution isn't right. So in
+     * principle it would be *just about* good enough to highlight
+     * just one error in the whole grid, if there was really no better
+     * way. But we'd like to highlight as many errors as possible.
+     *
+     * In this case, I think the simple approach is to make use of the
+     * fact that no vertex may have degree > 2, and that's really
+     * simple to detect. So the plan goes like this:
+     *
+     *  - Form the dsf of connected components of the graph vertices.
+     *
+     *  - Highlight an error at any vertex with degree > 2. (It so
+     *    happens that we do this by lighting up all the edges
+     *    incident to that vertex, but that's an output detail.)
+     *
+     *  - Any component that contains such a vertex is now excluded
+     *    from further consideration, because it already has a
+     *    highlight.
+     *
+     *  - The remaining components have no vertex with degree > 2, and
+     *    hence they all consist of either a simple loop, or a simple
+     *    path with two endpoints.
+     *
+     *  - For these purposes, group together all the paths and imagine
+     *    them to be a single component (because in most normal
+     *    situations the player will gradually build up the solution
+     *    _not_ all in one connected segment, but as lots of separate
+     *    little path pieces that gradually connect to each other).
+     *
+     *  - After doing that, if there is exactly one (sensible)
+     *    component - be it a collection of paths or a loop - then
+     *    highlight no further edge errors. (The former case is normal
+     *    during play, and the latter is a potentially solved puzzle.)
+     *
+     *  - Otherwise, find the largest of the sensible components,
+     *    leave that one unhighlighted, and light the rest up in red.
+      Build the dsf.  Initialise a state variable for each connected component.  Check for dots with degree > 3. Here we also spot dots of
+     * degree 1 in which the user has marked all the non-edges as
+     * LINE_NO, because those are also clear vertex-level errors, so
+     * we give them the same treatment of excluding their connected
+     * component from the subsequent loop analysis.  violation, so mark all YES edges as errors  And mark this component as not worthy of further
+             * consideration.  A completely isolated dot must also be excluded it from
+             * the subsequent loop highlighting pass, but we tag it
+             * with a different enum value to avoid it counting
+             * towards the components that inhibit returning a win
+             * status.  A dot with degree 1 that didn't fall into the 'clearly
+             * erroneous' case above indicates that this connected
+             * component will be a path rather than a loop - unless
+             * something worse elsewhere in the component has
+             * classified it as silly.  Count up the components. Also, find the largest sensible
+     * component. (Tie-breaking condition is derived from the order of
+     * vertices in the grid data structure, which is fairly arbitrary
+     * but at least stays stable throughout the game.)  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight all edges in every sensible
+         * component that is not the largest one.
+          either endpoint is good enough 
+         * If there is exactly one component and it is a loop, then
+         * the puzzle is potentially complete, so check the clues.
+         
+         * Also, whether or not the puzzle is actually complete, set
+         * the flag that says this game_state has exactly one loop and
+         * nothing else, which will be used to vary the semantics of
+         * clue highlighting at display time.
+          ----------------------------------------------------------------------
+ * Solver logic
+ *
+ * Our solver modes operate as follows.  Each mode also uses the modes above it.
+ *
+ *   Easy Mode
+ *   Just implement the rules of the game.
+ *
+ *   Normal and Tricky Modes
+ *   For each (adjacent) pair of lines through each dot we store a bit for
+ *   whether at least one of them is on and whether at most one is on.  (If we
+ *   know both or neither is on that's already stored more directly.)
+ *
+ *   Advanced Mode
+ *   Use edsf data structure to make equivalence classes of lines that are
+ *   known identical to or opposite to one another.
+  DLines:
+ * For general grids, we consider "dlines" to be pairs of lines joined
+ * at a dot.  The lines must be adjacent around the dot, so we can think of
+ * a dline as being a dot+face combination.  Or, a dot+edge combination where
+ * the second edge is taken to be the next clockwise edge from the dot.
+ * Original loopy code didn't have this extra restriction of the lines being
+ * adjacent.  From my tests with square grids, this extra restriction seems to
+ * take little, if anything, away from the quality of the puzzles.
+ * A dline can be uniquely identified by an edge/dot combination, given that
+ * a dline-pair always goes clockwise around its common dot.  The edge/dot
+ * combination can be represented by an edge/bool combination - if bool is
+ * true, use edge->dot1 else use edge->dot2.  So the total number of dlines is
+ * exactly twice the number of edges in the grid - although the dlines
+ * spanning the infinite face are not all that useful to the solver.
+ * Note that, by convention, a dline goes clockwise around its common dot,
+ * which means the dline goes anti-clockwise around its common face.
+  Helper functions for obtaining an index into an array of dlines, given
+ * various information.  We assume the grid layout conventions about how
+ * the various lists are interleaved - see grid_make_consistent() for
+ * details.  i points to the first edge of the dline pair, reading clockwise around
+ * the dot.  i points to the second edge of the dline pair, reading clockwise around
+ * the face.  That is, the edges of the dline, starting at edge{i}, read
+ * anti-clockwise around the face.  By layout conventions, the common dot
+ * of the dline will be f->dots[i]  Helper, called when doing dline dot deductions, in the case where we
+ * have 4 UNKNOWNs, and two of them (adjacent) have *exactly* one YES between
+ * them (because of dline atmostone/atleastone).
+ * On entry, edge points to the first of these two UNKNOWNs.  This function
+ * will find the opposite UNKNOWNS (if they are adjacent to one another)
+ * and set their corresponding dline to atleastone.  (Setting atmostone
+ * already happens in earlier dline deductions)  Check if opp, opp2 point to LINE_UNKNOWNs  Found opposite UNKNOWNS and they're next to each other  Set pairs of lines around this face which are known to be identical, to
+ * the given line_state  can[dir] contains the canonical line associated with the line in
+     * direction dir from the square in question.  Similarly inv[dir] is
+     * whether or not the line in question is inverse to its canonical
+     * element.  Found two UNKNOWNS  Given a dot or face, and a count of LINE_UNKNOWNs, find them and
+ * return the edge indices into e.  Edge list to search (from a face or a dot)  Number of UNKNOWNs (comes from solver's cache)  Returned edge indices  If we have a list of edges, and we know whether the number of YESs should
+ * be odd or even, and there are only a few UNKNOWNs, we can do some simple
+ * linedsf deductions.  This can be used for both face and dot deductions.
+ * Returns the difficulty level of the next solver that should be used,
+ * or DIFF_MAX if no progress was made.  Edge list (from a face or a dot)  Expected number of YESs modulo 2 (either 0 or 1)  Lines are known alike/opposite, depending on inv.  canonical edges  whether can[x] is inverse to e[x]  canonical edges  whether can[x] is inverse to e[x] 
+ * These are the main solver functions.
+ *
+ * Their return values are diff values corresponding to the lowest mode solver
+ * that would notice the work that they have done.  For example if the normal
+ * mode solver adds actual lines or crosses, it will return DIFF_EASY as the
+ * easy mode solver might be able to make progress using that.  It doesn't make
+ * sense for one of them to return a diff value higher than that of the
+ * function itself.
+ *
+ * Each function returns the lowest value it can, as early as possible, in
+ * order to try and pass as much work as possible back to the lower level
+ * solvers which progress more quickly.
+  PROPOSED NEW DESIGN:
+ * We have a work queue consisting of 'events' notifying us that something has
+ * happened that a particular solver mode might be interested in.  For example
+ * the hard mode solver might do something that helps the normal mode solver at
+ * dot [x,y] in which case it will enqueue an event recording this fact.  Then
+ * we pull events off the work queue, and hand each in turn to the solver that
+ * is interested in them.  If a solver reports that it failed we pass the same
+ * event on to progressively more advanced solvers and the loop detector.  Once
+ * we've exhausted an event, or it has helped us progress, we drop it and
+ * continue to the next one.  The events are sorted first in order of solver
+ * complexity (easy first) then order of insertion (oldest first).
+ * Once we run out of events we loop over each permitted solver in turn
+ * (easiest first) until either a deduction is made (and an event therefore
+ * emerges) or no further deductions can be made (in which case we've failed).
+ *
+ * QUESTIONS:
+ *    * How do we 'loop over' a solver when both dots and squares are concerned.
+ *      Answer: first all squares then all dots.
+  Per-face deductions 
+         * This code checks whether the numeric clue on a face is so
+         * large as to permit all its remaining LINE_UNKNOWNs to be
+         * filled in as LINE_YES, or alternatively so small as to
+         * permit them all to be filled in as LINE_NO.
+         
+             * One small refinement to the above: we also look for any
+             * adjacent pair of LINE_UNKNOWNs around the face with
+             * some LINE_YES incident on it from elsewhere. If we find
+             * one, then we know that pair of LINE_UNKNOWNs can't
+             * _both_ be LINE_YES, and hence that pushes us one line
+             * closer to being able to determine all the rest.
+              multi-level break 
+             * If we get here, we've found such a pair of edges, and
+             * they're e1 and e2.
+              Per-dot deductions  ------ Face deductions ------  Given a set of dline atmostone/atleastone constraints, need to figure
+     * out if we can deduce any further info.  For more general faces than
+     * squares, this turns out to be a tricky problem.
+     * The approach taken here is to define (per face) NxN matrices:
+     * "maxs" and "mins".
+     * The entries maxs(j,k) and mins(j,k) define the upper and lower limits
+     * for the possible number of edges that are YES between positions j and k
+     * going clockwise around the face.  Can think of j and k as marking dots
+     * around the face (recall the labelling scheme: edge0 joins dot0 to dot1,
+     * edge1 joins dot1 to dot2 etc).
+     * Trivially, mins(j,j) = maxs(j,j) = 0, and we don't even bother storing
+     * these.  mins(j,j+1) and maxs(j,j+1) are determined by whether edge{j}
+     * is YES, NO or UNKNOWN.  mins(j,j+2) and maxs(j,j+2) are related to
+     * the dline atmostone/atleastone status for edges j and j+1.
+     *
+     * Then we calculate the remaining entries recursively.  We definitely
+     * know that
+     * mins(j,k) >= { mins(j,u) + mins(u,k) } for any u between j and k.
+     * This is because any valid placement of YESs between j and k must give
+     * a valid placement between j and u, and also between u and k.
+     * I believe it's sufficient to use just the two values of u:
+     * j+1 and j+2.  Seems to work well in practice - the bounds we compute
+     * are rigorous, even if they might not be best-possible.
+     *
+     * Once we have maxs and mins calculated, we can make inferences about
+     * each dline{j,j+1} by looking at the possible complementary edge-counts
+     * mins(j+2,j) and maxs(j+2,j) and comparing these with the face clue.
+     * As well as dlines, we can make similar inferences about single edges.
+     * For example, consider a pentagon with clue 3, and we know at most one
+     * of (edge0, edge1) is YES, and at most one of (edge2, edge3) is YES.
+     * We could then deduce edge4 is YES, because maxs(0,4) would be 2, so
+     * that final edge would have to be YES to make the count up to 3.
+      Much quicker to allocate arrays on the stack than the heap, so
+     * define the largest possible face size, and base our array allocations
+     * on that.  We check this with an assertion, in case someone decides to
+     * make a grid which has larger faces than this.  Note, this algorithm
+     * could get quite expensive if there are many large faces.  Calculate the (j,j+1) entries  Calculate the (j,j+2) entries  max  min  Calculate the (j,j+m) entries for m between 3 and N-1  See if we can make any deductions  minimum YESs in the complement of this edge  setting this edge to YES would make at least
+                 * (clue+1) edges - contradiction  Only way to satisfy the clue is to set edge{j} as YES  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example, 3-2-...-2-3
+             * in square grids.  Now see if we can make dline deduction for edges{j,j+1}  Only worth doing this for an UNKNOWN,UNKNOWN pair.
+                     * Dlines where one of the edges is known, are handled in the
+                     * dot-deductions  minimum YESs in the complement of this dline  Adding 2 YESs would break the clue  maximum YESs in the complement of this dline  Adding 2 NOs would mean not enough YESs  ------ Dot deductions ------  Infer dline state from line state  Infer line state from dline state  Deductions that depend on the numbers of lines.
+             * Only bother if both lines are UNKNOWN, otherwise the
+             * easy-mode solver (or deductions above) would have taken
+             * care of it.  Both these unknowns must be identical.  If we know
+                 * atmostone or atleastone, we can make progress.  More advanced deduction that allows propagation along diagonal
+             * chains of faces connected by dots, for example: 3-2-...-2-3
+             * in square grids.  If we have atleastone set for this dline, infer
+                 * atmostone for each "opposite" dline (that is, each
+                 * dline without edges in common with this one).
+                 * Again, this test is only worth doing if both these
+                 * lines are UNKNOWN.  For if one of these lines were YES,
+                 * the (yes == 1) test above would kick in instead.  This dline has *exactly* one YES and there are no
+                         * other YESs.  This allows more deductions.  Third unknown must be YES  Exactly one of opposite UNKNOWNS is YES.  We've
+                             * already set atmostone, so set atleastone as
+                             * well.
+                              ------ Face deductions ------  A fully-general linedsf deduction seems overly complicated
+     * (I suspect the problem is NP-complete, though in practice it might just
+     * be doable because faces are limited in size).
+     * For simplicity, we only consider *pairs* of LINE_UNKNOWNS that are
+     * known to be identical.  If setting them both to YES (or NO) would break
+     * the clue, set them to NO (or YES).  Reload YES count, it might have changed  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Dot deductions ------  Go through dlines, and do any dline<->linedsf deductions wherever
+         * we find two UNKNOWNS.  Infer dline flags from linedsf  These are opposites, so set dline atmostone/atleastone  Infer linedsf from dline flags  Deductions with small number of LINE_UNKNOWNs, based on overall
+         * parity of lines.  ------ Edge dsf deductions ------  If the state of a line is known, deduce the state of its canonical line
+     * too, and vice versa. 
+     * Go through the grid and update for all the new edges.
+     * Since merge_dots() is idempotent, the simplest way to
+     * do this is just to update for _all_ the edges.
+     * Also, while we're here, we count the edges.
+     
+     * Count the clues, count the satisfied clues, and count the
+     * satisfied-minus-one clues.
+      This discovery clearly counts as progress, even if we haven't
+         * just added any lines or anything 
+     * Now go through looking for LINE_UNKNOWN edges which
+     * connect two dots that are already in the same
+     * equivalence class. If we find one, test to see if the
+     * loop it would create is a solution.
+      loop is bad until proven otherwise 
+         * This edge would form a loop. Next
+         * question: how long would the loop be?
+         * Would it equal the total number of edges
+         * (plus the one we'd be adding if we added
+         * it)?
+         
+             * This edge would form a loop which
+             * took in all the edges in the entire
+             * grid. So now we need to work out
+             * whether it would be a valid solution
+             * to the puzzle, which means we have to
+             * check if it satisfies all the clues.
+             * This means that every clue must be
+             * either satisfied or satisfied-minus-
+             * 1, and also that the number of
+             * satisfied-minus-1 clues must be at
+             * most two and they must lie on either
+             * side of this edge.
+              loop is good! 
+         * Right. Now we know that adding this edge
+         * would form a loop, and we know whether
+         * that loop would be a viable solution or
+         * not.
+         *
+         * If adding this edge produces a solution,
+         * then we know we've found _a_ solution but
+         * we don't know that it's _the_ solution -
+         * if it were provably the solution then
+         * we'd have deduced this edge some time ago
+         * without the need to do loop detection. So
+         * in this state we return SOLVER_AMBIGUOUS,
+         * which has the effect that hitting Solve
+         * on a user-provided puzzle will fill in a
+         * solution but using the solver to
+         * construct new puzzles won't consider this
+         * a reasonable deduction for the user to
+         * make.
+          This will return a dynamically allocated solver_state containing the (more)
+ * solved grid  Index of the solver we should call next.  As a speed-optimisation, we avoid re-running solvers that we know
+     * won't make any progress.  This happens when a high-difficulty
+     * solver makes a deduction that can only help other high-difficulty
+     * solvers.
+     * For example: if a new 'dline' flag is set by dline_deductions, the
+     * trivial_deductions solver cannot do anything with this information.
+     * If we've already run the trivial_deductions solver (because it's
+     * earlier in the list), there's no point running it again.
+     *
+     * Therefore: if a solver is earlier in the list than "threshold_index",
+     * we don't bother running it if it's difficulty level is less than
+     * "threshold_diff".
+      solver finished  current_solver is eligible, so use it  solver made progress, so use new thresholds and
+                * start again at top of list.  current_solver is ineligible, or failed to make progress, so
+         * go to the next solver in the list  s/LINE_UNKNOWN/LINE_NO/g *error = "Solver found ambiguous solutions"; *error = "Solver failed";  ----------------------------------------------------------------------
+ * Drawing and mouse-handling
+  Convert mouse-click (x,y) to grid coordinates  I think it's only possible to play this game with mouse clicks, sorry  Maybe will add mouse drag support some time 
+                         * Special case: we might have come all the
+                         * way round a loop and found our way back to
+                         * the same edge we started from. In that
+                         * situation, we must terminate not only this
+                         * while loop, but the 'for' outside it that
+                         * was tracing in both directions from the
+                         * starting edge, because if we let it trace
+                         * in the second direction then we'll only
+                         * find ourself traversing the same loop in
+                         * the other order and generate an encoded
+                         * move string that mentions the same set of
+                         * edges twice.
+                         
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Convert from grid coordinates to screen coordinates  Returns (into x,y) position of centre of face for rendering the text clue.
+ 
+     * Return the cached position for this face, if we've already
+     * worked it out.
+     
+     * Otherwise, use the incentre computed by grid.c and convert it
+     * to screen coordinates.
+      There seems to be a certain amount of trial-and-error involved
+     * in working out the correct bounding-box for the text.  Allow extra margin for dots, and thickness of lines  Convert from grid to screen coordinates 
+     * Two intervals intersect iff neither is wholly on one side of
+     * the other. Two boxes intersect iff their horizontal and
+     * vertical intervals both intersect.
+      Somewhat arbitrary tradeoff  Redrawing is somewhat involved.
+     *
+     * An update can theoretically affect an arbitrary number of edges
+     * (consider, for example, completing or breaking a cycle which doesn't
+     * satisfy all the clues -- we'll switch many edges between error and
+     * normal states).  On the other hand, redrawing the whole grid takes a
+     * while, making the game feel sluggish, and many updates are actually
+     * quite well localized.
+     *
+     * This redraw algorithm attempts to cope with both situations gracefully
+     * and correctly.  For localized changes, we set a clip rectangle, fill
+     * it with background, and then redraw (a plausible but conservative
+     * guess at) the objects which intersect the rectangle; if several
+     * objects need redrawing, we'll do them individually.  However, if lots
+     * of objects are affected, we'll just redraw everything.
+     *
+     * The reason for all of this is that it's just not safe to do the redraw
+     * piecemeal.  If you try to draw an antialiased diagonal line over
+     * itself, you get a slightly thicker antialiased diagonal line, which
+     * looks rather ugly after a while.
+     *
+     * So, we take two passes over the grid.  The first attempts to work out
+     * what needs doing, and the second actually does it.
+     
+         * But we must still go through the upcoming loops, so that we
+         * set up stuff in ds correctly for the initial redraw.
+          First, trundle through the faces. 
+             * Special case: if the set of LINE_YES edges in the grid
+             * consists of exactly one loop and nothing else, then we
+             * switch to treating LINE_UNKNOWN the same as LINE_NO for
+             * purposes of clue checking.
+             *
+             * This is because some people like to play Loopy without
+             * using the right-click, i.e. never setting anything to
+             * LINE_NO. Without this special case, if a person playing
+             * in that style fills in what they think is a correct
+             * solution loop but in fact it has an underfilled clue,
+             * then we will display no victory flash and also no error
+             * highlight explaining why not. With this special case,
+             * we light up underfilled clues at the instant the loop
+             * is closed. (Of course, *overfilled* clues are fine
+             * either way.)
+             *
+             * (It might still be considered unfortunate that we can't
+             * warn this style of player any earlier, if they make a
+             * mistake very near the beginning which doesn't show up
+             * until they close the last edge of the loop. One other
+             * thing we _could_ do here is to treat any LINE_UNKNOWN
+             * as LINE_NO if either of its endpoints has yes-degree 2,
+             * reflecting the fact that setting that line to YES would
+             * be an obvious error. But I don't think even that could
+             * catch _all_ clue errors in a timely manner; I think
+             * there are some that won't be displayed until the loop
+             * is filled in, even so, and there's no way to avoid that
+             * with complete reliability except to switch to being a
+             * player who sets things to LINE_NO.)
+              Work out what the flash state needs to be.  Now, trundle through the edges.  Pass one is now done.  Now we do the actual drawing.  Right.  Now we roll up our sleeves. 
+     * I'll use 7mm "squares" by default.
+     
+     * Clues.
+     
+     * Lines.
+      (dx, dy) points from (x1, y1) to (x2, y2).
+             * The line is then "fattened" in a perpendicular
+             * direction to create a thin rectangle.  Draw a dotted line  Weighted average  game_request_keys  wants_statusbar  mouse_priorities 
+ * Half-hearted standalone solver. It can't output the solution to
+ * anything but a square puzzle, and it can't log the deductions
+ * it makes either. But it can solve square puzzles, and more
+ * importantly it can use its solver to grade the difficulty of
+ * any puzzle you give it.
+  verbose solver not supported here (yet)  verbose solver not supported here (yet) 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  If we supported a verbose solver, we'd set verbosity here  vim: set shiftwidth=4 tabstop=8: 

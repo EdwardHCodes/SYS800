@@ -1,0 +1,277 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIVOLUME  DMA controller  DMA request lines  embedded SD card  SD slot if present  Clipv2 Clip+ and Fuzev2 OF all occupy the same size  command flags  controller registers  control bits  power enable  clock divider  CLK_DIV_0 :    bits 7:0
+ * CLK_DIV_1 :    bits 15:8
+ * CLK_DIV_2 :    bits 23:16
+ * CLK_DIV_3 :    bits 31:24
+  clock source  CLK_SRC_CRD0:  bits 1:0
+ * CLK_SRC_CRD1:  bits 3:2
+ * CLK_SRC_CRD2:  bits 5:4
+ * CLK_SRC_CRD3:  bits 7:6
+  clock enable  LP --> Low Power Mode?  timeout  response timeout bits 0:7
+ * data timeout bits     8:31
+  card type  1 bit per card, set = wide bus  block size  bits 0:15 byte count  bits 0:31 interrupt mask  command bits (bits 5:0 are the command index)  5 bits wide   masked interrupt status  raw interrupt status, also used as
+                                         * status clear  interrupt bits  C D E   (Cmd) (Data) (End)           card detect  x         response error      x     command done      x     data transfer over           tx fifo data request           rx fifo data request  x         response crc error    x       data crc error  x         response timeout    x       data read timeout    x       data starv timeout    x       fifo over/underrun  x x        hw locked while error    x       start bit error           auto command done    x       end bit error 
+ *  STATUS register
+ *  & 0xBA80    = MCI_INT_DCRC | MCI_INT_DRTO | MCI_INT_FRUN | \
+ *                  MCI_INT_HLE | MCI_INT_SBE | MCI_INT_EBE
+ *  & 8         = MCI_INT_DTO
+ *  & 0x428     = MCI_INT_DTO | MCI_INT_RXDR | MCI_INT_HTO
+ *  & 0x418     = MCI_INT_DTO | MCI_INT_TXDR | MCI_INT_HTO
+  FIFO threshold  TX watermark :    bits 11:0
+ * RX watermark :    bits 27:16
+ * DMA MTRANS SIZE : bits 30:28
+ * bits 31, 15:12 : unused
+  card detect  write protect  transferred CIU byte count (card) transferred host/DMA to/from bytes (FIFO) card detect debounce  bits 23:0 user id  version id  hardware config  bit  0       : card type
+ * bits 5:1     : maximum card index
+ * bit  6       : BUS TYPE
+ * bits 9:7     : DATA WIDTH
+ * bits 15:10   : ADDR WIDTH
+ * bits 17:16   : DMA IF
+ * bits 20:18   : DMA WIDTH
+ * bit  21      : FIFO RAM INSIDE
+ * bit  22      : IMPL HOLD REG
+ * bit  23      : SET CLK FALSE
+ * bits 25:24   : MAX CLK DIV IDX
+ * bit  26      : AREA OPTIM
+  bus mode  bit  0       : SWR
+ * bit  1       : FB
+ * bits 6:2     : DSL
+ * bit  7       : DE
+ * bit  10:8    : PBL
+  poll demand  descriptor base address  internal DMAC status  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NIS
+ * bit  9       : AIS
+ * bits 12:10   : EB
+ * bits 16:13   : FSM
+  internal DMAC interrupt enable  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NI
+ * bit  9       : AI
+  current host descriptor address  current host buffer address  align on cache line size  for compatibility  use raw status here as we need to check some Ints that are masked  clear status  interface enable  interface enable  BOOTLOADER  send SD_APP_CMD first  Construct MCI_COMMAND  b5:0b6  b7  b8      | CMD_CHECK_CRC_BIT       unused  b9  b10 b11     | CMD_TRANSMODE_BIT       unused  b12     | CMD_SENT_AUTO_STOP_BIT  unused  b13 b14     | CMD_ABRT_CMD_BIT        unused  b15 b20:16 b21     | CMD_SEND_CLK_ONLY       unused  b22     | CMD_READ_CEATA          unused  b23     | CMD_CCS_EXPECTED        unused  b31   Handle command responses & errors   assume 24 MHz clock / 60 = 400 kHz   CLK_DIV_0 : bits 7:0   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle   CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  Make sure we have 2 unique rca numbers   End of Card Identification Mode   ***********************************  Card back to full speed   CLK_DIV_0 : bits 7:0 = 0x00  CMD9 send CSD  The OF is stored in the first blocks   Switch to to 4 bit widebus mode    CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Now that card is widebus make controller aware  ! BOOTLOADER   power off all cards    power up cards   Clear all MCI Interrupts    data b31:8, response b7:0   all cards 1 bit bus for now   Enables card clocks   default value  Rx watermark = 63(sd reads)  Tx watermark = 128 (sd writes)   RCRC & RTO interrupts should be set together with the CD interrupt but
+ *  in practice sometimes incorrectly precede the CD interrupt.  If we leave
+ *  them masked for now we can check them in the isr by reading raw status when
+ *  the CD int is triggered.
+  interface enable  clock source = PLLA  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt  HAVE_MULTIDRIVE  Configure XPD for SD-MCI interface  XXX: why is it signed ? 
+        ret = -18;
+        goto exit;
+ skip SanDisk OF  Check the real block size after the card has been initialized  'start' represents the real (physical) starting sector
+     *  so we must compare it to the real (physical) number of sectors   CMD7 w/rca: Select card to put it in TRAN state  direct transfer, indirect is always uncached  Interrupt handler might set this to true during transfer  not SDHC  wait for the card to exit programming state  According to datasheet DMA channel should be automatically disabled
+         * when transfer completes. But it not true for DMA_PERI_SD.
+         * Disable DMA channel manually to prevent problems with DMA.   reset controller if we had an error   if we have error  CMD lines are separate, not common, so we need to actively deselect   CMD7 w/rca =0 : deselects card & puts it in STBY state  BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  CONFIG_STORAGE_MULTI  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIVOLUME  DMA controller  DMA request lines  embedded SD card  SD slot if present  Clipv2 Clip+ and Fuzev2 OF all occupy the same size  command flags  controller registers  control bits  power enable  clock divider  CLK_DIV_0 :    bits 7:0
+ * CLK_DIV_1 :    bits 15:8
+ * CLK_DIV_2 :    bits 23:16
+ * CLK_DIV_3 :    bits 31:24
+  clock source  CLK_SRC_CRD0:  bits 1:0
+ * CLK_SRC_CRD1:  bits 3:2
+ * CLK_SRC_CRD2:  bits 5:4
+ * CLK_SRC_CRD3:  bits 7:6
+  clock enable  LP --> Low Power Mode?  timeout  response timeout bits 0:7
+ * data timeout bits     8:31
+  card type  1 bit per card, set = wide bus  block size  bits 0:15 byte count  bits 0:31 interrupt mask  command bits (bits 5:0 are the command index)  5 bits wide   masked interrupt status  raw interrupt status, also used as
+                                         * status clear  interrupt bits  C D E   (Cmd) (Data) (End)           card detect  x         response error      x     command done      x     data transfer over           tx fifo data request           rx fifo data request  x         response crc error    x       data crc error  x         response timeout    x       data read timeout    x       data starv timeout    x       fifo over/underrun  x x        hw locked while error    x       start bit error           auto command done    x       end bit error 
+ *  STATUS register
+ *  & 0xBA80    = MCI_INT_DCRC | MCI_INT_DRTO | MCI_INT_FRUN | \
+ *                  MCI_INT_HLE | MCI_INT_SBE | MCI_INT_EBE
+ *  & 8         = MCI_INT_DTO
+ *  & 0x428     = MCI_INT_DTO | MCI_INT_RXDR | MCI_INT_HTO
+ *  & 0x418     = MCI_INT_DTO | MCI_INT_TXDR | MCI_INT_HTO
+  FIFO threshold  TX watermark :    bits 11:0
+ * RX watermark :    bits 27:16
+ * DMA MTRANS SIZE : bits 30:28
+ * bits 31, 15:12 : unused
+  card detect  write protect  transferred CIU byte count (card) transferred host/DMA to/from bytes (FIFO) card detect debounce  bits 23:0 user id  version id  hardware config  bit  0       : card type
+ * bits 5:1     : maximum card index
+ * bit  6       : BUS TYPE
+ * bits 9:7     : DATA WIDTH
+ * bits 15:10   : ADDR WIDTH
+ * bits 17:16   : DMA IF
+ * bits 20:18   : DMA WIDTH
+ * bit  21      : FIFO RAM INSIDE
+ * bit  22      : IMPL HOLD REG
+ * bit  23      : SET CLK FALSE
+ * bits 25:24   : MAX CLK DIV IDX
+ * bit  26      : AREA OPTIM
+  bus mode  bit  0       : SWR
+ * bit  1       : FB
+ * bits 6:2     : DSL
+ * bit  7       : DE
+ * bit  10:8    : PBL
+  poll demand  descriptor base address  internal DMAC status  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NIS
+ * bit  9       : AIS
+ * bits 12:10   : EB
+ * bits 16:13   : FSM
+  internal DMAC interrupt enable  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NI
+ * bit  9       : AI
+  current host descriptor address  current host buffer address  align on cache line size  for compatibility  use raw status here as we need to check some Ints that are masked  clear status  interface enable  interface enable  BOOTLOADER  send SD_APP_CMD first  Construct MCI_COMMAND  b5:0b6  b7  b8      | CMD_CHECK_CRC_BIT       unused  b9  b10 b11     | CMD_TRANSMODE_BIT       unused  b12     | CMD_SENT_AUTO_STOP_BIT  unused  b13 b14     | CMD_ABRT_CMD_BIT        unused  b15 b20:16 b21     | CMD_SEND_CLK_ONLY       unused  b22     | CMD_READ_CEATA          unused  b23     | CMD_CCS_EXPECTED        unused  b31   Handle command responses & errors   assume 24 MHz clock / 60 = 400 kHz   CLK_DIV_0 : bits 7:0   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle   CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  Make sure we have 2 unique rca numbers   End of Card Identification Mode   ***********************************  Card back to full speed   CLK_DIV_0 : bits 7:0 = 0x00  CMD9 send CSD  The OF is stored in the first blocks   Switch to to 4 bit widebus mode    CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Now that card is widebus make controller aware  ! BOOTLOADER   power off all cards    power up cards   Clear all MCI Interrupts    data b31:8, response b7:0   all cards 1 bit bus for now   Enables card clocks   default value  Rx watermark = 63(sd reads)  Tx watermark = 128 (sd writes)   RCRC & RTO interrupts should be set together with the CD interrupt but
+ *  in practice sometimes incorrectly precede the CD interrupt.  If we leave
+ *  them masked for now we can check them in the isr by reading raw status when
+ *  the CD int is triggered.
+  interface enable  clock source = PLLA  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt  HAVE_MULTIDRIVE  Configure XPD for SD-MCI interface  XXX: why is it signed ? 
+        ret = -18;
+        goto exit;
+ skip SanDisk OF  Check the real block size after the card has been initialized  'start' represents the real (physical) starting sector
+     *  so we must compare it to the real (physical) number of sectors   CMD7 w/rca: Select card to put it in TRAN state  direct transfer, indirect is always uncached  Interrupt handler might set this to true during transfer  not SDHC  wait for the card to exit programming state  According to datasheet DMA channel should be automatically disabled
+         * when transfer completes. But it not true for DMA_PERI_SD.
+         * Disable DMA channel manually to prevent problems with DMA.   reset controller if we had an error   if we have error  CMD lines are separate, not common, so we need to actively deselect   CMD7 w/rca =0 : deselects card & puts it in STBY state  BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  CONFIG_STORAGE_MULTI  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIVOLUME  DMA controller  DMA request lines  embedded SD card  SD slot if present  Clipv2 Clip+ and Fuzev2 OF all occupy the same size  command flags  controller registers  control bits  power enable  clock divider  CLK_DIV_0 :    bits 7:0
+ * CLK_DIV_1 :    bits 15:8
+ * CLK_DIV_2 :    bits 23:16
+ * CLK_DIV_3 :    bits 31:24
+  clock source  CLK_SRC_CRD0:  bits 1:0
+ * CLK_SRC_CRD1:  bits 3:2
+ * CLK_SRC_CRD2:  bits 5:4
+ * CLK_SRC_CRD3:  bits 7:6
+  clock enable  LP --> Low Power Mode?  timeout  response timeout bits 0:7
+ * data timeout bits     8:31
+  card type  1 bit per card, set = wide bus  block size  bits 0:15 byte count  bits 0:31 interrupt mask  command bits (bits 5:0 are the command index)  5 bits wide   masked interrupt status  raw interrupt status, also used as
+                                         * status clear  interrupt bits  C D E   (Cmd) (Data) (End)           card detect  x         response error      x     command done      x     data transfer over           tx fifo data request           rx fifo data request  x         response crc error    x       data crc error  x         response timeout    x       data read timeout    x       data starv timeout    x       fifo over/underrun  x x        hw locked while error    x       start bit error           auto command done    x       end bit error 
+ *  STATUS register
+ *  & 0xBA80    = MCI_INT_DCRC | MCI_INT_DRTO | MCI_INT_FRUN | \
+ *                  MCI_INT_HLE | MCI_INT_SBE | MCI_INT_EBE
+ *  & 8         = MCI_INT_DTO
+ *  & 0x428     = MCI_INT_DTO | MCI_INT_RXDR | MCI_INT_HTO
+ *  & 0x418     = MCI_INT_DTO | MCI_INT_TXDR | MCI_INT_HTO
+  FIFO threshold  TX watermark :    bits 11:0
+ * RX watermark :    bits 27:16
+ * DMA MTRANS SIZE : bits 30:28
+ * bits 31, 15:12 : unused
+  card detect  write protect  transferred CIU byte count (card) transferred host/DMA to/from bytes (FIFO) card detect debounce  bits 23:0 user id  version id  hardware config  bit  0       : card type
+ * bits 5:1     : maximum card index
+ * bit  6       : BUS TYPE
+ * bits 9:7     : DATA WIDTH
+ * bits 15:10   : ADDR WIDTH
+ * bits 17:16   : DMA IF
+ * bits 20:18   : DMA WIDTH
+ * bit  21      : FIFO RAM INSIDE
+ * bit  22      : IMPL HOLD REG
+ * bit  23      : SET CLK FALSE
+ * bits 25:24   : MAX CLK DIV IDX
+ * bit  26      : AREA OPTIM
+  bus mode  bit  0       : SWR
+ * bit  1       : FB
+ * bits 6:2     : DSL
+ * bit  7       : DE
+ * bit  10:8    : PBL
+  poll demand  descriptor base address  internal DMAC status  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NIS
+ * bit  9       : AIS
+ * bits 12:10   : EB
+ * bits 16:13   : FSM
+  internal DMAC interrupt enable  bit  0       : TI
+ * bit  1       : RI
+ * bit  2       : FBE
+ * bit  3       : unused
+ * bit  4       : DU
+ * bit  5       : CES
+ * bits 7:6     : unused
+ * bits 8       : NI
+ * bit  9       : AI
+  current host descriptor address  current host buffer address  align on cache line size  for compatibility  use raw status here as we need to check some Ints that are masked  clear status  interface enable  interface enable  BOOTLOADER  send SD_APP_CMD first  Construct MCI_COMMAND  b5:0b6  b7  b8      | CMD_CHECK_CRC_BIT       unused  b9  b10 b11     | CMD_TRANSMODE_BIT       unused  b12     | CMD_SENT_AUTO_STOP_BIT  unused  b13 b14     | CMD_ABRT_CMD_BIT        unused  b15 b20:16 b21     | CMD_SEND_CLK_ONLY       unused  b22     | CMD_READ_CEATA          unused  b23     | CMD_CCS_EXPECTED        unused  b31   Handle command responses & errors   assume 24 MHz clock / 60 = 400 kHz   CLK_DIV_0 : bits 7:0   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle   CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  Make sure we have 2 unique rca numbers   End of Card Identification Mode   ***********************************  Card back to full speed   CLK_DIV_0 : bits 7:0 = 0x00  CMD9 send CSD  The OF is stored in the first blocks   Switch to to 4 bit widebus mode    CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Now that card is widebus make controller aware  ! BOOTLOADER   power off all cards    power up cards   Clear all MCI Interrupts    data b31:8, response b7:0   all cards 1 bit bus for now   Enables card clocks   default value  Rx watermark = 63(sd reads)  Tx watermark = 128 (sd writes)   RCRC & RTO interrupts should be set together with the CD interrupt but
+ *  in practice sometimes incorrectly precede the CD interrupt.  If we leave
+ *  them masked for now we can check them in the isr by reading raw status when
+ *  the CD int is triggered.
+  interface enable  clock source = PLLA  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt  HAVE_MULTIDRIVE  Configure XPD for SD-MCI interface  XXX: why is it signed ? 
+        ret = -18;
+        goto exit;
+ skip SanDisk OF  Check the real block size after the card has been initialized  'start' represents the real (physical) starting sector
+     *  so we must compare it to the real (physical) number of sectors   CMD7 w/rca: Select card to put it in TRAN state  direct transfer, indirect is always uncached  Interrupt handler might set this to true during transfer  not SDHC  wait for the card to exit programming state  According to datasheet DMA channel should be automatically disabled
+         * when transfer completes. But it not true for DMA_PERI_SD.
+         * Disable DMA channel manually to prevent problems with DMA.   reset controller if we had an error   if we have error  CMD lines are separate, not common, so we need to actively deselect   CMD7 w/rca =0 : deselects card & puts it in STBY state  BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  CONFIG_STORAGE_MULTI  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP 

@@ -1,0 +1,484 @@
+ process.c - Interpreter loop and program control
+ *	Copyright (c) 1995-1997 Stefan Jokisch
+ *
+ * This file is part of Frotz.
+ *
+ * Frotz is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Frotz is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ 
+ * init_process
+ *
+ * Initialize process variables.
+ *
+  init_process 
+ * load_operand
+ *
+ * Load an operand, either a variable or a constant.
+ *
+  variable  small constant  large constant  load_operand 
+ * load_all_operands
+ *
+ * Given the operand specifier byte, load all (up to four) operands
+ * for a VAR or EXT opcode.
+ *
+  load_all_operands 
+ * interpret
+ *
+ * Z-code interpreter main loop
+ *
+  2OP opcodes  1OP opcodes  0OP opcodes  VAR opcodes  opcodes 0xec  and 0xfa are  call opcodes  with up to 8  arguments     interpret 
+ * call
+ *
+ * Call a subroutine. Save PC and FP then load new PC and initialise
+ * new stack frame. Note that the caller may legally provide less or
+ * more arguments than the function actually has. The call type "ct"
+ * can be 0 (z_call_s), 1 (z_call_n) or 2 (direct call).
+ *
+  Calculate byte address of routine  h_version == V8  Initialise local variables  Save local var count for Quetzal.  V1 to V4 games provide default  values for all local variables  Start main loop for direct calls  call 
+ * ret
+ *
+ * Return from the current subroutine and restore the previous stack
+ * frame. The result may be stored (0), thrown away (1) or pushed on
+ * the stack (2). In the latter case a direct call has been finished
+ * and we must exit the interpreter loop.
+ *
+  Handle resulting value  Stop main loop for direct calls  ret 
+ * branch
+ *
+ * Take a jump after an instruction based on the flag, either true or
+ * false. The branch can be short or long; it is encoded in one or two
+ * bytes respectively. When bit 7 of the first byte is set, the jump
+ * takes place if the flag is true; otherwise it is taken if the flag
+ * is false. When bit 6 of the first byte is set, the branch is short;
+ * otherwise it is long. The offset occupies the bottom 6 bits of the
+ * first byte plus all the bits in the second byte for long branches.
+ * Uniquely, an offset of 0 means return false, and an offset of 1 is
+ * return true.
+ *
+  it's a long branch  propagate sign bit  it's a short branch  normal branch  special case, return 0 or 1  branch 
+ * store
+ *
+ * Store an operand, either as a variable or pushed on the stack.
+ *
+  store 
+ * direct_call
+ *
+ * Call the interpreter loop directly. This is necessary when
+ *
+ * - a sound effect has been finished
+ * - a read instruction has timed out
+ * - a newline countdown has hit zero
+ *
+ * The interpreter returns the result value on the stack.
+ *
+  Calls to address 0 return false  Save operands and operand count  Call routine directly  Restore operands and operand count  Resulting value lies on top of the stack  direct_call 
+ * __extended__
+ *
+ * Load and execute an extended opcode.
+ *
+  extended opcodes from 0x1d on  are reserved for future spec'  __extended__ 
+ * __illegal__
+ *
+ * Exit game because an unknown opcode has been hit.
+ *
+  __illegal__ 
+ * z_catch, store the current stack frame for later use with z_throw.
+ *
+ *	no zargs used
+ *
+  z_catch 
+ * z_throw, go back to the given stack frame and return the given value.
+ *
+ *	zargs[0] = value to return
+ *	zargs[1] = stack frame
+ *
+  Unwind the stack a frame at a time.  z_throw 
+ * z_call_n, call a subroutine and discard its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_n 
+ * z_call_s, call a subroutine and store its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_s 
+ * z_check_arg_count, branch if subroutine was called with >= n arg's.
+ *
+ * 	zargs[0] = number of arguments
+ *
+  z_check_arg_count 
+ * z_jump, jump unconditionally to the given address.
+ *
+ *	zargs[0] = PC relative address
+ *
+  z_jump 
+ * z_nop, no operation.
+ *
+ *	no zargs used
+ *
+  Do nothing  z_nop 
+ * z_quit, stop game and exit interpreter.
+ *
+ *	no zargs used
+ *
+  z_quit 
+ * z_ret, return from a subroutine with the given value.
+ *
+ *	zargs[0] = value to return
+ *
+  z_ret 
+ * z_ret_popped, return from a subroutine with a value popped off the stack.
+ *
+ *	no zargs used
+ *
+  z_ret_popped 
+ * z_rfalse, return from a subroutine with false (0).
+ *
+ * 	no zargs used
+ *
+  z_rfalse 
+ * z_rtrue, return from a subroutine with true (1).
+ *
+ * 	no zargs used
+ *
+  z_rtrue  process.c - Interpreter loop and program control
+ *	Copyright (c) 1995-1997 Stefan Jokisch
+ *
+ * This file is part of Frotz.
+ *
+ * Frotz is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Frotz is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ 
+ * init_process
+ *
+ * Initialize process variables.
+ *
+  init_process 
+ * load_operand
+ *
+ * Load an operand, either a variable or a constant.
+ *
+  variable  small constant  large constant  load_operand 
+ * load_all_operands
+ *
+ * Given the operand specifier byte, load all (up to four) operands
+ * for a VAR or EXT opcode.
+ *
+  load_all_operands 
+ * interpret
+ *
+ * Z-code interpreter main loop
+ *
+  2OP opcodes  1OP opcodes  0OP opcodes  VAR opcodes  opcodes 0xec  and 0xfa are  call opcodes  with up to 8  arguments     interpret 
+ * call
+ *
+ * Call a subroutine. Save PC and FP then load new PC and initialise
+ * new stack frame. Note that the caller may legally provide less or
+ * more arguments than the function actually has. The call type "ct"
+ * can be 0 (z_call_s), 1 (z_call_n) or 2 (direct call).
+ *
+  Calculate byte address of routine  h_version == V8  Initialise local variables  Save local var count for Quetzal.  V1 to V4 games provide default  values for all local variables  Start main loop for direct calls  call 
+ * ret
+ *
+ * Return from the current subroutine and restore the previous stack
+ * frame. The result may be stored (0), thrown away (1) or pushed on
+ * the stack (2). In the latter case a direct call has been finished
+ * and we must exit the interpreter loop.
+ *
+  Handle resulting value  Stop main loop for direct calls  ret 
+ * branch
+ *
+ * Take a jump after an instruction based on the flag, either true or
+ * false. The branch can be short or long; it is encoded in one or two
+ * bytes respectively. When bit 7 of the first byte is set, the jump
+ * takes place if the flag is true; otherwise it is taken if the flag
+ * is false. When bit 6 of the first byte is set, the branch is short;
+ * otherwise it is long. The offset occupies the bottom 6 bits of the
+ * first byte plus all the bits in the second byte for long branches.
+ * Uniquely, an offset of 0 means return false, and an offset of 1 is
+ * return true.
+ *
+  it's a long branch  propagate sign bit  it's a short branch  normal branch  special case, return 0 or 1  branch 
+ * store
+ *
+ * Store an operand, either as a variable or pushed on the stack.
+ *
+  store 
+ * direct_call
+ *
+ * Call the interpreter loop directly. This is necessary when
+ *
+ * - a sound effect has been finished
+ * - a read instruction has timed out
+ * - a newline countdown has hit zero
+ *
+ * The interpreter returns the result value on the stack.
+ *
+  Calls to address 0 return false  Save operands and operand count  Call routine directly  Restore operands and operand count  Resulting value lies on top of the stack  direct_call 
+ * __extended__
+ *
+ * Load and execute an extended opcode.
+ *
+  extended opcodes from 0x1d on  are reserved for future spec'  __extended__ 
+ * __illegal__
+ *
+ * Exit game because an unknown opcode has been hit.
+ *
+  __illegal__ 
+ * z_catch, store the current stack frame for later use with z_throw.
+ *
+ *	no zargs used
+ *
+  z_catch 
+ * z_throw, go back to the given stack frame and return the given value.
+ *
+ *	zargs[0] = value to return
+ *	zargs[1] = stack frame
+ *
+  Unwind the stack a frame at a time.  z_throw 
+ * z_call_n, call a subroutine and discard its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_n 
+ * z_call_s, call a subroutine and store its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_s 
+ * z_check_arg_count, branch if subroutine was called with >= n arg's.
+ *
+ * 	zargs[0] = number of arguments
+ *
+  z_check_arg_count 
+ * z_jump, jump unconditionally to the given address.
+ *
+ *	zargs[0] = PC relative address
+ *
+  z_jump 
+ * z_nop, no operation.
+ *
+ *	no zargs used
+ *
+  Do nothing  z_nop 
+ * z_quit, stop game and exit interpreter.
+ *
+ *	no zargs used
+ *
+  z_quit 
+ * z_ret, return from a subroutine with the given value.
+ *
+ *	zargs[0] = value to return
+ *
+  z_ret 
+ * z_ret_popped, return from a subroutine with a value popped off the stack.
+ *
+ *	no zargs used
+ *
+  z_ret_popped 
+ * z_rfalse, return from a subroutine with false (0).
+ *
+ * 	no zargs used
+ *
+  z_rfalse 
+ * z_rtrue, return from a subroutine with true (1).
+ *
+ * 	no zargs used
+ *
+  z_rtrue  process.c - Interpreter loop and program control
+ *	Copyright (c) 1995-1997 Stefan Jokisch
+ *
+ * This file is part of Frotz.
+ *
+ * Frotz is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Frotz is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ 
+ * init_process
+ *
+ * Initialize process variables.
+ *
+  init_process 
+ * load_operand
+ *
+ * Load an operand, either a variable or a constant.
+ *
+  variable  small constant  large constant  load_operand 
+ * load_all_operands
+ *
+ * Given the operand specifier byte, load all (up to four) operands
+ * for a VAR or EXT opcode.
+ *
+  load_all_operands 
+ * interpret
+ *
+ * Z-code interpreter main loop
+ *
+  2OP opcodes  1OP opcodes  0OP opcodes  VAR opcodes  opcodes 0xec  and 0xfa are  call opcodes  with up to 8  arguments     interpret 
+ * call
+ *
+ * Call a subroutine. Save PC and FP then load new PC and initialise
+ * new stack frame. Note that the caller may legally provide less or
+ * more arguments than the function actually has. The call type "ct"
+ * can be 0 (z_call_s), 1 (z_call_n) or 2 (direct call).
+ *
+  Calculate byte address of routine  h_version == V8  Initialise local variables  Save local var count for Quetzal.  V1 to V4 games provide default  values for all local variables  Start main loop for direct calls  call 
+ * ret
+ *
+ * Return from the current subroutine and restore the previous stack
+ * frame. The result may be stored (0), thrown away (1) or pushed on
+ * the stack (2). In the latter case a direct call has been finished
+ * and we must exit the interpreter loop.
+ *
+  Handle resulting value  Stop main loop for direct calls  ret 
+ * branch
+ *
+ * Take a jump after an instruction based on the flag, either true or
+ * false. The branch can be short or long; it is encoded in one or two
+ * bytes respectively. When bit 7 of the first byte is set, the jump
+ * takes place if the flag is true; otherwise it is taken if the flag
+ * is false. When bit 6 of the first byte is set, the branch is short;
+ * otherwise it is long. The offset occupies the bottom 6 bits of the
+ * first byte plus all the bits in the second byte for long branches.
+ * Uniquely, an offset of 0 means return false, and an offset of 1 is
+ * return true.
+ *
+  it's a long branch  propagate sign bit  it's a short branch  normal branch  special case, return 0 or 1  branch 
+ * store
+ *
+ * Store an operand, either as a variable or pushed on the stack.
+ *
+  store 
+ * direct_call
+ *
+ * Call the interpreter loop directly. This is necessary when
+ *
+ * - a sound effect has been finished
+ * - a read instruction has timed out
+ * - a newline countdown has hit zero
+ *
+ * The interpreter returns the result value on the stack.
+ *
+  Calls to address 0 return false  Save operands and operand count  Call routine directly  Restore operands and operand count  Resulting value lies on top of the stack  direct_call 
+ * __extended__
+ *
+ * Load and execute an extended opcode.
+ *
+  extended opcodes from 0x1d on  are reserved for future spec'  __extended__ 
+ * __illegal__
+ *
+ * Exit game because an unknown opcode has been hit.
+ *
+  __illegal__ 
+ * z_catch, store the current stack frame for later use with z_throw.
+ *
+ *	no zargs used
+ *
+  z_catch 
+ * z_throw, go back to the given stack frame and return the given value.
+ *
+ *	zargs[0] = value to return
+ *	zargs[1] = stack frame
+ *
+  Unwind the stack a frame at a time.  z_throw 
+ * z_call_n, call a subroutine and discard its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_n 
+ * z_call_s, call a subroutine and store its result.
+ *
+ * 	zargs[0] = packed address of subroutine
+ *	zargs[1] = first argument (optional)
+ *	...
+ *	zargs[7] = seventh argument (optional)
+ *
+  z_call_s 
+ * z_check_arg_count, branch if subroutine was called with >= n arg's.
+ *
+ * 	zargs[0] = number of arguments
+ *
+  z_check_arg_count 
+ * z_jump, jump unconditionally to the given address.
+ *
+ *	zargs[0] = PC relative address
+ *
+  z_jump 
+ * z_nop, no operation.
+ *
+ *	no zargs used
+ *
+  Do nothing  z_nop 
+ * z_quit, stop game and exit interpreter.
+ *
+ *	no zargs used
+ *
+  z_quit 
+ * z_ret, return from a subroutine with the given value.
+ *
+ *	zargs[0] = value to return
+ *
+  z_ret 
+ * z_ret_popped, return from a subroutine with a value popped off the stack.
+ *
+ *	no zargs used
+ *
+  z_ret_popped 
+ * z_rfalse, return from a subroutine with false (0).
+ *
+ * 	no zargs used
+ *
+  z_rfalse 
+ * z_rtrue, return from a subroutine with true (1).
+ *
+ * 	no zargs used
+ *
+  z_rtrue 

@@ -1,0 +1,328 @@
+ Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Enemy thinking, AI.
+ *      Action Pointer Functions
+ *      that are associated with states/frames.
+ *
+ *----------------------------------------------------------------------------- phares ENEMY THINKING Enemies are allways spawned with targetplayer = -1, threshold = 0 Most monsters are spawned unaware of all players, but some can be made preaware Called by P_NoiseAlert. Recursively traverse adjacent sectors, sound blocking lines cut off traversal. killough 5/5/98: reformatted, cleaned up wake up all monsters in this sector already flooded closed door P_NoiseAlert If a monster yells at a player, it will alert other monsters to the player. P_CheckMeleeRange killough 7/18/98: friendly monsters don't attack other friends P_HitFriend() killough 12/98 This function tries to prevent shooting at friends P_CheckMissileRange the target just hit the enemy, so fight back! killough 7/18/98: no friendly fire at corpses
+       * killough 11/98: prevent too much infighting among friends
+       * cph - yikes, talk about fitting everything on one line...  killough 7/18/98: friendly monsters don't attack other friendly
+    * monsters or players (except when attacked, and then only once)
+     do not attack yet OPTIMIZE: get this from a global checksight no melee attack, so fire more too far away close for fist attack
+ * P_IsOnLift
+ *
+ * killough 9/9/98:
+ *
+ * Returns true if the object is on a lift. Used for AI,
+ * since it may indicate the need for crowded conditions,
+ * or that a monster should stay on the lift for a while
+ * while it goes up or down.
+  Short-circuit: it's on a lift which is active. Check to see if it's in a sector which can be activated as a lift.
+ * P_IsUnderDamage
+ *
+ * killough 9/9/98:
+ *
+ * Returns nonzero if the object is under damage based on
+ * their current position. Returns 1 if the damage is moderate,
+ * -1 if it is serious. Used for AI.
+  Crushing ceiling P_Move Move in the current direction, returns false if the move is blocked. 1/11/98 killough: Limit removed on special lines crossed New code -- killough killough 9/12/98  killough 10/98 killough 10/98: make monsters get affected by ice and sludge too: sludge always give the monster a little bit of speed killough 10/98: Let normal momentum carry them, instead of steptoeing them across ice. open any specials must adjust height if the special is not a door that can be opened, return false
+       *
+       * killough 8/9/98: this is what caused monsters to get stuck in
+       * doortracks, because it thought that the monster freed itself
+       * by opening a door, even if it was moving towards the doortrack,
+       * and not the door itself.
+       *
+       * killough 9/9/98: If a line blocking the monster is activated,
+       * return true 90% of the time. If a line blocking the monster is
+       * not activated, but some other line is, return false 90% of the
+       * time. A bit of randomness is needed to ensure it's free from
+       * lockups, but for most cases, it returns the correct result.
+       *
+       * Do NOT simply return false 1/4th of the time (causes monsters to
+       * back out when they shouldn't, and creates secondary stickiness).
+        cph - compatibility maze here
+       * Boom v2.01 and orig. Doom return "good"
+       * Boom v2.02 and LxDoom return good && (P_Random(pr_trywalk)&3)
+       * MBF plays even more games
+        jff 8/13/98  finally, MBF code  killough 11/98: fall more slowly, under gravity, if felldown==true 
+ * P_SmartMove
+ *
+ * killough 9/12/98: Same as P_Move, except smarter
+  killough 9/12/98: Stay on a lift if target is on one  killough 10/98: allow dogs to drop off of taller ledges sometimes. dropoff==1 means always allow it, dropoff==2 means only up to 128 high, and only if the target is immediately on the other side of the line. killough 9/9/98: avoid crushing ceilings or other damaging areas Stay on lift Get away from damage avoid the area (most of the time anyway) TryWalk Attempts to move actor on in its current (ob->moveangle) direction. If blocked by either a wall or an actor returns FALSE If move is either clear or blocked only by a door, returns TRUE and sets... If a door is in the way, an OpenDoor call is made to start it opening. P_DoNewChaseDir killough 9/8/98: Most of P_NewChaseDir(), except for what determines the new direction to take find reverse direction try direct route try other directions either moved forward or attacked there is no direct path to the player, so pick another direction. randomly determine direction of search killough 11/98: Monsters try to move away from tall dropoffs. In Doom, they were never allowed to hang over dropoffs, and would remain stuck if involuntarily forced over one. This logic, combined with p_map.c (P_TryMove), allows monsters to free themselves without making them tend to hang over dropoffs. Ignore one-sided linedefs Linedef must be contacted The monster must contact one of the two floors, and the other must be a tall dropoff (more than 24). front side dropoff back side dropoff Move away from dropoff at a standard speed. Multiple contacted linedefs are cumulative (e.g. hanging over corner) Driver for above remember floor height check lines all contacted lines Non-zero if movement prescribed P_NewChaseDir killough 9/8/98: Split into two functions killough 8/8/98: sometimes move away from target, keeping distance 1) Stay a certain distance away from a friend, to avoid being in their way 2) Take advantage over an enemy without missiles, by keeping distance Move away from dropoff  If moving away from dropoff, set movecount to 1 so that small steps are taken to get monster away from dropoff. Move away from friends when too close, except in certain situations (e.g. a crowded lift) Live enemy target Back away from melee attacker If strafing, set movecount to strafecount so that old Doom logic still works the same, except in the strafing part P_IsVisible killough 9/9/98: whether a target is visible to a monster PIT_FindTarget killough 9/5/98 Finds monster targets for other monsters Invalid target If the monster is already engaged in a one-on-one attack with a healthy friend, don't attack around 60% the time Remember previous target Found target Move the selected monster to the end of its associated list, so that it gets searched last next time. P_LookForPlayers If allaround is false, only look 180 degrees in front. Returns true if a player is targeted. killough 9/9/98: friendly monsters go about players differently If you want friendly monsters not to awaken unprovoked Go back to a player, no matter whether it's visible or not killough 12/98: get out of refiring loop, to avoid hitting player accidentally Change mask of 3 to (MAXPLAYERS-1) -- killough 2/15/98: killough 9/9/98 killough 2/15/98, 9/9/98: done looking dead killough 9/9/98: give monsters a threshold towards getting players
+       * (we don't want it to be too easy for a player with dogs :)
+        Friendly monsters, by Lee Killough 7/18/98 Friendly monsters go after other monsters first, but also return to owner if they cannot find any targets. A marine's best friend :)  killough 7/18/98, 9/98 not friends Old demos do not support monster-seeking bots  Search the threaded list corresponding to this object's potential targets Search for new enemy Empty list? bail out early Search first in the immediate vicinity. Random number of monsters, to prevent patterns from forming Only a subset of the monsters were searched. Move all of the ones which were searched so far, to the end of the list. If target sighted No monster found P_LookForTargets killough 9/5/98: look for targets to go after, depending on kind of monster P_HelpFriend killough 9/8/98: Help friends in danger of dying If less than 33% health, self-preservation rules Possibly help a friend under 50% health Ignore any attacking monsters, while searching for friend A_KeenDie DOOM II special, map 32. Uses special tag 666. scan the remaining thinkers to see if all Keens are dead other Keen not dead ACTION ROUTINES A_Look Stay in state until a player is sighted. any shot will wake up killough 7/18/98:
+    * Friendly monsters go after other monsters first, but
+    * also return to player, without attacking them, if they
+    * cannot find any targets. A marine's best friend :)
+     go into chase state full volume A_KeepChasing killough 10/98: Allows monsters to continue movement while attacking A_Chase Actor has a melee attack, so it tries to close as fast as possible modify target threshold  turn towards movement direction if not there yet
+    * killough 9/7/98: keep facing towards target if strafing or backing out
+     look for a new target no new target do not attack twice in a row check for melee attack killough 8/98: remember an attack
+      * cph - DEMOSYNC?  check for missile attack killough 9/9/98: for backward demo compatibility  killough 7/18/98, 9/9/98: new monster AI  killough 9/8/98: Help friends in need  Look for new targets if current one is bad or is out of view  Our pursuit time has expired. We're going to think about
+          * changing targets  Unless (we have a live target
+          *         and it's not friendly
+          *         and we can see it)
+          *  try to find a new one; return if sucessful  (Current target was good, or no new target was found.)
+          *
+          * If monster is a missile-less friend, give up pursuit and
+          * return to player, if no attacks have occurred recently.
+           if recent action,  keep fighting  else return to player  chase towards player make active sound A_FaceTarget killough 5/5/98: remove dependence on order of evaluation: A_PosAttack killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously  keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously launch a missile A_TroopAttack launch a missile launch a missile launch a missile A_SkelMissile so missile spawns higher back to normal killough 1/18/98: this is why some missiles do not have smoke
+    * and some do. Also, internal demos start at random gametics, thus
+    * the bug in which revenants cause internal demos to go out of sync.
+    *
+    * killough 3/6/98: fix revenant internal demo bug by subtracting
+    * levelstarttic from gametic.
+    *
+    * killough 9/29/98: use new "basetic" so that demos stay in sync
+    * during pauses and menu activations, while retaining old demo sync.
+    *
+    * leveltime would have been better to use to start with in Doom, but
+    * since old demos were recorded using gametic, we must stick with it,
+    * and improvise around it (using leveltime causes desync across levels).
+     spawn a puff of smoke behind the rocket adjust direction change angle change slope PIT_VileCheck Detect a corpse that could be raised. not a monster not lying still yet monster doesn't have a raise state not actually touching Check to see if the radius and height are zero. If they are      // phares then this is a crushed monster that has been turned into a       //   | gib. One of the options may be to ignore this guy.               //   V Option 1: the original, buggy method, -> ghost (compatibility) Option 2: ressurect the monster, but not as a ghost Option 3: ignore the gib    if (Option3)                                                  //   ^        if ((thing->height == 0) && (thing->radius == 0))         //   |            return true;                                          // phares phares   |   V save temporarily save temporarily restore restore                      //   ^   | phares doesn't fit here got one, so stop checking A_VileChase Check for ressurecting a body check for corpses to raise Call PIT_VileCheck to check whether object is a corpse that canbe raised. got one! phares   |   V fix Ghost bug fix Ghost bug phares killough 7/18/98:
+                * friendliness is transferred from AV to raised corpse
+                 killough 11/98 kilough 9/9/98  killough 8/29/98: add to appropriate thread  Return to normal attack. A_VileStart A_Fire Keep fire in front of player unless out of sight don't move it if the vile lost sight A_VileTarget Spawn the hellfire killough 12/98: fix Vile fog coordinates // CPhipps - compatibility optioned A_VileAttack move the fire between the vile and the player Mancubus attack, firing three missiles (bruisers) in three different directions? Doesn't look like it. Change direction  to ... Now here choose opposite deviation. SkullAttack Fly at the player like a missile. A_PainShootSkull Spawn a lost soul and launch it at the target The original code checked for 20 skulls on the level,            // phares and wouldn't spit another one if there were. If not in           // phares compatibility mode, we remove the limit.                         // phares phares killough 10/98: compatibility-optioned  count total number of skulls currently on the level phares phares okay, there's room for another one killough 10/98: compatibility-optioned  phares   V Check whether the Lost Soul is being fired through a 1-sided wall or an impassible line, or a "monsters can't cross" line. If it is, then we don't allow the spawn. This is a bug fix, but it should be considered an enhancement, since it may disturb existing demos, so don't do it in compatibility mode. Check to see if the new Lost Soul's z value is above the ceiling of its new sector, or below the floor. If so, kill it. kill it immediately   ^   | phares killough 7/20/98: PEs shoot lost souls with the same friendliness  killough 8/29/98: add to appropriate thread  Check for movements. killough 3/15/98: don't jump over dropoffs: kill it immediately A_PainAttack Spawn a lost soul and launch it at the target Check for bosses. full volume actor is on ground, it can be walked over A_Explode A_BossDeath Possibly trigger special effects if on first boss level make sure there is a player alive for victory no one left alive, so do not end game scan the remaining thinkers to see if all bosses are dead other boss not dead victory! killough 2/7/98: Remove limit on icon landings: killough 3/26/98: global state of boss brain killough 3/26/98: initialize icon landings at level startup, rather than at boss wakeup, to prevent savegame-related crashes killough 3/26/98: renamed old function find all the target spots killough 3/26/98: always init easy to 0 killough 2/7/98: remove limit on icon landings: killough 3/26/98: only generates sound now killough 5/5/98: remove dependence on order of evaluation: killough 4/1/98: ignore if no targets killough 3/26/98: use brain struct shoot a cube at current target killough 3/26/98: Use brain struct for targets spawn brain missile killough 7/18/98: brain friendliness is transferred killough 8/29/98: add to appropriate thread travelling cube sound still flying First spawn teleport fog. Randomly select monster to spawn. Probability distribution (kind of :), decreasing likelihood. killough 7/18/98: brain friendliness is transferred  killough 8/29/98: add to appropriate thread  killough 9/4/98  telefrag anything in this spot killough 8/9/98  remove self (i.e., cube). Default death sound. IF THE PLAYER DIES LESS THAN -50% WITHOUT GIBBING cph - MBF-added codepointer functions  killough 11/98: kill an object A_Detonate killough 8/9/98: same as A_Explode, except that the damage is variable killough 9/98: a mushroom explosion effect, sorta :) Original idea: Linguica First make normal explosion Now launch mushroom cloud Aim in many directions from source Aim up fairly high Launch fireball Slow it down a bit Make debris fall under gravity killough 11/98 The following were inspired by Len Pitre A small set of highly-sought-after code pointers mobj_t *newmobj =  CPhipps - no friendlyness (yet)
+      newmobj->flags = (newmobj->flags & ~MF_FRIEND) | (mo->flags & MF_FRIEND);
+       This allows linedef effects to be activated inside deh frames.**** Start of new functions for Andy Baker's stealth monsters ***** already invisible**** End of new functions for Andy Baker's stealth monsters ***** Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Enemy thinking, AI.
+ *      Action Pointer Functions
+ *      that are associated with states/frames.
+ *
+ *----------------------------------------------------------------------------- phares ENEMY THINKING Enemies are allways spawned with targetplayer = -1, threshold = 0 Most monsters are spawned unaware of all players, but some can be made preaware Called by P_NoiseAlert. Recursively traverse adjacent sectors, sound blocking lines cut off traversal. killough 5/5/98: reformatted, cleaned up wake up all monsters in this sector already flooded closed door P_NoiseAlert If a monster yells at a player, it will alert other monsters to the player. P_CheckMeleeRange killough 7/18/98: friendly monsters don't attack other friends P_HitFriend() killough 12/98 This function tries to prevent shooting at friends P_CheckMissileRange the target just hit the enemy, so fight back! killough 7/18/98: no friendly fire at corpses
+       * killough 11/98: prevent too much infighting among friends
+       * cph - yikes, talk about fitting everything on one line...  killough 7/18/98: friendly monsters don't attack other friendly
+    * monsters or players (except when attacked, and then only once)
+     do not attack yet OPTIMIZE: get this from a global checksight no melee attack, so fire more too far away close for fist attack
+ * P_IsOnLift
+ *
+ * killough 9/9/98:
+ *
+ * Returns true if the object is on a lift. Used for AI,
+ * since it may indicate the need for crowded conditions,
+ * or that a monster should stay on the lift for a while
+ * while it goes up or down.
+  Short-circuit: it's on a lift which is active. Check to see if it's in a sector which can be activated as a lift.
+ * P_IsUnderDamage
+ *
+ * killough 9/9/98:
+ *
+ * Returns nonzero if the object is under damage based on
+ * their current position. Returns 1 if the damage is moderate,
+ * -1 if it is serious. Used for AI.
+  Crushing ceiling P_Move Move in the current direction, returns false if the move is blocked. 1/11/98 killough: Limit removed on special lines crossed New code -- killough killough 9/12/98  killough 10/98 killough 10/98: make monsters get affected by ice and sludge too: sludge always give the monster a little bit of speed killough 10/98: Let normal momentum carry them, instead of steptoeing them across ice. open any specials must adjust height if the special is not a door that can be opened, return false
+       *
+       * killough 8/9/98: this is what caused monsters to get stuck in
+       * doortracks, because it thought that the monster freed itself
+       * by opening a door, even if it was moving towards the doortrack,
+       * and not the door itself.
+       *
+       * killough 9/9/98: If a line blocking the monster is activated,
+       * return true 90% of the time. If a line blocking the monster is
+       * not activated, but some other line is, return false 90% of the
+       * time. A bit of randomness is needed to ensure it's free from
+       * lockups, but for most cases, it returns the correct result.
+       *
+       * Do NOT simply return false 1/4th of the time (causes monsters to
+       * back out when they shouldn't, and creates secondary stickiness).
+        cph - compatibility maze here
+       * Boom v2.01 and orig. Doom return "good"
+       * Boom v2.02 and LxDoom return good && (P_Random(pr_trywalk)&3)
+       * MBF plays even more games
+        jff 8/13/98  finally, MBF code  killough 11/98: fall more slowly, under gravity, if felldown==true 
+ * P_SmartMove
+ *
+ * killough 9/12/98: Same as P_Move, except smarter
+  killough 9/12/98: Stay on a lift if target is on one  killough 10/98: allow dogs to drop off of taller ledges sometimes. dropoff==1 means always allow it, dropoff==2 means only up to 128 high, and only if the target is immediately on the other side of the line. killough 9/9/98: avoid crushing ceilings or other damaging areas Stay on lift Get away from damage avoid the area (most of the time anyway) TryWalk Attempts to move actor on in its current (ob->moveangle) direction. If blocked by either a wall or an actor returns FALSE If move is either clear or blocked only by a door, returns TRUE and sets... If a door is in the way, an OpenDoor call is made to start it opening. P_DoNewChaseDir killough 9/8/98: Most of P_NewChaseDir(), except for what determines the new direction to take find reverse direction try direct route try other directions either moved forward or attacked there is no direct path to the player, so pick another direction. randomly determine direction of search killough 11/98: Monsters try to move away from tall dropoffs. In Doom, they were never allowed to hang over dropoffs, and would remain stuck if involuntarily forced over one. This logic, combined with p_map.c (P_TryMove), allows monsters to free themselves without making them tend to hang over dropoffs. Ignore one-sided linedefs Linedef must be contacted The monster must contact one of the two floors, and the other must be a tall dropoff (more than 24). front side dropoff back side dropoff Move away from dropoff at a standard speed. Multiple contacted linedefs are cumulative (e.g. hanging over corner) Driver for above remember floor height check lines all contacted lines Non-zero if movement prescribed P_NewChaseDir killough 9/8/98: Split into two functions killough 8/8/98: sometimes move away from target, keeping distance 1) Stay a certain distance away from a friend, to avoid being in their way 2) Take advantage over an enemy without missiles, by keeping distance Move away from dropoff  If moving away from dropoff, set movecount to 1 so that small steps are taken to get monster away from dropoff. Move away from friends when too close, except in certain situations (e.g. a crowded lift) Live enemy target Back away from melee attacker If strafing, set movecount to strafecount so that old Doom logic still works the same, except in the strafing part P_IsVisible killough 9/9/98: whether a target is visible to a monster PIT_FindTarget killough 9/5/98 Finds monster targets for other monsters Invalid target If the monster is already engaged in a one-on-one attack with a healthy friend, don't attack around 60% the time Remember previous target Found target Move the selected monster to the end of its associated list, so that it gets searched last next time. P_LookForPlayers If allaround is false, only look 180 degrees in front. Returns true if a player is targeted. killough 9/9/98: friendly monsters go about players differently If you want friendly monsters not to awaken unprovoked Go back to a player, no matter whether it's visible or not killough 12/98: get out of refiring loop, to avoid hitting player accidentally Change mask of 3 to (MAXPLAYERS-1) -- killough 2/15/98: killough 9/9/98 killough 2/15/98, 9/9/98: done looking dead killough 9/9/98: give monsters a threshold towards getting players
+       * (we don't want it to be too easy for a player with dogs :)
+        Friendly monsters, by Lee Killough 7/18/98 Friendly monsters go after other monsters first, but also return to owner if they cannot find any targets. A marine's best friend :)  killough 7/18/98, 9/98 not friends Old demos do not support monster-seeking bots  Search the threaded list corresponding to this object's potential targets Search for new enemy Empty list? bail out early Search first in the immediate vicinity. Random number of monsters, to prevent patterns from forming Only a subset of the monsters were searched. Move all of the ones which were searched so far, to the end of the list. If target sighted No monster found P_LookForTargets killough 9/5/98: look for targets to go after, depending on kind of monster P_HelpFriend killough 9/8/98: Help friends in danger of dying If less than 33% health, self-preservation rules Possibly help a friend under 50% health Ignore any attacking monsters, while searching for friend A_KeenDie DOOM II special, map 32. Uses special tag 666. scan the remaining thinkers to see if all Keens are dead other Keen not dead ACTION ROUTINES A_Look Stay in state until a player is sighted. any shot will wake up killough 7/18/98:
+    * Friendly monsters go after other monsters first, but
+    * also return to player, without attacking them, if they
+    * cannot find any targets. A marine's best friend :)
+     go into chase state full volume A_KeepChasing killough 10/98: Allows monsters to continue movement while attacking A_Chase Actor has a melee attack, so it tries to close as fast as possible modify target threshold  turn towards movement direction if not there yet
+    * killough 9/7/98: keep facing towards target if strafing or backing out
+     look for a new target no new target do not attack twice in a row check for melee attack killough 8/98: remember an attack
+      * cph - DEMOSYNC?  check for missile attack killough 9/9/98: for backward demo compatibility  killough 7/18/98, 9/9/98: new monster AI  killough 9/8/98: Help friends in need  Look for new targets if current one is bad or is out of view  Our pursuit time has expired. We're going to think about
+          * changing targets  Unless (we have a live target
+          *         and it's not friendly
+          *         and we can see it)
+          *  try to find a new one; return if sucessful  (Current target was good, or no new target was found.)
+          *
+          * If monster is a missile-less friend, give up pursuit and
+          * return to player, if no attacks have occurred recently.
+           if recent action,  keep fighting  else return to player  chase towards player make active sound A_FaceTarget killough 5/5/98: remove dependence on order of evaluation: A_PosAttack killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously  keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously launch a missile A_TroopAttack launch a missile launch a missile launch a missile A_SkelMissile so missile spawns higher back to normal killough 1/18/98: this is why some missiles do not have smoke
+    * and some do. Also, internal demos start at random gametics, thus
+    * the bug in which revenants cause internal demos to go out of sync.
+    *
+    * killough 3/6/98: fix revenant internal demo bug by subtracting
+    * levelstarttic from gametic.
+    *
+    * killough 9/29/98: use new "basetic" so that demos stay in sync
+    * during pauses and menu activations, while retaining old demo sync.
+    *
+    * leveltime would have been better to use to start with in Doom, but
+    * since old demos were recorded using gametic, we must stick with it,
+    * and improvise around it (using leveltime causes desync across levels).
+     spawn a puff of smoke behind the rocket adjust direction change angle change slope PIT_VileCheck Detect a corpse that could be raised. not a monster not lying still yet monster doesn't have a raise state not actually touching Check to see if the radius and height are zero. If they are      // phares then this is a crushed monster that has been turned into a       //   | gib. One of the options may be to ignore this guy.               //   V Option 1: the original, buggy method, -> ghost (compatibility) Option 2: ressurect the monster, but not as a ghost Option 3: ignore the gib    if (Option3)                                                  //   ^        if ((thing->height == 0) && (thing->radius == 0))         //   |            return true;                                          // phares phares   |   V save temporarily save temporarily restore restore                      //   ^   | phares doesn't fit here got one, so stop checking A_VileChase Check for ressurecting a body check for corpses to raise Call PIT_VileCheck to check whether object is a corpse that canbe raised. got one! phares   |   V fix Ghost bug fix Ghost bug phares killough 7/18/98:
+                * friendliness is transferred from AV to raised corpse
+                 killough 11/98 kilough 9/9/98  killough 8/29/98: add to appropriate thread  Return to normal attack. A_VileStart A_Fire Keep fire in front of player unless out of sight don't move it if the vile lost sight A_VileTarget Spawn the hellfire killough 12/98: fix Vile fog coordinates // CPhipps - compatibility optioned A_VileAttack move the fire between the vile and the player Mancubus attack, firing three missiles (bruisers) in three different directions? Doesn't look like it. Change direction  to ... Now here choose opposite deviation. SkullAttack Fly at the player like a missile. A_PainShootSkull Spawn a lost soul and launch it at the target The original code checked for 20 skulls on the level,            // phares and wouldn't spit another one if there were. If not in           // phares compatibility mode, we remove the limit.                         // phares phares killough 10/98: compatibility-optioned  count total number of skulls currently on the level phares phares okay, there's room for another one killough 10/98: compatibility-optioned  phares   V Check whether the Lost Soul is being fired through a 1-sided wall or an impassible line, or a "monsters can't cross" line. If it is, then we don't allow the spawn. This is a bug fix, but it should be considered an enhancement, since it may disturb existing demos, so don't do it in compatibility mode. Check to see if the new Lost Soul's z value is above the ceiling of its new sector, or below the floor. If so, kill it. kill it immediately   ^   | phares killough 7/20/98: PEs shoot lost souls with the same friendliness  killough 8/29/98: add to appropriate thread  Check for movements. killough 3/15/98: don't jump over dropoffs: kill it immediately A_PainAttack Spawn a lost soul and launch it at the target Check for bosses. full volume actor is on ground, it can be walked over A_Explode A_BossDeath Possibly trigger special effects if on first boss level make sure there is a player alive for victory no one left alive, so do not end game scan the remaining thinkers to see if all bosses are dead other boss not dead victory! killough 2/7/98: Remove limit on icon landings: killough 3/26/98: global state of boss brain killough 3/26/98: initialize icon landings at level startup, rather than at boss wakeup, to prevent savegame-related crashes killough 3/26/98: renamed old function find all the target spots killough 3/26/98: always init easy to 0 killough 2/7/98: remove limit on icon landings: killough 3/26/98: only generates sound now killough 5/5/98: remove dependence on order of evaluation: killough 4/1/98: ignore if no targets killough 3/26/98: use brain struct shoot a cube at current target killough 3/26/98: Use brain struct for targets spawn brain missile killough 7/18/98: brain friendliness is transferred killough 8/29/98: add to appropriate thread travelling cube sound still flying First spawn teleport fog. Randomly select monster to spawn. Probability distribution (kind of :), decreasing likelihood. killough 7/18/98: brain friendliness is transferred  killough 8/29/98: add to appropriate thread  killough 9/4/98  telefrag anything in this spot killough 8/9/98  remove self (i.e., cube). Default death sound. IF THE PLAYER DIES LESS THAN -50% WITHOUT GIBBING cph - MBF-added codepointer functions  killough 11/98: kill an object A_Detonate killough 8/9/98: same as A_Explode, except that the damage is variable killough 9/98: a mushroom explosion effect, sorta :) Original idea: Linguica First make normal explosion Now launch mushroom cloud Aim in many directions from source Aim up fairly high Launch fireball Slow it down a bit Make debris fall under gravity killough 11/98 The following were inspired by Len Pitre A small set of highly-sought-after code pointers mobj_t *newmobj =  CPhipps - no friendlyness (yet)
+      newmobj->flags = (newmobj->flags & ~MF_FRIEND) | (mo->flags & MF_FRIEND);
+       This allows linedef effects to be activated inside deh frames.**** Start of new functions for Andy Baker's stealth monsters ***** already invisible**** End of new functions for Andy Baker's stealth monsters ***** Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Enemy thinking, AI.
+ *      Action Pointer Functions
+ *      that are associated with states/frames.
+ *
+ *----------------------------------------------------------------------------- phares ENEMY THINKING Enemies are allways spawned with targetplayer = -1, threshold = 0 Most monsters are spawned unaware of all players, but some can be made preaware Called by P_NoiseAlert. Recursively traverse adjacent sectors, sound blocking lines cut off traversal. killough 5/5/98: reformatted, cleaned up wake up all monsters in this sector already flooded closed door P_NoiseAlert If a monster yells at a player, it will alert other monsters to the player. P_CheckMeleeRange killough 7/18/98: friendly monsters don't attack other friends P_HitFriend() killough 12/98 This function tries to prevent shooting at friends P_CheckMissileRange the target just hit the enemy, so fight back! killough 7/18/98: no friendly fire at corpses
+       * killough 11/98: prevent too much infighting among friends
+       * cph - yikes, talk about fitting everything on one line...  killough 7/18/98: friendly monsters don't attack other friendly
+    * monsters or players (except when attacked, and then only once)
+     do not attack yet OPTIMIZE: get this from a global checksight no melee attack, so fire more too far away close for fist attack
+ * P_IsOnLift
+ *
+ * killough 9/9/98:
+ *
+ * Returns true if the object is on a lift. Used for AI,
+ * since it may indicate the need for crowded conditions,
+ * or that a monster should stay on the lift for a while
+ * while it goes up or down.
+  Short-circuit: it's on a lift which is active. Check to see if it's in a sector which can be activated as a lift.
+ * P_IsUnderDamage
+ *
+ * killough 9/9/98:
+ *
+ * Returns nonzero if the object is under damage based on
+ * their current position. Returns 1 if the damage is moderate,
+ * -1 if it is serious. Used for AI.
+  Crushing ceiling P_Move Move in the current direction, returns false if the move is blocked. 1/11/98 killough: Limit removed on special lines crossed New code -- killough killough 9/12/98  killough 10/98 killough 10/98: make monsters get affected by ice and sludge too: sludge always give the monster a little bit of speed killough 10/98: Let normal momentum carry them, instead of steptoeing them across ice. open any specials must adjust height if the special is not a door that can be opened, return false
+       *
+       * killough 8/9/98: this is what caused monsters to get stuck in
+       * doortracks, because it thought that the monster freed itself
+       * by opening a door, even if it was moving towards the doortrack,
+       * and not the door itself.
+       *
+       * killough 9/9/98: If a line blocking the monster is activated,
+       * return true 90% of the time. If a line blocking the monster is
+       * not activated, but some other line is, return false 90% of the
+       * time. A bit of randomness is needed to ensure it's free from
+       * lockups, but for most cases, it returns the correct result.
+       *
+       * Do NOT simply return false 1/4th of the time (causes monsters to
+       * back out when they shouldn't, and creates secondary stickiness).
+        cph - compatibility maze here
+       * Boom v2.01 and orig. Doom return "good"
+       * Boom v2.02 and LxDoom return good && (P_Random(pr_trywalk)&3)
+       * MBF plays even more games
+        jff 8/13/98  finally, MBF code  killough 11/98: fall more slowly, under gravity, if felldown==true 
+ * P_SmartMove
+ *
+ * killough 9/12/98: Same as P_Move, except smarter
+  killough 9/12/98: Stay on a lift if target is on one  killough 10/98: allow dogs to drop off of taller ledges sometimes. dropoff==1 means always allow it, dropoff==2 means only up to 128 high, and only if the target is immediately on the other side of the line. killough 9/9/98: avoid crushing ceilings or other damaging areas Stay on lift Get away from damage avoid the area (most of the time anyway) TryWalk Attempts to move actor on in its current (ob->moveangle) direction. If blocked by either a wall or an actor returns FALSE If move is either clear or blocked only by a door, returns TRUE and sets... If a door is in the way, an OpenDoor call is made to start it opening. P_DoNewChaseDir killough 9/8/98: Most of P_NewChaseDir(), except for what determines the new direction to take find reverse direction try direct route try other directions either moved forward or attacked there is no direct path to the player, so pick another direction. randomly determine direction of search killough 11/98: Monsters try to move away from tall dropoffs. In Doom, they were never allowed to hang over dropoffs, and would remain stuck if involuntarily forced over one. This logic, combined with p_map.c (P_TryMove), allows monsters to free themselves without making them tend to hang over dropoffs. Ignore one-sided linedefs Linedef must be contacted The monster must contact one of the two floors, and the other must be a tall dropoff (more than 24). front side dropoff back side dropoff Move away from dropoff at a standard speed. Multiple contacted linedefs are cumulative (e.g. hanging over corner) Driver for above remember floor height check lines all contacted lines Non-zero if movement prescribed P_NewChaseDir killough 9/8/98: Split into two functions killough 8/8/98: sometimes move away from target, keeping distance 1) Stay a certain distance away from a friend, to avoid being in their way 2) Take advantage over an enemy without missiles, by keeping distance Move away from dropoff  If moving away from dropoff, set movecount to 1 so that small steps are taken to get monster away from dropoff. Move away from friends when too close, except in certain situations (e.g. a crowded lift) Live enemy target Back away from melee attacker If strafing, set movecount to strafecount so that old Doom logic still works the same, except in the strafing part P_IsVisible killough 9/9/98: whether a target is visible to a monster PIT_FindTarget killough 9/5/98 Finds monster targets for other monsters Invalid target If the monster is already engaged in a one-on-one attack with a healthy friend, don't attack around 60% the time Remember previous target Found target Move the selected monster to the end of its associated list, so that it gets searched last next time. P_LookForPlayers If allaround is false, only look 180 degrees in front. Returns true if a player is targeted. killough 9/9/98: friendly monsters go about players differently If you want friendly monsters not to awaken unprovoked Go back to a player, no matter whether it's visible or not killough 12/98: get out of refiring loop, to avoid hitting player accidentally Change mask of 3 to (MAXPLAYERS-1) -- killough 2/15/98: killough 9/9/98 killough 2/15/98, 9/9/98: done looking dead killough 9/9/98: give monsters a threshold towards getting players
+       * (we don't want it to be too easy for a player with dogs :)
+        Friendly monsters, by Lee Killough 7/18/98 Friendly monsters go after other monsters first, but also return to owner if they cannot find any targets. A marine's best friend :)  killough 7/18/98, 9/98 not friends Old demos do not support monster-seeking bots  Search the threaded list corresponding to this object's potential targets Search for new enemy Empty list? bail out early Search first in the immediate vicinity. Random number of monsters, to prevent patterns from forming Only a subset of the monsters were searched. Move all of the ones which were searched so far, to the end of the list. If target sighted No monster found P_LookForTargets killough 9/5/98: look for targets to go after, depending on kind of monster P_HelpFriend killough 9/8/98: Help friends in danger of dying If less than 33% health, self-preservation rules Possibly help a friend under 50% health Ignore any attacking monsters, while searching for friend A_KeenDie DOOM II special, map 32. Uses special tag 666. scan the remaining thinkers to see if all Keens are dead other Keen not dead ACTION ROUTINES A_Look Stay in state until a player is sighted. any shot will wake up killough 7/18/98:
+    * Friendly monsters go after other monsters first, but
+    * also return to player, without attacking them, if they
+    * cannot find any targets. A marine's best friend :)
+     go into chase state full volume A_KeepChasing killough 10/98: Allows monsters to continue movement while attacking A_Chase Actor has a melee attack, so it tries to close as fast as possible modify target threshold  turn towards movement direction if not there yet
+    * killough 9/7/98: keep facing towards target if strafing or backing out
+     look for a new target no new target do not attack twice in a row check for melee attack killough 8/98: remember an attack
+      * cph - DEMOSYNC?  check for missile attack killough 9/9/98: for backward demo compatibility  killough 7/18/98, 9/9/98: new monster AI  killough 9/8/98: Help friends in need  Look for new targets if current one is bad or is out of view  Our pursuit time has expired. We're going to think about
+          * changing targets  Unless (we have a live target
+          *         and it's not friendly
+          *         and we can see it)
+          *  try to find a new one; return if sucessful  (Current target was good, or no new target was found.)
+          *
+          * If monster is a missile-less friend, give up pursuit and
+          * return to player, if no attacks have occurred recently.
+           if recent action,  keep fighting  else return to player  chase towards player make active sound A_FaceTarget killough 5/5/98: remove dependence on order of evaluation: A_PosAttack killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: killough 8/2/98  killough 5/5/98: remove dependence on order of evaluation: keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously  keep firing unless target got out of sight killough 12/98: Stop firing if a friend has gotten in the way  killough 11/98: prevent refiring on friends continuously launch a missile A_TroopAttack launch a missile launch a missile launch a missile A_SkelMissile so missile spawns higher back to normal killough 1/18/98: this is why some missiles do not have smoke
+    * and some do. Also, internal demos start at random gametics, thus
+    * the bug in which revenants cause internal demos to go out of sync.
+    *
+    * killough 3/6/98: fix revenant internal demo bug by subtracting
+    * levelstarttic from gametic.
+    *
+    * killough 9/29/98: use new "basetic" so that demos stay in sync
+    * during pauses and menu activations, while retaining old demo sync.
+    *
+    * leveltime would have been better to use to start with in Doom, but
+    * since old demos were recorded using gametic, we must stick with it,
+    * and improvise around it (using leveltime causes desync across levels).
+     spawn a puff of smoke behind the rocket adjust direction change angle change slope PIT_VileCheck Detect a corpse that could be raised. not a monster not lying still yet monster doesn't have a raise state not actually touching Check to see if the radius and height are zero. If they are      // phares then this is a crushed monster that has been turned into a       //   | gib. One of the options may be to ignore this guy.               //   V Option 1: the original, buggy method, -> ghost (compatibility) Option 2: ressurect the monster, but not as a ghost Option 3: ignore the gib    if (Option3)                                                  //   ^        if ((thing->height == 0) && (thing->radius == 0))         //   |            return true;                                          // phares phares   |   V save temporarily save temporarily restore restore                      //   ^   | phares doesn't fit here got one, so stop checking A_VileChase Check for ressurecting a body check for corpses to raise Call PIT_VileCheck to check whether object is a corpse that canbe raised. got one! phares   |   V fix Ghost bug fix Ghost bug phares killough 7/18/98:
+                * friendliness is transferred from AV to raised corpse
+                 killough 11/98 kilough 9/9/98  killough 8/29/98: add to appropriate thread  Return to normal attack. A_VileStart A_Fire Keep fire in front of player unless out of sight don't move it if the vile lost sight A_VileTarget Spawn the hellfire killough 12/98: fix Vile fog coordinates // CPhipps - compatibility optioned A_VileAttack move the fire between the vile and the player Mancubus attack, firing three missiles (bruisers) in three different directions? Doesn't look like it. Change direction  to ... Now here choose opposite deviation. SkullAttack Fly at the player like a missile. A_PainShootSkull Spawn a lost soul and launch it at the target The original code checked for 20 skulls on the level,            // phares and wouldn't spit another one if there were. If not in           // phares compatibility mode, we remove the limit.                         // phares phares killough 10/98: compatibility-optioned  count total number of skulls currently on the level phares phares okay, there's room for another one killough 10/98: compatibility-optioned  phares   V Check whether the Lost Soul is being fired through a 1-sided wall or an impassible line, or a "monsters can't cross" line. If it is, then we don't allow the spawn. This is a bug fix, but it should be considered an enhancement, since it may disturb existing demos, so don't do it in compatibility mode. Check to see if the new Lost Soul's z value is above the ceiling of its new sector, or below the floor. If so, kill it. kill it immediately   ^   | phares killough 7/20/98: PEs shoot lost souls with the same friendliness  killough 8/29/98: add to appropriate thread  Check for movements. killough 3/15/98: don't jump over dropoffs: kill it immediately A_PainAttack Spawn a lost soul and launch it at the target Check for bosses. full volume actor is on ground, it can be walked over A_Explode A_BossDeath Possibly trigger special effects if on first boss level make sure there is a player alive for victory no one left alive, so do not end game scan the remaining thinkers to see if all bosses are dead other boss not dead victory! killough 2/7/98: Remove limit on icon landings: killough 3/26/98: global state of boss brain killough 3/26/98: initialize icon landings at level startup, rather than at boss wakeup, to prevent savegame-related crashes killough 3/26/98: renamed old function find all the target spots killough 3/26/98: always init easy to 0 killough 2/7/98: remove limit on icon landings: killough 3/26/98: only generates sound now killough 5/5/98: remove dependence on order of evaluation: killough 4/1/98: ignore if no targets killough 3/26/98: use brain struct shoot a cube at current target killough 3/26/98: Use brain struct for targets spawn brain missile killough 7/18/98: brain friendliness is transferred killough 8/29/98: add to appropriate thread travelling cube sound still flying First spawn teleport fog. Randomly select monster to spawn. Probability distribution (kind of :), decreasing likelihood. killough 7/18/98: brain friendliness is transferred  killough 8/29/98: add to appropriate thread  killough 9/4/98  telefrag anything in this spot killough 8/9/98  remove self (i.e., cube). Default death sound. IF THE PLAYER DIES LESS THAN -50% WITHOUT GIBBING cph - MBF-added codepointer functions  killough 11/98: kill an object A_Detonate killough 8/9/98: same as A_Explode, except that the damage is variable killough 9/98: a mushroom explosion effect, sorta :) Original idea: Linguica First make normal explosion Now launch mushroom cloud Aim in many directions from source Aim up fairly high Launch fireball Slow it down a bit Make debris fall under gravity killough 11/98 The following were inspired by Len Pitre A small set of highly-sought-after code pointers mobj_t *newmobj =  CPhipps - no friendlyness (yet)
+      newmobj->flags = (newmobj->flags & ~MF_FRIEND) | (mo->flags & MF_FRIEND);
+       This allows linedef effects to be activated inside deh frames.**** Start of new functions for Andy Baker's stealth monsters ***** already invisible**** End of new functions for Andy Baker's stealth monsters *****

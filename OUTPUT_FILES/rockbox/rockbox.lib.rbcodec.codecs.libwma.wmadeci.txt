@@ -1,0 +1,205 @@
+
+ * WMA compatible decoder
+ * Copyright (c) 2002 The FFmpeg Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * @file wmadec.c
+ * WMA compatible decoder.
+ declarations of statically allocated variables used to remove malloc callsdecode and window into IRAM on targets with at least 80KB of codec IRAMMDCT reconstruction windowsVLC lookup tablesputting these in IRAM actually makes PP slower This buffer gets reused for lsp tables *
+  * Apply MDCT window and add into output.
+  *
+  * We ensure that when the windows overlap their squared sum
+  * is always 1 (MDCT reconstruction rule).
+  *
+  * The Vorbis I spec has a great diagram explaining this process.
+  * See section 1.3.2.3 of http://xiph.org/vorbis/doc/Vorbis_I_spec.html
+  float *in = s->output; left part  previous block was larger, so we'll use the size of the current 
+      * block to set the window sizeprevious block was smaller or the same size, so use it's size to set the window lengthfind the middle of the two overlapped blocks, this will be the first overlapped sample Advance to the end of the current block and prepare to window it for the next block.
+     * Since the window function needs to be reversed, we do it backwards starting with the
+     * last sample and moving towards the first
+      right part  XXX: use same run/length optimization as mpeg decoders     int filehandle;clear stereo setting to avoid glitches when switching stereo->monoone of those other wma flavors that don't have GPLed decoders  extract flag infos  compute MDCT block size max is 11-7 init rate dependant parameters  if version 2, then the rates are normalized  compute high frequency value and choose if noise coding should
+       be activated  compute the scale factor band sizes for each MDCT block size  hardcoded tables  max number of coefs  high freq computation  high_freq is a fixed32!
+            s->high_band_start[k] = (int)((block_len * 2 * high_freq) /
+                                          s->sample_rate + 0.5); ffmpeg uses malloc to only allocate as many window sizes as needed.  
+    *  However, we're really only interested in the worst case memory usage.
+    *  In the worst case you can have 5 window sizes, 128 doubling up 2048
+    *  Smaller windows are handled differently.
+    *  Since we don't have malloc, just statically allocate this
+     init MDCT windows : simple sinus window  this calculates 0.5/(2*n) alpha between 0 and pi/2 init the noise generator  LSP values are simply 2x the EXP values unlikely, but we may have previoiusly used this table for LSP,
+            so halve the values if neededcheck that we haven't already doubled this tableTODO:  Rockbox has a dither function.  Consider using it for noise coding We use a lookup table computered in advance, so no need to do this PJJ: near as makes any diff to 0! choose the VLC tables for the coefficients  since the coef2 table is the biggest and that has index 2 in coef_vlcs
+       it's safe to always assign like this  compute x^-0.25 with an exponent and mantissa table. We use linear
+   interpolation to reduce the mantissa table size at a small speed
+   expense (linear interpolation approximately doubles the number of
+   bits of precision).  build interpolation scale: 1 <= t < 2.  lsp_pow_e_table contains 32.32 format  TODO:  Since we're unlikely have value that cover the whole
+     * IEEE754 range, we probably don't need to have all possible exponents  TODO: can probably reuse the trig_init values here  get 3 bits headroom + 1 bit from not doubleing the values  NOTE: these two tables are needed to avoid two operations in
+       pow_m1_4 double check this later NOTE: We use the same code as Vorbis here  XXX: optimize it further with SSE/3Dnow  shift by 2 now to reduce rounding error,
+         * we can renormalize right before pow_m1_4
+          w is 5.27 format, lsp is in 16.16, temp2 becomes 5.27 format  q is 16.16 format, temp2 is 5.27, q becomes 16.16  2 in 5.27 format is 0x10000000  p/q end up as 16.16  decode exponents coded with LSP coefficients (same idea as Vorbis)
+ * only used for low bitrate (< 16kbps) files
+  decode exponents coded with VLC codes - used for bitrate >= 32kbpsaccommodate the 60 negative indices wmav1 only NOTE: this offset is the same as MPEG4 AAC !  return 0 if OK. return 1 if last block of frame. return -1 if
+   unrecorrable error. DEBUGF("***decode_block: %d  (%d samples of %d in frame)\n",  s->block_num, s->block_len, s->frame_len); compute current block length  update block lengths  rb->splash(HZ*4, "v was %d", v);        //5, 7this is itrb->splash(HZ, "passed v block (%d)!", v); fixed block len  now check if the block length is coherent with the frame length oddly 32k sample from tracker fails here if no channel coded, no need to go further  XXX: fix potential framing problems  read total gain and extract corresponding number of bits for
+       coef escape coding  compute number of coefficients  complex coding  if noise coding, the coefficients are not transmitted code = get_vlc(&s->gb, &s->hgain_vlc); exponents can be reused in short blocks.  parse spectral coefficients : just RLE encoding  special VLC tables are used for ms stereo because
+               there is potentially less energy there  XXX: optimize  EOB  escape  NOTE: this is rather suboptimal. reading
+                       block_len_bits would be better  normal code  NOTE: EOB can be omitted  finally compute the MDCT coefficients total_gain, coefs1, mdctnorm are lossless
+          *  The calculation of coefs has a shift right by 2 built in.  This
+          *  prepares samples for the Tremor IMDCT which uses a slightly
+          *  different fixed format then the ffmpeg one. If the old ffmpeg
+          *  imdct is used, each shift storing into coefs should be reduced
+          *  by 1.
+          *  See SVN logs for details.
+          This case is only used for low bitrates (typically less then 32kbps)TODO:  mult should be converted to 32 bit to speed up noise coding very low freqs : noise  compute power of high bands  avoid warning v is normalized later on so its fixed format is irrelevantn is an int... main freqs and high freqs  use noise with specified power mult1 is 48.16, pow_table is 48.16this step has a fairly high degree of error for some reason coded values + small noise don't forget to renormalize the noise very high freqs : noise renormalize the noise product and then reduce to 14.18 precisonNoise coding not used, simply convert from exp to fixed representationzero the first 3 coefficients for WMA V1, does nothing otherwise XXX: optimize more, unrolling this loop in asm
+                                might be a good idea ffmpeg imdct needs 15.17, while tremor 14.18 nominal case for ms stereo: we do it before mdct  no need to optimize this case because it should almost
+           never happen  BLOCK_MAX_SIZE is 2048 (samples) and MAX_CHANNELS is 2.  add in the frame  specific fast case for ms-stereo : add to second
+               channel if it is not coded  update block number  decode a frame of frame_len samples  read each block  Initialise the superframe decoding input read super frame header  super frame index  Decode a single frame in the current superframe - return -1 if
+   there was a decoding error, or the number of samples decoded.
+input add s->bit_offset bits to last frame  XXX: s->bit_offset bits into last frame  skip unused bits  this frame is stored in the last superframe and in the
+               current one  read each frame starting from s->bit_offset  If we haven't decoded a frame yet, do it now  we copy the end of the frame in the last frame buffer  when error, we reset the bit reservoir 
+ * WMA compatible decoder
+ * Copyright (c) 2002 The FFmpeg Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * @file wmadec.c
+ * WMA compatible decoder.
+ declarations of statically allocated variables used to remove malloc callsdecode and window into IRAM on targets with at least 80KB of codec IRAMMDCT reconstruction windowsVLC lookup tablesputting these in IRAM actually makes PP slower This buffer gets reused for lsp tables *
+  * Apply MDCT window and add into output.
+  *
+  * We ensure that when the windows overlap their squared sum
+  * is always 1 (MDCT reconstruction rule).
+  *
+  * The Vorbis I spec has a great diagram explaining this process.
+  * See section 1.3.2.3 of http://xiph.org/vorbis/doc/Vorbis_I_spec.html
+  float *in = s->output; left part  previous block was larger, so we'll use the size of the current 
+      * block to set the window sizeprevious block was smaller or the same size, so use it's size to set the window lengthfind the middle of the two overlapped blocks, this will be the first overlapped sample Advance to the end of the current block and prepare to window it for the next block.
+     * Since the window function needs to be reversed, we do it backwards starting with the
+     * last sample and moving towards the first
+      right part  XXX: use same run/length optimization as mpeg decoders     int filehandle;clear stereo setting to avoid glitches when switching stereo->monoone of those other wma flavors that don't have GPLed decoders  extract flag infos  compute MDCT block size max is 11-7 init rate dependant parameters  if version 2, then the rates are normalized  compute high frequency value and choose if noise coding should
+       be activated  compute the scale factor band sizes for each MDCT block size  hardcoded tables  max number of coefs  high freq computation  high_freq is a fixed32!
+            s->high_band_start[k] = (int)((block_len * 2 * high_freq) /
+                                          s->sample_rate + 0.5); ffmpeg uses malloc to only allocate as many window sizes as needed.  
+    *  However, we're really only interested in the worst case memory usage.
+    *  In the worst case you can have 5 window sizes, 128 doubling up 2048
+    *  Smaller windows are handled differently.
+    *  Since we don't have malloc, just statically allocate this
+     init MDCT windows : simple sinus window  this calculates 0.5/(2*n) alpha between 0 and pi/2 init the noise generator  LSP values are simply 2x the EXP values unlikely, but we may have previoiusly used this table for LSP,
+            so halve the values if neededcheck that we haven't already doubled this tableTODO:  Rockbox has a dither function.  Consider using it for noise coding We use a lookup table computered in advance, so no need to do this PJJ: near as makes any diff to 0! choose the VLC tables for the coefficients  since the coef2 table is the biggest and that has index 2 in coef_vlcs
+       it's safe to always assign like this  compute x^-0.25 with an exponent and mantissa table. We use linear
+   interpolation to reduce the mantissa table size at a small speed
+   expense (linear interpolation approximately doubles the number of
+   bits of precision).  build interpolation scale: 1 <= t < 2.  lsp_pow_e_table contains 32.32 format  TODO:  Since we're unlikely have value that cover the whole
+     * IEEE754 range, we probably don't need to have all possible exponents  TODO: can probably reuse the trig_init values here  get 3 bits headroom + 1 bit from not doubleing the values  NOTE: these two tables are needed to avoid two operations in
+       pow_m1_4 double check this later NOTE: We use the same code as Vorbis here  XXX: optimize it further with SSE/3Dnow  shift by 2 now to reduce rounding error,
+         * we can renormalize right before pow_m1_4
+          w is 5.27 format, lsp is in 16.16, temp2 becomes 5.27 format  q is 16.16 format, temp2 is 5.27, q becomes 16.16  2 in 5.27 format is 0x10000000  p/q end up as 16.16  decode exponents coded with LSP coefficients (same idea as Vorbis)
+ * only used for low bitrate (< 16kbps) files
+  decode exponents coded with VLC codes - used for bitrate >= 32kbpsaccommodate the 60 negative indices wmav1 only NOTE: this offset is the same as MPEG4 AAC !  return 0 if OK. return 1 if last block of frame. return -1 if
+   unrecorrable error. DEBUGF("***decode_block: %d  (%d samples of %d in frame)\n",  s->block_num, s->block_len, s->frame_len); compute current block length  update block lengths  rb->splash(HZ*4, "v was %d", v);        //5, 7this is itrb->splash(HZ, "passed v block (%d)!", v); fixed block len  now check if the block length is coherent with the frame length oddly 32k sample from tracker fails here if no channel coded, no need to go further  XXX: fix potential framing problems  read total gain and extract corresponding number of bits for
+       coef escape coding  compute number of coefficients  complex coding  if noise coding, the coefficients are not transmitted code = get_vlc(&s->gb, &s->hgain_vlc); exponents can be reused in short blocks.  parse spectral coefficients : just RLE encoding  special VLC tables are used for ms stereo because
+               there is potentially less energy there  XXX: optimize  EOB  escape  NOTE: this is rather suboptimal. reading
+                       block_len_bits would be better  normal code  NOTE: EOB can be omitted  finally compute the MDCT coefficients total_gain, coefs1, mdctnorm are lossless
+          *  The calculation of coefs has a shift right by 2 built in.  This
+          *  prepares samples for the Tremor IMDCT which uses a slightly
+          *  different fixed format then the ffmpeg one. If the old ffmpeg
+          *  imdct is used, each shift storing into coefs should be reduced
+          *  by 1.
+          *  See SVN logs for details.
+          This case is only used for low bitrates (typically less then 32kbps)TODO:  mult should be converted to 32 bit to speed up noise coding very low freqs : noise  compute power of high bands  avoid warning v is normalized later on so its fixed format is irrelevantn is an int... main freqs and high freqs  use noise with specified power mult1 is 48.16, pow_table is 48.16this step has a fairly high degree of error for some reason coded values + small noise don't forget to renormalize the noise very high freqs : noise renormalize the noise product and then reduce to 14.18 precisonNoise coding not used, simply convert from exp to fixed representationzero the first 3 coefficients for WMA V1, does nothing otherwise XXX: optimize more, unrolling this loop in asm
+                                might be a good idea ffmpeg imdct needs 15.17, while tremor 14.18 nominal case for ms stereo: we do it before mdct  no need to optimize this case because it should almost
+           never happen  BLOCK_MAX_SIZE is 2048 (samples) and MAX_CHANNELS is 2.  add in the frame  specific fast case for ms-stereo : add to second
+               channel if it is not coded  update block number  decode a frame of frame_len samples  read each block  Initialise the superframe decoding input read super frame header  super frame index  Decode a single frame in the current superframe - return -1 if
+   there was a decoding error, or the number of samples decoded.
+input add s->bit_offset bits to last frame  XXX: s->bit_offset bits into last frame  skip unused bits  this frame is stored in the last superframe and in the
+               current one  read each frame starting from s->bit_offset  If we haven't decoded a frame yet, do it now  we copy the end of the frame in the last frame buffer  when error, we reset the bit reservoir 
+ * WMA compatible decoder
+ * Copyright (c) 2002 The FFmpeg Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * @file wmadec.c
+ * WMA compatible decoder.
+ declarations of statically allocated variables used to remove malloc callsdecode and window into IRAM on targets with at least 80KB of codec IRAMMDCT reconstruction windowsVLC lookup tablesputting these in IRAM actually makes PP slower This buffer gets reused for lsp tables *
+  * Apply MDCT window and add into output.
+  *
+  * We ensure that when the windows overlap their squared sum
+  * is always 1 (MDCT reconstruction rule).
+  *
+  * The Vorbis I spec has a great diagram explaining this process.
+  * See section 1.3.2.3 of http://xiph.org/vorbis/doc/Vorbis_I_spec.html
+  float *in = s->output; left part  previous block was larger, so we'll use the size of the current 
+      * block to set the window sizeprevious block was smaller or the same size, so use it's size to set the window lengthfind the middle of the two overlapped blocks, this will be the first overlapped sample Advance to the end of the current block and prepare to window it for the next block.
+     * Since the window function needs to be reversed, we do it backwards starting with the
+     * last sample and moving towards the first
+      right part  XXX: use same run/length optimization as mpeg decoders     int filehandle;clear stereo setting to avoid glitches when switching stereo->monoone of those other wma flavors that don't have GPLed decoders  extract flag infos  compute MDCT block size max is 11-7 init rate dependant parameters  if version 2, then the rates are normalized  compute high frequency value and choose if noise coding should
+       be activated  compute the scale factor band sizes for each MDCT block size  hardcoded tables  max number of coefs  high freq computation  high_freq is a fixed32!
+            s->high_band_start[k] = (int)((block_len * 2 * high_freq) /
+                                          s->sample_rate + 0.5); ffmpeg uses malloc to only allocate as many window sizes as needed.  
+    *  However, we're really only interested in the worst case memory usage.
+    *  In the worst case you can have 5 window sizes, 128 doubling up 2048
+    *  Smaller windows are handled differently.
+    *  Since we don't have malloc, just statically allocate this
+     init MDCT windows : simple sinus window  this calculates 0.5/(2*n) alpha between 0 and pi/2 init the noise generator  LSP values are simply 2x the EXP values unlikely, but we may have previoiusly used this table for LSP,
+            so halve the values if neededcheck that we haven't already doubled this tableTODO:  Rockbox has a dither function.  Consider using it for noise coding We use a lookup table computered in advance, so no need to do this PJJ: near as makes any diff to 0! choose the VLC tables for the coefficients  since the coef2 table is the biggest and that has index 2 in coef_vlcs
+       it's safe to always assign like this  compute x^-0.25 with an exponent and mantissa table. We use linear
+   interpolation to reduce the mantissa table size at a small speed
+   expense (linear interpolation approximately doubles the number of
+   bits of precision).  build interpolation scale: 1 <= t < 2.  lsp_pow_e_table contains 32.32 format  TODO:  Since we're unlikely have value that cover the whole
+     * IEEE754 range, we probably don't need to have all possible exponents  TODO: can probably reuse the trig_init values here  get 3 bits headroom + 1 bit from not doubleing the values  NOTE: these two tables are needed to avoid two operations in
+       pow_m1_4 double check this later NOTE: We use the same code as Vorbis here  XXX: optimize it further with SSE/3Dnow  shift by 2 now to reduce rounding error,
+         * we can renormalize right before pow_m1_4
+          w is 5.27 format, lsp is in 16.16, temp2 becomes 5.27 format  q is 16.16 format, temp2 is 5.27, q becomes 16.16  2 in 5.27 format is 0x10000000  p/q end up as 16.16  decode exponents coded with LSP coefficients (same idea as Vorbis)
+ * only used for low bitrate (< 16kbps) files
+  decode exponents coded with VLC codes - used for bitrate >= 32kbpsaccommodate the 60 negative indices wmav1 only NOTE: this offset is the same as MPEG4 AAC !  return 0 if OK. return 1 if last block of frame. return -1 if
+   unrecorrable error. DEBUGF("***decode_block: %d  (%d samples of %d in frame)\n",  s->block_num, s->block_len, s->frame_len); compute current block length  update block lengths  rb->splash(HZ*4, "v was %d", v);        //5, 7this is itrb->splash(HZ, "passed v block (%d)!", v); fixed block len  now check if the block length is coherent with the frame length oddly 32k sample from tracker fails here if no channel coded, no need to go further  XXX: fix potential framing problems  read total gain and extract corresponding number of bits for
+       coef escape coding  compute number of coefficients  complex coding  if noise coding, the coefficients are not transmitted code = get_vlc(&s->gb, &s->hgain_vlc); exponents can be reused in short blocks.  parse spectral coefficients : just RLE encoding  special VLC tables are used for ms stereo because
+               there is potentially less energy there  XXX: optimize  EOB  escape  NOTE: this is rather suboptimal. reading
+                       block_len_bits would be better  normal code  NOTE: EOB can be omitted  finally compute the MDCT coefficients total_gain, coefs1, mdctnorm are lossless
+          *  The calculation of coefs has a shift right by 2 built in.  This
+          *  prepares samples for the Tremor IMDCT which uses a slightly
+          *  different fixed format then the ffmpeg one. If the old ffmpeg
+          *  imdct is used, each shift storing into coefs should be reduced
+          *  by 1.
+          *  See SVN logs for details.
+          This case is only used for low bitrates (typically less then 32kbps)TODO:  mult should be converted to 32 bit to speed up noise coding very low freqs : noise  compute power of high bands  avoid warning v is normalized later on so its fixed format is irrelevantn is an int... main freqs and high freqs  use noise with specified power mult1 is 48.16, pow_table is 48.16this step has a fairly high degree of error for some reason coded values + small noise don't forget to renormalize the noise very high freqs : noise renormalize the noise product and then reduce to 14.18 precisonNoise coding not used, simply convert from exp to fixed representationzero the first 3 coefficients for WMA V1, does nothing otherwise XXX: optimize more, unrolling this loop in asm
+                                might be a good idea ffmpeg imdct needs 15.17, while tremor 14.18 nominal case for ms stereo: we do it before mdct  no need to optimize this case because it should almost
+           never happen  BLOCK_MAX_SIZE is 2048 (samples) and MAX_CHANNELS is 2.  add in the frame  specific fast case for ms-stereo : add to second
+               channel if it is not coded  update block number  decode a frame of frame_len samples  read each block  Initialise the superframe decoding input read super frame header  super frame index  Decode a single frame in the current superframe - return -1 if
+   there was a decoding error, or the number of samples decoded.
+input add s->bit_offset bits to last frame  XXX: s->bit_offset bits into last frame  skip unused bits  this frame is stored in the last superframe and in the
+               current one  read each frame starting from s->bit_offset  If we haven't decoded a frame yet, do it now  we copy the end of the frame in the last frame buffer  when error, we reset the bit reservoir 

@@ -1,0 +1,526 @@
+ Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2007-2009 Timothy B. Terriberry
+   Written by Timothy B. Terriberry and Jean-Marc Valin 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Guaranteed to return a conservatively large estimate of the binary logarithm
+   with frac bits of fractional precision.
+  Tested for all possible 32-bit inputs with frac=4, where the maximum
+   overestimation is 0.06254243 bits.This is (val>>l-16), but guaranteed to round up, even if adding a bias
+       before the shift would cause overflow (e.g., for 0xFFFFxxxx).
+       Doesn't work for val=0, but that case fails the test above.Note that we always need one iteration, since the rounding up above means
+       that we might need to adjust the integer part of the logarithm.If val is not exactly 0x8000, then we have to round up the remainder.Exact powers of two require no rounding.Although derived separately, the pulse vector coding scheme is equivalent to
+   a Pyramid Vector Quantizer \cite{Fis86}.
+  Some additional notes about an early version appear at
+   http://people.xiph.org/~tterribe/notes/cwrs.html, but the codebook ordering
+   and the definitions of some terms have evolved since that was written.
+
+  The conversion from a pulse vector to an integer index (encoding) and back
+   (decoding) is governed by two related functions, V(N,K) and U(N,K).
+
+  V(N,K) = the number of combinations, with replacement, of N items, taken K
+   at a time, when a sign bit is added to each item taken at least once (i.e.,
+   the number of N-dimensional unit pulse vectors with K pulses).
+  One way to compute this is via
+    V(N,K) = K>0 ? sum(k=1...K,2**k*choose(N,k)*choose(K-1,k-1)) : 1,
+   where choose() is the binomial function.
+  A table of values for N<10 and K<10 looks like:
+  V[10][10] = {
+    {1,  0,   0,    0,    0,     0,     0,      0,      0,       0},
+    {1,  2,   2,    2,    2,     2,     2,      2,      2,       2},
+    {1,  4,   8,   12,   16,    20,    24,     28,     32,      36},
+    {1,  6,  18,   38,   66,   102,   146,    198,    258,     326},
+    {1,  8,  32,   88,  192,   360,   608,    952,   1408,    1992},
+    {1, 10,  50,  170,  450,  1002,  1970,   3530,   5890,    9290},
+    {1, 12,  72,  292,  912,  2364,  5336,  10836,  20256,   35436},
+    {1, 14,  98,  462, 1666,  4942, 12642,  28814,  59906,  115598},
+    {1, 16, 128,  688, 2816,  9424, 27008,  68464, 157184,  332688},
+    {1, 18, 162,  978, 4482, 16722, 53154, 148626, 374274,  864146}
+  };
+
+  U(N,K) = the number of such combinations wherein N-1 objects are taken at
+   most K-1 at a time.
+  This is given by
+    U(N,K) = sum(k=0...K-1,V(N-1,k))
+           = K>0 ? (V(N-1,K-1) + V(N,K-1))/2 : 0.
+  The latter expression also makes clear that U(N,K) is half the number of such
+   combinations wherein the first object is taken at least once.
+  Although it may not be clear from either of these definitions, U(N,K) is the
+   natural function to work with when enumerating the pulse vector codebooks,
+   not V(N,K).
+  U(N,K) is not well-defined for N=0, but with the extension
+    U(0,K) = K>0 ? 0 : 1,
+   the function becomes symmetric: U(N,K) = U(K,N), with a similar table:
+  U[10][10] = {
+    {1, 0,  0,   0,    0,    0,     0,     0,      0,      0},
+    {0, 1,  1,   1,    1,    1,     1,     1,      1,      1},
+    {0, 1,  3,   5,    7,    9,    11,    13,     15,     17},
+    {0, 1,  5,  13,   25,   41,    61,    85,    113,    145},
+    {0, 1,  7,  25,   63,  129,   231,   377,    575,    833},
+    {0, 1,  9,  41,  129,  321,   681,  1289,   2241,   3649},
+    {0, 1, 11,  61,  231,  681,  1683,  3653,   7183,  13073},
+    {0, 1, 13,  85,  377, 1289,  3653,  8989,  19825,  40081},
+    {0, 1, 15, 113,  575, 2241,  7183, 19825,  48639, 108545},
+    {0, 1, 17, 145,  833, 3649, 13073, 40081, 108545, 265729}
+  };
+
+  With this extension, V(N,K) may be written in terms of U(N,K):
+    V(N,K) = U(N,K) + U(N,K+1)
+   for all N>=0, K>=0.
+  Thus U(N,K+1) represents the number of combinations where the first element
+   is positive or zero, and U(N,K) represents the number of combinations where
+   it is negative.
+  With a large enough table of U(N,K) values, we could write O(N) encoding
+   and O(min(N*log(K),N+K)) decoding routines, but such a table would be
+   prohibitively large for small embedded devices (K may be as large as 32767
+   for small N, and N may be as large as 200).
+
+  Both functions obey the same recurrence relation:
+    V(N,K) = V(N-1,K) + V(N,K-1) + V(N-1,K-1),
+    U(N,K) = U(N-1,K) + U(N,K-1) + U(N-1,K-1),
+   for all N>0, K>0, with different initial conditions at N=0 or K=0.
+  This allows us to construct a row of one of the tables above given the
+   previous row or the next row.
+  Thus we can derive O(NK) encoding and decoding routines with O(K) memory
+   using only addition and subtraction.
+
+  When encoding, we build up from the U(2,K) row and work our way forwards.
+  When decoding, we need to start at the U(N,K) row and work our way backwards,
+   which requires a means of computing U(N,K).
+  U(N,K) may be computed from two previous values with the same N:
+    U(N,K) = ((2*N-1)*U(N,K-1) - U(N,K-2))/(K-1) + U(N,K-2)
+   for all N>1, and since U(N,K) is symmetric, a similar relation holds for two
+   previous values with the same K:
+    U(N,K>1) = ((2*K-1)*U(N-1,K) - U(N-2,K))/(N-1) + U(N-2,K)
+   for all K>1.
+  This allows us to construct an arbitrary row of the U(N,K) table by starting
+   with the first two values, which are constants.
+  This saves roughly 2/3 the work in our O(NK) decoding routine, but costs O(K)
+   multiplications.
+  Similar relations can be derived for V(N,K), but are not used here.
+
+  For N>0 and K>0, U(N,K) and V(N,K) take on the form of an (N-1)-degree
+   polynomial for fixed N.
+  The first few are
+    U(1,K) = 1,
+    U(2,K) = 2*K-1,
+    U(3,K) = (2*K-2)*K+1,
+    U(4,K) = (((4*K-6)*K+8)*K-3)/3,
+    U(5,K) = ((((2*K-4)*K+10)*K-8)*K+3)/3,
+   and
+    V(1,K) = 2,
+    V(2,K) = 4*K,
+    V(3,K) = 4*K*K+2,
+    V(4,K) = 8*(K*K+2)*K/3,
+    V(5,K) = ((4*K*K+20)*K*K+6)/3,
+   for all K>0.
+  This allows us to derive O(N) encoding and O(N*log(K)) decoding routines for
+   small N (and indeed decoding is also O(N) for N<3).
+
+  @ARTICLE{Fis86,
+    author="Thomas R. Fischer",
+    title="A Pyramid Vector Quantizer",
+    journal="IEEE Transactions on Information Theory",
+    volume="IT-32",
+    number=4,
+    pages="568--583",
+    month=Jul,
+    year=1986
+  }U(N,K) = U(K,N) := N>0?K>0?U(N-1,K)+U(N,K-1)+U(N-1,K-1):0:K>0?1:0V(N,K) := U(N,K)+U(N,K+1) = the number of PVQ codewords for a band of size N
+   with K pulses allocated to it.For each V(N,K) supported, we will access element U(min(N,K+1),max(N,K+1)).
+  Thus, the number of entries in row I is the larger of the maximum number of
+   pulses we will ever allocate for a given N=I (K=128, or however many fit in
+   32 bits, whichever is smaller), plus one, and the maximum N for which
+   K=I-1 pulses fit in 32 bits.
+  The largest band size in an Opus Custom mode is 208.
+  Otherwise, we can limit things to the set of N which can be achieved by
+   splitting a band from a standard Opus mode: 176, 144, 96, 88, 72, 64, 48,
+   44, 36, 32, 24, 22, 18, 16, 8, 4, 2).N=0, K=0...176:...208:N=1, K=1...176:...208:N=2, K=2...176:...208:N=3, K=3...176:...208:N=4, K=4...176:...208:N=5, K=5...176:...208:N=6, K=6...96:...109:N=7, K=7...54...60:N=8, K=8...37...40:N=9, K=9...28:...29:N=10, K=10...24:N=11, K=11...19:...20:N=12, K=12...18:N=13, K=13...16:N=14, K=14:_maxk==0 => there's nothing to do.Lots of pulses case:Are the pulses in this dimension negative?Count how many pulses were placed in this dimension.Lots of dimensions case:Are there any pulses in this dimension at all?Are the pulses in this dimension negative?Count how many pulses were placed in this dimension._n==2_n==1 SMALL_FOOTPRINT Computes the next row/column of any recurrence that obeys the relation
+   u[i][j]=u[i-1][j]+u[i][j-1]+u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Computes the previous row/column of any recurrence that obeys the relation
+   u[i-1][j]=u[i][j]-u[i][j-1]-u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Compute V(_n,_k), as well as U(_n,0..._k+1).
+  _u: On exit, _u[i] contains U(_n,i) for i in [0..._k+1].We require storage at least 3 values (e.g., _k>0).If _n==0, _u[0] should be 1 and the rest should be 0.If _n==1, _u[i] should be 1 for i>1.If _k==0, the following do-while loop will overflow the buffer.Returns the _i'th combination of _k elements chosen from a set of size _n
+   with associated sign bits.
+  _y: Returns the vector of pulses.
+  _u: Must contain entries [0..._k+1] of row _n of U() on input.
+      Its contents will be destructively modified.Returns the index of the given combination of K elements chosen from a set
+   of size 1 with associated sign bits.
+  _y: The vector of pulses, whose sum of absolute values is K.
+  _k: Returns K.Returns the index of the given combination of K elements chosen from a set
+   of size _n with associated sign bits.
+  _y:  The vector of pulses, whose sum of absolute values must be _k.
+  _nc: Returns V(_n,_k).We can't unroll the first two iterations of the loop unless _n>=2._maxk==0 => there's nothing to do. CUSTOM_MODES  SMALL_FOOTPRINT  Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2007-2009 Timothy B. Terriberry
+   Written by Timothy B. Terriberry and Jean-Marc Valin 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Guaranteed to return a conservatively large estimate of the binary logarithm
+   with frac bits of fractional precision.
+  Tested for all possible 32-bit inputs with frac=4, where the maximum
+   overestimation is 0.06254243 bits.This is (val>>l-16), but guaranteed to round up, even if adding a bias
+       before the shift would cause overflow (e.g., for 0xFFFFxxxx).
+       Doesn't work for val=0, but that case fails the test above.Note that we always need one iteration, since the rounding up above means
+       that we might need to adjust the integer part of the logarithm.If val is not exactly 0x8000, then we have to round up the remainder.Exact powers of two require no rounding.Although derived separately, the pulse vector coding scheme is equivalent to
+   a Pyramid Vector Quantizer \cite{Fis86}.
+  Some additional notes about an early version appear at
+   http://people.xiph.org/~tterribe/notes/cwrs.html, but the codebook ordering
+   and the definitions of some terms have evolved since that was written.
+
+  The conversion from a pulse vector to an integer index (encoding) and back
+   (decoding) is governed by two related functions, V(N,K) and U(N,K).
+
+  V(N,K) = the number of combinations, with replacement, of N items, taken K
+   at a time, when a sign bit is added to each item taken at least once (i.e.,
+   the number of N-dimensional unit pulse vectors with K pulses).
+  One way to compute this is via
+    V(N,K) = K>0 ? sum(k=1...K,2**k*choose(N,k)*choose(K-1,k-1)) : 1,
+   where choose() is the binomial function.
+  A table of values for N<10 and K<10 looks like:
+  V[10][10] = {
+    {1,  0,   0,    0,    0,     0,     0,      0,      0,       0},
+    {1,  2,   2,    2,    2,     2,     2,      2,      2,       2},
+    {1,  4,   8,   12,   16,    20,    24,     28,     32,      36},
+    {1,  6,  18,   38,   66,   102,   146,    198,    258,     326},
+    {1,  8,  32,   88,  192,   360,   608,    952,   1408,    1992},
+    {1, 10,  50,  170,  450,  1002,  1970,   3530,   5890,    9290},
+    {1, 12,  72,  292,  912,  2364,  5336,  10836,  20256,   35436},
+    {1, 14,  98,  462, 1666,  4942, 12642,  28814,  59906,  115598},
+    {1, 16, 128,  688, 2816,  9424, 27008,  68464, 157184,  332688},
+    {1, 18, 162,  978, 4482, 16722, 53154, 148626, 374274,  864146}
+  };
+
+  U(N,K) = the number of such combinations wherein N-1 objects are taken at
+   most K-1 at a time.
+  This is given by
+    U(N,K) = sum(k=0...K-1,V(N-1,k))
+           = K>0 ? (V(N-1,K-1) + V(N,K-1))/2 : 0.
+  The latter expression also makes clear that U(N,K) is half the number of such
+   combinations wherein the first object is taken at least once.
+  Although it may not be clear from either of these definitions, U(N,K) is the
+   natural function to work with when enumerating the pulse vector codebooks,
+   not V(N,K).
+  U(N,K) is not well-defined for N=0, but with the extension
+    U(0,K) = K>0 ? 0 : 1,
+   the function becomes symmetric: U(N,K) = U(K,N), with a similar table:
+  U[10][10] = {
+    {1, 0,  0,   0,    0,    0,     0,     0,      0,      0},
+    {0, 1,  1,   1,    1,    1,     1,     1,      1,      1},
+    {0, 1,  3,   5,    7,    9,    11,    13,     15,     17},
+    {0, 1,  5,  13,   25,   41,    61,    85,    113,    145},
+    {0, 1,  7,  25,   63,  129,   231,   377,    575,    833},
+    {0, 1,  9,  41,  129,  321,   681,  1289,   2241,   3649},
+    {0, 1, 11,  61,  231,  681,  1683,  3653,   7183,  13073},
+    {0, 1, 13,  85,  377, 1289,  3653,  8989,  19825,  40081},
+    {0, 1, 15, 113,  575, 2241,  7183, 19825,  48639, 108545},
+    {0, 1, 17, 145,  833, 3649, 13073, 40081, 108545, 265729}
+  };
+
+  With this extension, V(N,K) may be written in terms of U(N,K):
+    V(N,K) = U(N,K) + U(N,K+1)
+   for all N>=0, K>=0.
+  Thus U(N,K+1) represents the number of combinations where the first element
+   is positive or zero, and U(N,K) represents the number of combinations where
+   it is negative.
+  With a large enough table of U(N,K) values, we could write O(N) encoding
+   and O(min(N*log(K),N+K)) decoding routines, but such a table would be
+   prohibitively large for small embedded devices (K may be as large as 32767
+   for small N, and N may be as large as 200).
+
+  Both functions obey the same recurrence relation:
+    V(N,K) = V(N-1,K) + V(N,K-1) + V(N-1,K-1),
+    U(N,K) = U(N-1,K) + U(N,K-1) + U(N-1,K-1),
+   for all N>0, K>0, with different initial conditions at N=0 or K=0.
+  This allows us to construct a row of one of the tables above given the
+   previous row or the next row.
+  Thus we can derive O(NK) encoding and decoding routines with O(K) memory
+   using only addition and subtraction.
+
+  When encoding, we build up from the U(2,K) row and work our way forwards.
+  When decoding, we need to start at the U(N,K) row and work our way backwards,
+   which requires a means of computing U(N,K).
+  U(N,K) may be computed from two previous values with the same N:
+    U(N,K) = ((2*N-1)*U(N,K-1) - U(N,K-2))/(K-1) + U(N,K-2)
+   for all N>1, and since U(N,K) is symmetric, a similar relation holds for two
+   previous values with the same K:
+    U(N,K>1) = ((2*K-1)*U(N-1,K) - U(N-2,K))/(N-1) + U(N-2,K)
+   for all K>1.
+  This allows us to construct an arbitrary row of the U(N,K) table by starting
+   with the first two values, which are constants.
+  This saves roughly 2/3 the work in our O(NK) decoding routine, but costs O(K)
+   multiplications.
+  Similar relations can be derived for V(N,K), but are not used here.
+
+  For N>0 and K>0, U(N,K) and V(N,K) take on the form of an (N-1)-degree
+   polynomial for fixed N.
+  The first few are
+    U(1,K) = 1,
+    U(2,K) = 2*K-1,
+    U(3,K) = (2*K-2)*K+1,
+    U(4,K) = (((4*K-6)*K+8)*K-3)/3,
+    U(5,K) = ((((2*K-4)*K+10)*K-8)*K+3)/3,
+   and
+    V(1,K) = 2,
+    V(2,K) = 4*K,
+    V(3,K) = 4*K*K+2,
+    V(4,K) = 8*(K*K+2)*K/3,
+    V(5,K) = ((4*K*K+20)*K*K+6)/3,
+   for all K>0.
+  This allows us to derive O(N) encoding and O(N*log(K)) decoding routines for
+   small N (and indeed decoding is also O(N) for N<3).
+
+  @ARTICLE{Fis86,
+    author="Thomas R. Fischer",
+    title="A Pyramid Vector Quantizer",
+    journal="IEEE Transactions on Information Theory",
+    volume="IT-32",
+    number=4,
+    pages="568--583",
+    month=Jul,
+    year=1986
+  }U(N,K) = U(K,N) := N>0?K>0?U(N-1,K)+U(N,K-1)+U(N-1,K-1):0:K>0?1:0V(N,K) := U(N,K)+U(N,K+1) = the number of PVQ codewords for a band of size N
+   with K pulses allocated to it.For each V(N,K) supported, we will access element U(min(N,K+1),max(N,K+1)).
+  Thus, the number of entries in row I is the larger of the maximum number of
+   pulses we will ever allocate for a given N=I (K=128, or however many fit in
+   32 bits, whichever is smaller), plus one, and the maximum N for which
+   K=I-1 pulses fit in 32 bits.
+  The largest band size in an Opus Custom mode is 208.
+  Otherwise, we can limit things to the set of N which can be achieved by
+   splitting a band from a standard Opus mode: 176, 144, 96, 88, 72, 64, 48,
+   44, 36, 32, 24, 22, 18, 16, 8, 4, 2).N=0, K=0...176:...208:N=1, K=1...176:...208:N=2, K=2...176:...208:N=3, K=3...176:...208:N=4, K=4...176:...208:N=5, K=5...176:...208:N=6, K=6...96:...109:N=7, K=7...54...60:N=8, K=8...37...40:N=9, K=9...28:...29:N=10, K=10...24:N=11, K=11...19:...20:N=12, K=12...18:N=13, K=13...16:N=14, K=14:_maxk==0 => there's nothing to do.Lots of pulses case:Are the pulses in this dimension negative?Count how many pulses were placed in this dimension.Lots of dimensions case:Are there any pulses in this dimension at all?Are the pulses in this dimension negative?Count how many pulses were placed in this dimension._n==2_n==1 SMALL_FOOTPRINT Computes the next row/column of any recurrence that obeys the relation
+   u[i][j]=u[i-1][j]+u[i][j-1]+u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Computes the previous row/column of any recurrence that obeys the relation
+   u[i-1][j]=u[i][j]-u[i][j-1]-u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Compute V(_n,_k), as well as U(_n,0..._k+1).
+  _u: On exit, _u[i] contains U(_n,i) for i in [0..._k+1].We require storage at least 3 values (e.g., _k>0).If _n==0, _u[0] should be 1 and the rest should be 0.If _n==1, _u[i] should be 1 for i>1.If _k==0, the following do-while loop will overflow the buffer.Returns the _i'th combination of _k elements chosen from a set of size _n
+   with associated sign bits.
+  _y: Returns the vector of pulses.
+  _u: Must contain entries [0..._k+1] of row _n of U() on input.
+      Its contents will be destructively modified.Returns the index of the given combination of K elements chosen from a set
+   of size 1 with associated sign bits.
+  _y: The vector of pulses, whose sum of absolute values is K.
+  _k: Returns K.Returns the index of the given combination of K elements chosen from a set
+   of size _n with associated sign bits.
+  _y:  The vector of pulses, whose sum of absolute values must be _k.
+  _nc: Returns V(_n,_k).We can't unroll the first two iterations of the loop unless _n>=2._maxk==0 => there's nothing to do. CUSTOM_MODES  SMALL_FOOTPRINT  Copyright (c) 2007-2008 CSIRO
+   Copyright (c) 2007-2009 Xiph.Org Foundation
+   Copyright (c) 2007-2009 Timothy B. Terriberry
+   Written by Timothy B. Terriberry and Jean-Marc Valin 
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Guaranteed to return a conservatively large estimate of the binary logarithm
+   with frac bits of fractional precision.
+  Tested for all possible 32-bit inputs with frac=4, where the maximum
+   overestimation is 0.06254243 bits.This is (val>>l-16), but guaranteed to round up, even if adding a bias
+       before the shift would cause overflow (e.g., for 0xFFFFxxxx).
+       Doesn't work for val=0, but that case fails the test above.Note that we always need one iteration, since the rounding up above means
+       that we might need to adjust the integer part of the logarithm.If val is not exactly 0x8000, then we have to round up the remainder.Exact powers of two require no rounding.Although derived separately, the pulse vector coding scheme is equivalent to
+   a Pyramid Vector Quantizer \cite{Fis86}.
+  Some additional notes about an early version appear at
+   http://people.xiph.org/~tterribe/notes/cwrs.html, but the codebook ordering
+   and the definitions of some terms have evolved since that was written.
+
+  The conversion from a pulse vector to an integer index (encoding) and back
+   (decoding) is governed by two related functions, V(N,K) and U(N,K).
+
+  V(N,K) = the number of combinations, with replacement, of N items, taken K
+   at a time, when a sign bit is added to each item taken at least once (i.e.,
+   the number of N-dimensional unit pulse vectors with K pulses).
+  One way to compute this is via
+    V(N,K) = K>0 ? sum(k=1...K,2**k*choose(N,k)*choose(K-1,k-1)) : 1,
+   where choose() is the binomial function.
+  A table of values for N<10 and K<10 looks like:
+  V[10][10] = {
+    {1,  0,   0,    0,    0,     0,     0,      0,      0,       0},
+    {1,  2,   2,    2,    2,     2,     2,      2,      2,       2},
+    {1,  4,   8,   12,   16,    20,    24,     28,     32,      36},
+    {1,  6,  18,   38,   66,   102,   146,    198,    258,     326},
+    {1,  8,  32,   88,  192,   360,   608,    952,   1408,    1992},
+    {1, 10,  50,  170,  450,  1002,  1970,   3530,   5890,    9290},
+    {1, 12,  72,  292,  912,  2364,  5336,  10836,  20256,   35436},
+    {1, 14,  98,  462, 1666,  4942, 12642,  28814,  59906,  115598},
+    {1, 16, 128,  688, 2816,  9424, 27008,  68464, 157184,  332688},
+    {1, 18, 162,  978, 4482, 16722, 53154, 148626, 374274,  864146}
+  };
+
+  U(N,K) = the number of such combinations wherein N-1 objects are taken at
+   most K-1 at a time.
+  This is given by
+    U(N,K) = sum(k=0...K-1,V(N-1,k))
+           = K>0 ? (V(N-1,K-1) + V(N,K-1))/2 : 0.
+  The latter expression also makes clear that U(N,K) is half the number of such
+   combinations wherein the first object is taken at least once.
+  Although it may not be clear from either of these definitions, U(N,K) is the
+   natural function to work with when enumerating the pulse vector codebooks,
+   not V(N,K).
+  U(N,K) is not well-defined for N=0, but with the extension
+    U(0,K) = K>0 ? 0 : 1,
+   the function becomes symmetric: U(N,K) = U(K,N), with a similar table:
+  U[10][10] = {
+    {1, 0,  0,   0,    0,    0,     0,     0,      0,      0},
+    {0, 1,  1,   1,    1,    1,     1,     1,      1,      1},
+    {0, 1,  3,   5,    7,    9,    11,    13,     15,     17},
+    {0, 1,  5,  13,   25,   41,    61,    85,    113,    145},
+    {0, 1,  7,  25,   63,  129,   231,   377,    575,    833},
+    {0, 1,  9,  41,  129,  321,   681,  1289,   2241,   3649},
+    {0, 1, 11,  61,  231,  681,  1683,  3653,   7183,  13073},
+    {0, 1, 13,  85,  377, 1289,  3653,  8989,  19825,  40081},
+    {0, 1, 15, 113,  575, 2241,  7183, 19825,  48639, 108545},
+    {0, 1, 17, 145,  833, 3649, 13073, 40081, 108545, 265729}
+  };
+
+  With this extension, V(N,K) may be written in terms of U(N,K):
+    V(N,K) = U(N,K) + U(N,K+1)
+   for all N>=0, K>=0.
+  Thus U(N,K+1) represents the number of combinations where the first element
+   is positive or zero, and U(N,K) represents the number of combinations where
+   it is negative.
+  With a large enough table of U(N,K) values, we could write O(N) encoding
+   and O(min(N*log(K),N+K)) decoding routines, but such a table would be
+   prohibitively large for small embedded devices (K may be as large as 32767
+   for small N, and N may be as large as 200).
+
+  Both functions obey the same recurrence relation:
+    V(N,K) = V(N-1,K) + V(N,K-1) + V(N-1,K-1),
+    U(N,K) = U(N-1,K) + U(N,K-1) + U(N-1,K-1),
+   for all N>0, K>0, with different initial conditions at N=0 or K=0.
+  This allows us to construct a row of one of the tables above given the
+   previous row or the next row.
+  Thus we can derive O(NK) encoding and decoding routines with O(K) memory
+   using only addition and subtraction.
+
+  When encoding, we build up from the U(2,K) row and work our way forwards.
+  When decoding, we need to start at the U(N,K) row and work our way backwards,
+   which requires a means of computing U(N,K).
+  U(N,K) may be computed from two previous values with the same N:
+    U(N,K) = ((2*N-1)*U(N,K-1) - U(N,K-2))/(K-1) + U(N,K-2)
+   for all N>1, and since U(N,K) is symmetric, a similar relation holds for two
+   previous values with the same K:
+    U(N,K>1) = ((2*K-1)*U(N-1,K) - U(N-2,K))/(N-1) + U(N-2,K)
+   for all K>1.
+  This allows us to construct an arbitrary row of the U(N,K) table by starting
+   with the first two values, which are constants.
+  This saves roughly 2/3 the work in our O(NK) decoding routine, but costs O(K)
+   multiplications.
+  Similar relations can be derived for V(N,K), but are not used here.
+
+  For N>0 and K>0, U(N,K) and V(N,K) take on the form of an (N-1)-degree
+   polynomial for fixed N.
+  The first few are
+    U(1,K) = 1,
+    U(2,K) = 2*K-1,
+    U(3,K) = (2*K-2)*K+1,
+    U(4,K) = (((4*K-6)*K+8)*K-3)/3,
+    U(5,K) = ((((2*K-4)*K+10)*K-8)*K+3)/3,
+   and
+    V(1,K) = 2,
+    V(2,K) = 4*K,
+    V(3,K) = 4*K*K+2,
+    V(4,K) = 8*(K*K+2)*K/3,
+    V(5,K) = ((4*K*K+20)*K*K+6)/3,
+   for all K>0.
+  This allows us to derive O(N) encoding and O(N*log(K)) decoding routines for
+   small N (and indeed decoding is also O(N) for N<3).
+
+  @ARTICLE{Fis86,
+    author="Thomas R. Fischer",
+    title="A Pyramid Vector Quantizer",
+    journal="IEEE Transactions on Information Theory",
+    volume="IT-32",
+    number=4,
+    pages="568--583",
+    month=Jul,
+    year=1986
+  }U(N,K) = U(K,N) := N>0?K>0?U(N-1,K)+U(N,K-1)+U(N-1,K-1):0:K>0?1:0V(N,K) := U(N,K)+U(N,K+1) = the number of PVQ codewords for a band of size N
+   with K pulses allocated to it.For each V(N,K) supported, we will access element U(min(N,K+1),max(N,K+1)).
+  Thus, the number of entries in row I is the larger of the maximum number of
+   pulses we will ever allocate for a given N=I (K=128, or however many fit in
+   32 bits, whichever is smaller), plus one, and the maximum N for which
+   K=I-1 pulses fit in 32 bits.
+  The largest band size in an Opus Custom mode is 208.
+  Otherwise, we can limit things to the set of N which can be achieved by
+   splitting a band from a standard Opus mode: 176, 144, 96, 88, 72, 64, 48,
+   44, 36, 32, 24, 22, 18, 16, 8, 4, 2).N=0, K=0...176:...208:N=1, K=1...176:...208:N=2, K=2...176:...208:N=3, K=3...176:...208:N=4, K=4...176:...208:N=5, K=5...176:...208:N=6, K=6...96:...109:N=7, K=7...54...60:N=8, K=8...37...40:N=9, K=9...28:...29:N=10, K=10...24:N=11, K=11...19:...20:N=12, K=12...18:N=13, K=13...16:N=14, K=14:_maxk==0 => there's nothing to do.Lots of pulses case:Are the pulses in this dimension negative?Count how many pulses were placed in this dimension.Lots of dimensions case:Are there any pulses in this dimension at all?Are the pulses in this dimension negative?Count how many pulses were placed in this dimension._n==2_n==1 SMALL_FOOTPRINT Computes the next row/column of any recurrence that obeys the relation
+   u[i][j]=u[i-1][j]+u[i][j-1]+u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Computes the previous row/column of any recurrence that obeys the relation
+   u[i-1][j]=u[i][j]-u[i][j-1]-u[i-1][j-1].
+  _ui0 is the base case for the new row/column.This do-while will overrun the array if we don't have storage for at least
+     2 values.Compute V(_n,_k), as well as U(_n,0..._k+1).
+  _u: On exit, _u[i] contains U(_n,i) for i in [0..._k+1].We require storage at least 3 values (e.g., _k>0).If _n==0, _u[0] should be 1 and the rest should be 0.If _n==1, _u[i] should be 1 for i>1.If _k==0, the following do-while loop will overflow the buffer.Returns the _i'th combination of _k elements chosen from a set of size _n
+   with associated sign bits.
+  _y: Returns the vector of pulses.
+  _u: Must contain entries [0..._k+1] of row _n of U() on input.
+      Its contents will be destructively modified.Returns the index of the given combination of K elements chosen from a set
+   of size 1 with associated sign bits.
+  _y: The vector of pulses, whose sum of absolute values is K.
+  _k: Returns K.Returns the index of the given combination of K elements chosen from a set
+   of size _n with associated sign bits.
+  _y:  The vector of pulses, whose sum of absolute values must be _k.
+  _nc: Returns V(_n,_k).We can't unroll the first two iterations of the loop unless _n>=2._maxk==0 => there's nothing to do. CUSTOM_MODES  SMALL_FOOTPRINT 

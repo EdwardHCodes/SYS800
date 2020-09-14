@@ -1,0 +1,163 @@
+ Copyright (C) 2002-2006 Jean-Marc Valin 
+   File: nb_celp.c
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ pi  Default size for the encoder and decoder stack (can be changed at compile time).
+   This does not apply when using variable-size arrays or alloca.  Allocating input buffer  Allocating excitation buffer  Create the window for autocorrelation (lag-windowing)  #ifndef DISABLE_VBR  Free all allocated memory  #ifndef DISABLE_VBR Free state memory... should be last Move signals 1 frame towards the past  Window for analysis  Compute auto-correlation  Noise floor in auto-correlation domain  Lag windowing: equivalent to filtering in the power-spectrum domain  Levinson-Durbin  LPC to LSPs (x-domain) transform  Check if we found all the roots If we can't find all LSP's, do some damage control and use previous filter Whole frame analysis (open-loop estimation of pitch and excitation gain)  Compute interpolated LPCs (unquantized) for whole frameOpen-loop pitchTry to remove pitch multiplesol_pitch_coef=nol_pitch_coef[i];if (ol_pitch>50)
+           ol_pitch/=2;ol_pitch_coef = sqrt(ol_pitch_coef);Compute "real" excitation Compute open-loop excitation gain print_vec(st->curve, 128, "curve");VBR stuff Only adapt if long-term and short-term drift are the same sign if (delta_qual<0)  delta_qual*=.1*(3+st->vbr_quality);VAD only casespeex_encoder_ctl(state, SPEEX_SET_MODE, &mode); #ifndef DISABLE_VBR  First, transmit a zero for narrowband  Transmit the sub-mode we use for this frame  If null mode (no transmission), just set a couple things to zero Clear memory (no need to really compute it)  LSP Quantization Quantize LSPs0 for unquantizedIf we use low bit-rate pitch mode, transmit open-loop pitch This just damps the pitch a bit, because it tends to be too aggressive when forced Quantize and transmit open-loop excitation gainol_gain = exp(qe/3.5)*SIG_SCALING; Special case for first frame  Target signal  Loop on sub-frames  Offset relative to start of frame  Excitation  Weighted signal  LSP interpolation (quantized and unquantized)  Make sure the filters are stable  Compute interpolated LPCs (quantized and unquantized)  Compute analysis filter gain at w=pi (for use in SB-CELP) pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1]; Compute bandwidth-expanded (unquantized) LPCs for perceptual weighting print_vec(st->bw_lpc1, 10, "bw_lpc");FIXME: This will break if we change the window size  Compute zero response of A(z/g1) / ( A(z/g2) * A(z) )  Compute weighted signal  Compute target signal (saturation prevents overflows on clipped input speech)  Reset excitation  If we have a long-term predictor (otherwise, something's wrong)  Long-term prediction  Low bit-rate pitch handling  Force pitch to use only the current frame if needed  Perform pitch search  Quantization of innovation  FIXME: Make sure this is save from overflows (so far so good) FIXME: Should use DIV32_16 and make sure result fits in 16 bits  Calculate gain correction for the sub-frame (if any) printf ("%f %f\n", ener, ol_gain); Normalize innovation  Quantize innovation  Codebook search  De-normalize innovation and update excitation  In some (rare) modes, we do a second search (more bits) to reduce noise even more  Final signal synthesis from excitation  Compute weighted signal again, from synthesized speech (not sure it's the right thing)  Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  SPEEX_DISABLE_ENCODER 
+   st = (DecState *)speex_alloc(sizeof(DecState));
+   if (!st)
+      return NULL;
+ Codec parameters, should eventually have several "modes" st->excBuf = (spx_word16_t*)speex_alloc((st->frameSize + 2*st->max_pitch + st->subframeSize + 12)*sizeof(spx_word16_t));  st->interp_qlpc = (spx_coef_t*)speex_alloc(st->lpcSize*sizeof(spx_coef_t));  st->old_qlsp = (spx_lsp_t*)speex_alloc(st->lpcSize*sizeof(spx_lsp_t));  st->mem_sp = (spx_mem_t*)speex_alloc(st->lpcSize*sizeof(spx_mem_t));  st->pi_gain = (spx_word32_t*)speex_alloc((st->nbSubframes)*sizeof(spx_word32_t));  Integer mode
+   speex_free (st->excBuf);
+   speex_free (st->interp_qlpc);
+   speex_free (st->old_qlsp);
+   speex_free (st->mem_sp);
+   speex_free (st->pi_gain);
+
+   speex_free(state);
+ FIXME: This was rms of innovation (not exc)  Shift all buffers by one frame  rollover  Just so we don't need to carry the complete wideband mode information  Check if we're in DTX mode If bits is NULL, consider the packet to be lost (what could we do anyway)  Search for next narrowband block (handle requests, skip wideband blocks)  Skip wideband block (for compatibility) speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance);speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance); FIXME: Check for overflow  We found a terminator  Speex in-band request  User in-band request  Invalid mode  Get the sub-mode that was used  Shift all buffers by one frame  If null mode (no transmission), just set a couple things to zero FIXME: This was innov, not exc  Final signal synthesis from excitation  Unquantize LSPs Damp memory if a frame was lost and the LSP changed too much Handle first frame and lost-packet case  Get open-loop pitch estimation for low bit-rate pitch coding  Get global excitation gain  FIXME: Perhaps we could slightly lower the gain here when the output is going to saturate? Loop on subframes  Offset relative to start of frame  Excitation  Reset excitation Adaptive codebook contribution Handle pitch constraints if any  GT - need optimization?
+               if (ol_pitch < st->min_pitch+margin-1)
+                  ol_pitch=st->min_pitch+margin-1;
+               if (ol_pitch > st->max_pitch-margin)
+                  ol_pitch=st->max_pitch-margin;
+               pit_min = ol_pitch-margin+1;
+               pit_max = ol_pitch+margin;
+ Ensuring that things aren't blowing up as would happen if e.g. an encoder is 
+         crafting packets to make us produce NaNs and slow down the decoder (vague DoS threat).
+         We can probably be even more aggressive and limit to 15000 or so.  Unquantize the innovation  Decode sub-frame gain correction Fixed codebook contribution De-normalize innovation and update excitation  Decode second codebook (only for some modes) print_vec(exc, 40, "innov");Vocoder mode exc[st->voc_offset]= g*sqrt(2*ol_pitch)*ol_gain;
+                  Not quite sure why we need the factor of two in the sqrt  If the last packet was lost, re-scale the excitation to obtain the same energy as encoded in ol_gain Loop on subframes  Offset relative to start of frame  Original signal  LSP interpolation (quantized and unquantized)  Make sure the LSP's are stable  Compute interpolated LPCs (unquantized)  Compute analysis filter at w=pi pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1];for (i=0;i<st->frameSize;i++)
+     printf ("%d\n", (int)st->frame[i]); Tracking output level printf ("%f %f %f %d\n", og, st->min_level, st->max_level, update); Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  rollover  #ifndef DISABLE_VBR  !defined(DISABLE_VBR) && !defined(DISABLE_FLOAT_API)  #ifndef DISABLE_VBR  This is all internal stuff past this point  #ifndef DISABLE_VBR  SPEEX_DISABLE_ENCODER  FIXME: Convert to fixed-point and re-enable even when float API is disabled  Done in a strange way to catch NaNs as well printf ("%f %f %f %f\n", st->level, st->min_level, st->max_level, ret); Copyright (C) 2002-2006 Jean-Marc Valin 
+   File: nb_celp.c
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ pi  Default size for the encoder and decoder stack (can be changed at compile time).
+   This does not apply when using variable-size arrays or alloca.  Allocating input buffer  Allocating excitation buffer  Create the window for autocorrelation (lag-windowing)  #ifndef DISABLE_VBR  Free all allocated memory  #ifndef DISABLE_VBR Free state memory... should be last Move signals 1 frame towards the past  Window for analysis  Compute auto-correlation  Noise floor in auto-correlation domain  Lag windowing: equivalent to filtering in the power-spectrum domain  Levinson-Durbin  LPC to LSPs (x-domain) transform  Check if we found all the roots If we can't find all LSP's, do some damage control and use previous filter Whole frame analysis (open-loop estimation of pitch and excitation gain)  Compute interpolated LPCs (unquantized) for whole frameOpen-loop pitchTry to remove pitch multiplesol_pitch_coef=nol_pitch_coef[i];if (ol_pitch>50)
+           ol_pitch/=2;ol_pitch_coef = sqrt(ol_pitch_coef);Compute "real" excitation Compute open-loop excitation gain print_vec(st->curve, 128, "curve");VBR stuff Only adapt if long-term and short-term drift are the same sign if (delta_qual<0)  delta_qual*=.1*(3+st->vbr_quality);VAD only casespeex_encoder_ctl(state, SPEEX_SET_MODE, &mode); #ifndef DISABLE_VBR  First, transmit a zero for narrowband  Transmit the sub-mode we use for this frame  If null mode (no transmission), just set a couple things to zero Clear memory (no need to really compute it)  LSP Quantization Quantize LSPs0 for unquantizedIf we use low bit-rate pitch mode, transmit open-loop pitch This just damps the pitch a bit, because it tends to be too aggressive when forced Quantize and transmit open-loop excitation gainol_gain = exp(qe/3.5)*SIG_SCALING; Special case for first frame  Target signal  Loop on sub-frames  Offset relative to start of frame  Excitation  Weighted signal  LSP interpolation (quantized and unquantized)  Make sure the filters are stable  Compute interpolated LPCs (quantized and unquantized)  Compute analysis filter gain at w=pi (for use in SB-CELP) pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1]; Compute bandwidth-expanded (unquantized) LPCs for perceptual weighting print_vec(st->bw_lpc1, 10, "bw_lpc");FIXME: This will break if we change the window size  Compute zero response of A(z/g1) / ( A(z/g2) * A(z) )  Compute weighted signal  Compute target signal (saturation prevents overflows on clipped input speech)  Reset excitation  If we have a long-term predictor (otherwise, something's wrong)  Long-term prediction  Low bit-rate pitch handling  Force pitch to use only the current frame if needed  Perform pitch search  Quantization of innovation  FIXME: Make sure this is save from overflows (so far so good) FIXME: Should use DIV32_16 and make sure result fits in 16 bits  Calculate gain correction for the sub-frame (if any) printf ("%f %f\n", ener, ol_gain); Normalize innovation  Quantize innovation  Codebook search  De-normalize innovation and update excitation  In some (rare) modes, we do a second search (more bits) to reduce noise even more  Final signal synthesis from excitation  Compute weighted signal again, from synthesized speech (not sure it's the right thing)  Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  SPEEX_DISABLE_ENCODER 
+   st = (DecState *)speex_alloc(sizeof(DecState));
+   if (!st)
+      return NULL;
+ Codec parameters, should eventually have several "modes" st->excBuf = (spx_word16_t*)speex_alloc((st->frameSize + 2*st->max_pitch + st->subframeSize + 12)*sizeof(spx_word16_t));  st->interp_qlpc = (spx_coef_t*)speex_alloc(st->lpcSize*sizeof(spx_coef_t));  st->old_qlsp = (spx_lsp_t*)speex_alloc(st->lpcSize*sizeof(spx_lsp_t));  st->mem_sp = (spx_mem_t*)speex_alloc(st->lpcSize*sizeof(spx_mem_t));  st->pi_gain = (spx_word32_t*)speex_alloc((st->nbSubframes)*sizeof(spx_word32_t));  Integer mode
+   speex_free (st->excBuf);
+   speex_free (st->interp_qlpc);
+   speex_free (st->old_qlsp);
+   speex_free (st->mem_sp);
+   speex_free (st->pi_gain);
+
+   speex_free(state);
+ FIXME: This was rms of innovation (not exc)  Shift all buffers by one frame  rollover  Just so we don't need to carry the complete wideband mode information  Check if we're in DTX mode If bits is NULL, consider the packet to be lost (what could we do anyway)  Search for next narrowband block (handle requests, skip wideband blocks)  Skip wideband block (for compatibility) speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance);speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance); FIXME: Check for overflow  We found a terminator  Speex in-band request  User in-band request  Invalid mode  Get the sub-mode that was used  Shift all buffers by one frame  If null mode (no transmission), just set a couple things to zero FIXME: This was innov, not exc  Final signal synthesis from excitation  Unquantize LSPs Damp memory if a frame was lost and the LSP changed too much Handle first frame and lost-packet case  Get open-loop pitch estimation for low bit-rate pitch coding  Get global excitation gain  FIXME: Perhaps we could slightly lower the gain here when the output is going to saturate? Loop on subframes  Offset relative to start of frame  Excitation  Reset excitation Adaptive codebook contribution Handle pitch constraints if any  GT - need optimization?
+               if (ol_pitch < st->min_pitch+margin-1)
+                  ol_pitch=st->min_pitch+margin-1;
+               if (ol_pitch > st->max_pitch-margin)
+                  ol_pitch=st->max_pitch-margin;
+               pit_min = ol_pitch-margin+1;
+               pit_max = ol_pitch+margin;
+ Ensuring that things aren't blowing up as would happen if e.g. an encoder is 
+         crafting packets to make us produce NaNs and slow down the decoder (vague DoS threat).
+         We can probably be even more aggressive and limit to 15000 or so.  Unquantize the innovation  Decode sub-frame gain correction Fixed codebook contribution De-normalize innovation and update excitation  Decode second codebook (only for some modes) print_vec(exc, 40, "innov");Vocoder mode exc[st->voc_offset]= g*sqrt(2*ol_pitch)*ol_gain;
+                  Not quite sure why we need the factor of two in the sqrt  If the last packet was lost, re-scale the excitation to obtain the same energy as encoded in ol_gain Loop on subframes  Offset relative to start of frame  Original signal  LSP interpolation (quantized and unquantized)  Make sure the LSP's are stable  Compute interpolated LPCs (unquantized)  Compute analysis filter at w=pi pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1];for (i=0;i<st->frameSize;i++)
+     printf ("%d\n", (int)st->frame[i]); Tracking output level printf ("%f %f %f %d\n", og, st->min_level, st->max_level, update); Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  rollover  #ifndef DISABLE_VBR  !defined(DISABLE_VBR) && !defined(DISABLE_FLOAT_API)  #ifndef DISABLE_VBR  This is all internal stuff past this point  #ifndef DISABLE_VBR  SPEEX_DISABLE_ENCODER  FIXME: Convert to fixed-point and re-enable even when float API is disabled  Done in a strange way to catch NaNs as well printf ("%f %f %f %f\n", st->level, st->min_level, st->max_level, ret); Copyright (C) 2002-2006 Jean-Marc Valin 
+   File: nb_celp.c
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ pi  Default size for the encoder and decoder stack (can be changed at compile time).
+   This does not apply when using variable-size arrays or alloca.  Allocating input buffer  Allocating excitation buffer  Create the window for autocorrelation (lag-windowing)  #ifndef DISABLE_VBR  Free all allocated memory  #ifndef DISABLE_VBR Free state memory... should be last Move signals 1 frame towards the past  Window for analysis  Compute auto-correlation  Noise floor in auto-correlation domain  Lag windowing: equivalent to filtering in the power-spectrum domain  Levinson-Durbin  LPC to LSPs (x-domain) transform  Check if we found all the roots If we can't find all LSP's, do some damage control and use previous filter Whole frame analysis (open-loop estimation of pitch and excitation gain)  Compute interpolated LPCs (unquantized) for whole frameOpen-loop pitchTry to remove pitch multiplesol_pitch_coef=nol_pitch_coef[i];if (ol_pitch>50)
+           ol_pitch/=2;ol_pitch_coef = sqrt(ol_pitch_coef);Compute "real" excitation Compute open-loop excitation gain print_vec(st->curve, 128, "curve");VBR stuff Only adapt if long-term and short-term drift are the same sign if (delta_qual<0)  delta_qual*=.1*(3+st->vbr_quality);VAD only casespeex_encoder_ctl(state, SPEEX_SET_MODE, &mode); #ifndef DISABLE_VBR  First, transmit a zero for narrowband  Transmit the sub-mode we use for this frame  If null mode (no transmission), just set a couple things to zero Clear memory (no need to really compute it)  LSP Quantization Quantize LSPs0 for unquantizedIf we use low bit-rate pitch mode, transmit open-loop pitch This just damps the pitch a bit, because it tends to be too aggressive when forced Quantize and transmit open-loop excitation gainol_gain = exp(qe/3.5)*SIG_SCALING; Special case for first frame  Target signal  Loop on sub-frames  Offset relative to start of frame  Excitation  Weighted signal  LSP interpolation (quantized and unquantized)  Make sure the filters are stable  Compute interpolated LPCs (quantized and unquantized)  Compute analysis filter gain at w=pi (for use in SB-CELP) pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1]; Compute bandwidth-expanded (unquantized) LPCs for perceptual weighting print_vec(st->bw_lpc1, 10, "bw_lpc");FIXME: This will break if we change the window size  Compute zero response of A(z/g1) / ( A(z/g2) * A(z) )  Compute weighted signal  Compute target signal (saturation prevents overflows on clipped input speech)  Reset excitation  If we have a long-term predictor (otherwise, something's wrong)  Long-term prediction  Low bit-rate pitch handling  Force pitch to use only the current frame if needed  Perform pitch search  Quantization of innovation  FIXME: Make sure this is save from overflows (so far so good) FIXME: Should use DIV32_16 and make sure result fits in 16 bits  Calculate gain correction for the sub-frame (if any) printf ("%f %f\n", ener, ol_gain); Normalize innovation  Quantize innovation  Codebook search  De-normalize innovation and update excitation  In some (rare) modes, we do a second search (more bits) to reduce noise even more  Final signal synthesis from excitation  Compute weighted signal again, from synthesized speech (not sure it's the right thing)  Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  SPEEX_DISABLE_ENCODER 
+   st = (DecState *)speex_alloc(sizeof(DecState));
+   if (!st)
+      return NULL;
+ Codec parameters, should eventually have several "modes" st->excBuf = (spx_word16_t*)speex_alloc((st->frameSize + 2*st->max_pitch + st->subframeSize + 12)*sizeof(spx_word16_t));  st->interp_qlpc = (spx_coef_t*)speex_alloc(st->lpcSize*sizeof(spx_coef_t));  st->old_qlsp = (spx_lsp_t*)speex_alloc(st->lpcSize*sizeof(spx_lsp_t));  st->mem_sp = (spx_mem_t*)speex_alloc(st->lpcSize*sizeof(spx_mem_t));  st->pi_gain = (spx_word32_t*)speex_alloc((st->nbSubframes)*sizeof(spx_word32_t));  Integer mode
+   speex_free (st->excBuf);
+   speex_free (st->interp_qlpc);
+   speex_free (st->old_qlsp);
+   speex_free (st->mem_sp);
+   speex_free (st->pi_gain);
+
+   speex_free(state);
+ FIXME: This was rms of innovation (not exc)  Shift all buffers by one frame  rollover  Just so we don't need to carry the complete wideband mode information  Check if we're in DTX mode If bits is NULL, consider the packet to be lost (what could we do anyway)  Search for next narrowband block (handle requests, skip wideband blocks)  Skip wideband block (for compatibility) speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance);speex_mode_query(&speex_wb_mode, SPEEX_SUBMODE_BITS_PER_FRAME, &advance); FIXME: Check for overflow  We found a terminator  Speex in-band request  User in-band request  Invalid mode  Get the sub-mode that was used  Shift all buffers by one frame  If null mode (no transmission), just set a couple things to zero FIXME: This was innov, not exc  Final signal synthesis from excitation  Unquantize LSPs Damp memory if a frame was lost and the LSP changed too much Handle first frame and lost-packet case  Get open-loop pitch estimation for low bit-rate pitch coding  Get global excitation gain  FIXME: Perhaps we could slightly lower the gain here when the output is going to saturate? Loop on subframes  Offset relative to start of frame  Excitation  Reset excitation Adaptive codebook contribution Handle pitch constraints if any  GT - need optimization?
+               if (ol_pitch < st->min_pitch+margin-1)
+                  ol_pitch=st->min_pitch+margin-1;
+               if (ol_pitch > st->max_pitch-margin)
+                  ol_pitch=st->max_pitch-margin;
+               pit_min = ol_pitch-margin+1;
+               pit_max = ol_pitch+margin;
+ Ensuring that things aren't blowing up as would happen if e.g. an encoder is 
+         crafting packets to make us produce NaNs and slow down the decoder (vague DoS threat).
+         We can probably be even more aggressive and limit to 15000 or so.  Unquantize the innovation  Decode sub-frame gain correction Fixed codebook contribution De-normalize innovation and update excitation  Decode second codebook (only for some modes) print_vec(exc, 40, "innov");Vocoder mode exc[st->voc_offset]= g*sqrt(2*ol_pitch)*ol_gain;
+                  Not quite sure why we need the factor of two in the sqrt  If the last packet was lost, re-scale the excitation to obtain the same energy as encoded in ol_gain Loop on subframes  Offset relative to start of frame  Original signal  LSP interpolation (quantized and unquantized)  Make sure the LSP's are stable  Compute interpolated LPCs (unquantized)  Compute analysis filter at w=pi pi_g += -st->interp_qlpc[i] +  st->interp_qlpc[i+1];for (i=0;i<st->frameSize;i++)
+     printf ("%d\n", (int)st->frame[i]); Tracking output level printf ("%f %f %f %d\n", og, st->min_level, st->max_level, update); Store the LSPs for interpolation in the next frame  The next frame will not be the first (Duh!)  rollover  #ifndef DISABLE_VBR  !defined(DISABLE_VBR) && !defined(DISABLE_FLOAT_API)  #ifndef DISABLE_VBR  This is all internal stuff past this point  #ifndef DISABLE_VBR  SPEEX_DISABLE_ENCODER  FIXME: Convert to fixed-point and re-enable even when float API is disabled  Done in a strange way to catch NaNs as well printf ("%f %f %f %f\n", st->level, st->min_level, st->max_level, ret);

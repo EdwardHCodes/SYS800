@@ -1,0 +1,316 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Thomas Martitz
+ *
+ * Generic unix threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The *_context functions are heavily based on Gnu pth
+ * http://www.gnu.org/software/pth/
+ *
+ * adjusted to work in a multi-thread environment to
+ * offer a ucontext-like API
+ 
+ * VARIANT 2: THE SIGNAL STACK TRICK
+ *
+ * This uses sigstack/sigaltstack() and friends and is really the
+ * most tricky part of Pth. When you understand the following
+ * stuff you're a good Unix hacker and then you've already
+ * understood the gory ingredients of Pth.  So, either welcome to
+ * the club of hackers, or do yourself a favor and skip this ;)
+ *
+ * The ingenious fact is that this variant runs really on _all_ POSIX
+ * compliant systems without special platform kludges.  But be _VERY_
+ * carefully when you change something in the following code. The slightest
+ * change or reordering can lead to horribly broken code.  Really every
+ * function call in the following case is intended to be how it is, doubt
+ * me...
+ *
+ * For more details we strongly recommend you to read the companion
+ * paper ``Portable Multithreading -- The Signal Stack Trick for
+ * User-Space Thread Creation'' from Ralf S. Engelschall. A copy of the
+ * draft of this paper you can find in the file rse-pmt.ps inside the
+ * GNU Pth distribution.
+ 
+     * Preserve the trampoline_sig signal state, block trampoline_sig,
+     * and establish our signal handler. The signal will
+     * later transfer control onto the signal stack.
+     
+     * Set the new stack.
+     *
+     * For sigaltstack we're lucky [from sigaltstack(2) on
+     * FreeBSD 3.1]: ``Signal stacks are automatically adjusted
+     * for the direction of stack growth and alignment
+     * requirements''
+     *
+     * For sigstack we have to decide ourself [from sigstack(2)
+     * on Solaris 2.6]: ``The direction of stack growth is not
+     * indicated in the historical definition of struct sigstack.
+     * The only way to portably establish a stack pointer is for
+     * the application to determine stack growth direction.''
+     
+     * Now transfer control onto the signal stack and set it up.
+     * It will return immediately via "return" after the setjmp()
+     * was performed. Be careful here with race conditions.  The
+     * signal can be delivered the first time sigsuspend() is
+     * called.
+     
+     * Inform the system that we are back off the signal stack by
+     * removing the alternative signal stack. Be careful here: It
+     * first has to be disabled, before it can be removed.
+     
+     * Restore the old trampoline_sig signal handler and mask
+     
+     * Tell the trampoline and bootstrap function where to dump
+     * the new machine context, and what to do afterwards...
+     
+     * Now enter the trampoline again, but this time not as a signal
+     * handler. Instead we jump into it directly. The functionally
+     * redundant ping-pong pointer arithmentic is neccessary to avoid
+     * type-conversion warnings related to the `volatile' qualifier and
+     * the fact that `jmp_buf' usually is an array type.
+     
+     * Ok, we returned again, so now we're finished
+      sanity check, no other thread should be here  longjump'd back in  copy to local storage so we can spawn further threads
+     * in the meantime 
+     * Save current machine state (on new stack) and
+     * go back to caller until we're scheduled for real...
+     
+     * The new thread is now running: GREAT!
+     * Now we just invoke its init function....
+      get a context for the main thread so that we can jump to it from
+     * other threads 
+ * Prepare context to make the thread runnable by calling swapcontext on it
+ 
+ * Save the ucontext_t pointer for later use in swapcontext()
+ *
+ * Cannot do getcontext() here, because jumping back to the context
+ * resumes after the getcontext call (i.e. store_context), but we need
+ * to resume from load_context()
+ 
+ * Perform context switch
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Thomas Martitz
+ *
+ * Generic unix threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The *_context functions are heavily based on Gnu pth
+ * http://www.gnu.org/software/pth/
+ *
+ * adjusted to work in a multi-thread environment to
+ * offer a ucontext-like API
+ 
+ * VARIANT 2: THE SIGNAL STACK TRICK
+ *
+ * This uses sigstack/sigaltstack() and friends and is really the
+ * most tricky part of Pth. When you understand the following
+ * stuff you're a good Unix hacker and then you've already
+ * understood the gory ingredients of Pth.  So, either welcome to
+ * the club of hackers, or do yourself a favor and skip this ;)
+ *
+ * The ingenious fact is that this variant runs really on _all_ POSIX
+ * compliant systems without special platform kludges.  But be _VERY_
+ * carefully when you change something in the following code. The slightest
+ * change or reordering can lead to horribly broken code.  Really every
+ * function call in the following case is intended to be how it is, doubt
+ * me...
+ *
+ * For more details we strongly recommend you to read the companion
+ * paper ``Portable Multithreading -- The Signal Stack Trick for
+ * User-Space Thread Creation'' from Ralf S. Engelschall. A copy of the
+ * draft of this paper you can find in the file rse-pmt.ps inside the
+ * GNU Pth distribution.
+ 
+     * Preserve the trampoline_sig signal state, block trampoline_sig,
+     * and establish our signal handler. The signal will
+     * later transfer control onto the signal stack.
+     
+     * Set the new stack.
+     *
+     * For sigaltstack we're lucky [from sigaltstack(2) on
+     * FreeBSD 3.1]: ``Signal stacks are automatically adjusted
+     * for the direction of stack growth and alignment
+     * requirements''
+     *
+     * For sigstack we have to decide ourself [from sigstack(2)
+     * on Solaris 2.6]: ``The direction of stack growth is not
+     * indicated in the historical definition of struct sigstack.
+     * The only way to portably establish a stack pointer is for
+     * the application to determine stack growth direction.''
+     
+     * Now transfer control onto the signal stack and set it up.
+     * It will return immediately via "return" after the setjmp()
+     * was performed. Be careful here with race conditions.  The
+     * signal can be delivered the first time sigsuspend() is
+     * called.
+     
+     * Inform the system that we are back off the signal stack by
+     * removing the alternative signal stack. Be careful here: It
+     * first has to be disabled, before it can be removed.
+     
+     * Restore the old trampoline_sig signal handler and mask
+     
+     * Tell the trampoline and bootstrap function where to dump
+     * the new machine context, and what to do afterwards...
+     
+     * Now enter the trampoline again, but this time not as a signal
+     * handler. Instead we jump into it directly. The functionally
+     * redundant ping-pong pointer arithmentic is neccessary to avoid
+     * type-conversion warnings related to the `volatile' qualifier and
+     * the fact that `jmp_buf' usually is an array type.
+     
+     * Ok, we returned again, so now we're finished
+      sanity check, no other thread should be here  longjump'd back in  copy to local storage so we can spawn further threads
+     * in the meantime 
+     * Save current machine state (on new stack) and
+     * go back to caller until we're scheduled for real...
+     
+     * The new thread is now running: GREAT!
+     * Now we just invoke its init function....
+      get a context for the main thread so that we can jump to it from
+     * other threads 
+ * Prepare context to make the thread runnable by calling swapcontext on it
+ 
+ * Save the ucontext_t pointer for later use in swapcontext()
+ *
+ * Cannot do getcontext() here, because jumping back to the context
+ * resumes after the getcontext call (i.e. store_context), but we need
+ * to resume from load_context()
+ 
+ * Perform context switch
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Thomas Martitz
+ *
+ * Generic unix threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The *_context functions are heavily based on Gnu pth
+ * http://www.gnu.org/software/pth/
+ *
+ * adjusted to work in a multi-thread environment to
+ * offer a ucontext-like API
+ 
+ * VARIANT 2: THE SIGNAL STACK TRICK
+ *
+ * This uses sigstack/sigaltstack() and friends and is really the
+ * most tricky part of Pth. When you understand the following
+ * stuff you're a good Unix hacker and then you've already
+ * understood the gory ingredients of Pth.  So, either welcome to
+ * the club of hackers, or do yourself a favor and skip this ;)
+ *
+ * The ingenious fact is that this variant runs really on _all_ POSIX
+ * compliant systems without special platform kludges.  But be _VERY_
+ * carefully when you change something in the following code. The slightest
+ * change or reordering can lead to horribly broken code.  Really every
+ * function call in the following case is intended to be how it is, doubt
+ * me...
+ *
+ * For more details we strongly recommend you to read the companion
+ * paper ``Portable Multithreading -- The Signal Stack Trick for
+ * User-Space Thread Creation'' from Ralf S. Engelschall. A copy of the
+ * draft of this paper you can find in the file rse-pmt.ps inside the
+ * GNU Pth distribution.
+ 
+     * Preserve the trampoline_sig signal state, block trampoline_sig,
+     * and establish our signal handler. The signal will
+     * later transfer control onto the signal stack.
+     
+     * Set the new stack.
+     *
+     * For sigaltstack we're lucky [from sigaltstack(2) on
+     * FreeBSD 3.1]: ``Signal stacks are automatically adjusted
+     * for the direction of stack growth and alignment
+     * requirements''
+     *
+     * For sigstack we have to decide ourself [from sigstack(2)
+     * on Solaris 2.6]: ``The direction of stack growth is not
+     * indicated in the historical definition of struct sigstack.
+     * The only way to portably establish a stack pointer is for
+     * the application to determine stack growth direction.''
+     
+     * Now transfer control onto the signal stack and set it up.
+     * It will return immediately via "return" after the setjmp()
+     * was performed. Be careful here with race conditions.  The
+     * signal can be delivered the first time sigsuspend() is
+     * called.
+     
+     * Inform the system that we are back off the signal stack by
+     * removing the alternative signal stack. Be careful here: It
+     * first has to be disabled, before it can be removed.
+     
+     * Restore the old trampoline_sig signal handler and mask
+     
+     * Tell the trampoline and bootstrap function where to dump
+     * the new machine context, and what to do afterwards...
+     
+     * Now enter the trampoline again, but this time not as a signal
+     * handler. Instead we jump into it directly. The functionally
+     * redundant ping-pong pointer arithmentic is neccessary to avoid
+     * type-conversion warnings related to the `volatile' qualifier and
+     * the fact that `jmp_buf' usually is an array type.
+     
+     * Ok, we returned again, so now we're finished
+      sanity check, no other thread should be here  longjump'd back in  copy to local storage so we can spawn further threads
+     * in the meantime 
+     * Save current machine state (on new stack) and
+     * go back to caller until we're scheduled for real...
+     
+     * The new thread is now running: GREAT!
+     * Now we just invoke its init function....
+      get a context for the main thread so that we can jump to it from
+     * other threads 
+ * Prepare context to make the thread runnable by calling swapcontext on it
+ 
+ * Save the ucontext_t pointer for later use in swapcontext()
+ *
+ * Cannot do getcontext() here, because jumping back to the context
+ * resumes after the getcontext call (i.e. store_context), but we need
+ * to resume from load_context()
+ 
+ * Perform context switch
+ 

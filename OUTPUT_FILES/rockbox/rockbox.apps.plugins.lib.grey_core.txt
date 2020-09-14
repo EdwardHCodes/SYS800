@@ -1,0 +1,241 @@
+**************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* New greyscale framework
+* Core & miscellaneous functions
+*
+* This is a generic framework to display 129 shades of grey on low-depth
+* bitmap LCDs (Archos b&w, Iriver & Ipod 4-grey) within plugins.
+*
+* Copyright (C) 2008 Jens Arnold
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** verified  Average measurements of 2 iAudio remotes connected to an M3.  The actual LCD scanrate is 3x as high, but 150 Hz or 75 Hz cause a too high
+ * CPU load (> 50 %). Even at 50Hz, greyscale display is rather smooth. Average
+ * from 2 iAudio remotes.  Hz  verified  Measurement of one iAudio M5L  Hz  verified  Average measurements of an iPod 1st Gen (0x00010001) and an iPod 2nd Gen
+ * (0x00020000), measured with both backlight off & backlight on (flipped
+ * curves) and medium load (white background when measuring with backlight on),
+ * as the curve is load dependent (the controller's step-up converter doesn't
+ * provide enough juice). Table is for backlight_off state.  Average from an iPod 1st Gen and an iPod 2nd Gen  Hz  verified  should be identical  TODO: verify  TODO: verify  Measurement of one iPod Mini G2  Average of an iPod Mini G2 and 2 3rd Gen iPods.  Hz  verified  Measurement of one Iriver H140  Hz  verified  Average measurements of 2 m:robe 100 s  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  matrix generated in the following way
+ * 1) run 5 times test_grey
+ * 2) average results (joint points)
+ * 3) plot full matrix obtained by natural cubic b-spline interpolation
+ * 4) hand tweak joint points to smooth the curve
+ * 5) repeat steps 3 and 4 until interpolated curve is smooth
+  Hz  verified  Measurement of one iAudio M5L  Hz  not yet calibrated targets - generic linear mapping  TODO: calibrate iFP7xx  generic default  Hz  SIMULATOR  undo a (generic) PC display gamma of 2.0 to simulate target behaviour  SIMULATOR  Prototypes  Step 1: Calculate a transposed table for undoing the old mapping  Step 2: Calculate new mapping  Step 3: Transpose all pixel values  Update LCD areas not covered by the greyscale overlay  refresh part above overlay, full width  refresh part below overlay, full width  refresh part to the left of overlay  refresh part to the right of overlay  Callback function for grey_ub_gray_bitmap_part() to read a pixel from the
+ * greybuffer. Note that x and y are in LCD coordinates, not greybuffer
+ * coordinates!  vertical packing or vertical interleaved  !SIMULATOR  Timer interrupt handler: display next frame  don't overload this timer slot  vertical packing or vertical interleaved  lcd_update() requested?  clear request  !SIMULATOR  approx. data /= 257  approx. data / 255  Initialise the framework and prepare the greyscale display buffer
+
+ arguments:
+   gbuf      = pointer to the memory area to use (e.g. plugin buffer)
+   gbuf_size = max usable size of the buffer
+   features  = flags for requesting features
+               GREY_BUFFERED: use chunky pixel buffering
+               This allows to use all drawing functions, but needs more
+               memory. Unbuffered operation provides only a subset of
+               drawing functions. (only grey_bitmap drawing and scrolling)
+               GREY_RAWMAPPED: no LCD linearisation and gamma correction
+   width     = width in pixels  (1..LCD_WIDTH)
+   height    = height in pixels (1..LCD_HEIGHT)
+               Note that depending on the target LCD, either height or
+               width are rounded up to a multiple of 4 or 8.
+
+ result:
+   true on success, false on failure
+
+   If you need info about the memory taken by the greyscale buffer, supply a
+   long* as the last parameter. This long will then contain the number of bytes
+   used. The total memory needed can be calculated as follows:
+ total_mem =
+     width * height * 2               [grey display data]
+   + buffered ? (width * height) : 0  [chunky buffer]
+   + 0..3                             [alignment]
+
+   The function is authentic regarding memory usage on the simulator, even
+   if it doesn't use all of the allocated memory.  vertical packing or vertical interleaved  Buffers should be line aligned  Buffers must be cache line aligned  Buffers must be 32 bit aligned.  chunky buffer  Values and phases must be uncached when running on COP  Init to white  Init phases with random bits  vertical packing or vertical interleaved  default viewport and settings  precalculate the value -> pattern index conversion table, taking
+       linearisation and gamma correction into account  caller requested info about space taken  Release the greyscale display buffer and the library
+   DO CALL either this function or at least grey_show_display(false)
+   before you exit, otherwise nasty things may happen.  Switch the greyscale overlay on or off
+   DO NOT call lcd_update() or any other api function that directly accesses
+   the lcd while the greyscale overlay is running! If you need to do
+   lcd_update() to update something outside the greyscale overlay area, use
+   grey_deferred_update() instead.
+
+ Other functions to avoid are:
+   lcd_blit_mono(), lcd_update_rect(), lcd_set_contrast(),
+   lcd_set_invert_display(), lcd_set_flip()  !SIMULATOR  !SIMULATOR  !SIMULATOR  Make sure the ISR has finished before calling lcd_update()  !SIMULATOR  restore whatever there was before  Update the whole greyscale overlay  Do an lcd_update() to show changes done by rb->lcd_xxx() functions
+   (in areas of the screen not covered by the greyscale overlay). ** Screenshot ** 'BM'  Total file size  Reserved  Offset to start of pixel data  Size of (2nd) header  Width in pixels  Height in pixels  Number of planes (always 1)  Bits per pixel 1/4/8/16/24  Compression mode, 0 = none  Size of bitmap data  Horizontal resolution (pixels/meter)  Vertical resolution (pixels/meter)  Number of used colours  Number of important colours  Only defined for positive, non-split LCD for now  Hook function for core screen_dump() to save the current display
+   content (b&w and greyscale overlay) to an 8-bit BMP file.  LCD_PIXELFORMAT  write header  build clut  BMP image goes bottom -> top  LCD_DEPTH  LCD_DEPTH  LCD_DEPTH  LCD_PIXELFORMAT **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* New greyscale framework
+* Core & miscellaneous functions
+*
+* This is a generic framework to display 129 shades of grey on low-depth
+* bitmap LCDs (Archos b&w, Iriver & Ipod 4-grey) within plugins.
+*
+* Copyright (C) 2008 Jens Arnold
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** verified  Average measurements of 2 iAudio remotes connected to an M3.  The actual LCD scanrate is 3x as high, but 150 Hz or 75 Hz cause a too high
+ * CPU load (> 50 %). Even at 50Hz, greyscale display is rather smooth. Average
+ * from 2 iAudio remotes.  Hz  verified  Measurement of one iAudio M5L  Hz  verified  Average measurements of an iPod 1st Gen (0x00010001) and an iPod 2nd Gen
+ * (0x00020000), measured with both backlight off & backlight on (flipped
+ * curves) and medium load (white background when measuring with backlight on),
+ * as the curve is load dependent (the controller's step-up converter doesn't
+ * provide enough juice). Table is for backlight_off state.  Average from an iPod 1st Gen and an iPod 2nd Gen  Hz  verified  should be identical  TODO: verify  TODO: verify  Measurement of one iPod Mini G2  Average of an iPod Mini G2 and 2 3rd Gen iPods.  Hz  verified  Measurement of one Iriver H140  Hz  verified  Average measurements of 2 m:robe 100 s  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  matrix generated in the following way
+ * 1) run 5 times test_grey
+ * 2) average results (joint points)
+ * 3) plot full matrix obtained by natural cubic b-spline interpolation
+ * 4) hand tweak joint points to smooth the curve
+ * 5) repeat steps 3 and 4 until interpolated curve is smooth
+  Hz  verified  Measurement of one iAudio M5L  Hz  not yet calibrated targets - generic linear mapping  TODO: calibrate iFP7xx  generic default  Hz  SIMULATOR  undo a (generic) PC display gamma of 2.0 to simulate target behaviour  SIMULATOR  Prototypes  Step 1: Calculate a transposed table for undoing the old mapping  Step 2: Calculate new mapping  Step 3: Transpose all pixel values  Update LCD areas not covered by the greyscale overlay  refresh part above overlay, full width  refresh part below overlay, full width  refresh part to the left of overlay  refresh part to the right of overlay  Callback function for grey_ub_gray_bitmap_part() to read a pixel from the
+ * greybuffer. Note that x and y are in LCD coordinates, not greybuffer
+ * coordinates!  vertical packing or vertical interleaved  !SIMULATOR  Timer interrupt handler: display next frame  don't overload this timer slot  vertical packing or vertical interleaved  lcd_update() requested?  clear request  !SIMULATOR  approx. data /= 257  approx. data / 255  Initialise the framework and prepare the greyscale display buffer
+
+ arguments:
+   gbuf      = pointer to the memory area to use (e.g. plugin buffer)
+   gbuf_size = max usable size of the buffer
+   features  = flags for requesting features
+               GREY_BUFFERED: use chunky pixel buffering
+               This allows to use all drawing functions, but needs more
+               memory. Unbuffered operation provides only a subset of
+               drawing functions. (only grey_bitmap drawing and scrolling)
+               GREY_RAWMAPPED: no LCD linearisation and gamma correction
+   width     = width in pixels  (1..LCD_WIDTH)
+   height    = height in pixels (1..LCD_HEIGHT)
+               Note that depending on the target LCD, either height or
+               width are rounded up to a multiple of 4 or 8.
+
+ result:
+   true on success, false on failure
+
+   If you need info about the memory taken by the greyscale buffer, supply a
+   long* as the last parameter. This long will then contain the number of bytes
+   used. The total memory needed can be calculated as follows:
+ total_mem =
+     width * height * 2               [grey display data]
+   + buffered ? (width * height) : 0  [chunky buffer]
+   + 0..3                             [alignment]
+
+   The function is authentic regarding memory usage on the simulator, even
+   if it doesn't use all of the allocated memory.  vertical packing or vertical interleaved  Buffers should be line aligned  Buffers must be cache line aligned  Buffers must be 32 bit aligned.  chunky buffer  Values and phases must be uncached when running on COP  Init to white  Init phases with random bits  vertical packing or vertical interleaved  default viewport and settings  precalculate the value -> pattern index conversion table, taking
+       linearisation and gamma correction into account  caller requested info about space taken  Release the greyscale display buffer and the library
+   DO CALL either this function or at least grey_show_display(false)
+   before you exit, otherwise nasty things may happen.  Switch the greyscale overlay on or off
+   DO NOT call lcd_update() or any other api function that directly accesses
+   the lcd while the greyscale overlay is running! If you need to do
+   lcd_update() to update something outside the greyscale overlay area, use
+   grey_deferred_update() instead.
+
+ Other functions to avoid are:
+   lcd_blit_mono(), lcd_update_rect(), lcd_set_contrast(),
+   lcd_set_invert_display(), lcd_set_flip()  !SIMULATOR  !SIMULATOR  !SIMULATOR  Make sure the ISR has finished before calling lcd_update()  !SIMULATOR  restore whatever there was before  Update the whole greyscale overlay  Do an lcd_update() to show changes done by rb->lcd_xxx() functions
+   (in areas of the screen not covered by the greyscale overlay). ** Screenshot ** 'BM'  Total file size  Reserved  Offset to start of pixel data  Size of (2nd) header  Width in pixels  Height in pixels  Number of planes (always 1)  Bits per pixel 1/4/8/16/24  Compression mode, 0 = none  Size of bitmap data  Horizontal resolution (pixels/meter)  Vertical resolution (pixels/meter)  Number of used colours  Number of important colours  Only defined for positive, non-split LCD for now  Hook function for core screen_dump() to save the current display
+   content (b&w and greyscale overlay) to an 8-bit BMP file.  LCD_PIXELFORMAT  write header  build clut  BMP image goes bottom -> top  LCD_DEPTH  LCD_DEPTH  LCD_DEPTH  LCD_PIXELFORMAT **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* New greyscale framework
+* Core & miscellaneous functions
+*
+* This is a generic framework to display 129 shades of grey on low-depth
+* bitmap LCDs (Archos b&w, Iriver & Ipod 4-grey) within plugins.
+*
+* Copyright (C) 2008 Jens Arnold
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** verified  Average measurements of 2 iAudio remotes connected to an M3.  The actual LCD scanrate is 3x as high, but 150 Hz or 75 Hz cause a too high
+ * CPU load (> 50 %). Even at 50Hz, greyscale display is rather smooth. Average
+ * from 2 iAudio remotes.  Hz  verified  Measurement of one iAudio M5L  Hz  verified  Average measurements of an iPod 1st Gen (0x00010001) and an iPod 2nd Gen
+ * (0x00020000), measured with both backlight off & backlight on (flipped
+ * curves) and medium load (white background when measuring with backlight on),
+ * as the curve is load dependent (the controller's step-up converter doesn't
+ * provide enough juice). Table is for backlight_off state.  Average from an iPod 1st Gen and an iPod 2nd Gen  Hz  verified  should be identical  TODO: verify  TODO: verify  Measurement of one iPod Mini G2  Average of an iPod Mini G2 and 2 3rd Gen iPods.  Hz  verified  Measurement of one Iriver H140  Hz  verified  Average measurements of 2 m:robe 100 s  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  TODO: calibrate  Hz  matrix generated in the following way
+ * 1) run 5 times test_grey
+ * 2) average results (joint points)
+ * 3) plot full matrix obtained by natural cubic b-spline interpolation
+ * 4) hand tweak joint points to smooth the curve
+ * 5) repeat steps 3 and 4 until interpolated curve is smooth
+  Hz  verified  Measurement of one iAudio M5L  Hz  not yet calibrated targets - generic linear mapping  TODO: calibrate iFP7xx  generic default  Hz  SIMULATOR  undo a (generic) PC display gamma of 2.0 to simulate target behaviour  SIMULATOR  Prototypes  Step 1: Calculate a transposed table for undoing the old mapping  Step 2: Calculate new mapping  Step 3: Transpose all pixel values  Update LCD areas not covered by the greyscale overlay  refresh part above overlay, full width  refresh part below overlay, full width  refresh part to the left of overlay  refresh part to the right of overlay  Callback function for grey_ub_gray_bitmap_part() to read a pixel from the
+ * greybuffer. Note that x and y are in LCD coordinates, not greybuffer
+ * coordinates!  vertical packing or vertical interleaved  !SIMULATOR  Timer interrupt handler: display next frame  don't overload this timer slot  vertical packing or vertical interleaved  lcd_update() requested?  clear request  !SIMULATOR  approx. data /= 257  approx. data / 255  Initialise the framework and prepare the greyscale display buffer
+
+ arguments:
+   gbuf      = pointer to the memory area to use (e.g. plugin buffer)
+   gbuf_size = max usable size of the buffer
+   features  = flags for requesting features
+               GREY_BUFFERED: use chunky pixel buffering
+               This allows to use all drawing functions, but needs more
+               memory. Unbuffered operation provides only a subset of
+               drawing functions. (only grey_bitmap drawing and scrolling)
+               GREY_RAWMAPPED: no LCD linearisation and gamma correction
+   width     = width in pixels  (1..LCD_WIDTH)
+   height    = height in pixels (1..LCD_HEIGHT)
+               Note that depending on the target LCD, either height or
+               width are rounded up to a multiple of 4 or 8.
+
+ result:
+   true on success, false on failure
+
+   If you need info about the memory taken by the greyscale buffer, supply a
+   long* as the last parameter. This long will then contain the number of bytes
+   used. The total memory needed can be calculated as follows:
+ total_mem =
+     width * height * 2               [grey display data]
+   + buffered ? (width * height) : 0  [chunky buffer]
+   + 0..3                             [alignment]
+
+   The function is authentic regarding memory usage on the simulator, even
+   if it doesn't use all of the allocated memory.  vertical packing or vertical interleaved  Buffers should be line aligned  Buffers must be cache line aligned  Buffers must be 32 bit aligned.  chunky buffer  Values and phases must be uncached when running on COP  Init to white  Init phases with random bits  vertical packing or vertical interleaved  default viewport and settings  precalculate the value -> pattern index conversion table, taking
+       linearisation and gamma correction into account  caller requested info about space taken  Release the greyscale display buffer and the library
+   DO CALL either this function or at least grey_show_display(false)
+   before you exit, otherwise nasty things may happen.  Switch the greyscale overlay on or off
+   DO NOT call lcd_update() or any other api function that directly accesses
+   the lcd while the greyscale overlay is running! If you need to do
+   lcd_update() to update something outside the greyscale overlay area, use
+   grey_deferred_update() instead.
+
+ Other functions to avoid are:
+   lcd_blit_mono(), lcd_update_rect(), lcd_set_contrast(),
+   lcd_set_invert_display(), lcd_set_flip()  !SIMULATOR  !SIMULATOR  !SIMULATOR  Make sure the ISR has finished before calling lcd_update()  !SIMULATOR  restore whatever there was before  Update the whole greyscale overlay  Do an lcd_update() to show changes done by rb->lcd_xxx() functions
+   (in areas of the screen not covered by the greyscale overlay). ** Screenshot ** 'BM'  Total file size  Reserved  Offset to start of pixel data  Size of (2nd) header  Width in pixels  Height in pixels  Number of planes (always 1)  Bits per pixel 1/4/8/16/24  Compression mode, 0 = none  Size of bitmap data  Horizontal resolution (pixels/meter)  Vertical resolution (pixels/meter)  Number of used colours  Number of important colours  Only defined for positive, non-split LCD for now  Hook function for core screen_dump() to save the current display
+   content (b&w and greyscale overlay) to an 8-bit BMP file.  LCD_PIXELFORMAT  write header  build clut  BMP image goes bottom -> top  LCD_DEPTH  LCD_DEPTH  LCD_DEPTH  LCD_PIXELFORMAT 

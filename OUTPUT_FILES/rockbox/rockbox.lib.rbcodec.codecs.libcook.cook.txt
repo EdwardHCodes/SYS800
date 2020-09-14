@@ -1,0 +1,478 @@
+
+ * COOK compatible decoder
+ * Copyright (c) 2003 Sascha Sommer
+ * Copyright (c) 2005 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file cook.c
+ * Cook compatible decoder. Bastardization of the G.722.1 standard.
+ * This decoder handles RealNetworks, RealAudio G2 data.
+ * Cook is identified by the codec name cook in RM files.
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided from the RM container; 8+ bytes for mono streams and
+ * 16+ for stereo streams (maybe more).
+ *
+ * Codec technicalities (all this assume a buffer length of 1024):
+ * Cook works with several different techniques to achieve its compression.
+ * In the timedomain the buffer is divided into 8 pieces and quantized. If
+ * two neighboring pieces have different quantization index a smooth
+ * quantization curve is used to get a smooth overlap between the different
+ * pieces.
+ * To get to the transformdomain Cook uses a modulated lapped transform.
+ * The transform domain has 50 subbands with 20 elements each. This
+ * means only a maximum of 50*20=1000 coefficients are used out of the 1024
+ * available.
+  the different Cook versions multichannel Cook, not supported#define COOKDEBUG*
+ * Random bit stream generator.
+  typical RNG numbers >>31 debug functions ************** init functions ************** Codebook sizes (11586 * 4 bytes in total)  Used for envelope_quant_index[].  Used for sqvh[].  Used for ccpl.  Code book sizes (11586 entries in total)  Set pointers for codebooks.  Init envelope VLC (13 books)  Init subband VLC (7 books)  Init Joint-Stereo VLC (1 book) ************** init functions end ***********
+ * Cook indata decoding, every 32 bits are XORed with 0x37c511f2.
+ * Why? No idea, some checksum/error detection method maybe.
+ *
+ * Out buffer size: extra bytes are needed to cope with
+ * padding/misalignment.
+ * Subpackets passed to the decoder can contain two, consecutive
+ * half-subpackets, of identical but arbitrary size.
+ *          1234 1234 1234 1234  extraA extraB
+ * Case 1:  AAAA BBBB              0      0
+ * Case 2:  AAAA ABBB BB--         3      3
+ * Case 3:  AAAA AABB BBBB         2      2
+ * Case 4:  AAAA AAAB BBBB BB--    1      5
+ *
+ * Nice way to waste CPU cycles.
+ *
+ * @param inbuffer  pointer to byte array of indata
+ * @param out       pointer to byte array of outdata
+ * @param bytes     number of bytes
+  FIXME: 64 bit platforms would be able to do 64 bits at a time.
+     * I'm too lazy though, should be something like
+     * for(i=0 ; i<bitamount/64 ; i++)
+     *     (int64_t)out[i] = 0x37c511f237c511f2^be2me_64(int64_t)in[i]);
+     * Buffer alignment needs to be checked. *
+ * Fill the gain array for the timedomain quantization.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param gaininfo[9]       array of gain indexes
+ amount of elements*2 to update*
+ * Create the quant index table needed for the envelope.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param quant_index_table pointer to the array
+ This is used later in categorizethe VLC tables >13 are identical to No. 13differential encoding*
+ * Calculate the category and category_index vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param quant_index_table     pointer to the array
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ av_log(q->avctx, AV_LOG_ERROR, "bits_left = %d\n",bits_left); Estimate bias.  Calculate total number of bits.  --->  <--- *
+ * Expand the category vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ *
+ * Unpack the subband_coef_index and subband_coef_sign vectors.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param subband_coef_index    array of indexes to quant_centroid_tab
+ * @param subband_coef_sign     signs of coefficients
+ *
+ * Fill the mlt_buffer with mlt coefficients.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param category          pointer to the category array
+ * @param quant_index_table pointer to the array
+ * @param mlt_buffer        pointer to mlt coefficients
+  A zero in this table means that the subband coefficient is
+       random noise coded.  A zero in this table means that the subband coefficient is a
+       positive multiplicator.  FIXME: should this be removed, or moved into loop above? *
+ * function for decoding mono data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer        pointer to mlt coefficients
+ *
+ * function for getting the jointstereo coupling information
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decouple_tab      decoupling array
+ *
+ *
+ * function for decoding joint stereo data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer1       pointer to left channel mlt coefficients
+ * @param mlt_buffer2       pointer to right channel mlt coefficients
+  Make sure the buffers are zeroed out.  The two channels are stored interleaved in decode_buffer.  When we reach js_subband_start (the higher frequencies)
+       the coefficients are stored in a coupling scheme. *
+ * First part of subpacket decoding:
+ *  decode raw stream bytes and read gain info.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to raw stream data
+ * @param gain_ptr          array of current/prev gain pointers
+  Swap current and previous gains *
+ * Final part of subpacket decoding:
+ *  Apply modulated lapped transform, gain compensation,
+ *  clip and convert to integer.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decode_buffer     pointer to the mlt coefficients
+ * @param gain_ptr          array of current/prev gain pointers
+ * @param previous_buffer   pointer to the previous buffer to be used for overlapping
+ * @param out               pointer to the output buffer
+ * @param chan              0: left or single channel, 1: right channel
+  Overlap with the previous block.  Apply gain profile  Save away the current to be previous block.  Copy output to non-interleaved sample buffer *
+ * Cook subpacket decoding. This function returns one decoded subpacket,
+ * usually 1024 samples per channel.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to the inbuffer
+ * @param sub_packet_size   subpacket size
+ * @param outbuffer         pointer to the outbuffer
+  packet dump     for (i=0 ; i<sub_packet_size ; i++) {        DEBUGF("%02x", inbuffer[i]);    }    DEBUGF("\n");*
+ * Cook frame decoding
+ *
+ * @param rmctx     pointer to the RMContext
+ COOKContext *q = avctx->priv_data;COOKContext *q; Discard the first two frames: no valid audio. int i=0;*
+ * Cook initialization
+  cook extradata  Take data from the RMContext (RM container).  Initialize RNG.  Initialize extradata related variables.  Initialize default data states.  Initialize version-dependent variables  Initialize variable relations  Generate tables  Initialize COOK signal arithmetic handling 
+    if (1) {
+        q->scalar_dequant  = scalar_dequant_math;
+        q->interpolate     = interpolate_math;
+    }
+     Try to catch some obviously faulty streams, othervise it might be exploitable 
+ * COOK compatible decoder
+ * Copyright (c) 2003 Sascha Sommer
+ * Copyright (c) 2005 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file cook.c
+ * Cook compatible decoder. Bastardization of the G.722.1 standard.
+ * This decoder handles RealNetworks, RealAudio G2 data.
+ * Cook is identified by the codec name cook in RM files.
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided from the RM container; 8+ bytes for mono streams and
+ * 16+ for stereo streams (maybe more).
+ *
+ * Codec technicalities (all this assume a buffer length of 1024):
+ * Cook works with several different techniques to achieve its compression.
+ * In the timedomain the buffer is divided into 8 pieces and quantized. If
+ * two neighboring pieces have different quantization index a smooth
+ * quantization curve is used to get a smooth overlap between the different
+ * pieces.
+ * To get to the transformdomain Cook uses a modulated lapped transform.
+ * The transform domain has 50 subbands with 20 elements each. This
+ * means only a maximum of 50*20=1000 coefficients are used out of the 1024
+ * available.
+  the different Cook versions multichannel Cook, not supported#define COOKDEBUG*
+ * Random bit stream generator.
+  typical RNG numbers >>31 debug functions ************** init functions ************** Codebook sizes (11586 * 4 bytes in total)  Used for envelope_quant_index[].  Used for sqvh[].  Used for ccpl.  Code book sizes (11586 entries in total)  Set pointers for codebooks.  Init envelope VLC (13 books)  Init subband VLC (7 books)  Init Joint-Stereo VLC (1 book) ************** init functions end ***********
+ * Cook indata decoding, every 32 bits are XORed with 0x37c511f2.
+ * Why? No idea, some checksum/error detection method maybe.
+ *
+ * Out buffer size: extra bytes are needed to cope with
+ * padding/misalignment.
+ * Subpackets passed to the decoder can contain two, consecutive
+ * half-subpackets, of identical but arbitrary size.
+ *          1234 1234 1234 1234  extraA extraB
+ * Case 1:  AAAA BBBB              0      0
+ * Case 2:  AAAA ABBB BB--         3      3
+ * Case 3:  AAAA AABB BBBB         2      2
+ * Case 4:  AAAA AAAB BBBB BB--    1      5
+ *
+ * Nice way to waste CPU cycles.
+ *
+ * @param inbuffer  pointer to byte array of indata
+ * @param out       pointer to byte array of outdata
+ * @param bytes     number of bytes
+  FIXME: 64 bit platforms would be able to do 64 bits at a time.
+     * I'm too lazy though, should be something like
+     * for(i=0 ; i<bitamount/64 ; i++)
+     *     (int64_t)out[i] = 0x37c511f237c511f2^be2me_64(int64_t)in[i]);
+     * Buffer alignment needs to be checked. *
+ * Fill the gain array for the timedomain quantization.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param gaininfo[9]       array of gain indexes
+ amount of elements*2 to update*
+ * Create the quant index table needed for the envelope.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param quant_index_table pointer to the array
+ This is used later in categorizethe VLC tables >13 are identical to No. 13differential encoding*
+ * Calculate the category and category_index vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param quant_index_table     pointer to the array
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ av_log(q->avctx, AV_LOG_ERROR, "bits_left = %d\n",bits_left); Estimate bias.  Calculate total number of bits.  --->  <--- *
+ * Expand the category vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ *
+ * Unpack the subband_coef_index and subband_coef_sign vectors.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param subband_coef_index    array of indexes to quant_centroid_tab
+ * @param subband_coef_sign     signs of coefficients
+ *
+ * Fill the mlt_buffer with mlt coefficients.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param category          pointer to the category array
+ * @param quant_index_table pointer to the array
+ * @param mlt_buffer        pointer to mlt coefficients
+  A zero in this table means that the subband coefficient is
+       random noise coded.  A zero in this table means that the subband coefficient is a
+       positive multiplicator.  FIXME: should this be removed, or moved into loop above? *
+ * function for decoding mono data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer        pointer to mlt coefficients
+ *
+ * function for getting the jointstereo coupling information
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decouple_tab      decoupling array
+ *
+ *
+ * function for decoding joint stereo data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer1       pointer to left channel mlt coefficients
+ * @param mlt_buffer2       pointer to right channel mlt coefficients
+  Make sure the buffers are zeroed out.  The two channels are stored interleaved in decode_buffer.  When we reach js_subband_start (the higher frequencies)
+       the coefficients are stored in a coupling scheme. *
+ * First part of subpacket decoding:
+ *  decode raw stream bytes and read gain info.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to raw stream data
+ * @param gain_ptr          array of current/prev gain pointers
+  Swap current and previous gains *
+ * Final part of subpacket decoding:
+ *  Apply modulated lapped transform, gain compensation,
+ *  clip and convert to integer.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decode_buffer     pointer to the mlt coefficients
+ * @param gain_ptr          array of current/prev gain pointers
+ * @param previous_buffer   pointer to the previous buffer to be used for overlapping
+ * @param out               pointer to the output buffer
+ * @param chan              0: left or single channel, 1: right channel
+  Overlap with the previous block.  Apply gain profile  Save away the current to be previous block.  Copy output to non-interleaved sample buffer *
+ * Cook subpacket decoding. This function returns one decoded subpacket,
+ * usually 1024 samples per channel.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to the inbuffer
+ * @param sub_packet_size   subpacket size
+ * @param outbuffer         pointer to the outbuffer
+  packet dump     for (i=0 ; i<sub_packet_size ; i++) {        DEBUGF("%02x", inbuffer[i]);    }    DEBUGF("\n");*
+ * Cook frame decoding
+ *
+ * @param rmctx     pointer to the RMContext
+ COOKContext *q = avctx->priv_data;COOKContext *q; Discard the first two frames: no valid audio. int i=0;*
+ * Cook initialization
+  cook extradata  Take data from the RMContext (RM container).  Initialize RNG.  Initialize extradata related variables.  Initialize default data states.  Initialize version-dependent variables  Initialize variable relations  Generate tables  Initialize COOK signal arithmetic handling 
+    if (1) {
+        q->scalar_dequant  = scalar_dequant_math;
+        q->interpolate     = interpolate_math;
+    }
+     Try to catch some obviously faulty streams, othervise it might be exploitable 
+ * COOK compatible decoder
+ * Copyright (c) 2003 Sascha Sommer
+ * Copyright (c) 2005 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file cook.c
+ * Cook compatible decoder. Bastardization of the G.722.1 standard.
+ * This decoder handles RealNetworks, RealAudio G2 data.
+ * Cook is identified by the codec name cook in RM files.
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided from the RM container; 8+ bytes for mono streams and
+ * 16+ for stereo streams (maybe more).
+ *
+ * Codec technicalities (all this assume a buffer length of 1024):
+ * Cook works with several different techniques to achieve its compression.
+ * In the timedomain the buffer is divided into 8 pieces and quantized. If
+ * two neighboring pieces have different quantization index a smooth
+ * quantization curve is used to get a smooth overlap between the different
+ * pieces.
+ * To get to the transformdomain Cook uses a modulated lapped transform.
+ * The transform domain has 50 subbands with 20 elements each. This
+ * means only a maximum of 50*20=1000 coefficients are used out of the 1024
+ * available.
+  the different Cook versions multichannel Cook, not supported#define COOKDEBUG*
+ * Random bit stream generator.
+  typical RNG numbers >>31 debug functions ************** init functions ************** Codebook sizes (11586 * 4 bytes in total)  Used for envelope_quant_index[].  Used for sqvh[].  Used for ccpl.  Code book sizes (11586 entries in total)  Set pointers for codebooks.  Init envelope VLC (13 books)  Init subband VLC (7 books)  Init Joint-Stereo VLC (1 book) ************** init functions end ***********
+ * Cook indata decoding, every 32 bits are XORed with 0x37c511f2.
+ * Why? No idea, some checksum/error detection method maybe.
+ *
+ * Out buffer size: extra bytes are needed to cope with
+ * padding/misalignment.
+ * Subpackets passed to the decoder can contain two, consecutive
+ * half-subpackets, of identical but arbitrary size.
+ *          1234 1234 1234 1234  extraA extraB
+ * Case 1:  AAAA BBBB              0      0
+ * Case 2:  AAAA ABBB BB--         3      3
+ * Case 3:  AAAA AABB BBBB         2      2
+ * Case 4:  AAAA AAAB BBBB BB--    1      5
+ *
+ * Nice way to waste CPU cycles.
+ *
+ * @param inbuffer  pointer to byte array of indata
+ * @param out       pointer to byte array of outdata
+ * @param bytes     number of bytes
+  FIXME: 64 bit platforms would be able to do 64 bits at a time.
+     * I'm too lazy though, should be something like
+     * for(i=0 ; i<bitamount/64 ; i++)
+     *     (int64_t)out[i] = 0x37c511f237c511f2^be2me_64(int64_t)in[i]);
+     * Buffer alignment needs to be checked. *
+ * Fill the gain array for the timedomain quantization.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param gaininfo[9]       array of gain indexes
+ amount of elements*2 to update*
+ * Create the quant index table needed for the envelope.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param quant_index_table pointer to the array
+ This is used later in categorizethe VLC tables >13 are identical to No. 13differential encoding*
+ * Calculate the category and category_index vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param quant_index_table     pointer to the array
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ av_log(q->avctx, AV_LOG_ERROR, "bits_left = %d\n",bits_left); Estimate bias.  Calculate total number of bits.  --->  <--- *
+ * Expand the category vector.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param category_index        pointer to the category_index array
+ *
+ * Unpack the subband_coef_index and subband_coef_sign vectors.
+ *
+ * @param q                     pointer to the COOKContext
+ * @param category              pointer to the category array
+ * @param subband_coef_index    array of indexes to quant_centroid_tab
+ * @param subband_coef_sign     signs of coefficients
+ *
+ * Fill the mlt_buffer with mlt coefficients.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param category          pointer to the category array
+ * @param quant_index_table pointer to the array
+ * @param mlt_buffer        pointer to mlt coefficients
+  A zero in this table means that the subband coefficient is
+       random noise coded.  A zero in this table means that the subband coefficient is a
+       positive multiplicator.  FIXME: should this be removed, or moved into loop above? *
+ * function for decoding mono data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer        pointer to mlt coefficients
+ *
+ * function for getting the jointstereo coupling information
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decouple_tab      decoupling array
+ *
+ *
+ * function for decoding joint stereo data
+ *
+ * @param q                 pointer to the COOKContext
+ * @param mlt_buffer1       pointer to left channel mlt coefficients
+ * @param mlt_buffer2       pointer to right channel mlt coefficients
+  Make sure the buffers are zeroed out.  The two channels are stored interleaved in decode_buffer.  When we reach js_subband_start (the higher frequencies)
+       the coefficients are stored in a coupling scheme. *
+ * First part of subpacket decoding:
+ *  decode raw stream bytes and read gain info.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to raw stream data
+ * @param gain_ptr          array of current/prev gain pointers
+  Swap current and previous gains *
+ * Final part of subpacket decoding:
+ *  Apply modulated lapped transform, gain compensation,
+ *  clip and convert to integer.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param decode_buffer     pointer to the mlt coefficients
+ * @param gain_ptr          array of current/prev gain pointers
+ * @param previous_buffer   pointer to the previous buffer to be used for overlapping
+ * @param out               pointer to the output buffer
+ * @param chan              0: left or single channel, 1: right channel
+  Overlap with the previous block.  Apply gain profile  Save away the current to be previous block.  Copy output to non-interleaved sample buffer *
+ * Cook subpacket decoding. This function returns one decoded subpacket,
+ * usually 1024 samples per channel.
+ *
+ * @param q                 pointer to the COOKContext
+ * @param inbuffer          pointer to the inbuffer
+ * @param sub_packet_size   subpacket size
+ * @param outbuffer         pointer to the outbuffer
+  packet dump     for (i=0 ; i<sub_packet_size ; i++) {        DEBUGF("%02x", inbuffer[i]);    }    DEBUGF("\n");*
+ * Cook frame decoding
+ *
+ * @param rmctx     pointer to the RMContext
+ COOKContext *q = avctx->priv_data;COOKContext *q; Discard the first two frames: no valid audio. int i=0;*
+ * Cook initialization
+  cook extradata  Take data from the RMContext (RM container).  Initialize RNG.  Initialize extradata related variables.  Initialize default data states.  Initialize version-dependent variables  Initialize variable relations  Generate tables  Initialize COOK signal arithmetic handling 
+    if (1) {
+        q->scalar_dequant  = scalar_dequant_math;
+        q->interpolate     = interpolate_math;
+    }
+     Try to catch some obviously faulty streams, othervise it might be exploitable 

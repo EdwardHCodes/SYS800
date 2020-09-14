@@ -1,0 +1,286 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mkamsboot.c - a tool for merging bootloader code into an Sansa V2
+ *               (AMS) firmware file
+ *
+ * Copyright (C) 2008 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+
+Insert a Rockbox bootloader into a Sansa AMS original firmware file.
+
+Layout of a Sansa AMS original firmware file:
+
+ ----------------------  0x0
+|        HEADER        |
+|----------------------| 0x400
+|    FIRMWARE BLOCK    | (contains the OF version on some fuzev2 firmwares
+|----------------------| 0x600
+|    FIRMWARE BLOCK    |
+|----------------------| 0x400 + firmware block size
+|    LIBRARIES/DATA    |
+ ----------------------  END
+
+We replace the main firmware block while preserving the potential OF version
+(bytes 0x600..0x400+firmware_size) as follows:
+
+
+ ----------------------  0x0
+|                      |
+|    Dual-boot code    |
+|                      |
+|----------------------|
+|     EMPTY SPACE      |
+|----------------------|
+|                      |
+| compressed RB image  |
+|                      |
+|----------------------|
+|                      |
+| compressed OF image  |
+|                      |
+|----------------------|
+| UCL unpack function  |
+ ----------------------
+
+This entire block fits into the space previously occupied by the main
+firmware block - the space saved by compressing the OF image is used
+to store the compressed version of the Rockbox bootloader.
+
+On version 1 firmwares, the OF image is typically about 120KB, which allows
+us to store a Rockbox bootloader with an uncompressed size of about 60KB-70KB.
+Version 2 firmwares are bigger and are stored in SDRAM (instead of IRAM).
+In both cases, the RAM we are using is mapped at offset 0x0.
+
+mkamsboot then corrects the checksums and writes a new legal firmware
+file which can be installed on the device.
+
+When the Sansa device boots, this firmware block is loaded to RAM at
+address 0x0 and executed.
+
+Firstly, the dual-boot code will copy the UCL unpack function to the
+end of RAM.
+
+Then, depending on the detection of the dual-boot keypress, either the
+OF image or the Rockbox image is copied to the end of RAM (just before
+the ucl unpack function) and uncompressed to the start of RAM.
+
+Finally, the ucl unpack function branches to address 0x0, passing
+execution to the uncompressed firmware.
+
+
+ Header for ARM code binaries  Win32 compatibility  fw_revision: version 2 is used in Clipv2, Clip+ and Fuzev2 firmwares  hw_revision: 4 for m200, 2 for e200/c200, 1 or 2 for fuze/clip, 1 for clip+  Checksums of unmodified original firmwares - for safety, and device
+   detection  NOTE: Different regional versions of the firmware normally only
+             differ in the filename - the md5sums are identical    model       version    md5                         The OF boots with IRAM (320kB) mapped at 0x0  The decompressed Clipv2 OF is around 380kB.
+         * Let's use the full IRAM (1MB on AMSv2)
+          The IRAM is 320kB on AMSv1, and 320 will be enough on Fuzev1/Clip+  Calculate a simple checksum used in Sansa Original Firmwares  Compress using nrv2e algorithm : Thumb decompressor fits in 168 bytes !  The following formula comes from the UCL documentation  Allocate some memory for the output buffer  this should NEVER happen, and implies memory corruption  Loads a Sansa AMS Original Firmware file into memory  check the file  Calculate MD5 checksum of OF  OF unknown, give a list of tested versions for the requested model  TODO: Do some more sanity checks on the OF image. Some images (like
+       m200v4) dont have a checksum at the end, only padding (0xdeadbeef).  Get the firmware size  Compress the original firmware image  Loads a rockbox bootloader file into memory  Read Rockbox header  Check checksum  add 8 unsigned bits but keep a 32 bit sum  Patches a Sansa AMS Original Firmware file  Zero the original firmware area - not needed, but helps debugging  Insert dual-boot bootloader at offset 0x200, we preserve the OF
+     * version string located between 0x0 and 0x200  Insert vectors, they won't overwrite the OF version string  mov pc, #0x200 1: b 1b ALL vectors: infinite loop  Now change only the interesting vectors  Reset/SWI vectors: branch to our dualboot code at 0x200  Reset SWI We are filling the firmware buffer backwards from the end  1 - UCL unpack function  2 - Compressed copy of original firmware  3 - Compressed copy of Rockbox bootloader  Write the locations of the various images to the variables at the
+       start of the dualboot image - we save the location of the last byte
+       in each image, along with the size in bytes  UCL unpack function  Compressed original firmware image  Compressed Rockbox image  last byte of memory  Update the firmware block checksum  Update the header checksums  Update the whole-file checksum  returns != 0 if the firmware can be safely patched  XXX: we keep the first 0x200 bytes block unmodified, we just replace
+     * the ARM vectors  how much memory is available  the memory used when unpacking the OF  the memory used when unpacking the bootloader  will packed data fit in the OF file ? **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mkamsboot.c - a tool for merging bootloader code into an Sansa V2
+ *               (AMS) firmware file
+ *
+ * Copyright (C) 2008 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+
+Insert a Rockbox bootloader into a Sansa AMS original firmware file.
+
+Layout of a Sansa AMS original firmware file:
+
+ ----------------------  0x0
+|        HEADER        |
+|----------------------| 0x400
+|    FIRMWARE BLOCK    | (contains the OF version on some fuzev2 firmwares
+|----------------------| 0x600
+|    FIRMWARE BLOCK    |
+|----------------------| 0x400 + firmware block size
+|    LIBRARIES/DATA    |
+ ----------------------  END
+
+We replace the main firmware block while preserving the potential OF version
+(bytes 0x600..0x400+firmware_size) as follows:
+
+
+ ----------------------  0x0
+|                      |
+|    Dual-boot code    |
+|                      |
+|----------------------|
+|     EMPTY SPACE      |
+|----------------------|
+|                      |
+| compressed RB image  |
+|                      |
+|----------------------|
+|                      |
+| compressed OF image  |
+|                      |
+|----------------------|
+| UCL unpack function  |
+ ----------------------
+
+This entire block fits into the space previously occupied by the main
+firmware block - the space saved by compressing the OF image is used
+to store the compressed version of the Rockbox bootloader.
+
+On version 1 firmwares, the OF image is typically about 120KB, which allows
+us to store a Rockbox bootloader with an uncompressed size of about 60KB-70KB.
+Version 2 firmwares are bigger and are stored in SDRAM (instead of IRAM).
+In both cases, the RAM we are using is mapped at offset 0x0.
+
+mkamsboot then corrects the checksums and writes a new legal firmware
+file which can be installed on the device.
+
+When the Sansa device boots, this firmware block is loaded to RAM at
+address 0x0 and executed.
+
+Firstly, the dual-boot code will copy the UCL unpack function to the
+end of RAM.
+
+Then, depending on the detection of the dual-boot keypress, either the
+OF image or the Rockbox image is copied to the end of RAM (just before
+the ucl unpack function) and uncompressed to the start of RAM.
+
+Finally, the ucl unpack function branches to address 0x0, passing
+execution to the uncompressed firmware.
+
+
+ Header for ARM code binaries  Win32 compatibility  fw_revision: version 2 is used in Clipv2, Clip+ and Fuzev2 firmwares  hw_revision: 4 for m200, 2 for e200/c200, 1 or 2 for fuze/clip, 1 for clip+  Checksums of unmodified original firmwares - for safety, and device
+   detection  NOTE: Different regional versions of the firmware normally only
+             differ in the filename - the md5sums are identical    model       version    md5                         The OF boots with IRAM (320kB) mapped at 0x0  The decompressed Clipv2 OF is around 380kB.
+         * Let's use the full IRAM (1MB on AMSv2)
+          The IRAM is 320kB on AMSv1, and 320 will be enough on Fuzev1/Clip+  Calculate a simple checksum used in Sansa Original Firmwares  Compress using nrv2e algorithm : Thumb decompressor fits in 168 bytes !  The following formula comes from the UCL documentation  Allocate some memory for the output buffer  this should NEVER happen, and implies memory corruption  Loads a Sansa AMS Original Firmware file into memory  check the file  Calculate MD5 checksum of OF  OF unknown, give a list of tested versions for the requested model  TODO: Do some more sanity checks on the OF image. Some images (like
+       m200v4) dont have a checksum at the end, only padding (0xdeadbeef).  Get the firmware size  Compress the original firmware image  Loads a rockbox bootloader file into memory  Read Rockbox header  Check checksum  add 8 unsigned bits but keep a 32 bit sum  Patches a Sansa AMS Original Firmware file  Zero the original firmware area - not needed, but helps debugging  Insert dual-boot bootloader at offset 0x200, we preserve the OF
+     * version string located between 0x0 and 0x200  Insert vectors, they won't overwrite the OF version string  mov pc, #0x200 1: b 1b ALL vectors: infinite loop  Now change only the interesting vectors  Reset/SWI vectors: branch to our dualboot code at 0x200  Reset SWI We are filling the firmware buffer backwards from the end  1 - UCL unpack function  2 - Compressed copy of original firmware  3 - Compressed copy of Rockbox bootloader  Write the locations of the various images to the variables at the
+       start of the dualboot image - we save the location of the last byte
+       in each image, along with the size in bytes  UCL unpack function  Compressed original firmware image  Compressed Rockbox image  last byte of memory  Update the firmware block checksum  Update the header checksums  Update the whole-file checksum  returns != 0 if the firmware can be safely patched  XXX: we keep the first 0x200 bytes block unmodified, we just replace
+     * the ARM vectors  how much memory is available  the memory used when unpacking the OF  the memory used when unpacking the bootloader  will packed data fit in the OF file ? **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mkamsboot.c - a tool for merging bootloader code into an Sansa V2
+ *               (AMS) firmware file
+ *
+ * Copyright (C) 2008 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+
+Insert a Rockbox bootloader into a Sansa AMS original firmware file.
+
+Layout of a Sansa AMS original firmware file:
+
+ ----------------------  0x0
+|        HEADER        |
+|----------------------| 0x400
+|    FIRMWARE BLOCK    | (contains the OF version on some fuzev2 firmwares
+|----------------------| 0x600
+|    FIRMWARE BLOCK    |
+|----------------------| 0x400 + firmware block size
+|    LIBRARIES/DATA    |
+ ----------------------  END
+
+We replace the main firmware block while preserving the potential OF version
+(bytes 0x600..0x400+firmware_size) as follows:
+
+
+ ----------------------  0x0
+|                      |
+|    Dual-boot code    |
+|                      |
+|----------------------|
+|     EMPTY SPACE      |
+|----------------------|
+|                      |
+| compressed RB image  |
+|                      |
+|----------------------|
+|                      |
+| compressed OF image  |
+|                      |
+|----------------------|
+| UCL unpack function  |
+ ----------------------
+
+This entire block fits into the space previously occupied by the main
+firmware block - the space saved by compressing the OF image is used
+to store the compressed version of the Rockbox bootloader.
+
+On version 1 firmwares, the OF image is typically about 120KB, which allows
+us to store a Rockbox bootloader with an uncompressed size of about 60KB-70KB.
+Version 2 firmwares are bigger and are stored in SDRAM (instead of IRAM).
+In both cases, the RAM we are using is mapped at offset 0x0.
+
+mkamsboot then corrects the checksums and writes a new legal firmware
+file which can be installed on the device.
+
+When the Sansa device boots, this firmware block is loaded to RAM at
+address 0x0 and executed.
+
+Firstly, the dual-boot code will copy the UCL unpack function to the
+end of RAM.
+
+Then, depending on the detection of the dual-boot keypress, either the
+OF image or the Rockbox image is copied to the end of RAM (just before
+the ucl unpack function) and uncompressed to the start of RAM.
+
+Finally, the ucl unpack function branches to address 0x0, passing
+execution to the uncompressed firmware.
+
+
+ Header for ARM code binaries  Win32 compatibility  fw_revision: version 2 is used in Clipv2, Clip+ and Fuzev2 firmwares  hw_revision: 4 for m200, 2 for e200/c200, 1 or 2 for fuze/clip, 1 for clip+  Checksums of unmodified original firmwares - for safety, and device
+   detection  NOTE: Different regional versions of the firmware normally only
+             differ in the filename - the md5sums are identical    model       version    md5                         The OF boots with IRAM (320kB) mapped at 0x0  The decompressed Clipv2 OF is around 380kB.
+         * Let's use the full IRAM (1MB on AMSv2)
+          The IRAM is 320kB on AMSv1, and 320 will be enough on Fuzev1/Clip+  Calculate a simple checksum used in Sansa Original Firmwares  Compress using nrv2e algorithm : Thumb decompressor fits in 168 bytes !  The following formula comes from the UCL documentation  Allocate some memory for the output buffer  this should NEVER happen, and implies memory corruption  Loads a Sansa AMS Original Firmware file into memory  check the file  Calculate MD5 checksum of OF  OF unknown, give a list of tested versions for the requested model  TODO: Do some more sanity checks on the OF image. Some images (like
+       m200v4) dont have a checksum at the end, only padding (0xdeadbeef).  Get the firmware size  Compress the original firmware image  Loads a rockbox bootloader file into memory  Read Rockbox header  Check checksum  add 8 unsigned bits but keep a 32 bit sum  Patches a Sansa AMS Original Firmware file  Zero the original firmware area - not needed, but helps debugging  Insert dual-boot bootloader at offset 0x200, we preserve the OF
+     * version string located between 0x0 and 0x200  Insert vectors, they won't overwrite the OF version string  mov pc, #0x200 1: b 1b ALL vectors: infinite loop  Now change only the interesting vectors  Reset/SWI vectors: branch to our dualboot code at 0x200  Reset SWI We are filling the firmware buffer backwards from the end  1 - UCL unpack function  2 - Compressed copy of original firmware  3 - Compressed copy of Rockbox bootloader  Write the locations of the various images to the variables at the
+       start of the dualboot image - we save the location of the last byte
+       in each image, along with the size in bytes  UCL unpack function  Compressed original firmware image  Compressed Rockbox image  last byte of memory  Update the firmware block checksum  Update the header checksums  Update the whole-file checksum  returns != 0 if the firmware can be safely patched  XXX: we keep the first 0x200 bytes block unmodified, we just replace
+     * the ARM vectors  how much memory is available  the memory used when unpacking the OF  the memory used when unpacking the bootloader  will packed data fit in the OF file ? 

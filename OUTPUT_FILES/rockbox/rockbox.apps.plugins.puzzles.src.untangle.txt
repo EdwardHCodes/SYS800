@@ -1,0 +1,589 @@
+
+ * untangle.c: Game about planar graphs. You are given a graph
+ * represented by points and straight lines, with some lines
+ * crossing; your task is to drag the points into a configuration
+ * where none of the lines cross.
+ * 
+ * Cloned from a Flash game called `Planarity', by John Tantalo.
+ * <http://home.cwru.edu/~jnt5/Planarity> at the time of writing
+ * this. The Flash game had a fixed set of levels; my added value,
+ * as usual, is automatic generation of random games to order.
+ 
+ * TODO:
+ *
+ *  - This puzzle, perhaps uniquely among the collection, could use
+ *    support for non-aspect-ratio-preserving resizes. This would
+ *    require some sort of fairly large redesign, unfortunately (since
+ *    it would invalidate the basic assumption that puzzles' size
+ *    requirements are adequately expressed by a single scalar tile
+ *    size), and probably complicate the rest of the puzzles' API as a
+ *    result. So I'm not sure I really want to do it.
+ *
+ *  - It would be nice if we could somehow auto-detect a real `long
+ *    long' type on the host platform and use it in place of my
+ *    hand-hacked int64s. It'd be faster and more reliable.
+ 
+     * Points are stored using rational coordinates, with the same
+     * denominator for both coordinates.
+     
+     * This structure is implicitly associated with a particular
+     * point set, so all it has to do is to store two point
+     * indices. It is required to store them in the order (lower,
+     * higher), i.e. a < b always.
+      number of points  for deallocation  stores `edge' structures  extent of coordinate system only  mark edges which are crossed  structure copy  ----------------------------------------------------------------------
+ * Small number of 64-bit integer arithmetic operations, to prevent
+ * integer overflow at the very core of cross().
+ 
+ * Determine whether the line segments between a1 and a2, and
+ * between b1 and b2, intersect. We count it as an intersection if
+ * any of the endpoints lies _on_ the other line.
+ 
+     * The condition for crossing is that b1 and b2 are on opposite
+     * sides of the line a1-a2, and vice versa. We determine this
+     * by taking the dot product of b1-a1 with a vector
+     * perpendicular to a2-a1, and similarly with b2-a1, and seeing
+     * if they have different signs.
+     
+     * Construct the vector b1-a1. We don't have to worry too much
+     * about the denominator, because we're only going to check the
+     * sign of this vector; we just need to get the numerator
+     * right.
+      Now construct b2-a1, and a vector perpendicular to a2-a1,
+     * in the same way.  Take the dot products. Here we resort to 64-bit arithmetic.  If they have the same non-zero sign, the lines do not cross. 
+     * If the dot products are both exactly zero, then the two line
+     * segments are collinear. At this point the intersection
+     * condition becomes whether or not they overlap within their
+     * line.
+      Construct the vector a2-a1.  Determine the dot products of b1-a1 and b2-a1 with this.  If they're both strictly negative, the lines do not cross.  Otherwise, take the dot product of a2-a1 with itself. If
+	 * the other two dot products both exceed this, the lines do
+	 * not cross. 
+     * We've eliminated the only important special case, and we
+     * have determined that b1 and b2 are on opposite sides of the
+     * line a1-a2. Now do the same thing the other way round and
+     * we're done.
+     
+     * The lines must cross.
+      largest available power of 4 
+ * Our solutions are arranged on a square grid big enough that n
+ * points occupy about 1/POINTDENSITY of the grid.
+ 
+ * Construct point coordinates for n points arranged in a circle,
+ * within the bounding box (0,0) to (w,w).
+ 
+     * First, decide on a denominator. Although in principle it
+     * would be nice to set this really high so as to finely
+     * distinguish all the points on the circle, I'm going to set
+     * it at a fixed size to prevent integer overflow problems.
+     
+     * Leave a little space outside the circle.
+     
+     * Place the points.
+     
+     * Choose n points from this grid.
+     
+     * Now start adding edges between the points.
+     * 
+     * At all times, we attempt to add an edge to the lowest-degree
+     * vertex we currently have, and we try the other vertices as
+     * candidate second endpoints in order of distance from this
+     * one. We stop as soon as we find an edge which
+     * 
+     *  (a) does not increase any vertex's degree beyond MAXDEGREE
+     *  (b) does not cross any existing edges
+     *  (c) does not intersect any actual point.
+      in this tree, param is the degree  nothing left to add! 
+	     * Sort the other vertices into order of their distance
+	     * from this one. Don't bother looking below i, because
+	     * we've already tried those edges the other way round.
+	     * Also here we rule out target vertices with too high
+	     * a degree, and (of course) ones to which we already
+	     * have an edge.
+	     
+		 * Check to see whether this edge intersects any
+		 * existing edge or point.
+		 
+		 * We're done! Add this edge, modify the degrees of
+		 * the two vertices involved, and break.
+		  we're done. 
+     * That's our graph. Now shuffle the points, making sure that
+     * they come out with at least one crossed line when arranged
+     * in a circle (so that the puzzle isn't immediately solved!).
+      we've found a crossing 
+     * We're done. Now encode the graph in a string format. Let's
+     * use a comma-separated list of dash-separated vertex number
+     * pairs, numbered from zero. We'll sort the list to prevent
+     * side channels.
+     
+     * Encode the solution we started with as an aux_info string.
+      leading 'S' and trailing '\0'  eat dash  eat comma 
+     * Check correctness: for every pair of edges, see whether they
+     * cross.
+      multi-level break - sorry 
+     * e == NULL if we've gone through all the edge pairs
+     * without finding a crossing.
+      eat dash  eat comma  sets up `crosses' and `completed' 
+     * Decode the aux_info to get the original point positions.
+      eat 'S' 
+     * Now go through eight possible symmetries of the point set.
+     * For each one, work out the sum of the Euclidean distances
+     * between the points' current positions and their new ones.
+     * 
+     * We're squaring distances here, which means we're at risk of
+     * integer overflow. Fortunately, there's no real need to be
+     * massively careful about rounding errors, since this is a
+     * non-essential bit of the code; so I'll just work in floats
+     * internally.
+     
+     * Now we know which symmetry is closest to the points' current
+     * positions. Use it.
+     
+         * Use a fixed denominator of 2, because we know the
+         * original points were on an integer grid offset by 1/2.
+          point being dragged; -1 if none  point being highlighted, but
+                                        * not dragged by the cursor,
+                                        * again -1 if none  where it's been dragged to so far  reset in game_changed_state  _set_ in game_changed_state 
+	 * Begin drag. We drag the vertex _nearest_ to the pointer,
+	 * just in case one is nearly on top of another and we want
+	 * to drag the latter. However, we drag nothing at all if
+	 * the nearest vertex is outside DRAG_THRESHOLD.
+	  terminate drag, no matter what 
+	 * First, see if we're within range. The user can cancel a
+	 * drag by dragging the point right off the window.
+	 
+	 * We aren't cancelling the drag. Construct a move string
+	 * indicating where this point is going to.
+	  We're selecting a point here.  Search all the points and find the closest one (2-D) in
+             * the given direction. 
+             * Begin drag. We drag the vertex _nearest_ to the pointer,
+             * just in case one is nearly on top of another and we want
+             * to drag the latter. However, we drag nothing at all if
+             * the nearest vertex is outside DRAG_THRESHOLD.
+              Figure out if this point falls into a 90 degree
+                 * range extending from the current point  negate y to adjust for raster coordinates  offset to [0..2*PI]  dragging  begin drag  end drag  terminate drag, no matter what 
+             * First, see if we're within range. The user can cancel a
+             * drag by dragging the point right off the window.
+             
+             * We aren't cancelling the drag. Construct a move string
+             * indicating where this point is going to.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * COL_BACKGROUND is what we use as the normal background colour.
+     * Unusually, though, it isn't colour #0: COL_SYSBACKGROUND, a bit
+     * darker, takes that place. This means that if the user resizes
+     * an Untangle window so as to change its aspect ratio, the
+     * still-square playable area will be distinguished from the dead
+     * space around it.
+     
+     * There's no terribly sensible way to do partial redraws of
+     * this game, so I'm going to have to resort to redrawing the
+     * whole thing every time.
+     
+     * To prevent excessive spinning on redraw during a completion
+     * flash, we first check to see if _either_ the flash
+     * background colour has changed _or_ at least one point has
+     * moved _or_ a drag has begun or ended, and abandon the redraw
+     * if neither is the case.
+     * 
+     * Also in this loop we work out the coordinates of all the
+     * points for this redraw.
+      nothing to do 
+     * Draw the edges.
+     
+     * Draw the points.
+     * 
+     * When dragging, we should not only vary the colours, but
+     * leave the point being dragged until last.
+      game_request_keys  wants_statusbar  flags 
+ * untangle.c: Game about planar graphs. You are given a graph
+ * represented by points and straight lines, with some lines
+ * crossing; your task is to drag the points into a configuration
+ * where none of the lines cross.
+ * 
+ * Cloned from a Flash game called `Planarity', by John Tantalo.
+ * <http://home.cwru.edu/~jnt5/Planarity> at the time of writing
+ * this. The Flash game had a fixed set of levels; my added value,
+ * as usual, is automatic generation of random games to order.
+ 
+ * TODO:
+ *
+ *  - This puzzle, perhaps uniquely among the collection, could use
+ *    support for non-aspect-ratio-preserving resizes. This would
+ *    require some sort of fairly large redesign, unfortunately (since
+ *    it would invalidate the basic assumption that puzzles' size
+ *    requirements are adequately expressed by a single scalar tile
+ *    size), and probably complicate the rest of the puzzles' API as a
+ *    result. So I'm not sure I really want to do it.
+ *
+ *  - It would be nice if we could somehow auto-detect a real `long
+ *    long' type on the host platform and use it in place of my
+ *    hand-hacked int64s. It'd be faster and more reliable.
+ 
+     * Points are stored using rational coordinates, with the same
+     * denominator for both coordinates.
+     
+     * This structure is implicitly associated with a particular
+     * point set, so all it has to do is to store two point
+     * indices. It is required to store them in the order (lower,
+     * higher), i.e. a < b always.
+      number of points  for deallocation  stores `edge' structures  extent of coordinate system only  mark edges which are crossed  structure copy  ----------------------------------------------------------------------
+ * Small number of 64-bit integer arithmetic operations, to prevent
+ * integer overflow at the very core of cross().
+ 
+ * Determine whether the line segments between a1 and a2, and
+ * between b1 and b2, intersect. We count it as an intersection if
+ * any of the endpoints lies _on_ the other line.
+ 
+     * The condition for crossing is that b1 and b2 are on opposite
+     * sides of the line a1-a2, and vice versa. We determine this
+     * by taking the dot product of b1-a1 with a vector
+     * perpendicular to a2-a1, and similarly with b2-a1, and seeing
+     * if they have different signs.
+     
+     * Construct the vector b1-a1. We don't have to worry too much
+     * about the denominator, because we're only going to check the
+     * sign of this vector; we just need to get the numerator
+     * right.
+      Now construct b2-a1, and a vector perpendicular to a2-a1,
+     * in the same way.  Take the dot products. Here we resort to 64-bit arithmetic.  If they have the same non-zero sign, the lines do not cross. 
+     * If the dot products are both exactly zero, then the two line
+     * segments are collinear. At this point the intersection
+     * condition becomes whether or not they overlap within their
+     * line.
+      Construct the vector a2-a1.  Determine the dot products of b1-a1 and b2-a1 with this.  If they're both strictly negative, the lines do not cross.  Otherwise, take the dot product of a2-a1 with itself. If
+	 * the other two dot products both exceed this, the lines do
+	 * not cross. 
+     * We've eliminated the only important special case, and we
+     * have determined that b1 and b2 are on opposite sides of the
+     * line a1-a2. Now do the same thing the other way round and
+     * we're done.
+     
+     * The lines must cross.
+      largest available power of 4 
+ * Our solutions are arranged on a square grid big enough that n
+ * points occupy about 1/POINTDENSITY of the grid.
+ 
+ * Construct point coordinates for n points arranged in a circle,
+ * within the bounding box (0,0) to (w,w).
+ 
+     * First, decide on a denominator. Although in principle it
+     * would be nice to set this really high so as to finely
+     * distinguish all the points on the circle, I'm going to set
+     * it at a fixed size to prevent integer overflow problems.
+     
+     * Leave a little space outside the circle.
+     
+     * Place the points.
+     
+     * Choose n points from this grid.
+     
+     * Now start adding edges between the points.
+     * 
+     * At all times, we attempt to add an edge to the lowest-degree
+     * vertex we currently have, and we try the other vertices as
+     * candidate second endpoints in order of distance from this
+     * one. We stop as soon as we find an edge which
+     * 
+     *  (a) does not increase any vertex's degree beyond MAXDEGREE
+     *  (b) does not cross any existing edges
+     *  (c) does not intersect any actual point.
+      in this tree, param is the degree  nothing left to add! 
+	     * Sort the other vertices into order of their distance
+	     * from this one. Don't bother looking below i, because
+	     * we've already tried those edges the other way round.
+	     * Also here we rule out target vertices with too high
+	     * a degree, and (of course) ones to which we already
+	     * have an edge.
+	     
+		 * Check to see whether this edge intersects any
+		 * existing edge or point.
+		 
+		 * We're done! Add this edge, modify the degrees of
+		 * the two vertices involved, and break.
+		  we're done. 
+     * That's our graph. Now shuffle the points, making sure that
+     * they come out with at least one crossed line when arranged
+     * in a circle (so that the puzzle isn't immediately solved!).
+      we've found a crossing 
+     * We're done. Now encode the graph in a string format. Let's
+     * use a comma-separated list of dash-separated vertex number
+     * pairs, numbered from zero. We'll sort the list to prevent
+     * side channels.
+     
+     * Encode the solution we started with as an aux_info string.
+      leading 'S' and trailing '\0'  eat dash  eat comma 
+     * Check correctness: for every pair of edges, see whether they
+     * cross.
+      multi-level break - sorry 
+     * e == NULL if we've gone through all the edge pairs
+     * without finding a crossing.
+      eat dash  eat comma  sets up `crosses' and `completed' 
+     * Decode the aux_info to get the original point positions.
+      eat 'S' 
+     * Now go through eight possible symmetries of the point set.
+     * For each one, work out the sum of the Euclidean distances
+     * between the points' current positions and their new ones.
+     * 
+     * We're squaring distances here, which means we're at risk of
+     * integer overflow. Fortunately, there's no real need to be
+     * massively careful about rounding errors, since this is a
+     * non-essential bit of the code; so I'll just work in floats
+     * internally.
+     
+     * Now we know which symmetry is closest to the points' current
+     * positions. Use it.
+     
+         * Use a fixed denominator of 2, because we know the
+         * original points were on an integer grid offset by 1/2.
+          point being dragged; -1 if none  point being highlighted, but
+                                        * not dragged by the cursor,
+                                        * again -1 if none  where it's been dragged to so far  reset in game_changed_state  _set_ in game_changed_state 
+	 * Begin drag. We drag the vertex _nearest_ to the pointer,
+	 * just in case one is nearly on top of another and we want
+	 * to drag the latter. However, we drag nothing at all if
+	 * the nearest vertex is outside DRAG_THRESHOLD.
+	  terminate drag, no matter what 
+	 * First, see if we're within range. The user can cancel a
+	 * drag by dragging the point right off the window.
+	 
+	 * We aren't cancelling the drag. Construct a move string
+	 * indicating where this point is going to.
+	  We're selecting a point here.  Search all the points and find the closest one (2-D) in
+             * the given direction. 
+             * Begin drag. We drag the vertex _nearest_ to the pointer,
+             * just in case one is nearly on top of another and we want
+             * to drag the latter. However, we drag nothing at all if
+             * the nearest vertex is outside DRAG_THRESHOLD.
+              Figure out if this point falls into a 90 degree
+                 * range extending from the current point  negate y to adjust for raster coordinates  offset to [0..2*PI]  dragging  begin drag  end drag  terminate drag, no matter what 
+             * First, see if we're within range. The user can cancel a
+             * drag by dragging the point right off the window.
+             
+             * We aren't cancelling the drag. Construct a move string
+             * indicating where this point is going to.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * COL_BACKGROUND is what we use as the normal background colour.
+     * Unusually, though, it isn't colour #0: COL_SYSBACKGROUND, a bit
+     * darker, takes that place. This means that if the user resizes
+     * an Untangle window so as to change its aspect ratio, the
+     * still-square playable area will be distinguished from the dead
+     * space around it.
+     
+     * There's no terribly sensible way to do partial redraws of
+     * this game, so I'm going to have to resort to redrawing the
+     * whole thing every time.
+     
+     * To prevent excessive spinning on redraw during a completion
+     * flash, we first check to see if _either_ the flash
+     * background colour has changed _or_ at least one point has
+     * moved _or_ a drag has begun or ended, and abandon the redraw
+     * if neither is the case.
+     * 
+     * Also in this loop we work out the coordinates of all the
+     * points for this redraw.
+      nothing to do 
+     * Draw the edges.
+     
+     * Draw the points.
+     * 
+     * When dragging, we should not only vary the colours, but
+     * leave the point being dragged until last.
+      game_request_keys  wants_statusbar  flags 
+ * untangle.c: Game about planar graphs. You are given a graph
+ * represented by points and straight lines, with some lines
+ * crossing; your task is to drag the points into a configuration
+ * where none of the lines cross.
+ * 
+ * Cloned from a Flash game called `Planarity', by John Tantalo.
+ * <http://home.cwru.edu/~jnt5/Planarity> at the time of writing
+ * this. The Flash game had a fixed set of levels; my added value,
+ * as usual, is automatic generation of random games to order.
+ 
+ * TODO:
+ *
+ *  - This puzzle, perhaps uniquely among the collection, could use
+ *    support for non-aspect-ratio-preserving resizes. This would
+ *    require some sort of fairly large redesign, unfortunately (since
+ *    it would invalidate the basic assumption that puzzles' size
+ *    requirements are adequately expressed by a single scalar tile
+ *    size), and probably complicate the rest of the puzzles' API as a
+ *    result. So I'm not sure I really want to do it.
+ *
+ *  - It would be nice if we could somehow auto-detect a real `long
+ *    long' type on the host platform and use it in place of my
+ *    hand-hacked int64s. It'd be faster and more reliable.
+ 
+     * Points are stored using rational coordinates, with the same
+     * denominator for both coordinates.
+     
+     * This structure is implicitly associated with a particular
+     * point set, so all it has to do is to store two point
+     * indices. It is required to store them in the order (lower,
+     * higher), i.e. a < b always.
+      number of points  for deallocation  stores `edge' structures  extent of coordinate system only  mark edges which are crossed  structure copy  ----------------------------------------------------------------------
+ * Small number of 64-bit integer arithmetic operations, to prevent
+ * integer overflow at the very core of cross().
+ 
+ * Determine whether the line segments between a1 and a2, and
+ * between b1 and b2, intersect. We count it as an intersection if
+ * any of the endpoints lies _on_ the other line.
+ 
+     * The condition for crossing is that b1 and b2 are on opposite
+     * sides of the line a1-a2, and vice versa. We determine this
+     * by taking the dot product of b1-a1 with a vector
+     * perpendicular to a2-a1, and similarly with b2-a1, and seeing
+     * if they have different signs.
+     
+     * Construct the vector b1-a1. We don't have to worry too much
+     * about the denominator, because we're only going to check the
+     * sign of this vector; we just need to get the numerator
+     * right.
+      Now construct b2-a1, and a vector perpendicular to a2-a1,
+     * in the same way.  Take the dot products. Here we resort to 64-bit arithmetic.  If they have the same non-zero sign, the lines do not cross. 
+     * If the dot products are both exactly zero, then the two line
+     * segments are collinear. At this point the intersection
+     * condition becomes whether or not they overlap within their
+     * line.
+      Construct the vector a2-a1.  Determine the dot products of b1-a1 and b2-a1 with this.  If they're both strictly negative, the lines do not cross.  Otherwise, take the dot product of a2-a1 with itself. If
+	 * the other two dot products both exceed this, the lines do
+	 * not cross. 
+     * We've eliminated the only important special case, and we
+     * have determined that b1 and b2 are on opposite sides of the
+     * line a1-a2. Now do the same thing the other way round and
+     * we're done.
+     
+     * The lines must cross.
+      largest available power of 4 
+ * Our solutions are arranged on a square grid big enough that n
+ * points occupy about 1/POINTDENSITY of the grid.
+ 
+ * Construct point coordinates for n points arranged in a circle,
+ * within the bounding box (0,0) to (w,w).
+ 
+     * First, decide on a denominator. Although in principle it
+     * would be nice to set this really high so as to finely
+     * distinguish all the points on the circle, I'm going to set
+     * it at a fixed size to prevent integer overflow problems.
+     
+     * Leave a little space outside the circle.
+     
+     * Place the points.
+     
+     * Choose n points from this grid.
+     
+     * Now start adding edges between the points.
+     * 
+     * At all times, we attempt to add an edge to the lowest-degree
+     * vertex we currently have, and we try the other vertices as
+     * candidate second endpoints in order of distance from this
+     * one. We stop as soon as we find an edge which
+     * 
+     *  (a) does not increase any vertex's degree beyond MAXDEGREE
+     *  (b) does not cross any existing edges
+     *  (c) does not intersect any actual point.
+      in this tree, param is the degree  nothing left to add! 
+	     * Sort the other vertices into order of their distance
+	     * from this one. Don't bother looking below i, because
+	     * we've already tried those edges the other way round.
+	     * Also here we rule out target vertices with too high
+	     * a degree, and (of course) ones to which we already
+	     * have an edge.
+	     
+		 * Check to see whether this edge intersects any
+		 * existing edge or point.
+		 
+		 * We're done! Add this edge, modify the degrees of
+		 * the two vertices involved, and break.
+		  we're done. 
+     * That's our graph. Now shuffle the points, making sure that
+     * they come out with at least one crossed line when arranged
+     * in a circle (so that the puzzle isn't immediately solved!).
+      we've found a crossing 
+     * We're done. Now encode the graph in a string format. Let's
+     * use a comma-separated list of dash-separated vertex number
+     * pairs, numbered from zero. We'll sort the list to prevent
+     * side channels.
+     
+     * Encode the solution we started with as an aux_info string.
+      leading 'S' and trailing '\0'  eat dash  eat comma 
+     * Check correctness: for every pair of edges, see whether they
+     * cross.
+      multi-level break - sorry 
+     * e == NULL if we've gone through all the edge pairs
+     * without finding a crossing.
+      eat dash  eat comma  sets up `crosses' and `completed' 
+     * Decode the aux_info to get the original point positions.
+      eat 'S' 
+     * Now go through eight possible symmetries of the point set.
+     * For each one, work out the sum of the Euclidean distances
+     * between the points' current positions and their new ones.
+     * 
+     * We're squaring distances here, which means we're at risk of
+     * integer overflow. Fortunately, there's no real need to be
+     * massively careful about rounding errors, since this is a
+     * non-essential bit of the code; so I'll just work in floats
+     * internally.
+     
+     * Now we know which symmetry is closest to the points' current
+     * positions. Use it.
+     
+         * Use a fixed denominator of 2, because we know the
+         * original points were on an integer grid offset by 1/2.
+          point being dragged; -1 if none  point being highlighted, but
+                                        * not dragged by the cursor,
+                                        * again -1 if none  where it's been dragged to so far  reset in game_changed_state  _set_ in game_changed_state 
+	 * Begin drag. We drag the vertex _nearest_ to the pointer,
+	 * just in case one is nearly on top of another and we want
+	 * to drag the latter. However, we drag nothing at all if
+	 * the nearest vertex is outside DRAG_THRESHOLD.
+	  terminate drag, no matter what 
+	 * First, see if we're within range. The user can cancel a
+	 * drag by dragging the point right off the window.
+	 
+	 * We aren't cancelling the drag. Construct a move string
+	 * indicating where this point is going to.
+	  We're selecting a point here.  Search all the points and find the closest one (2-D) in
+             * the given direction. 
+             * Begin drag. We drag the vertex _nearest_ to the pointer,
+             * just in case one is nearly on top of another and we want
+             * to drag the latter. However, we drag nothing at all if
+             * the nearest vertex is outside DRAG_THRESHOLD.
+              Figure out if this point falls into a 90 degree
+                 * range extending from the current point  negate y to adjust for raster coordinates  offset to [0..2*PI]  dragging  begin drag  end drag  terminate drag, no matter what 
+             * First, see if we're within range. The user can cancel a
+             * drag by dragging the point right off the window.
+             
+             * We aren't cancelling the drag. Construct a move string
+             * indicating where this point is going to.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * COL_BACKGROUND is what we use as the normal background colour.
+     * Unusually, though, it isn't colour #0: COL_SYSBACKGROUND, a bit
+     * darker, takes that place. This means that if the user resizes
+     * an Untangle window so as to change its aspect ratio, the
+     * still-square playable area will be distinguished from the dead
+     * space around it.
+     
+     * There's no terribly sensible way to do partial redraws of
+     * this game, so I'm going to have to resort to redrawing the
+     * whole thing every time.
+     
+     * To prevent excessive spinning on redraw during a completion
+     * flash, we first check to see if _either_ the flash
+     * background colour has changed _or_ at least one point has
+     * moved _or_ a drag has begun or ended, and abandon the redraw
+     * if neither is the case.
+     * 
+     * Also in this loop we work out the coordinates of all the
+     * points for this redraw.
+      nothing to do 
+     * Draw the edges.
+     
+     * Draw the points.
+     * 
+     * When dragging, we should not only vary the colours, but
+     * leave the point being dragged until last.
+      game_request_keys  wants_statusbar  flags 

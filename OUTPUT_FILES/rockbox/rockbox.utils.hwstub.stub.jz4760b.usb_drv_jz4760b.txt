@@ -1,0 +1,112 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (C) 2014 by Marcin Bukat
+                         Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Reset EP0  clear setupend and rxpktrdy  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb  power up usb: assume EXCLK=12Mhz  use EXCLK as source (and not EXCLK/2)  use EXCLK as source, no divisor  change source now  wait for stable clock  enable usb  tweak various parameters  reset otg phy  enable otg phy  wait for stable phy  reset  NOTE: this core is a bit weird, it handles the status stage automatically
+ * as soon as DataEnd is written to CSR. The problem is that DataEnd needs
+ * to be written as part of a read (INPKTRDY) or write (SVDOUTPKTRDY) request
+ * but not on its own.
+ * Thus the design is follows: after receiving the setup packet, we DO NOT
+ * acknowledge it with SVDOUTPKTRDY. Instead it will be acknowledged
+ * either as part of STALL or recv/send. If there is an OUT data stage, we use
+ * a similar trick: we do not acknowledge the last packet and leave a pending
+ * SVDOUTPKTRDY to be done as part of a final STALL or ZLP.  handle reset  ignore anything but EP0 irq  select EP0  load csr to examine the cause of the interrupt  wait setup: we expect to receive a packet  anything other than 8-byte is wrong  DO NOT acknowledge the packet, leave this to recv/send/stall  select EP0  clear packet ready for the PREVIOUS packet: warning, there is a trap here!
+     * if we are clearing without sending anything (length=0) then we must
+     * set DataEnd at the same time. Otherwise, we must set it by itself and then
+     * send data  clear packet ready for the PREVIOUS packet (SETUP)  send data  write data   last packet ?  write csr  wait for packet to be transmitted  clear packet ready for the PREVIOUS packet (SETUP or DATA) and finish  wait until acknowledgement  select EP0  ZLP: ignore receive, the core does it automatically on DataEnd  receive data
+     * NOTE when we are called here, there is a pending SVDOUTPKTRDY to
+     * be done (see note above usb_drv_recv_setup), and when we will finish,
+     * we will also leave a pending SVDOUTPKTRDY to be done in stall or send  clear packet ready for the PREVIOUS packet  wait for data  clamp just in case  read fifo  there is still a pending SVDOUTPKTRDY here  EP0 unstall automatically  select EP0  set stall  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (C) 2014 by Marcin Bukat
+                         Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Reset EP0  clear setupend and rxpktrdy  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb  power up usb: assume EXCLK=12Mhz  use EXCLK as source (and not EXCLK/2)  use EXCLK as source, no divisor  change source now  wait for stable clock  enable usb  tweak various parameters  reset otg phy  enable otg phy  wait for stable phy  reset  NOTE: this core is a bit weird, it handles the status stage automatically
+ * as soon as DataEnd is written to CSR. The problem is that DataEnd needs
+ * to be written as part of a read (INPKTRDY) or write (SVDOUTPKTRDY) request
+ * but not on its own.
+ * Thus the design is follows: after receiving the setup packet, we DO NOT
+ * acknowledge it with SVDOUTPKTRDY. Instead it will be acknowledged
+ * either as part of STALL or recv/send. If there is an OUT data stage, we use
+ * a similar trick: we do not acknowledge the last packet and leave a pending
+ * SVDOUTPKTRDY to be done as part of a final STALL or ZLP.  handle reset  ignore anything but EP0 irq  select EP0  load csr to examine the cause of the interrupt  wait setup: we expect to receive a packet  anything other than 8-byte is wrong  DO NOT acknowledge the packet, leave this to recv/send/stall  select EP0  clear packet ready for the PREVIOUS packet: warning, there is a trap here!
+     * if we are clearing without sending anything (length=0) then we must
+     * set DataEnd at the same time. Otherwise, we must set it by itself and then
+     * send data  clear packet ready for the PREVIOUS packet (SETUP)  send data  write data   last packet ?  write csr  wait for packet to be transmitted  clear packet ready for the PREVIOUS packet (SETUP or DATA) and finish  wait until acknowledgement  select EP0  ZLP: ignore receive, the core does it automatically on DataEnd  receive data
+     * NOTE when we are called here, there is a pending SVDOUTPKTRDY to
+     * be done (see note above usb_drv_recv_setup), and when we will finish,
+     * we will also leave a pending SVDOUTPKTRDY to be done in stall or send  clear packet ready for the PREVIOUS packet  wait for data  clamp just in case  read fifo  there is still a pending SVDOUTPKTRDY here  EP0 unstall automatically  select EP0  set stall  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (C) 2014 by Marcin Bukat
+                         Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Reset EP0  clear setupend and rxpktrdy  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb  power up usb: assume EXCLK=12Mhz  use EXCLK as source (and not EXCLK/2)  use EXCLK as source, no divisor  change source now  wait for stable clock  enable usb  tweak various parameters  reset otg phy  enable otg phy  wait for stable phy  reset  NOTE: this core is a bit weird, it handles the status stage automatically
+ * as soon as DataEnd is written to CSR. The problem is that DataEnd needs
+ * to be written as part of a read (INPKTRDY) or write (SVDOUTPKTRDY) request
+ * but not on its own.
+ * Thus the design is follows: after receiving the setup packet, we DO NOT
+ * acknowledge it with SVDOUTPKTRDY. Instead it will be acknowledged
+ * either as part of STALL or recv/send. If there is an OUT data stage, we use
+ * a similar trick: we do not acknowledge the last packet and leave a pending
+ * SVDOUTPKTRDY to be done as part of a final STALL or ZLP.  handle reset  ignore anything but EP0 irq  select EP0  load csr to examine the cause of the interrupt  wait setup: we expect to receive a packet  anything other than 8-byte is wrong  DO NOT acknowledge the packet, leave this to recv/send/stall  select EP0  clear packet ready for the PREVIOUS packet: warning, there is a trap here!
+     * if we are clearing without sending anything (length=0) then we must
+     * set DataEnd at the same time. Otherwise, we must set it by itself and then
+     * send data  clear packet ready for the PREVIOUS packet (SETUP)  send data  write data   last packet ?  write csr  wait for packet to be transmitted  clear packet ready for the PREVIOUS packet (SETUP or DATA) and finish  wait until acknowledgement  select EP0  ZLP: ignore receive, the core does it automatically on DataEnd  receive data
+     * NOTE when we are called here, there is a pending SVDOUTPKTRDY to
+     * be done (see note above usb_drv_recv_setup), and when we will finish,
+     * we will also leave a pending SVDOUTPKTRDY to be done in stall or send  clear packet ready for the PREVIOUS packet  wait for data  clamp just in case  read fifo  there is still a pending SVDOUTPKTRDY here  EP0 unstall automatically  select EP0  set stall  in case usb is running, soft disconnect  A delay seems necessary to avoid causing havoc. The USB spec says disconnect
+     * detection time (T_DDIS) is around 2us but in practice many hubs might
+     * require more.  disable usb 

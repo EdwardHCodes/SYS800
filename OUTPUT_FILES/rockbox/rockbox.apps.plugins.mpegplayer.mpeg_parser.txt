@@ -1,0 +1,253 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Parser for MPEG streams
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Place the stream in a state to begin parsing - sync will be performed
+ * first  Initial positions start here  No packet  Pick up parsing from this point in the buffer  No flags  Sync first  Place the stream in an end of data state  Offsets that prevent this stream from being included in the
+     * min left/max right window so that no buffering is triggered on
+     * its behalf. Set right to the min first so a thread reading the
+     * overall window gets doesn't see this as valid no matter what the
+     * file length.  No packets  No flags  Fin  Return a timestamp at address p+offset if the marker bits are in tact  Find a start code before or after a given position  Reverse scan - start with at least the min needed  Only the low byte matters  Find a PES packet header for any stream - return stream to which it
+ * belongs  Reverse scan - start with at least the min needed  PES header  else some video stream element  Return the first SCR found from the scan direction  9 bytes total required  mpeg-2  Lookhead p+8  mpeg-1  Lookahead p+8  Weird pack header  Reverse scan - start with at least the min needed  Insufficient data  mpeg2  mpeg1  Skip stuffing_byte  Skip STD_buffer_scale and STD_buffer_size  Header points to the mpeg1 pes header  PTS or PTS_DTS indicated  No PTS present - keep searching for a matching PES header with
+             * one  The decoder handles this in order to initialize its knowledge of the
+     * movie parameters making seeking easier  Simply find the first earliest timestamp - this will be the one
+     * used when streaming anyway  Probe for many for the start because some stamps could be anomalous.
+     * Video also can also have things out of order. Just see what it's got.
+      Use the decoder thread to perform a synchronized search - no
+     * decoding should take place but just a simple run through timestamps
+     * and durations as the decoder would see them. This should give the
+     * precise time at the end of the last frame for the stream.  Return the best-fit file offset of a timestamp in the PES where
+ * timstamp <= time < next timestamp. Will try to return something reasonably
+ * valid if best-fit could not be made.  Initial estimate taken from average bitrate - later interpolations are
+     * taken similarly based on the remaining file interval  return this estimated position if nothing better comes up  Adjustment to over or under-estimate  Found a valid timestamp - see were it lies in relation to
+             * target  Time at current position is before seek time - move
+                 * forward  This is less than the desired time but greater than
+                     * the currently seeked one; move the position up  No next timestamp can be sooner  If the window disappeared - we're done  Point is ahead of us - fudge estimate a bit high  Estimate could push too far  Last scan was early  Time at current position is past seek time - move
+                   backward  If the window disappeared - we're done  Overshot the seek point - fudge estimate a bit low  Last scan was late  Exact match - it happens  Nothing found  We already tried the bruteforce scan and failed again - no
+                 * more stamps could possibly exist in the interval  Hardly likely except at very beginning - just do L->R scan
+                 * to find something  Could just be missing timestamps because the interval is
+                 * narrowing down. A large block of data from another stream
+                 * may also be in the midst of our chosen points which could
+                 * cluster at either extreme end. If anything is there, this
+                 * will find it.  Same timestamp twice = quit  The next pts after the seeked-to position should be greater -
+     * most of the time - frames out of presentation order may muck it
+     * up a slight bit  Smile - it worked  See where things ended up  Hmm  Weird - probably because of encoded order & tends to be right
+             * anyway if other criteria are met  Ugh  This function demuxes the streams and gives the next stream data
+ * pointer.
+ *
+ * STREAM_PM_STREAMING is for operation during playback. If the nescessary
+ * data and worst-case lookahead margin is not available, the stream is
+ * registered for notification when the data becomes available. If parsing
+ * extends beyond the end of the file or the end of stream marker is reached,
+ * STREAM_DATA_END is returned and the stream state changed to SSTATE_EOS.
+ *
+ * STREAM_PM_RANDOM_ACCESS is for operation when not playing such as seeking.
+ * If the file cache misses for the current position + lookahead, it will be
+ * loaded from disk. When the specified limit is reached, STREAM_DATA_END is
+ * returned.
+ *
+ * The results from one mode may be used as input to the other. Random access
+ * requires cooperation amongst threads to avoid evicting another stream's
+ * data.
+  Has the end been reached already?  Expected case first if no jumptable  Are we at the end of file?  Is sync at the end of file?  Fall-through  This data range is not buffered yet - register stream to
+                 * be notified when it becomes available. Stream is obliged
+                 * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Scanning for start code  Found a start code - enter parse state  Pack header, skip it  Max lookahead: 14  mpeg-2  Max delta: 14 + 7 = 21  Skip pack header and any stuffing bytes mpeg-1  unknown - skip it  System header, parse and skip it - 6 bytes + size  Skip start code  Max Delta = 65535 + 6 = 65541  Packet header, parse it  Problem? Meh...probably not but just a corrupted section.
+             * Try to resync the parser which will probably succeed.  Next byte - this one's no good  We retrieve basic infos  Maximum packet length: 6 + 65535 = 65541  end of stream  These shouldn't be here - no increment or resync
+                 * since we'll pick it up above.  It's not the packet we're looking for, skip it  Ok, it's our packet  mpeg2  Max Lookahead: 18          Min length: 9              Max length: 9 + 255 = 264  header points to the mpeg2 pes header  header has a pts  DTS isn't used for anything since things just get
+                      decoded ASAP but keep the code around  Video stream - header may have a dts as well  mpeg1  Max lookahead: 24 + 2 + 9 = 35  Max len_skip: 24 + 2 = 26       Min length: 7                   Max length: 24 + 2 + 9 = 35     Header points to the mpeg1 pes header  header has a pts  DTS isn't used for anything since things just get
+                       decoded ASAP but keep the code around  Video stream - header may have a dts as well  Max bytes: 6 + 65535 - 7 = 65534  No packet that exceeds end of file can be valid  end while  This simply reads data from the file one page at a time and returns a
+ * pointer to it in the buffer.  Has the end been reached already?  Are we at the end of file?  This data range is not buffered yet - register stream to
+             * be notified when it becomes available. Stream is obliged
+             * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Should already have the image  No interference with trigger_cpu_boost  Not part of our stream  This will hit the PES header since it's known to be there  Two tries should be all that is nescessary to find the exact frame
+         * if the first GOP actually started later than the timestamp - the
+         * GOP just prior must then start on or earlier.  Seek parser to the specified time and return absolute time.
+ * No actual hard stuff is performed here. That's done when streaming is
+ * about to begin or something from the current position is requested  Prepare initial video frame  Sync audio stream  Prequeue some data and set buffer window  TODO: Actually find which streams are available  Try to pull a video PES - if not found, try video init anyway which
+     * should succeed if it really is a video-only stream  Found a video packet - assume program stream  No PES element found - assume video elementary stream  Cannot determine video size, etc.  Initalize start_pts and end_pts with the length (in 45kHz units) of
+         * the movie. INVALID_TIMESTAMP if the time could not be determined  Must have video at least  Audio will be part of playback pool  Overall duration is maximum span  Bad times on audio - use video times  Questionable: could use bitrate seek and match video to that  No audio stream - use video only  There's no way to handle times on this without a full file
+         * scan  Add video to playback pool  Cache duration - it's used very often **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Parser for MPEG streams
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Place the stream in a state to begin parsing - sync will be performed
+ * first  Initial positions start here  No packet  Pick up parsing from this point in the buffer  No flags  Sync first  Place the stream in an end of data state  Offsets that prevent this stream from being included in the
+     * min left/max right window so that no buffering is triggered on
+     * its behalf. Set right to the min first so a thread reading the
+     * overall window gets doesn't see this as valid no matter what the
+     * file length.  No packets  No flags  Fin  Return a timestamp at address p+offset if the marker bits are in tact  Find a start code before or after a given position  Reverse scan - start with at least the min needed  Only the low byte matters  Find a PES packet header for any stream - return stream to which it
+ * belongs  Reverse scan - start with at least the min needed  PES header  else some video stream element  Return the first SCR found from the scan direction  9 bytes total required  mpeg-2  Lookhead p+8  mpeg-1  Lookahead p+8  Weird pack header  Reverse scan - start with at least the min needed  Insufficient data  mpeg2  mpeg1  Skip stuffing_byte  Skip STD_buffer_scale and STD_buffer_size  Header points to the mpeg1 pes header  PTS or PTS_DTS indicated  No PTS present - keep searching for a matching PES header with
+             * one  The decoder handles this in order to initialize its knowledge of the
+     * movie parameters making seeking easier  Simply find the first earliest timestamp - this will be the one
+     * used when streaming anyway  Probe for many for the start because some stamps could be anomalous.
+     * Video also can also have things out of order. Just see what it's got.
+      Use the decoder thread to perform a synchronized search - no
+     * decoding should take place but just a simple run through timestamps
+     * and durations as the decoder would see them. This should give the
+     * precise time at the end of the last frame for the stream.  Return the best-fit file offset of a timestamp in the PES where
+ * timstamp <= time < next timestamp. Will try to return something reasonably
+ * valid if best-fit could not be made.  Initial estimate taken from average bitrate - later interpolations are
+     * taken similarly based on the remaining file interval  return this estimated position if nothing better comes up  Adjustment to over or under-estimate  Found a valid timestamp - see were it lies in relation to
+             * target  Time at current position is before seek time - move
+                 * forward  This is less than the desired time but greater than
+                     * the currently seeked one; move the position up  No next timestamp can be sooner  If the window disappeared - we're done  Point is ahead of us - fudge estimate a bit high  Estimate could push too far  Last scan was early  Time at current position is past seek time - move
+                   backward  If the window disappeared - we're done  Overshot the seek point - fudge estimate a bit low  Last scan was late  Exact match - it happens  Nothing found  We already tried the bruteforce scan and failed again - no
+                 * more stamps could possibly exist in the interval  Hardly likely except at very beginning - just do L->R scan
+                 * to find something  Could just be missing timestamps because the interval is
+                 * narrowing down. A large block of data from another stream
+                 * may also be in the midst of our chosen points which could
+                 * cluster at either extreme end. If anything is there, this
+                 * will find it.  Same timestamp twice = quit  The next pts after the seeked-to position should be greater -
+     * most of the time - frames out of presentation order may muck it
+     * up a slight bit  Smile - it worked  See where things ended up  Hmm  Weird - probably because of encoded order & tends to be right
+             * anyway if other criteria are met  Ugh  This function demuxes the streams and gives the next stream data
+ * pointer.
+ *
+ * STREAM_PM_STREAMING is for operation during playback. If the nescessary
+ * data and worst-case lookahead margin is not available, the stream is
+ * registered for notification when the data becomes available. If parsing
+ * extends beyond the end of the file or the end of stream marker is reached,
+ * STREAM_DATA_END is returned and the stream state changed to SSTATE_EOS.
+ *
+ * STREAM_PM_RANDOM_ACCESS is for operation when not playing such as seeking.
+ * If the file cache misses for the current position + lookahead, it will be
+ * loaded from disk. When the specified limit is reached, STREAM_DATA_END is
+ * returned.
+ *
+ * The results from one mode may be used as input to the other. Random access
+ * requires cooperation amongst threads to avoid evicting another stream's
+ * data.
+  Has the end been reached already?  Expected case first if no jumptable  Are we at the end of file?  Is sync at the end of file?  Fall-through  This data range is not buffered yet - register stream to
+                 * be notified when it becomes available. Stream is obliged
+                 * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Scanning for start code  Found a start code - enter parse state  Pack header, skip it  Max lookahead: 14  mpeg-2  Max delta: 14 + 7 = 21  Skip pack header and any stuffing bytes mpeg-1  unknown - skip it  System header, parse and skip it - 6 bytes + size  Skip start code  Max Delta = 65535 + 6 = 65541  Packet header, parse it  Problem? Meh...probably not but just a corrupted section.
+             * Try to resync the parser which will probably succeed.  Next byte - this one's no good  We retrieve basic infos  Maximum packet length: 6 + 65535 = 65541  end of stream  These shouldn't be here - no increment or resync
+                 * since we'll pick it up above.  It's not the packet we're looking for, skip it  Ok, it's our packet  mpeg2  Max Lookahead: 18          Min length: 9              Max length: 9 + 255 = 264  header points to the mpeg2 pes header  header has a pts  DTS isn't used for anything since things just get
+                      decoded ASAP but keep the code around  Video stream - header may have a dts as well  mpeg1  Max lookahead: 24 + 2 + 9 = 35  Max len_skip: 24 + 2 = 26       Min length: 7                   Max length: 24 + 2 + 9 = 35     Header points to the mpeg1 pes header  header has a pts  DTS isn't used for anything since things just get
+                       decoded ASAP but keep the code around  Video stream - header may have a dts as well  Max bytes: 6 + 65535 - 7 = 65534  No packet that exceeds end of file can be valid  end while  This simply reads data from the file one page at a time and returns a
+ * pointer to it in the buffer.  Has the end been reached already?  Are we at the end of file?  This data range is not buffered yet - register stream to
+             * be notified when it becomes available. Stream is obliged
+             * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Should already have the image  No interference with trigger_cpu_boost  Not part of our stream  This will hit the PES header since it's known to be there  Two tries should be all that is nescessary to find the exact frame
+         * if the first GOP actually started later than the timestamp - the
+         * GOP just prior must then start on or earlier.  Seek parser to the specified time and return absolute time.
+ * No actual hard stuff is performed here. That's done when streaming is
+ * about to begin or something from the current position is requested  Prepare initial video frame  Sync audio stream  Prequeue some data and set buffer window  TODO: Actually find which streams are available  Try to pull a video PES - if not found, try video init anyway which
+     * should succeed if it really is a video-only stream  Found a video packet - assume program stream  No PES element found - assume video elementary stream  Cannot determine video size, etc.  Initalize start_pts and end_pts with the length (in 45kHz units) of
+         * the movie. INVALID_TIMESTAMP if the time could not be determined  Must have video at least  Audio will be part of playback pool  Overall duration is maximum span  Bad times on audio - use video times  Questionable: could use bitrate seek and match video to that  No audio stream - use video only  There's no way to handle times on this without a full file
+         * scan  Add video to playback pool  Cache duration - it's used very often **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Parser for MPEG streams
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Place the stream in a state to begin parsing - sync will be performed
+ * first  Initial positions start here  No packet  Pick up parsing from this point in the buffer  No flags  Sync first  Place the stream in an end of data state  Offsets that prevent this stream from being included in the
+     * min left/max right window so that no buffering is triggered on
+     * its behalf. Set right to the min first so a thread reading the
+     * overall window gets doesn't see this as valid no matter what the
+     * file length.  No packets  No flags  Fin  Return a timestamp at address p+offset if the marker bits are in tact  Find a start code before or after a given position  Reverse scan - start with at least the min needed  Only the low byte matters  Find a PES packet header for any stream - return stream to which it
+ * belongs  Reverse scan - start with at least the min needed  PES header  else some video stream element  Return the first SCR found from the scan direction  9 bytes total required  mpeg-2  Lookhead p+8  mpeg-1  Lookahead p+8  Weird pack header  Reverse scan - start with at least the min needed  Insufficient data  mpeg2  mpeg1  Skip stuffing_byte  Skip STD_buffer_scale and STD_buffer_size  Header points to the mpeg1 pes header  PTS or PTS_DTS indicated  No PTS present - keep searching for a matching PES header with
+             * one  The decoder handles this in order to initialize its knowledge of the
+     * movie parameters making seeking easier  Simply find the first earliest timestamp - this will be the one
+     * used when streaming anyway  Probe for many for the start because some stamps could be anomalous.
+     * Video also can also have things out of order. Just see what it's got.
+      Use the decoder thread to perform a synchronized search - no
+     * decoding should take place but just a simple run through timestamps
+     * and durations as the decoder would see them. This should give the
+     * precise time at the end of the last frame for the stream.  Return the best-fit file offset of a timestamp in the PES where
+ * timstamp <= time < next timestamp. Will try to return something reasonably
+ * valid if best-fit could not be made.  Initial estimate taken from average bitrate - later interpolations are
+     * taken similarly based on the remaining file interval  return this estimated position if nothing better comes up  Adjustment to over or under-estimate  Found a valid timestamp - see were it lies in relation to
+             * target  Time at current position is before seek time - move
+                 * forward  This is less than the desired time but greater than
+                     * the currently seeked one; move the position up  No next timestamp can be sooner  If the window disappeared - we're done  Point is ahead of us - fudge estimate a bit high  Estimate could push too far  Last scan was early  Time at current position is past seek time - move
+                   backward  If the window disappeared - we're done  Overshot the seek point - fudge estimate a bit low  Last scan was late  Exact match - it happens  Nothing found  We already tried the bruteforce scan and failed again - no
+                 * more stamps could possibly exist in the interval  Hardly likely except at very beginning - just do L->R scan
+                 * to find something  Could just be missing timestamps because the interval is
+                 * narrowing down. A large block of data from another stream
+                 * may also be in the midst of our chosen points which could
+                 * cluster at either extreme end. If anything is there, this
+                 * will find it.  Same timestamp twice = quit  The next pts after the seeked-to position should be greater -
+     * most of the time - frames out of presentation order may muck it
+     * up a slight bit  Smile - it worked  See where things ended up  Hmm  Weird - probably because of encoded order & tends to be right
+             * anyway if other criteria are met  Ugh  This function demuxes the streams and gives the next stream data
+ * pointer.
+ *
+ * STREAM_PM_STREAMING is for operation during playback. If the nescessary
+ * data and worst-case lookahead margin is not available, the stream is
+ * registered for notification when the data becomes available. If parsing
+ * extends beyond the end of the file or the end of stream marker is reached,
+ * STREAM_DATA_END is returned and the stream state changed to SSTATE_EOS.
+ *
+ * STREAM_PM_RANDOM_ACCESS is for operation when not playing such as seeking.
+ * If the file cache misses for the current position + lookahead, it will be
+ * loaded from disk. When the specified limit is reached, STREAM_DATA_END is
+ * returned.
+ *
+ * The results from one mode may be used as input to the other. Random access
+ * requires cooperation amongst threads to avoid evicting another stream's
+ * data.
+  Has the end been reached already?  Expected case first if no jumptable  Are we at the end of file?  Is sync at the end of file?  Fall-through  This data range is not buffered yet - register stream to
+                 * be notified when it becomes available. Stream is obliged
+                 * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Scanning for start code  Found a start code - enter parse state  Pack header, skip it  Max lookahead: 14  mpeg-2  Max delta: 14 + 7 = 21  Skip pack header and any stuffing bytes mpeg-1  unknown - skip it  System header, parse and skip it - 6 bytes + size  Skip start code  Max Delta = 65535 + 6 = 65541  Packet header, parse it  Problem? Meh...probably not but just a corrupted section.
+             * Try to resync the parser which will probably succeed.  Next byte - this one's no good  We retrieve basic infos  Maximum packet length: 6 + 65535 = 65541  end of stream  These shouldn't be here - no increment or resync
+                 * since we'll pick it up above.  It's not the packet we're looking for, skip it  Ok, it's our packet  mpeg2  Max Lookahead: 18          Min length: 9              Max length: 9 + 255 = 264  header points to the mpeg2 pes header  header has a pts  DTS isn't used for anything since things just get
+                      decoded ASAP but keep the code around  Video stream - header may have a dts as well  mpeg1  Max lookahead: 24 + 2 + 9 = 35  Max len_skip: 24 + 2 = 26       Min length: 7                   Max length: 24 + 2 + 9 = 35     Header points to the mpeg1 pes header  header has a pts  DTS isn't used for anything since things just get
+                       decoded ASAP but keep the code around  Video stream - header may have a dts as well  Max bytes: 6 + 65535 - 7 = 65534  No packet that exceeds end of file can be valid  end while  This simply reads data from the file one page at a time and returns a
+ * pointer to it in the buffer.  Has the end been reached already?  Are we at the end of file?  This data range is not buffered yet - register stream to
+             * be notified when it becomes available. Stream is obliged
+             * to enter a TSTATE_DATA state if it must wait.  STREAM_PM_STREAMING:  STREAM_PM_RANDOM_ACCESS:  Should already have the image  No interference with trigger_cpu_boost  Not part of our stream  This will hit the PES header since it's known to be there  Two tries should be all that is nescessary to find the exact frame
+         * if the first GOP actually started later than the timestamp - the
+         * GOP just prior must then start on or earlier.  Seek parser to the specified time and return absolute time.
+ * No actual hard stuff is performed here. That's done when streaming is
+ * about to begin or something from the current position is requested  Prepare initial video frame  Sync audio stream  Prequeue some data and set buffer window  TODO: Actually find which streams are available  Try to pull a video PES - if not found, try video init anyway which
+     * should succeed if it really is a video-only stream  Found a video packet - assume program stream  No PES element found - assume video elementary stream  Cannot determine video size, etc.  Initalize start_pts and end_pts with the length (in 45kHz units) of
+         * the movie. INVALID_TIMESTAMP if the time could not be determined  Must have video at least  Audio will be part of playback pool  Overall duration is maximum span  Bad times on audio - use video times  Questionable: could use bitrate seek and match video to that  No audio stream - use video only  There's no way to handle times on this without a full file
+         * scan  Add video to playback pool  Cache duration - it's used very often 

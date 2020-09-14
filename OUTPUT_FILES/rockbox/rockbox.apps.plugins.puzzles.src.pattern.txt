@@ -1,0 +1,835 @@
+
+ * pattern.c: the pattern-reconstruction game known as `nonograms'.
+  Parts of the game state that don't change during play.  structure copy  ----------------------------------------------------------------------
+ * Puzzle generation code.
+ * 
+ * For this particular puzzle, it seemed important to me to ensure
+ * a unique solution. I do this the brute-force way, by having a
+ * solver algorithm alongside the generator, and repeatedly
+ * generating a random grid until I find one whose solution is
+ * unique. It turns out that this isn't too onerous on a modern PC
+ * provided you keep grid size below around 30. Any offers of
+ * better algorithms, however, will be very gratefully received.
+ * 
+ * Another annoyance of this approach is that it limits the
+ * available puzzles to those solvable by the algorithm I've used.
+ * My algorithm only ever considers a single row or column at any
+ * one time, which means it's incapable of solving the following
+ * difficult example (found by Bella Image around 1995/6, when she
+ * and I were both doing maths degrees):
+ * 
+ *        2  1  2  1 
+ *
+ *      +--+--+--+--+
+ * 1 1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   2  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ * 
+ * Obviously this cannot be solved by a one-row-or-column-at-a-time
+ * algorithm (it would require at least one row or column reading
+ * `2 1', `1 2', `3' or `4' to get started). However, it can be
+ * proved to have a unique solution: if the top left square were
+ * empty, then the only option for the top row would be to fill the
+ * two squares in the 1 columns, which would imply the squares
+ * below those were empty, leaving no place for the 2 in the second
+ * row. Contradiction. Hence the top left square is full, and the
+ * unique solution follows easily from that starting point.
+ * 
+ * (The game ID for this puzzle is 4x4:2/1/2/1/1.1/2/1/1 , in case
+ * it's useful to anyone.)
+ 
+     * The above gives a completely random splattering of black and
+     * white cells. We want to gently bias this in favour of _some_
+     * reasonably thick areas of white and black, while retaining
+     * some randomness and fine detail.
+     * 
+     * So we evolve the starting grid using a cellular automaton.
+     * Currently, I'm doing something very simple indeed, which is
+     * to set each square to the average of the surrounding nine
+     * cells (or the average of fewer, if we're on a corner).
+     
+                 * Compute the average of the surrounding cells.
+                 
+			 * An additional special case not mentioned
+			 * above: if a grid dimension is 2xn then
+			 * we do not average across that dimension
+			 * at all. Otherwise a 2x2 grid would
+			 * contain four identical squares.
+			  Choose a threshold that makes half the pixels black. In case of
+     * an odd number of pixels, select randomly between just under and
+     * just over half.  This algorithm basically tries all possible ways the given rows of
+     * black blocks can be laid out in the row/column being examined.
+     * Special care is taken to avoid checking the tail of a row/column
+     * if the same conditions have already been checked during this recursion
+     * The algorithm also takes care to cut its losses as soon as an
+     * invalid (partial) solution is detected.
+      For each column, compute how many squares can be deduced
+     * from just the row-data and initial clues.
+     * Later, changed_* will hold how many squares were changed
+     * in every row/column in the previous iteration
+     * Changed_* is used to choose the next rows / cols to re-examine
+      Solve the puzzle.
+     * Process rows/columns individually. Deductions involving more than one
+     * row and/or column at a time are not supported.
+     * Take care to only process rows/columns which have been changed since they
+     * were previously processed.
+     * Also, prioritize rows/columns which have had the most changes since their
+     * previous processing, as they promise the greatest benefit.
+     * Extremely rectangular grids (e.g. 10x20, 15x40, etc.) are not treated specially.
+      Allocate this here, to avoid having to reallocate it again for every geneerated grid 
+         * The game is a bit too easy if any row or column is
+         * completely black or completely white. An exception is
+         * made for rows/columns that are under 3 squares,
+         * otherwise nothing will ever be successfully generated.
+         
+     * Fixed input picture.
+     
+     * Now winnow the immutable square set as far as possible.
+     
+     * Save the solved game in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Seed is a slash-separated list of row contents; each row
+     * contents section is a dot-separated list of integers. Row
+     * contents are listed in the order (columns left to right,
+     * then rows top to bottom).
+     * 
+     * Simplest way to handle memory allocation is to make two
+     * passes, first computing the seed size and then writing it
+     * out.
+     
+         * At least one immutable square, so we need a suffix.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+         
+     * If we already have the solved state in ai, copy it out.
+      {line,grid}_{width,height}  de-NUL-ify  FULL -> EMPTY -> UNKNOWN  EMPTY -> FULL -> UNKNOWN  if (button == MIDDLE_BUTTON) 
+         * There doesn't seem much point in allowing a rectangle
+         * drag; people will generally only want to drag a single
+         * horizontal or vertical line, so we make that easy by
+         * snapping to it.
+         * 
+         * Exception: if we're _middle_-button dragging to tag
+         * things as UNKNOWN, we may well want to trash an entire
+         * area and start over!
+         
+	 * An actual change, so check to see if we've completed the
+	 * game.
+	  ----------------------------------------------------------------------
+ * Error-checking during gameplay.
+ 
+ * The difficulty in error-checking Pattern is to make the error check
+ * _weak_ enough. The most obvious way would be to check each row and
+ * column by calling (a modified form of) do_row() to recursively
+ * analyse the row contents against the clue set and see if the
+ * GRID_UNKNOWNs could be filled in in any way that would end up
+ * correct. However, this turns out to be such a strong error check as
+ * to constitute a spoiler in many situations: you make a typo while
+ * trying to fill in one row, and not only does the row light up to
+ * indicate an error, but several columns crossed by the move also
+ * light up and draw your attention to deductions you hadn't even
+ * noticed you could make.
+ *
+ * So instead I restrict error-checking to 'complete runs' within a
+ * row, by which I mean contiguous sequences of GRID_FULL bounded at
+ * both ends by either GRID_EMPTY or the ends of the row. We identify
+ * all the complete runs in a row, and verify that _those_ are
+ * consistent with the row's clue list. Sequences of complete runs
+ * separated by solid GRID_EMPTY are required to match contiguous
+ * sequences in the clue list, whereas if there's at least one
+ * GRID_UNKNOWN between any two complete runs then those two need not
+ * be contiguous in the clue list.
+ *
+ * To simplify the edge cases, I pretend that the clue list for the
+ * row is extended with a 0 at each end, and I also pretend that the
+ * grid data for the row is extended with a GRID_EMPTY and a
+ * zero-length run at each end. This permits the contiguity checker to
+ * handle the fiddly end effects (e.g. if the first contiguous
+ * sequence of complete runs in the grid matches _something_ in the
+ * clue list but not at the beginning, this is allowable iff there's a
+ * GRID_UNKNOWN before the first one) with minimal faff, since the end
+ * effects just drop out as special cases of the normal inter-run
+ * handling (in this code the above case is not 'at the end of the
+ * clue list' at all, but between the implicit initial zero run and
+ * the first nonzero one).
+ *
+ * We must also be a little careful about how we search for a
+ * contiguous sequence of runs. In the clue list (1 1 2 1 2 3),
+ * suppose we see a GRID_UNKNOWN and then a length-1 run. We search
+ * for 1 in the clue list and find it at the very beginning. But now
+ * suppose we find a length-2 run with no GRID_UNKNOWN before it. We
+ * can't naively look at the next clue from the 1 we found, because
+ * that'll be the second 1 and won't match. Instead, we must backtrack
+ * by observing that the 2 we've just found must be contiguous with
+ * the 1 we've already seen, so we search for the sequence (1 2) and
+ * find it starting at the second 1. Now if we see a 3, we must
+ * rethink again and search for (1 2 3).
+ 
+     * rowdata and rowlen point at the clue data for this row in the
+     * game state.
+     
+     * rowpos indicates the lowest position where it would be valid to
+     * see our next run length. It might be equal to rowlen,
+     * indicating that the next run would have to be the terminating 0.
+     
+     * ncontig indicates how many runs we've seen in a contiguous
+     * block. This is taken into account when searching for the next
+     * run we find, unless ncontig is zeroed out first by encountering
+     * a GRID_UNKNOWN.
+      Macro to handle the pretence that rowdata has a 0 at each end 
+     * See if we can find this new run length at a position where it
+     * also matches the last 'ncontig' runs we've seen.
+      Pretend that we've already encountered the initial zero run  error!  Signal end-of-row by sending errcheck_found_run the terminating
+     * zero run, which will be marked as contiguous with the previous
+     * run if and only if there hasn't been a GRID_UNKNOWN before.  error at the last minute!  no error  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+ * Draw the numbers for a single row or column.
+ 
+     * Normally I space the numbers out by the same distance as the
+     * tile size. However, if there are more numbers than available
+     * spaces, I have to squash them up a bit.
+     
+         * The initial contents of the window are not guaranteed
+         * and can vary with front ends. To be on the safe side,
+         * all games should start by drawing a big background-
+         * colour rectangle covering the whole window.
+         
+         * Draw the grid outline.
+          placate gcc warnings 
+     * Now draw any grid squares which have changed since last
+     * redraw.
+     
+             * Work out what state this square should be drawn in,
+             * taking any current drag operation into account.
+              the cursor has moved; if we were the old or
+                 * the new cursor position we need to redraw. 
+             * Briefly invert everything twice during a completion
+             * flash.
+             
+     * Redraw any numbers which have changed their colour due to error
+     * indication.
+     
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Clues.
+     
+     * Solution.
+      game_request_keys  wants_statusbar  flags 
+	     * Work out the maximum text width of the clue numbers
+	     * in a row or column, so we can print the solver's
+	     * working in a nicely lined up way.
+	     
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./patternpicture < calligraphic-A.xbm
+ *   15x15:2/4/2/2/2/3/3/3.1/3.1/3.1/11/14/12/6/1/2/2/3/4/5/1.3/2.3/1.3/2.3/1.4/9/1.1.3/2.2.3/5.4/3.2
+ *
+ * That looks easy, of course - all the program has done is to count
+ * up the clue numbers! But in fact, it's done more than that: it's
+ * also checked that the result is uniquely soluble from just the
+ * numbers. If it hadn't been, then it would have also left some
+ * filled squares in the playing area as extra clues.
+ *
+ *   $ ./patternpicture < cube.xbm
+ *   15x15:10/2.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.10/1.1.1/1.1.1/1.1.1/2.1/10/10/1.2/1.1.1/1.1.1/1.1.1/10.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.2/10,TNINzzzzGNzw
+ *
+ * This enables a reasonably convenient design workflow for coming up
+ * with pictorial Pattern puzzles which _are_ uniquely soluble without
+ * those inelegant pre-filled squares. Fire up a bitmap editor (X11
+ * bitmap(1) is good enough), save a trial .xbm, and then test it by
+ * running a command along the lines of
+ *
+ *   $ ./pattern $(./patternpicture < test.xbm)
+ *
+ * If the resulting window pops up with some pre-filled squares, then
+ * that tells you which parts of the image are giving rise to
+ * ambiguities, so try making tweaks in those areas, try the test
+ * command again, and see if it helps. Once you have a design for
+ * which the Pattern starting grid comes out empty, there's your game
+ * ID.
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 
+ * pattern.c: the pattern-reconstruction game known as `nonograms'.
+  Parts of the game state that don't change during play.  structure copy  ----------------------------------------------------------------------
+ * Puzzle generation code.
+ * 
+ * For this particular puzzle, it seemed important to me to ensure
+ * a unique solution. I do this the brute-force way, by having a
+ * solver algorithm alongside the generator, and repeatedly
+ * generating a random grid until I find one whose solution is
+ * unique. It turns out that this isn't too onerous on a modern PC
+ * provided you keep grid size below around 30. Any offers of
+ * better algorithms, however, will be very gratefully received.
+ * 
+ * Another annoyance of this approach is that it limits the
+ * available puzzles to those solvable by the algorithm I've used.
+ * My algorithm only ever considers a single row or column at any
+ * one time, which means it's incapable of solving the following
+ * difficult example (found by Bella Image around 1995/6, when she
+ * and I were both doing maths degrees):
+ * 
+ *        2  1  2  1 
+ *
+ *      +--+--+--+--+
+ * 1 1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   2  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ * 
+ * Obviously this cannot be solved by a one-row-or-column-at-a-time
+ * algorithm (it would require at least one row or column reading
+ * `2 1', `1 2', `3' or `4' to get started). However, it can be
+ * proved to have a unique solution: if the top left square were
+ * empty, then the only option for the top row would be to fill the
+ * two squares in the 1 columns, which would imply the squares
+ * below those were empty, leaving no place for the 2 in the second
+ * row. Contradiction. Hence the top left square is full, and the
+ * unique solution follows easily from that starting point.
+ * 
+ * (The game ID for this puzzle is 4x4:2/1/2/1/1.1/2/1/1 , in case
+ * it's useful to anyone.)
+ 
+     * The above gives a completely random splattering of black and
+     * white cells. We want to gently bias this in favour of _some_
+     * reasonably thick areas of white and black, while retaining
+     * some randomness and fine detail.
+     * 
+     * So we evolve the starting grid using a cellular automaton.
+     * Currently, I'm doing something very simple indeed, which is
+     * to set each square to the average of the surrounding nine
+     * cells (or the average of fewer, if we're on a corner).
+     
+                 * Compute the average of the surrounding cells.
+                 
+			 * An additional special case not mentioned
+			 * above: if a grid dimension is 2xn then
+			 * we do not average across that dimension
+			 * at all. Otherwise a 2x2 grid would
+			 * contain four identical squares.
+			  Choose a threshold that makes half the pixels black. In case of
+     * an odd number of pixels, select randomly between just under and
+     * just over half.  This algorithm basically tries all possible ways the given rows of
+     * black blocks can be laid out in the row/column being examined.
+     * Special care is taken to avoid checking the tail of a row/column
+     * if the same conditions have already been checked during this recursion
+     * The algorithm also takes care to cut its losses as soon as an
+     * invalid (partial) solution is detected.
+      For each column, compute how many squares can be deduced
+     * from just the row-data and initial clues.
+     * Later, changed_* will hold how many squares were changed
+     * in every row/column in the previous iteration
+     * Changed_* is used to choose the next rows / cols to re-examine
+      Solve the puzzle.
+     * Process rows/columns individually. Deductions involving more than one
+     * row and/or column at a time are not supported.
+     * Take care to only process rows/columns which have been changed since they
+     * were previously processed.
+     * Also, prioritize rows/columns which have had the most changes since their
+     * previous processing, as they promise the greatest benefit.
+     * Extremely rectangular grids (e.g. 10x20, 15x40, etc.) are not treated specially.
+      Allocate this here, to avoid having to reallocate it again for every geneerated grid 
+         * The game is a bit too easy if any row or column is
+         * completely black or completely white. An exception is
+         * made for rows/columns that are under 3 squares,
+         * otherwise nothing will ever be successfully generated.
+         
+     * Fixed input picture.
+     
+     * Now winnow the immutable square set as far as possible.
+     
+     * Save the solved game in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Seed is a slash-separated list of row contents; each row
+     * contents section is a dot-separated list of integers. Row
+     * contents are listed in the order (columns left to right,
+     * then rows top to bottom).
+     * 
+     * Simplest way to handle memory allocation is to make two
+     * passes, first computing the seed size and then writing it
+     * out.
+     
+         * At least one immutable square, so we need a suffix.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+         
+     * If we already have the solved state in ai, copy it out.
+      {line,grid}_{width,height}  de-NUL-ify  FULL -> EMPTY -> UNKNOWN  EMPTY -> FULL -> UNKNOWN  if (button == MIDDLE_BUTTON) 
+         * There doesn't seem much point in allowing a rectangle
+         * drag; people will generally only want to drag a single
+         * horizontal or vertical line, so we make that easy by
+         * snapping to it.
+         * 
+         * Exception: if we're _middle_-button dragging to tag
+         * things as UNKNOWN, we may well want to trash an entire
+         * area and start over!
+         
+	 * An actual change, so check to see if we've completed the
+	 * game.
+	  ----------------------------------------------------------------------
+ * Error-checking during gameplay.
+ 
+ * The difficulty in error-checking Pattern is to make the error check
+ * _weak_ enough. The most obvious way would be to check each row and
+ * column by calling (a modified form of) do_row() to recursively
+ * analyse the row contents against the clue set and see if the
+ * GRID_UNKNOWNs could be filled in in any way that would end up
+ * correct. However, this turns out to be such a strong error check as
+ * to constitute a spoiler in many situations: you make a typo while
+ * trying to fill in one row, and not only does the row light up to
+ * indicate an error, but several columns crossed by the move also
+ * light up and draw your attention to deductions you hadn't even
+ * noticed you could make.
+ *
+ * So instead I restrict error-checking to 'complete runs' within a
+ * row, by which I mean contiguous sequences of GRID_FULL bounded at
+ * both ends by either GRID_EMPTY or the ends of the row. We identify
+ * all the complete runs in a row, and verify that _those_ are
+ * consistent with the row's clue list. Sequences of complete runs
+ * separated by solid GRID_EMPTY are required to match contiguous
+ * sequences in the clue list, whereas if there's at least one
+ * GRID_UNKNOWN between any two complete runs then those two need not
+ * be contiguous in the clue list.
+ *
+ * To simplify the edge cases, I pretend that the clue list for the
+ * row is extended with a 0 at each end, and I also pretend that the
+ * grid data for the row is extended with a GRID_EMPTY and a
+ * zero-length run at each end. This permits the contiguity checker to
+ * handle the fiddly end effects (e.g. if the first contiguous
+ * sequence of complete runs in the grid matches _something_ in the
+ * clue list but not at the beginning, this is allowable iff there's a
+ * GRID_UNKNOWN before the first one) with minimal faff, since the end
+ * effects just drop out as special cases of the normal inter-run
+ * handling (in this code the above case is not 'at the end of the
+ * clue list' at all, but between the implicit initial zero run and
+ * the first nonzero one).
+ *
+ * We must also be a little careful about how we search for a
+ * contiguous sequence of runs. In the clue list (1 1 2 1 2 3),
+ * suppose we see a GRID_UNKNOWN and then a length-1 run. We search
+ * for 1 in the clue list and find it at the very beginning. But now
+ * suppose we find a length-2 run with no GRID_UNKNOWN before it. We
+ * can't naively look at the next clue from the 1 we found, because
+ * that'll be the second 1 and won't match. Instead, we must backtrack
+ * by observing that the 2 we've just found must be contiguous with
+ * the 1 we've already seen, so we search for the sequence (1 2) and
+ * find it starting at the second 1. Now if we see a 3, we must
+ * rethink again and search for (1 2 3).
+ 
+     * rowdata and rowlen point at the clue data for this row in the
+     * game state.
+     
+     * rowpos indicates the lowest position where it would be valid to
+     * see our next run length. It might be equal to rowlen,
+     * indicating that the next run would have to be the terminating 0.
+     
+     * ncontig indicates how many runs we've seen in a contiguous
+     * block. This is taken into account when searching for the next
+     * run we find, unless ncontig is zeroed out first by encountering
+     * a GRID_UNKNOWN.
+      Macro to handle the pretence that rowdata has a 0 at each end 
+     * See if we can find this new run length at a position where it
+     * also matches the last 'ncontig' runs we've seen.
+      Pretend that we've already encountered the initial zero run  error!  Signal end-of-row by sending errcheck_found_run the terminating
+     * zero run, which will be marked as contiguous with the previous
+     * run if and only if there hasn't been a GRID_UNKNOWN before.  error at the last minute!  no error  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+ * Draw the numbers for a single row or column.
+ 
+     * Normally I space the numbers out by the same distance as the
+     * tile size. However, if there are more numbers than available
+     * spaces, I have to squash them up a bit.
+     
+         * The initial contents of the window are not guaranteed
+         * and can vary with front ends. To be on the safe side,
+         * all games should start by drawing a big background-
+         * colour rectangle covering the whole window.
+         
+         * Draw the grid outline.
+          placate gcc warnings 
+     * Now draw any grid squares which have changed since last
+     * redraw.
+     
+             * Work out what state this square should be drawn in,
+             * taking any current drag operation into account.
+              the cursor has moved; if we were the old or
+                 * the new cursor position we need to redraw. 
+             * Briefly invert everything twice during a completion
+             * flash.
+             
+     * Redraw any numbers which have changed their colour due to error
+     * indication.
+     
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Clues.
+     
+     * Solution.
+      game_request_keys  wants_statusbar  flags 
+	     * Work out the maximum text width of the clue numbers
+	     * in a row or column, so we can print the solver's
+	     * working in a nicely lined up way.
+	     
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./patternpicture < calligraphic-A.xbm
+ *   15x15:2/4/2/2/2/3/3/3.1/3.1/3.1/11/14/12/6/1/2/2/3/4/5/1.3/2.3/1.3/2.3/1.4/9/1.1.3/2.2.3/5.4/3.2
+ *
+ * That looks easy, of course - all the program has done is to count
+ * up the clue numbers! But in fact, it's done more than that: it's
+ * also checked that the result is uniquely soluble from just the
+ * numbers. If it hadn't been, then it would have also left some
+ * filled squares in the playing area as extra clues.
+ *
+ *   $ ./patternpicture < cube.xbm
+ *   15x15:10/2.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.10/1.1.1/1.1.1/1.1.1/2.1/10/10/1.2/1.1.1/1.1.1/1.1.1/10.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.2/10,TNINzzzzGNzw
+ *
+ * This enables a reasonably convenient design workflow for coming up
+ * with pictorial Pattern puzzles which _are_ uniquely soluble without
+ * those inelegant pre-filled squares. Fire up a bitmap editor (X11
+ * bitmap(1) is good enough), save a trial .xbm, and then test it by
+ * running a command along the lines of
+ *
+ *   $ ./pattern $(./patternpicture < test.xbm)
+ *
+ * If the resulting window pops up with some pre-filled squares, then
+ * that tells you which parts of the image are giving rise to
+ * ambiguities, so try making tweaks in those areas, try the test
+ * command again, and see if it helps. Once you have a design for
+ * which the Pattern starting grid comes out empty, there's your game
+ * ID.
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 
+ * pattern.c: the pattern-reconstruction game known as `nonograms'.
+  Parts of the game state that don't change during play.  structure copy  ----------------------------------------------------------------------
+ * Puzzle generation code.
+ * 
+ * For this particular puzzle, it seemed important to me to ensure
+ * a unique solution. I do this the brute-force way, by having a
+ * solver algorithm alongside the generator, and repeatedly
+ * generating a random grid until I find one whose solution is
+ * unique. It turns out that this isn't too onerous on a modern PC
+ * provided you keep grid size below around 30. Any offers of
+ * better algorithms, however, will be very gratefully received.
+ * 
+ * Another annoyance of this approach is that it limits the
+ * available puzzles to those solvable by the algorithm I've used.
+ * My algorithm only ever considers a single row or column at any
+ * one time, which means it's incapable of solving the following
+ * difficult example (found by Bella Image around 1995/6, when she
+ * and I were both doing maths degrees):
+ * 
+ *        2  1  2  1 
+ *
+ *      +--+--+--+--+
+ * 1 1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   2  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ *   1  |  |  |  |  |
+ *      +--+--+--+--+
+ * 
+ * Obviously this cannot be solved by a one-row-or-column-at-a-time
+ * algorithm (it would require at least one row or column reading
+ * `2 1', `1 2', `3' or `4' to get started). However, it can be
+ * proved to have a unique solution: if the top left square were
+ * empty, then the only option for the top row would be to fill the
+ * two squares in the 1 columns, which would imply the squares
+ * below those were empty, leaving no place for the 2 in the second
+ * row. Contradiction. Hence the top left square is full, and the
+ * unique solution follows easily from that starting point.
+ * 
+ * (The game ID for this puzzle is 4x4:2/1/2/1/1.1/2/1/1 , in case
+ * it's useful to anyone.)
+ 
+     * The above gives a completely random splattering of black and
+     * white cells. We want to gently bias this in favour of _some_
+     * reasonably thick areas of white and black, while retaining
+     * some randomness and fine detail.
+     * 
+     * So we evolve the starting grid using a cellular automaton.
+     * Currently, I'm doing something very simple indeed, which is
+     * to set each square to the average of the surrounding nine
+     * cells (or the average of fewer, if we're on a corner).
+     
+                 * Compute the average of the surrounding cells.
+                 
+			 * An additional special case not mentioned
+			 * above: if a grid dimension is 2xn then
+			 * we do not average across that dimension
+			 * at all. Otherwise a 2x2 grid would
+			 * contain four identical squares.
+			  Choose a threshold that makes half the pixels black. In case of
+     * an odd number of pixels, select randomly between just under and
+     * just over half.  This algorithm basically tries all possible ways the given rows of
+     * black blocks can be laid out in the row/column being examined.
+     * Special care is taken to avoid checking the tail of a row/column
+     * if the same conditions have already been checked during this recursion
+     * The algorithm also takes care to cut its losses as soon as an
+     * invalid (partial) solution is detected.
+      For each column, compute how many squares can be deduced
+     * from just the row-data and initial clues.
+     * Later, changed_* will hold how many squares were changed
+     * in every row/column in the previous iteration
+     * Changed_* is used to choose the next rows / cols to re-examine
+      Solve the puzzle.
+     * Process rows/columns individually. Deductions involving more than one
+     * row and/or column at a time are not supported.
+     * Take care to only process rows/columns which have been changed since they
+     * were previously processed.
+     * Also, prioritize rows/columns which have had the most changes since their
+     * previous processing, as they promise the greatest benefit.
+     * Extremely rectangular grids (e.g. 10x20, 15x40, etc.) are not treated specially.
+      Allocate this here, to avoid having to reallocate it again for every geneerated grid 
+         * The game is a bit too easy if any row or column is
+         * completely black or completely white. An exception is
+         * made for rows/columns that are under 3 squares,
+         * otherwise nothing will ever be successfully generated.
+         
+     * Fixed input picture.
+     
+     * Now winnow the immutable square set as far as possible.
+     
+     * Save the solved game in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Seed is a slash-separated list of row contents; each row
+     * contents section is a dot-separated list of integers. Row
+     * contents are listed in the order (columns left to right,
+     * then rows top to bottom).
+     * 
+     * Simplest way to handle memory allocation is to make two
+     * passes, first computing the seed size and then writing it
+     * out.
+     
+         * At least one immutable square, so we need a suffix.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+          expect a slash immediately 
+         * Optional extra piece of game description which fills in
+         * some grid squares as extra clues.
+         
+     * If we already have the solved state in ai, copy it out.
+      {line,grid}_{width,height}  de-NUL-ify  FULL -> EMPTY -> UNKNOWN  EMPTY -> FULL -> UNKNOWN  if (button == MIDDLE_BUTTON) 
+         * There doesn't seem much point in allowing a rectangle
+         * drag; people will generally only want to drag a single
+         * horizontal or vertical line, so we make that easy by
+         * snapping to it.
+         * 
+         * Exception: if we're _middle_-button dragging to tag
+         * things as UNKNOWN, we may well want to trash an entire
+         * area and start over!
+         
+	 * An actual change, so check to see if we've completed the
+	 * game.
+	  ----------------------------------------------------------------------
+ * Error-checking during gameplay.
+ 
+ * The difficulty in error-checking Pattern is to make the error check
+ * _weak_ enough. The most obvious way would be to check each row and
+ * column by calling (a modified form of) do_row() to recursively
+ * analyse the row contents against the clue set and see if the
+ * GRID_UNKNOWNs could be filled in in any way that would end up
+ * correct. However, this turns out to be such a strong error check as
+ * to constitute a spoiler in many situations: you make a typo while
+ * trying to fill in one row, and not only does the row light up to
+ * indicate an error, but several columns crossed by the move also
+ * light up and draw your attention to deductions you hadn't even
+ * noticed you could make.
+ *
+ * So instead I restrict error-checking to 'complete runs' within a
+ * row, by which I mean contiguous sequences of GRID_FULL bounded at
+ * both ends by either GRID_EMPTY or the ends of the row. We identify
+ * all the complete runs in a row, and verify that _those_ are
+ * consistent with the row's clue list. Sequences of complete runs
+ * separated by solid GRID_EMPTY are required to match contiguous
+ * sequences in the clue list, whereas if there's at least one
+ * GRID_UNKNOWN between any two complete runs then those two need not
+ * be contiguous in the clue list.
+ *
+ * To simplify the edge cases, I pretend that the clue list for the
+ * row is extended with a 0 at each end, and I also pretend that the
+ * grid data for the row is extended with a GRID_EMPTY and a
+ * zero-length run at each end. This permits the contiguity checker to
+ * handle the fiddly end effects (e.g. if the first contiguous
+ * sequence of complete runs in the grid matches _something_ in the
+ * clue list but not at the beginning, this is allowable iff there's a
+ * GRID_UNKNOWN before the first one) with minimal faff, since the end
+ * effects just drop out as special cases of the normal inter-run
+ * handling (in this code the above case is not 'at the end of the
+ * clue list' at all, but between the implicit initial zero run and
+ * the first nonzero one).
+ *
+ * We must also be a little careful about how we search for a
+ * contiguous sequence of runs. In the clue list (1 1 2 1 2 3),
+ * suppose we see a GRID_UNKNOWN and then a length-1 run. We search
+ * for 1 in the clue list and find it at the very beginning. But now
+ * suppose we find a length-2 run with no GRID_UNKNOWN before it. We
+ * can't naively look at the next clue from the 1 we found, because
+ * that'll be the second 1 and won't match. Instead, we must backtrack
+ * by observing that the 2 we've just found must be contiguous with
+ * the 1 we've already seen, so we search for the sequence (1 2) and
+ * find it starting at the second 1. Now if we see a 3, we must
+ * rethink again and search for (1 2 3).
+ 
+     * rowdata and rowlen point at the clue data for this row in the
+     * game state.
+     
+     * rowpos indicates the lowest position where it would be valid to
+     * see our next run length. It might be equal to rowlen,
+     * indicating that the next run would have to be the terminating 0.
+     
+     * ncontig indicates how many runs we've seen in a contiguous
+     * block. This is taken into account when searching for the next
+     * run we find, unless ncontig is zeroed out first by encountering
+     * a GRID_UNKNOWN.
+      Macro to handle the pretence that rowdata has a 0 at each end 
+     * See if we can find this new run length at a position where it
+     * also matches the last 'ncontig' runs we've seen.
+      Pretend that we've already encountered the initial zero run  error!  Signal end-of-row by sending errcheck_found_run the terminating
+     * zero run, which will be marked as contiguous with the previous
+     * run if and only if there hasn't been a GRID_UNKNOWN before.  error at the last minute!  no error  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+ * Draw the numbers for a single row or column.
+ 
+     * Normally I space the numbers out by the same distance as the
+     * tile size. However, if there are more numbers than available
+     * spaces, I have to squash them up a bit.
+     
+         * The initial contents of the window are not guaranteed
+         * and can vary with front ends. To be on the safe side,
+         * all games should start by drawing a big background-
+         * colour rectangle covering the whole window.
+         
+         * Draw the grid outline.
+          placate gcc warnings 
+     * Now draw any grid squares which have changed since last
+     * redraw.
+     
+             * Work out what state this square should be drawn in,
+             * taking any current drag operation into account.
+              the cursor has moved; if we were the old or
+                 * the new cursor position we need to redraw. 
+             * Briefly invert everything twice during a completion
+             * flash.
+             
+     * Redraw any numbers which have changed their colour due to error
+     * indication.
+     
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Clues.
+     
+     * Solution.
+      game_request_keys  wants_statusbar  flags 
+	     * Work out the maximum text width of the clue numbers
+	     * in a row or column, so we can print the solver's
+	     * working in a nicely lined up way.
+	     
+ * Main program for the standalone picture generator. To use it,
+ * simply provide it with an XBM-format bitmap file (note XBM, not
+ * XPM) on standard input, and it will output a game ID in return.
+ * For example:
+ *
+ *   $ ./patternpicture < calligraphic-A.xbm
+ *   15x15:2/4/2/2/2/3/3/3.1/3.1/3.1/11/14/12/6/1/2/2/3/4/5/1.3/2.3/1.3/2.3/1.4/9/1.1.3/2.2.3/5.4/3.2
+ *
+ * That looks easy, of course - all the program has done is to count
+ * up the clue numbers! But in fact, it's done more than that: it's
+ * also checked that the result is uniquely soluble from just the
+ * numbers. If it hadn't been, then it would have also left some
+ * filled squares in the playing area as extra clues.
+ *
+ *   $ ./patternpicture < cube.xbm
+ *   15x15:10/2.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.10/1.1.1/1.1.1/1.1.1/2.1/10/10/1.2/1.1.1/1.1.1/1.1.1/10.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.1.1/1.2/10,TNINzzzzGNzw
+ *
+ * This enables a reasonably convenient design workflow for coming up
+ * with pictorial Pattern puzzles which _are_ uniquely soluble without
+ * those inelegant pre-filled squares. Fire up a bitmap editor (X11
+ * bitmap(1) is good enough), save a trial .xbm, and then test it by
+ * running a command along the lines of
+ *
+ *   $ ./pattern $(./patternpicture < test.xbm)
+ *
+ * If the resulting window pops up with some pre-filled squares, then
+ * that tells you which parts of the image are giving rise to
+ * ambiguities, so try making tweaks in those areas, try the test
+ * command again, and see if it helps. Once you have a design for
+ * which the Pattern starting grid comes out empty, there's your game
+ * ID.
+  get difficulty 
+     * Now read an XBM file from standard input. This is simple and
+     * hacky and will do very little error detection, so don't feed
+     * it bogus data.
+     
+	     * Lines starting `#define' give the width and height.
+	     
+	     * Otherwise, break the string up into words and take
+	     * any word of the form `0x' plus hex digits to be a
+	     * byte.
+	      vim: set shiftwidth=4 tabstop=8: 

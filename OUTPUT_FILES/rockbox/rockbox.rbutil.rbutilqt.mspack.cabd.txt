@@ -1,0 +1,508 @@
+ This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Cabinet (.CAB) files are a form of file archive. Each cabinet contains
+ * "folders", which are compressed spans of data. Each cabinet has
+ * "files", whose metadata is in the cabinet header, but whose actual data
+ * is stored compressed in one of the "folders". Cabinets can span more
+ * than one physical file on disk, in which case they are a "cabinet set",
+ * and usually the last folder of each cabinet extends into the next
+ * cabinet.
+ *
+ * For a complete description of the format, see the MSDN site:
+ *   http://msdn.microsoft.com/en-us/library/bb267310.aspx
+  CAB decompression implementation  Notes on compliance with cabinet specification:
+ *
+ * One of the main changes between cabextract 0.6 and libmspack's cab
+ * decompressor is the move from block-oriented decompression to
+ * stream-oriented decompression.
+ *
+ * cabextract would read one data block from disk, decompress it with the
+ * appropriate method, then write the decompressed data. The CAB
+ * specification is specifically designed to work like this, as it ensures
+ * compression matches do not span the maximum decompressed block size
+ * limit of 32kb.
+ *
+ * However, the compression algorithms used are stream oriented, with
+ * specific hacks added to them to enforce the "individual 32kb blocks"
+ * rule in CABs. In other file formats, they do not have this limitation.
+ *
+ * In order to make more generalised decompressors, libmspack's CAB
+ * decompressor has moved from being block-oriented to more stream
+ * oriented. This also makes decompression slightly faster.
+ *
+ * However, this leads to incompliance with the CAB specification. The
+ * CAB controller can no longer ensure each block of input given to the
+ * decompressors is matched with their output. The "decompressed size" of
+ * each individual block is thrown away.
+ *
+ * Each CAB block is supposed to be seen as individually compressed. This
+ * means each consecutive data block can have completely different
+ * "uncompressed" sizes, ranging from 1 to 32768 bytes. However, in
+ * reality, all data blocks in a folder decompress to exactly 32768 bytes,
+ * excepting the final block. 
+ *
+ * Given this situation, the decompression algorithms are designed to
+ * realign their input bitstreams on 32768 output-byte boundaries, and
+ * various other special cases have been made. libmspack will not
+ * correctly decompress LZX or Quantum compressed folders where the blocks
+ * do not follow this "32768 bytes until last block" pattern. It could be
+ * implemented if needed, but hopefully this is not necessary -- it has
+ * not been seen in over 3Gb of CAB archives.
+  prototypes **************************************
+ * MSPACK_CREATE_CAB_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CABD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a cabinet file
+ **************************************
+ * CABD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mscabd_cabinet.
+  free files  free folders  free folder decompression state if it has been decompressed  free folder data segments  free predecessor cabinets (and the original cabinet's strings)  free successor cabinets  free actual cabinet structure  repeat full procedure again with the cab->next pointer (if set) **************************************
+ * CABD_READ_HEADERS
+ ***************************************
+ * reads the cabinet file header, folder list and file list.
+ * fills out a pre-existing mscabd_cabinet structure, allocates memory
+ * for folders and files as necessary
+  initialise pointers  seek to CFHEADER  read in the CFHEADER  check for "MSCF" signature  some basic header fields  get the number of folders  get the number of files  check cabinet version  read the reserved-sizes part of header, if present  skip the reserved header  read name and info of preceeding cabinet in set, if present  read name and info of next cabinet in set, if present  read folders  link folder into list of folders  read files  set folder pointer  normal folder index; count up to the correct folder  either CONTINUED_TO_NEXT, CONTINUED_FROM_PREV or
+       * CONTINUED_PREV_AND_NEXT  get last folder  set "merge next" pointer  get first folder  set "merge prev" pointer  get time  get date  get filename  if folder index or filename are bad, either skip it or fail  link file entry into file list  We never actually added any files to the file list.  Something went wrong.
+     * The file header may have been invalid  read up to 256 bytes  search for a null terminator in the buffer  reject empty strings  set the data stream to just after the string and return **************************************
+ * CABD_SEARCH, CABD_FIND
+ ***************************************
+ * cabd_search opens a file, finds its extent, allocates a search buffer,
+ * then reads through the whole file looking for possible cabinet headers.
+ * if it finds any, it tries to read them as real cabinets. returns a linked
+ * list of results
+ *
+ * cabd_find is the inner loop of cabd_search, to make it easier to
+ * break out of the loop and be sure that all resources are freed
+  allocate a search buffer  open file and get its full file length  truncated / extraneous data warning:  free the search buffer  detect 32-bit off_t overflow  search through the full file length  search length is either the full length of the search buffer, or the
+     * amount of data remaining to the end of the file, whichever is less.  fill the search buffer with data from disk  FAQ avoidance strategy  read through the entire buffer.  starting state  we spend most of our time in this while loop, looking for
+         * a leading 'M' of the 'MSCF' signature  if we found tht 'M', advance state  verify that the next 3 bytes are 'S', 'C' and 'F'  we don't care about bytes 4-7 (see default: for action)  bytes 8-11 are the overall length of the cabinet  we don't care about bytes 12-15 (see default: for action)  bytes 16-19 are the offset within the cabinet of the filedata  now we have recieved 20 bytes of potential cab header. work out
+         * the offset in the file of this potential cabinet  should reading cabinet fail, restart search just after 'MSCF'  capture the "length of cabinet" field if there is a cabinet at
+         * offset 0 in the file, regardless of whether the cabinet can be
+         * read correctly or not  check that the files offset is less than the alleged length of
+         * the cabinet, and that the offset + the alleged length are
+         * 'roughly' within the end of overall file length. In salvage
+         * mode, don't check the alleged length, allow it to be garbage  likely cabinet found -- try reading it  destroy the failed cabinet  cabinet read correctly!  link the cab into the list  cause the search to restart after this cab's data.  detect 32-bit off_t overflow  restart search  for bytes 4-7 and 12-15, just advance state/pointer  switch(state)  for (... p < pend ...)  for (... offset < length ...) **************************************
+ * CABD_MERGE, CABD_PREPEND, CABD_APPEND
+ ***************************************
+ * joins cabinets together, also merges split folders between these two
+ * cabinets only. This includes freeing the duplicate folder and file(s)
+ * and allocating a further mscabd_folder_data structure to append to the
+ * merged folder's data parts list.
+  basic args check  check there's not already a cabinet attached  do not create circular cabinet chains  warn about odd set IDs or indices  merging the last folder in lcab with the first folder in rcab  do we need to merge folders?  no, at least one of the folders is not for merging  attach cabs  attach folders  attach files  folder merge required - do the files match?  allocate a new folder data structure  attach cabs  append rfol's data to lfol  lfol becomes rfol.
+     * NOTE: special case, don't merge if rfol is merge prev and next,
+     * rfol->merge_next is going to be deleted, so keep lfol's version
+     * instead  attach the rfol's folder (except the merge folder)  free disused merge folder  attach rfol's files  delete all files from rfol's merge folder  if file's folder matches the merge folder, unlink and free it  all done! fix files and folders pointers in all cabs so they all
+   * point to the same list   decides if two folders are OK to merge  check that both folders use the same compression method/settings  check there are not too many data blocks after merging  for all files in lfol (which is the last folder in whichever cab and
+     * only has files to merge), compare them to the files from rfol. They
+     * should be identical in number and order. to verify this, check the
+     * offset and length of each file.  if rfol does not begin with an identical copy of the files in lfol, make
+     * make a judgement call; if at least ONE file from lfol is in rfol, allow
+     * the merge with a warning about missing files. **************************************
+ * CABD_EXTRACT
+ ***************************************
+ * extracts a file from a cabinet
+  if offset is beyond 2GB, nothing can be extracted  if file claims to go beyond 2GB either error out,
+   * or in salvage mode reduce file length so it fits 2GB limit
+    extraction impossible if no folder, or folder needs predecessor  if file goes beyond what can be decoded, given an error.
+   * In salvage mode, don't assume block sizes, just try decoding
+    allocate generic decompression state  do we need to change folder or reset the current folder?  free any existing decompressor  do we need to open a new cab file?  close previous file handle if from a different cab  seek to start of data blocks  set up decompressor  initialise new folder state  read_error lasts for the lifetime of a decompressor  open file for output  if file has more than 0 bytes  get to correct offset.
+     * - use NULL fh to say 'no writing' to cabd_sys_write()
+     * - if cabd_sys_read() has an error, it will set self->read_error
+     *   and pass back MSPACK_ERR_READ
+      if getting to the correct offset was error free, unpack file  close output file **************************************
+ * CABD_INIT_DECOMP, CABD_FREE_DECOMP
+ ***************************************
+ * cabd_init_decomp initialises decompression state, according to which
+ * decompression method was used. relies on self->d->folder being the same
+ * as when initialised.
+ *
+ * cabd_free_decomp frees decompression state, according to which method
+ * was used.
+ **************************************
+ * CABD_SYS_READ, CABD_SYS_WRITE
+ ***************************************
+ * cabd_sys_read is the internal reader function which the decompressors
+ * use. will read data blocks (and merge split blocks) from the cabinet
+ * and serve the read bytes to the decompressors
+ *
+ * cabd_sys_write is the internal writer function which the decompressors
+ * use. it either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset
+  if out of input data, read a new block  copy as many input bytes available as possible  out of data, read a new block  check if we're out of input blocks, advance block counter  read a block  special Quantum hack -- trailer byte to allow the decompressor
+       * to realign itself. CAB Quantum blocks, unlike LZX blocks, can have
+       * anything from 0 to 4 trailing null bytes.  is this the last block?  special LZX hack -- on the last block, inform LZX of the
+           * size of the output data stream.  if (avail)  while (todo > 0) **************************************
+ * CABD_SYS_READ_BLOCK
+ ***************************************
+ * reads a whole data block from a cab file. the block may span more than
+ * one cab file, if it does then the fragments will be reassembled
+  reset the input block pointer and end of block pointer  read the block header  skip any reserved block headers  blocks must not be over CAB_INPUTMAX in size  include cab-spanning blocks  in salvage mode, blocks can be 65535 bytes but no more than that  blocks must not expand to more than CAB_BLOCKMAX  read the block data  perform checksum test on the block (if one is stored)  advance end of block pointer to include newly read data  uncompressed size == 0 means this block was part of a split block
+     * and it continues as the first block of the next cabinet in the set.
+     * otherwise, this is the last part of the block, and no more block
+     * reading needs to be done.
+      EXIT POINT OF LOOP -- uncompressed size != 0  otherwise, advance to next cabinet  close current file handle  advance to next member in the cabinet set  open next cab file  seek to start of data blocks  not reached @fallthrough@@fallthrough@**************************************
+ * NONED_INIT, NONED_DECOMPRESS, NONED_FREE
+ ***************************************
+ * the "not compressed" method decompressor
+ **************************************
+ * CABD_PARAM
+ ***************************************
+ * allows a parameter to be set
+ **************************************
+ * CABD_ERROR
+ ***************************************
+ * returns the last error that occurred
+  This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Cabinet (.CAB) files are a form of file archive. Each cabinet contains
+ * "folders", which are compressed spans of data. Each cabinet has
+ * "files", whose metadata is in the cabinet header, but whose actual data
+ * is stored compressed in one of the "folders". Cabinets can span more
+ * than one physical file on disk, in which case they are a "cabinet set",
+ * and usually the last folder of each cabinet extends into the next
+ * cabinet.
+ *
+ * For a complete description of the format, see the MSDN site:
+ *   http://msdn.microsoft.com/en-us/library/bb267310.aspx
+  CAB decompression implementation  Notes on compliance with cabinet specification:
+ *
+ * One of the main changes between cabextract 0.6 and libmspack's cab
+ * decompressor is the move from block-oriented decompression to
+ * stream-oriented decompression.
+ *
+ * cabextract would read one data block from disk, decompress it with the
+ * appropriate method, then write the decompressed data. The CAB
+ * specification is specifically designed to work like this, as it ensures
+ * compression matches do not span the maximum decompressed block size
+ * limit of 32kb.
+ *
+ * However, the compression algorithms used are stream oriented, with
+ * specific hacks added to them to enforce the "individual 32kb blocks"
+ * rule in CABs. In other file formats, they do not have this limitation.
+ *
+ * In order to make more generalised decompressors, libmspack's CAB
+ * decompressor has moved from being block-oriented to more stream
+ * oriented. This also makes decompression slightly faster.
+ *
+ * However, this leads to incompliance with the CAB specification. The
+ * CAB controller can no longer ensure each block of input given to the
+ * decompressors is matched with their output. The "decompressed size" of
+ * each individual block is thrown away.
+ *
+ * Each CAB block is supposed to be seen as individually compressed. This
+ * means each consecutive data block can have completely different
+ * "uncompressed" sizes, ranging from 1 to 32768 bytes. However, in
+ * reality, all data blocks in a folder decompress to exactly 32768 bytes,
+ * excepting the final block. 
+ *
+ * Given this situation, the decompression algorithms are designed to
+ * realign their input bitstreams on 32768 output-byte boundaries, and
+ * various other special cases have been made. libmspack will not
+ * correctly decompress LZX or Quantum compressed folders where the blocks
+ * do not follow this "32768 bytes until last block" pattern. It could be
+ * implemented if needed, but hopefully this is not necessary -- it has
+ * not been seen in over 3Gb of CAB archives.
+  prototypes **************************************
+ * MSPACK_CREATE_CAB_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CABD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a cabinet file
+ **************************************
+ * CABD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mscabd_cabinet.
+  free files  free folders  free folder decompression state if it has been decompressed  free folder data segments  free predecessor cabinets (and the original cabinet's strings)  free successor cabinets  free actual cabinet structure  repeat full procedure again with the cab->next pointer (if set) **************************************
+ * CABD_READ_HEADERS
+ ***************************************
+ * reads the cabinet file header, folder list and file list.
+ * fills out a pre-existing mscabd_cabinet structure, allocates memory
+ * for folders and files as necessary
+  initialise pointers  seek to CFHEADER  read in the CFHEADER  check for "MSCF" signature  some basic header fields  get the number of folders  get the number of files  check cabinet version  read the reserved-sizes part of header, if present  skip the reserved header  read name and info of preceeding cabinet in set, if present  read name and info of next cabinet in set, if present  read folders  link folder into list of folders  read files  set folder pointer  normal folder index; count up to the correct folder  either CONTINUED_TO_NEXT, CONTINUED_FROM_PREV or
+       * CONTINUED_PREV_AND_NEXT  get last folder  set "merge next" pointer  get first folder  set "merge prev" pointer  get time  get date  get filename  if folder index or filename are bad, either skip it or fail  link file entry into file list  We never actually added any files to the file list.  Something went wrong.
+     * The file header may have been invalid  read up to 256 bytes  search for a null terminator in the buffer  reject empty strings  set the data stream to just after the string and return **************************************
+ * CABD_SEARCH, CABD_FIND
+ ***************************************
+ * cabd_search opens a file, finds its extent, allocates a search buffer,
+ * then reads through the whole file looking for possible cabinet headers.
+ * if it finds any, it tries to read them as real cabinets. returns a linked
+ * list of results
+ *
+ * cabd_find is the inner loop of cabd_search, to make it easier to
+ * break out of the loop and be sure that all resources are freed
+  allocate a search buffer  open file and get its full file length  truncated / extraneous data warning:  free the search buffer  detect 32-bit off_t overflow  search through the full file length  search length is either the full length of the search buffer, or the
+     * amount of data remaining to the end of the file, whichever is less.  fill the search buffer with data from disk  FAQ avoidance strategy  read through the entire buffer.  starting state  we spend most of our time in this while loop, looking for
+         * a leading 'M' of the 'MSCF' signature  if we found tht 'M', advance state  verify that the next 3 bytes are 'S', 'C' and 'F'  we don't care about bytes 4-7 (see default: for action)  bytes 8-11 are the overall length of the cabinet  we don't care about bytes 12-15 (see default: for action)  bytes 16-19 are the offset within the cabinet of the filedata  now we have recieved 20 bytes of potential cab header. work out
+         * the offset in the file of this potential cabinet  should reading cabinet fail, restart search just after 'MSCF'  capture the "length of cabinet" field if there is a cabinet at
+         * offset 0 in the file, regardless of whether the cabinet can be
+         * read correctly or not  check that the files offset is less than the alleged length of
+         * the cabinet, and that the offset + the alleged length are
+         * 'roughly' within the end of overall file length. In salvage
+         * mode, don't check the alleged length, allow it to be garbage  likely cabinet found -- try reading it  destroy the failed cabinet  cabinet read correctly!  link the cab into the list  cause the search to restart after this cab's data.  detect 32-bit off_t overflow  restart search  for bytes 4-7 and 12-15, just advance state/pointer  switch(state)  for (... p < pend ...)  for (... offset < length ...) **************************************
+ * CABD_MERGE, CABD_PREPEND, CABD_APPEND
+ ***************************************
+ * joins cabinets together, also merges split folders between these two
+ * cabinets only. This includes freeing the duplicate folder and file(s)
+ * and allocating a further mscabd_folder_data structure to append to the
+ * merged folder's data parts list.
+  basic args check  check there's not already a cabinet attached  do not create circular cabinet chains  warn about odd set IDs or indices  merging the last folder in lcab with the first folder in rcab  do we need to merge folders?  no, at least one of the folders is not for merging  attach cabs  attach folders  attach files  folder merge required - do the files match?  allocate a new folder data structure  attach cabs  append rfol's data to lfol  lfol becomes rfol.
+     * NOTE: special case, don't merge if rfol is merge prev and next,
+     * rfol->merge_next is going to be deleted, so keep lfol's version
+     * instead  attach the rfol's folder (except the merge folder)  free disused merge folder  attach rfol's files  delete all files from rfol's merge folder  if file's folder matches the merge folder, unlink and free it  all done! fix files and folders pointers in all cabs so they all
+   * point to the same list   decides if two folders are OK to merge  check that both folders use the same compression method/settings  check there are not too many data blocks after merging  for all files in lfol (which is the last folder in whichever cab and
+     * only has files to merge), compare them to the files from rfol. They
+     * should be identical in number and order. to verify this, check the
+     * offset and length of each file.  if rfol does not begin with an identical copy of the files in lfol, make
+     * make a judgement call; if at least ONE file from lfol is in rfol, allow
+     * the merge with a warning about missing files. **************************************
+ * CABD_EXTRACT
+ ***************************************
+ * extracts a file from a cabinet
+  if offset is beyond 2GB, nothing can be extracted  if file claims to go beyond 2GB either error out,
+   * or in salvage mode reduce file length so it fits 2GB limit
+    extraction impossible if no folder, or folder needs predecessor  if file goes beyond what can be decoded, given an error.
+   * In salvage mode, don't assume block sizes, just try decoding
+    allocate generic decompression state  do we need to change folder or reset the current folder?  free any existing decompressor  do we need to open a new cab file?  close previous file handle if from a different cab  seek to start of data blocks  set up decompressor  initialise new folder state  read_error lasts for the lifetime of a decompressor  open file for output  if file has more than 0 bytes  get to correct offset.
+     * - use NULL fh to say 'no writing' to cabd_sys_write()
+     * - if cabd_sys_read() has an error, it will set self->read_error
+     *   and pass back MSPACK_ERR_READ
+      if getting to the correct offset was error free, unpack file  close output file **************************************
+ * CABD_INIT_DECOMP, CABD_FREE_DECOMP
+ ***************************************
+ * cabd_init_decomp initialises decompression state, according to which
+ * decompression method was used. relies on self->d->folder being the same
+ * as when initialised.
+ *
+ * cabd_free_decomp frees decompression state, according to which method
+ * was used.
+ **************************************
+ * CABD_SYS_READ, CABD_SYS_WRITE
+ ***************************************
+ * cabd_sys_read is the internal reader function which the decompressors
+ * use. will read data blocks (and merge split blocks) from the cabinet
+ * and serve the read bytes to the decompressors
+ *
+ * cabd_sys_write is the internal writer function which the decompressors
+ * use. it either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset
+  if out of input data, read a new block  copy as many input bytes available as possible  out of data, read a new block  check if we're out of input blocks, advance block counter  read a block  special Quantum hack -- trailer byte to allow the decompressor
+       * to realign itself. CAB Quantum blocks, unlike LZX blocks, can have
+       * anything from 0 to 4 trailing null bytes.  is this the last block?  special LZX hack -- on the last block, inform LZX of the
+           * size of the output data stream.  if (avail)  while (todo > 0) **************************************
+ * CABD_SYS_READ_BLOCK
+ ***************************************
+ * reads a whole data block from a cab file. the block may span more than
+ * one cab file, if it does then the fragments will be reassembled
+  reset the input block pointer and end of block pointer  read the block header  skip any reserved block headers  blocks must not be over CAB_INPUTMAX in size  include cab-spanning blocks  in salvage mode, blocks can be 65535 bytes but no more than that  blocks must not expand to more than CAB_BLOCKMAX  read the block data  perform checksum test on the block (if one is stored)  advance end of block pointer to include newly read data  uncompressed size == 0 means this block was part of a split block
+     * and it continues as the first block of the next cabinet in the set.
+     * otherwise, this is the last part of the block, and no more block
+     * reading needs to be done.
+      EXIT POINT OF LOOP -- uncompressed size != 0  otherwise, advance to next cabinet  close current file handle  advance to next member in the cabinet set  open next cab file  seek to start of data blocks  not reached @fallthrough@@fallthrough@**************************************
+ * NONED_INIT, NONED_DECOMPRESS, NONED_FREE
+ ***************************************
+ * the "not compressed" method decompressor
+ **************************************
+ * CABD_PARAM
+ ***************************************
+ * allows a parameter to be set
+ **************************************
+ * CABD_ERROR
+ ***************************************
+ * returns the last error that occurred
+  This file is part of libmspack.
+ * (C) 2003-2018 Stuart Caie.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Cabinet (.CAB) files are a form of file archive. Each cabinet contains
+ * "folders", which are compressed spans of data. Each cabinet has
+ * "files", whose metadata is in the cabinet header, but whose actual data
+ * is stored compressed in one of the "folders". Cabinets can span more
+ * than one physical file on disk, in which case they are a "cabinet set",
+ * and usually the last folder of each cabinet extends into the next
+ * cabinet.
+ *
+ * For a complete description of the format, see the MSDN site:
+ *   http://msdn.microsoft.com/en-us/library/bb267310.aspx
+  CAB decompression implementation  Notes on compliance with cabinet specification:
+ *
+ * One of the main changes between cabextract 0.6 and libmspack's cab
+ * decompressor is the move from block-oriented decompression to
+ * stream-oriented decompression.
+ *
+ * cabextract would read one data block from disk, decompress it with the
+ * appropriate method, then write the decompressed data. The CAB
+ * specification is specifically designed to work like this, as it ensures
+ * compression matches do not span the maximum decompressed block size
+ * limit of 32kb.
+ *
+ * However, the compression algorithms used are stream oriented, with
+ * specific hacks added to them to enforce the "individual 32kb blocks"
+ * rule in CABs. In other file formats, they do not have this limitation.
+ *
+ * In order to make more generalised decompressors, libmspack's CAB
+ * decompressor has moved from being block-oriented to more stream
+ * oriented. This also makes decompression slightly faster.
+ *
+ * However, this leads to incompliance with the CAB specification. The
+ * CAB controller can no longer ensure each block of input given to the
+ * decompressors is matched with their output. The "decompressed size" of
+ * each individual block is thrown away.
+ *
+ * Each CAB block is supposed to be seen as individually compressed. This
+ * means each consecutive data block can have completely different
+ * "uncompressed" sizes, ranging from 1 to 32768 bytes. However, in
+ * reality, all data blocks in a folder decompress to exactly 32768 bytes,
+ * excepting the final block. 
+ *
+ * Given this situation, the decompression algorithms are designed to
+ * realign their input bitstreams on 32768 output-byte boundaries, and
+ * various other special cases have been made. libmspack will not
+ * correctly decompress LZX or Quantum compressed folders where the blocks
+ * do not follow this "32768 bytes until last block" pattern. It could be
+ * implemented if needed, but hopefully this is not necessary -- it has
+ * not been seen in over 3Gb of CAB archives.
+  prototypes **************************************
+ * MSPACK_CREATE_CAB_DECOMPRESSOR
+ ***************************************
+ * constructor
+ **************************************
+ * MSPACK_DESTROY_CAB_DECOMPRESSOR
+ ***************************************
+ * destructor
+ **************************************
+ * CABD_OPEN
+ ***************************************
+ * opens a file and tries to read it as a cabinet file
+ **************************************
+ * CABD_CLOSE
+ ***************************************
+ * frees all memory associated with a given mscabd_cabinet.
+  free files  free folders  free folder decompression state if it has been decompressed  free folder data segments  free predecessor cabinets (and the original cabinet's strings)  free successor cabinets  free actual cabinet structure  repeat full procedure again with the cab->next pointer (if set) **************************************
+ * CABD_READ_HEADERS
+ ***************************************
+ * reads the cabinet file header, folder list and file list.
+ * fills out a pre-existing mscabd_cabinet structure, allocates memory
+ * for folders and files as necessary
+  initialise pointers  seek to CFHEADER  read in the CFHEADER  check for "MSCF" signature  some basic header fields  get the number of folders  get the number of files  check cabinet version  read the reserved-sizes part of header, if present  skip the reserved header  read name and info of preceeding cabinet in set, if present  read name and info of next cabinet in set, if present  read folders  link folder into list of folders  read files  set folder pointer  normal folder index; count up to the correct folder  either CONTINUED_TO_NEXT, CONTINUED_FROM_PREV or
+       * CONTINUED_PREV_AND_NEXT  get last folder  set "merge next" pointer  get first folder  set "merge prev" pointer  get time  get date  get filename  if folder index or filename are bad, either skip it or fail  link file entry into file list  We never actually added any files to the file list.  Something went wrong.
+     * The file header may have been invalid  read up to 256 bytes  search for a null terminator in the buffer  reject empty strings  set the data stream to just after the string and return **************************************
+ * CABD_SEARCH, CABD_FIND
+ ***************************************
+ * cabd_search opens a file, finds its extent, allocates a search buffer,
+ * then reads through the whole file looking for possible cabinet headers.
+ * if it finds any, it tries to read them as real cabinets. returns a linked
+ * list of results
+ *
+ * cabd_find is the inner loop of cabd_search, to make it easier to
+ * break out of the loop and be sure that all resources are freed
+  allocate a search buffer  open file and get its full file length  truncated / extraneous data warning:  free the search buffer  detect 32-bit off_t overflow  search through the full file length  search length is either the full length of the search buffer, or the
+     * amount of data remaining to the end of the file, whichever is less.  fill the search buffer with data from disk  FAQ avoidance strategy  read through the entire buffer.  starting state  we spend most of our time in this while loop, looking for
+         * a leading 'M' of the 'MSCF' signature  if we found tht 'M', advance state  verify that the next 3 bytes are 'S', 'C' and 'F'  we don't care about bytes 4-7 (see default: for action)  bytes 8-11 are the overall length of the cabinet  we don't care about bytes 12-15 (see default: for action)  bytes 16-19 are the offset within the cabinet of the filedata  now we have recieved 20 bytes of potential cab header. work out
+         * the offset in the file of this potential cabinet  should reading cabinet fail, restart search just after 'MSCF'  capture the "length of cabinet" field if there is a cabinet at
+         * offset 0 in the file, regardless of whether the cabinet can be
+         * read correctly or not  check that the files offset is less than the alleged length of
+         * the cabinet, and that the offset + the alleged length are
+         * 'roughly' within the end of overall file length. In salvage
+         * mode, don't check the alleged length, allow it to be garbage  likely cabinet found -- try reading it  destroy the failed cabinet  cabinet read correctly!  link the cab into the list  cause the search to restart after this cab's data.  detect 32-bit off_t overflow  restart search  for bytes 4-7 and 12-15, just advance state/pointer  switch(state)  for (... p < pend ...)  for (... offset < length ...) **************************************
+ * CABD_MERGE, CABD_PREPEND, CABD_APPEND
+ ***************************************
+ * joins cabinets together, also merges split folders between these two
+ * cabinets only. This includes freeing the duplicate folder and file(s)
+ * and allocating a further mscabd_folder_data structure to append to the
+ * merged folder's data parts list.
+  basic args check  check there's not already a cabinet attached  do not create circular cabinet chains  warn about odd set IDs or indices  merging the last folder in lcab with the first folder in rcab  do we need to merge folders?  no, at least one of the folders is not for merging  attach cabs  attach folders  attach files  folder merge required - do the files match?  allocate a new folder data structure  attach cabs  append rfol's data to lfol  lfol becomes rfol.
+     * NOTE: special case, don't merge if rfol is merge prev and next,
+     * rfol->merge_next is going to be deleted, so keep lfol's version
+     * instead  attach the rfol's folder (except the merge folder)  free disused merge folder  attach rfol's files  delete all files from rfol's merge folder  if file's folder matches the merge folder, unlink and free it  all done! fix files and folders pointers in all cabs so they all
+   * point to the same list   decides if two folders are OK to merge  check that both folders use the same compression method/settings  check there are not too many data blocks after merging  for all files in lfol (which is the last folder in whichever cab and
+     * only has files to merge), compare them to the files from rfol. They
+     * should be identical in number and order. to verify this, check the
+     * offset and length of each file.  if rfol does not begin with an identical copy of the files in lfol, make
+     * make a judgement call; if at least ONE file from lfol is in rfol, allow
+     * the merge with a warning about missing files. **************************************
+ * CABD_EXTRACT
+ ***************************************
+ * extracts a file from a cabinet
+  if offset is beyond 2GB, nothing can be extracted  if file claims to go beyond 2GB either error out,
+   * or in salvage mode reduce file length so it fits 2GB limit
+    extraction impossible if no folder, or folder needs predecessor  if file goes beyond what can be decoded, given an error.
+   * In salvage mode, don't assume block sizes, just try decoding
+    allocate generic decompression state  do we need to change folder or reset the current folder?  free any existing decompressor  do we need to open a new cab file?  close previous file handle if from a different cab  seek to start of data blocks  set up decompressor  initialise new folder state  read_error lasts for the lifetime of a decompressor  open file for output  if file has more than 0 bytes  get to correct offset.
+     * - use NULL fh to say 'no writing' to cabd_sys_write()
+     * - if cabd_sys_read() has an error, it will set self->read_error
+     *   and pass back MSPACK_ERR_READ
+      if getting to the correct offset was error free, unpack file  close output file **************************************
+ * CABD_INIT_DECOMP, CABD_FREE_DECOMP
+ ***************************************
+ * cabd_init_decomp initialises decompression state, according to which
+ * decompression method was used. relies on self->d->folder being the same
+ * as when initialised.
+ *
+ * cabd_free_decomp frees decompression state, according to which method
+ * was used.
+ **************************************
+ * CABD_SYS_READ, CABD_SYS_WRITE
+ ***************************************
+ * cabd_sys_read is the internal reader function which the decompressors
+ * use. will read data blocks (and merge split blocks) from the cabinet
+ * and serve the read bytes to the decompressors
+ *
+ * cabd_sys_write is the internal writer function which the decompressors
+ * use. it either writes data to disk (self->d->outfh) with the real
+ * sys->write() function, or does nothing with the data when
+ * self->d->outfh == NULL. advances self->d->offset
+  if out of input data, read a new block  copy as many input bytes available as possible  out of data, read a new block  check if we're out of input blocks, advance block counter  read a block  special Quantum hack -- trailer byte to allow the decompressor
+       * to realign itself. CAB Quantum blocks, unlike LZX blocks, can have
+       * anything from 0 to 4 trailing null bytes.  is this the last block?  special LZX hack -- on the last block, inform LZX of the
+           * size of the output data stream.  if (avail)  while (todo > 0) **************************************
+ * CABD_SYS_READ_BLOCK
+ ***************************************
+ * reads a whole data block from a cab file. the block may span more than
+ * one cab file, if it does then the fragments will be reassembled
+  reset the input block pointer and end of block pointer  read the block header  skip any reserved block headers  blocks must not be over CAB_INPUTMAX in size  include cab-spanning blocks  in salvage mode, blocks can be 65535 bytes but no more than that  blocks must not expand to more than CAB_BLOCKMAX  read the block data  perform checksum test on the block (if one is stored)  advance end of block pointer to include newly read data  uncompressed size == 0 means this block was part of a split block
+     * and it continues as the first block of the next cabinet in the set.
+     * otherwise, this is the last part of the block, and no more block
+     * reading needs to be done.
+      EXIT POINT OF LOOP -- uncompressed size != 0  otherwise, advance to next cabinet  close current file handle  advance to next member in the cabinet set  open next cab file  seek to start of data blocks  not reached @fallthrough@@fallthrough@**************************************
+ * NONED_INIT, NONED_DECOMPRESS, NONED_FREE
+ ***************************************
+ * the "not compressed" method decompressor
+ **************************************
+ * CABD_PARAM
+ ***************************************
+ * allows a parameter to be set
+ **************************************
+ * CABD_ERROR
+ ***************************************
+ * returns the last error that occurred
+ 

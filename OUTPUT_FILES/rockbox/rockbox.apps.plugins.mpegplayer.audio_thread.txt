@@ -1,0 +1,130 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer audio thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Audio stream and thread * Our event queue to receive commands  Thread state  Media status (STREAM_PLAYING, etc.)  A count of the errors in each frame  Current stream sample rate  Number of audio channels  The DSP we're using  Current audio data for DSP processing  The audio thread is stolen from the core codec thread  libmad related definitions sbsample buffer for mad_frame 2567 bytes  There isn't enough room for this in IRAM on PortalPlayer, but there
+   is for Coldfire.  4608 bytes * A queue for saving needed information about MPEG audio packets * 32 should be way more than sufficient -
+                                         if not, the case is handled  Time stamp for packet in audio ticks        Number of unprocessed bytes left in packet  This starts out wr == rd but will never be emptied to zero during
+    streaming again in order to support initializing the first packet's
+    timestamp without a special case  Compressed audio data  Start of encoded audio buffer  Pointer to next encoded audio data  Number of bytes in MPEG audio buffer  Compressed audio data descriptors  Current slot  Increments the queue tail postion - should be used to preincrement  Increments the queue head position - leaves one slot as current  Returns the "tail" at the index just behind the write index  Returns a pointer to the current head  Resets the pts queue - call when starting and seeking  Carry any overshoot to the next size since we're technically
+       -size bytes into it already. If size is negative an audio
+       frame was split across packets. Old has to be saved before
+       moving the head.  Add packets to compressed audio buffer until it's full or the
+     * timestamp queue is full - whichever happens first  Get data from next audio packet  pts->size should have been zeroed when slot was
+               freed  Add to the one just behind the tail - this may be
+             * the head or the previouly added tail - whether or
+             * not we'll ever reach this is quite in question
+             * since audio always seems to have every packet
+             * timestamped  Slide any remainder over to beginning  Splice this packet onto any remainder  Initialise libmad  init the sbsample buffer  We do this so libmad doesn't try to call codec_calloc(). This needs to
+     * be called before mad_stream_init(), mad_frame_inti() and 
+     * mad_synth_init().  Call mad initialization. Those will zero the arrays frame.overlap,
+     * frame.sbsample and frame.sbsample_prev. Therefore there is no need to 
+     * zero them here.  Sync audio stream to a particular frame - see main decoder loop for
+ * detailed remarks  Actually syncing for playback - use real stream  Probing - use temp stream  At end of stream - no playback possible so fire the
+                 * completion event  Audio always needs to  Our bun is done  Time to go - make thread exit  These return when in playing state  Up the priority since the core DSP over-yields internally  We need this here to init the EMAC for Coldfire targets  This is the decoding loop.  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit * Buffering * STREAM_DATA_NOT_READY:  Still have frames to decode  Used up remainder of compressed audio buffer. Wait for
+             * samples on PCM buffer to finish playing.  STREAM_DATA_END: * Decoding * If something's goofed - try to perform resync by moving
+             * at least one byte at a time  This makes the codec support partially corrupted files  libmad says it can recover - just keep on decoding  Some other unrecoverable error  This is too hard - bail out  Adjust sizes by the frame size  Clear errors  Generate the pcm samples * Output * Add a frame of audio to the pcm buffer. Maximum is 1152 samples.  Wait for required amount of free buffer space  Wait one frame  Make this data available to DMA  As long as we're on this timestamp, the time is just
+                   incremented by the number of samples  end decoding loop  Initializes the audio thread resources and starts the thread  Initialise the encoded audio buffer and its descriptors  Start the audio thread  We steal the codec thread for audio  Wait for thread to initialize  Stops the audio thread **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer audio thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Audio stream and thread * Our event queue to receive commands  Thread state  Media status (STREAM_PLAYING, etc.)  A count of the errors in each frame  Current stream sample rate  Number of audio channels  The DSP we're using  Current audio data for DSP processing  The audio thread is stolen from the core codec thread  libmad related definitions sbsample buffer for mad_frame 2567 bytes  There isn't enough room for this in IRAM on PortalPlayer, but there
+   is for Coldfire.  4608 bytes * A queue for saving needed information about MPEG audio packets * 32 should be way more than sufficient -
+                                         if not, the case is handled  Time stamp for packet in audio ticks        Number of unprocessed bytes left in packet  This starts out wr == rd but will never be emptied to zero during
+    streaming again in order to support initializing the first packet's
+    timestamp without a special case  Compressed audio data  Start of encoded audio buffer  Pointer to next encoded audio data  Number of bytes in MPEG audio buffer  Compressed audio data descriptors  Current slot  Increments the queue tail postion - should be used to preincrement  Increments the queue head position - leaves one slot as current  Returns the "tail" at the index just behind the write index  Returns a pointer to the current head  Resets the pts queue - call when starting and seeking  Carry any overshoot to the next size since we're technically
+       -size bytes into it already. If size is negative an audio
+       frame was split across packets. Old has to be saved before
+       moving the head.  Add packets to compressed audio buffer until it's full or the
+     * timestamp queue is full - whichever happens first  Get data from next audio packet  pts->size should have been zeroed when slot was
+               freed  Add to the one just behind the tail - this may be
+             * the head or the previouly added tail - whether or
+             * not we'll ever reach this is quite in question
+             * since audio always seems to have every packet
+             * timestamped  Slide any remainder over to beginning  Splice this packet onto any remainder  Initialise libmad  init the sbsample buffer  We do this so libmad doesn't try to call codec_calloc(). This needs to
+     * be called before mad_stream_init(), mad_frame_inti() and 
+     * mad_synth_init().  Call mad initialization. Those will zero the arrays frame.overlap,
+     * frame.sbsample and frame.sbsample_prev. Therefore there is no need to 
+     * zero them here.  Sync audio stream to a particular frame - see main decoder loop for
+ * detailed remarks  Actually syncing for playback - use real stream  Probing - use temp stream  At end of stream - no playback possible so fire the
+                 * completion event  Audio always needs to  Our bun is done  Time to go - make thread exit  These return when in playing state  Up the priority since the core DSP over-yields internally  We need this here to init the EMAC for Coldfire targets  This is the decoding loop.  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit * Buffering * STREAM_DATA_NOT_READY:  Still have frames to decode  Used up remainder of compressed audio buffer. Wait for
+             * samples on PCM buffer to finish playing.  STREAM_DATA_END: * Decoding * If something's goofed - try to perform resync by moving
+             * at least one byte at a time  This makes the codec support partially corrupted files  libmad says it can recover - just keep on decoding  Some other unrecoverable error  This is too hard - bail out  Adjust sizes by the frame size  Clear errors  Generate the pcm samples * Output * Add a frame of audio to the pcm buffer. Maximum is 1152 samples.  Wait for required amount of free buffer space  Wait one frame  Make this data available to DMA  As long as we're on this timestamp, the time is just
+                   incremented by the number of samples  end decoding loop  Initializes the audio thread resources and starts the thread  Initialise the encoded audio buffer and its descriptors  Start the audio thread  We steal the codec thread for audio  Wait for thread to initialize  Stops the audio thread **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer audio thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Audio stream and thread * Our event queue to receive commands  Thread state  Media status (STREAM_PLAYING, etc.)  A count of the errors in each frame  Current stream sample rate  Number of audio channels  The DSP we're using  Current audio data for DSP processing  The audio thread is stolen from the core codec thread  libmad related definitions sbsample buffer for mad_frame 2567 bytes  There isn't enough room for this in IRAM on PortalPlayer, but there
+   is for Coldfire.  4608 bytes * A queue for saving needed information about MPEG audio packets * 32 should be way more than sufficient -
+                                         if not, the case is handled  Time stamp for packet in audio ticks        Number of unprocessed bytes left in packet  This starts out wr == rd but will never be emptied to zero during
+    streaming again in order to support initializing the first packet's
+    timestamp without a special case  Compressed audio data  Start of encoded audio buffer  Pointer to next encoded audio data  Number of bytes in MPEG audio buffer  Compressed audio data descriptors  Current slot  Increments the queue tail postion - should be used to preincrement  Increments the queue head position - leaves one slot as current  Returns the "tail" at the index just behind the write index  Returns a pointer to the current head  Resets the pts queue - call when starting and seeking  Carry any overshoot to the next size since we're technically
+       -size bytes into it already. If size is negative an audio
+       frame was split across packets. Old has to be saved before
+       moving the head.  Add packets to compressed audio buffer until it's full or the
+     * timestamp queue is full - whichever happens first  Get data from next audio packet  pts->size should have been zeroed when slot was
+               freed  Add to the one just behind the tail - this may be
+             * the head or the previouly added tail - whether or
+             * not we'll ever reach this is quite in question
+             * since audio always seems to have every packet
+             * timestamped  Slide any remainder over to beginning  Splice this packet onto any remainder  Initialise libmad  init the sbsample buffer  We do this so libmad doesn't try to call codec_calloc(). This needs to
+     * be called before mad_stream_init(), mad_frame_inti() and 
+     * mad_synth_init().  Call mad initialization. Those will zero the arrays frame.overlap,
+     * frame.sbsample and frame.sbsample_prev. Therefore there is no need to 
+     * zero them here.  Sync audio stream to a particular frame - see main decoder loop for
+ * detailed remarks  Actually syncing for playback - use real stream  Probing - use temp stream  At end of stream - no playback possible so fire the
+                 * completion event  Audio always needs to  Our bun is done  Time to go - make thread exit  These return when in playing state  Up the priority since the core DSP over-yields internally  We need this here to init the EMAC for Coldfire targets  This is the decoding loop.  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit * Buffering * STREAM_DATA_NOT_READY:  Still have frames to decode  Used up remainder of compressed audio buffer. Wait for
+             * samples on PCM buffer to finish playing.  STREAM_DATA_END: * Decoding * If something's goofed - try to perform resync by moving
+             * at least one byte at a time  This makes the codec support partially corrupted files  libmad says it can recover - just keep on decoding  Some other unrecoverable error  This is too hard - bail out  Adjust sizes by the frame size  Clear errors  Generate the pcm samples * Output * Add a frame of audio to the pcm buffer. Maximum is 1152 samples.  Wait for required amount of free buffer space  Wait one frame  Make this data available to DMA  As long as we're on this timestamp, the time is just
+                   incremented by the number of samples  end decoding loop  Initializes the audio thread resources and starts the thread  Initialise the encoded audio buffer and its descriptors  Start the audio thread  We steal the codec thread for audio  Wait for thread to initialize  Stops the audio thread 

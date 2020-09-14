@@ -211,3 +211,109 @@
  * Martin Stigge, Henryk Plötz, Wolf Müller, Jens-Peter Redlich.
  * http://sar.informatik.hu-berlin.de/research/publications/#SAR-PR-2006-05
   Verify that we actually get the desired result  The output image must not be larger than 4MiB - 5*64kiB  Make sure the headers have the right size 
+ * jcgimage - Create a JCG firmware image
+ *
+ * Copyright (C) 2015 Reinhard Max <reinhard@m4x.de>
+ * Copyright (C) 2019 Davide Fioravanti <pantanastyle@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ *
+ 
+ * JCG firmware update images consist of a 512 byte header and a
+ * modified uImage (details below) as the payload.
+ *
+ * The payload is obfuscated by XORing it with a key that is generated
+ * from parts of the header. Fortunately only non-essential parts of
+ * the header are used for this and zeroing them results in a zero
+ * key, effectively disabling the obfuscation and allowing us to use
+ * clear text payloads.
+ *
+ * The mandatory parts of the header are:
+ *
+ * - A magic string of "YSZJ" at offset 0.
+ * - A value of 1 at offset 39 (header format version?)
+ * - A CRC32 checksum of the payload at offset 504.
+ * - A CRC32 checksum of the header at offset 508.
+ *
+ * An image constructed by these rules will be accepted by JCG's
+ * U-Boot in resuce mode via TFTP and the payload will be written to
+ * the flash starting at offset 0x00050000.
+ *
+ * JCG's U-Boot does check the content or size of the payload
+ * image. If it is too large, it wraps around and overwrites U-Boot,
+ * requiring JTAG to revive the board. To prevent such bricking from
+ * happening, this tool refuses to build such overlong images.
+ *
+ * Using -m is possible to set the maximum size of the payload.
+ * Otherwise the default MAXSIZE will be used.
+ * For an 8Mb flash, the corresponding maxsize is:
+ * 8 * 1024 * 1024 - 5 * 64 * 1024 = 8388608 - 327680 = 8060928
+ *
+ * Two more conditions have to be met for a JCG image to be accepted
+ * as a valid update by the web interface of the stock firware:
+ *
+ *   - The bytes at offsets 109 and 111 in the header must be a binary
+ *   representation of the first two components of the firmware
+ *   version as displayed in the update web form, or it will be
+ *   rejected as "incorrect product".
+ *
+ *   - The payload must start with a valid uImage header whose data
+ *   CRC checksum matches the whole rest of the update file rather
+ *   than just the number of bytes specified in the size field of the
+ *   header.
+ *
+ * This last condition is met by JCG's original firmware images,
+ * because they have both, kernel and rootfs inside the uImage and
+ * abuse the last four bytes of the name field to record the offset of
+ * the file system from the start of the uImage header. This tool
+ * produces such images when called with -k and -r, which are meant to
+ * repack the original firmware after modifying the file systen,
+ * e.g. to add debugging tools and enable shell access.
+ *
+ * In contrast, OpenWrt sysupgrade images consist of a uImage that
+ * only contains the kernel and has the rootfs appended to it. Hence,
+ * the CRC over kernel and file system does not match the one in the
+ * uImage header. Fixing this by adjusting the uImage header is not
+ * possible, because it makes the uImage unusable for booting. Instead
+ * we append four "patch" bytes to the end of the file system, that
+ * are calculated to force the checksum of kernel+fs to be the same as
+ * for the kernel alone.
+ *
+ 
+ * JCG Firmware image header
+  "YSZJ"  Firmware version string.
+				      Fill with zeros to avoid encryption   must be 1                             Firmware info string. Fill with
+				      zeros to avoid encryption             Image creation time in seconds since
+				    * the Epoch. Does not seem to be used
+				    * by the stock firmware.                Major fimware version                 Minor fimrmware version               Apparently unused and all zeros       CRC checksum of the payload           CRC checksum of the header           
+ * JCG uses a modified uImage header that replaces the last four bytes
+ * of the image name with the length of the kernel in the image.
+  Image Magic Number      Image Name Length       Image Header Magic Number    Image Header CRC Checksum    Image Creation Timestamp     Image Data Size              Data     Load  Address       Entry Point Address          Image Data CRC Checksum      Operating System             CPU architecture             Image Type                   Compression Type             Image Name                   Offset of the file system
+					 partition from the start of
+					 the header                  
+ * Open the named file and return its size and file descriptor.
+ * Exit in case of errors.
+ 
+ * Write the JCG header
+  CRC over JCG payload (uImage)  CRC over JCG header 
+ * Write the uImage header
+  printf("mkuheader: %p, %zd, %zd\n", h, ksize, fsize); CRC over uImage payload (kernel and file system)  CRC over uImage header 
+ * Calculate a "patch" value and write it into the last four bytes of
+ * buf, so that the CRC32 checksum of the whole buffer is dcrc.
+ *
+ * Based on: SAR-PR-2006-05: Reversing CRC – Theory and Practice.
+ * Martin Stigge, Henryk Plötz, Wolf Müller, Jens-Peter Redlich.
+ * http://sar.informatik.hu-berlin.de/research/publications/#SAR-PR-2006-05
+  Verify that we actually get the desired result  The output image must not be larger than 4MiB - 5*64kiB  Make sure the headers have the right size 

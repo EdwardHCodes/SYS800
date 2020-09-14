@@ -1,0 +1,565 @@
+
+ * emcc.c: the C component of an Emscripten-based web/Javascript front
+ * end for Puzzles.
+ *
+ * The Javascript parts of this system live in emcclib.js and
+ * emccpre.js. It also depends on being run in the context of a web
+ * page containing an appropriate collection of bits and pieces (a
+ * canvas, some buttons and links etc), which is generated for each
+ * puzzle by the script html/jspage.pl.
+ 
+ * Further thoughts on possible enhancements:
+ *
+ *  - I think it might be feasible to have these JS puzzles permit
+ *    loading and saving games in disk files. Saving would be done by
+ *    constructing a data: URI encapsulating the save file, and then
+ *    telling the browser to visit that URI with the effect that it
+ *    would naturally pop up a 'where would you like to save this'
+ *    dialog box. Loading, more or less similarly, might be feasible
+ *    by using the DOM File API to ask the user to select a file and
+ *    permit us to see its contents.
+ *
+ *  - I should think about whether these webified puzzles can support
+ *    touchscreen-based tablet browsers (assuming there are any that
+ *    can cope with the reasonably modern JS and run it fast enough to
+ *    be worthwhile).
+ *
+ *  - think about making use of localStorage. It might be useful to
+ *    let the user save games into there as an alternative to disk
+ *    files - disk files are all very well for getting the save right
+ *    out of your browser to (e.g.) email to me as a bug report, but
+ *    for just resuming a game you were in the middle of, you'd
+ *    probably rather have a nice simple 'quick save' and 'quick load'
+ *    button pair. Also, that might be a useful place to store
+ *    preferences, if I ever get round to writing a preferences UI.
+ *
+ *  - some CSS to make the button bar and configuration dialogs a
+ *    little less ugly would probably not go amiss.
+ *
+ *  - this is a downright silly idea, but it does occur to me that if
+ *    I were to write a PDF output driver for the Puzzles printing
+ *    API, then I might be able to implement a sort of 'printing'
+ *    feature in this front end, using data: URIs again. (Ask the user
+ *    exactly what they want printed, then construct an appropriate
+ *    PDF and embed it in a gigantic data: URI. Then they can print
+ *    that using whatever they normally use to print PDFs!)
+ 
+ * Extern references to Javascript functions provided in emcclib.js.
+ 
+ * Call JS to get the date, and use that to initialise our random
+ * number generator to invent the first game seed.
+ 
+ * Fatal error, called in cases of complete despair such as when
+ * malloc() has returned NULL.
+ 
+ * Helper function that makes it easy to test strings that might be
+ * NULL.
+ 
+ * HTMLish names for the colours allocated by the puzzle.
+ 
+ * The global midend object.
+  ----------------------------------------------------------------------
+ * Timing functions.
+  ----------------------------------------------------------------------
+ * Helper functions to resize the canvas, and variables to remember
+ * its size for other functions (e.g. trimming blitter rectangles).
+  Called when we resize as a result of changing puzzle settings  Called from JS when the user uses the resize handle  Called from JS when the user uses the restore button 
+ * HTML doesn't give us a default frontend colour of its own, so we
+ * just make up a lightish grey ourselves.
+ 
+ * Helper function called from all over the place to ensure the undo
+ * and redo buttons get properly enabled and disabled after every move
+ * or undo or new-game event.
+ 
+ * Mouse event handlers called from JS.
+ 
+ * Keyboard handler called from JS.
+  Backspace / Delete  return 
+         * We interpret Home, End, PgUp and PgDn as numeric keypad
+         * controls regardless of whether they're the ones on the
+         * numeric keypad (since we can't tell). The effect of
+         * this should only be that the non-numeric-pad versions
+         * of those keys generate directions in 8-way movement
+         * puzzles like Cube and Inertia.
+          space / CURSOR_SELECT2 
+ * Helper function called from several places to update the permalinks
+ * whenever a new game is created.
+ 
+ * Callback from the midend when the game ids change, so we can update
+ * the permalinks.
+  ----------------------------------------------------------------------
+ * Implementation of the drawing API by calling Javascript canvas
+ * drawing functions. (Well, half of it; the other half is on the JS
+ * side.)
+  allocated on the js side  easier to retain here 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  Emscripten has no trouble with UTF-8  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  ----------------------------------------------------------------------
+ * Presets and game-configuration dialog support.
+ 
+ * Set up a dialog box. This is pretty easy on the C side; most of the
+ * work is done in JS.
+ 
+ * Callbacks from JS when the OK button is clicked, to return the
+ * final state of each control.
+ 
+ * Called when the user clicks OK or Cancel. use_results will be true
+ * or false respectively, in those cases. We terminate the dialog box,
+ * unless the user selected an invalid combination of parameters.
+ 
+         * User hit OK.
+         
+             * The settings were unacceptable, so leave the config box
+             * open for the user to adjust them and try again.
+             
+             * New settings are fine; start a new game and close the
+             * dialog.
+             
+         * User hit Cancel. Close the dialog, but also we must still
+         * reselect the right element of the dropdown list.
+         *
+         * (Because: imagine you have a preset selected, and then you
+         * select Custom from the list, but change your mind and hit
+         * Esc. The Custom option will now still be selected in the
+         * list, whereas obviously it should show the preset you still
+         * _actually_ have selected. Worse still, it'll be the visible
+         * rather than invisible Custom option - see the comment in
+         * js_add_preset in emcclib.js - so you won't even be able to
+         * select Custom without a faffy workaround.)
+          ----------------------------------------------------------------------
+ * Called from JS when a command is given to the puzzle by clicking a
+ * button or control of some sort.
+  specific game ID  random game seed  game parameter dropdown changed 
+                 * The user selected 'Custom', so launch the config
+                 * box.
+                  (double-check just in case) 
+                 * The user selected a preset, so just switch straight
+                 * to that.
+                  OK clicked in a config box  Cancel clicked in a config box  New Game  Restart  Undo  Redo  Solve  ----------------------------------------------------------------------
+ * Called from JS to prepare a save-game file, and free one after it's
+ * been used.
+  First pass, to count up the size  Second pass, to actually write out the data. We have to put a
+     * terminating \0 on the end (which we expect never to show up in
+     * the actual serialisation format - it's text, not binary) so
+     * that the Javascript side can easily find out the length.  ----------------------------------------------------------------------
+ * Setup function called at page load time. It's called main() because
+ * that's the most convenient thing in Emscripten, but it's not main()
+ * in the usual sense of bounding the program's entire execution.
+ * Instead, this function returns once the initial puzzle is set up
+ * and working, and everything thereafter happens by means of JS event
+ * handlers sending us callbacks.
+ 
+     * Instantiate a midend.
+     
+     * Chuck in the HTML fragment ID if we have one (trimming the
+     * leading # off the front first). If that's invalid, we retain
+     * the error message and will display it at the end, after setting
+     * up a random puzzle as usual.
+     
+     * Create either a random game or the specified one, and set the
+     * canvas size appropriately.
+     
+     * Create a status bar, if needed.
+     
+     * Set up the game-type dropdown with presets and/or the Custom
+     * option.
+     
+         * Now ensure the appropriate element of the presets menu
+         * starts off selected, in case it isn't the first one in the
+         * list (e.g. Slant).
+         
+     * Remove the Solve button if the game doesn't support it.
+     
+     * Retrieve the game's colours, and convert them into #abcdef type
+     * hex ID strings.
+     
+     * Request notification when the game ids change (e.g. if the user
+     * presses 'n', and also when Mines supersedes its game
+     * description), so that we can proactively update the permalink.
+     
+     * Draw the puzzle's initial state, and set up the permalinks and
+     * undo/redo greying out.
+     
+     * If we were given an erroneous game ID in argv[1], now's the
+     * time to put up the error box about it, after we've fully set up
+     * a random puzzle. Then when the user clicks 'ok', we have a
+     * puzzle for them.
+     
+     * Done. Return to JS, and await callbacks!
+     
+ * emcc.c: the C component of an Emscripten-based web/Javascript front
+ * end for Puzzles.
+ *
+ * The Javascript parts of this system live in emcclib.js and
+ * emccpre.js. It also depends on being run in the context of a web
+ * page containing an appropriate collection of bits and pieces (a
+ * canvas, some buttons and links etc), which is generated for each
+ * puzzle by the script html/jspage.pl.
+ 
+ * Further thoughts on possible enhancements:
+ *
+ *  - I think it might be feasible to have these JS puzzles permit
+ *    loading and saving games in disk files. Saving would be done by
+ *    constructing a data: URI encapsulating the save file, and then
+ *    telling the browser to visit that URI with the effect that it
+ *    would naturally pop up a 'where would you like to save this'
+ *    dialog box. Loading, more or less similarly, might be feasible
+ *    by using the DOM File API to ask the user to select a file and
+ *    permit us to see its contents.
+ *
+ *  - I should think about whether these webified puzzles can support
+ *    touchscreen-based tablet browsers (assuming there are any that
+ *    can cope with the reasonably modern JS and run it fast enough to
+ *    be worthwhile).
+ *
+ *  - think about making use of localStorage. It might be useful to
+ *    let the user save games into there as an alternative to disk
+ *    files - disk files are all very well for getting the save right
+ *    out of your browser to (e.g.) email to me as a bug report, but
+ *    for just resuming a game you were in the middle of, you'd
+ *    probably rather have a nice simple 'quick save' and 'quick load'
+ *    button pair. Also, that might be a useful place to store
+ *    preferences, if I ever get round to writing a preferences UI.
+ *
+ *  - some CSS to make the button bar and configuration dialogs a
+ *    little less ugly would probably not go amiss.
+ *
+ *  - this is a downright silly idea, but it does occur to me that if
+ *    I were to write a PDF output driver for the Puzzles printing
+ *    API, then I might be able to implement a sort of 'printing'
+ *    feature in this front end, using data: URIs again. (Ask the user
+ *    exactly what they want printed, then construct an appropriate
+ *    PDF and embed it in a gigantic data: URI. Then they can print
+ *    that using whatever they normally use to print PDFs!)
+ 
+ * Extern references to Javascript functions provided in emcclib.js.
+ 
+ * Call JS to get the date, and use that to initialise our random
+ * number generator to invent the first game seed.
+ 
+ * Fatal error, called in cases of complete despair such as when
+ * malloc() has returned NULL.
+ 
+ * Helper function that makes it easy to test strings that might be
+ * NULL.
+ 
+ * HTMLish names for the colours allocated by the puzzle.
+ 
+ * The global midend object.
+  ----------------------------------------------------------------------
+ * Timing functions.
+  ----------------------------------------------------------------------
+ * Helper functions to resize the canvas, and variables to remember
+ * its size for other functions (e.g. trimming blitter rectangles).
+  Called when we resize as a result of changing puzzle settings  Called from JS when the user uses the resize handle  Called from JS when the user uses the restore button 
+ * HTML doesn't give us a default frontend colour of its own, so we
+ * just make up a lightish grey ourselves.
+ 
+ * Helper function called from all over the place to ensure the undo
+ * and redo buttons get properly enabled and disabled after every move
+ * or undo or new-game event.
+ 
+ * Mouse event handlers called from JS.
+ 
+ * Keyboard handler called from JS.
+  Backspace / Delete  return 
+         * We interpret Home, End, PgUp and PgDn as numeric keypad
+         * controls regardless of whether they're the ones on the
+         * numeric keypad (since we can't tell). The effect of
+         * this should only be that the non-numeric-pad versions
+         * of those keys generate directions in 8-way movement
+         * puzzles like Cube and Inertia.
+          space / CURSOR_SELECT2 
+ * Helper function called from several places to update the permalinks
+ * whenever a new game is created.
+ 
+ * Callback from the midend when the game ids change, so we can update
+ * the permalinks.
+  ----------------------------------------------------------------------
+ * Implementation of the drawing API by calling Javascript canvas
+ * drawing functions. (Well, half of it; the other half is on the JS
+ * side.)
+  allocated on the js side  easier to retain here 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  Emscripten has no trouble with UTF-8  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  ----------------------------------------------------------------------
+ * Presets and game-configuration dialog support.
+ 
+ * Set up a dialog box. This is pretty easy on the C side; most of the
+ * work is done in JS.
+ 
+ * Callbacks from JS when the OK button is clicked, to return the
+ * final state of each control.
+ 
+ * Called when the user clicks OK or Cancel. use_results will be true
+ * or false respectively, in those cases. We terminate the dialog box,
+ * unless the user selected an invalid combination of parameters.
+ 
+         * User hit OK.
+         
+             * The settings were unacceptable, so leave the config box
+             * open for the user to adjust them and try again.
+             
+             * New settings are fine; start a new game and close the
+             * dialog.
+             
+         * User hit Cancel. Close the dialog, but also we must still
+         * reselect the right element of the dropdown list.
+         *
+         * (Because: imagine you have a preset selected, and then you
+         * select Custom from the list, but change your mind and hit
+         * Esc. The Custom option will now still be selected in the
+         * list, whereas obviously it should show the preset you still
+         * _actually_ have selected. Worse still, it'll be the visible
+         * rather than invisible Custom option - see the comment in
+         * js_add_preset in emcclib.js - so you won't even be able to
+         * select Custom without a faffy workaround.)
+          ----------------------------------------------------------------------
+ * Called from JS when a command is given to the puzzle by clicking a
+ * button or control of some sort.
+  specific game ID  random game seed  game parameter dropdown changed 
+                 * The user selected 'Custom', so launch the config
+                 * box.
+                  (double-check just in case) 
+                 * The user selected a preset, so just switch straight
+                 * to that.
+                  OK clicked in a config box  Cancel clicked in a config box  New Game  Restart  Undo  Redo  Solve  ----------------------------------------------------------------------
+ * Called from JS to prepare a save-game file, and free one after it's
+ * been used.
+  First pass, to count up the size  Second pass, to actually write out the data. We have to put a
+     * terminating \0 on the end (which we expect never to show up in
+     * the actual serialisation format - it's text, not binary) so
+     * that the Javascript side can easily find out the length.  ----------------------------------------------------------------------
+ * Setup function called at page load time. It's called main() because
+ * that's the most convenient thing in Emscripten, but it's not main()
+ * in the usual sense of bounding the program's entire execution.
+ * Instead, this function returns once the initial puzzle is set up
+ * and working, and everything thereafter happens by means of JS event
+ * handlers sending us callbacks.
+ 
+     * Instantiate a midend.
+     
+     * Chuck in the HTML fragment ID if we have one (trimming the
+     * leading # off the front first). If that's invalid, we retain
+     * the error message and will display it at the end, after setting
+     * up a random puzzle as usual.
+     
+     * Create either a random game or the specified one, and set the
+     * canvas size appropriately.
+     
+     * Create a status bar, if needed.
+     
+     * Set up the game-type dropdown with presets and/or the Custom
+     * option.
+     
+         * Now ensure the appropriate element of the presets menu
+         * starts off selected, in case it isn't the first one in the
+         * list (e.g. Slant).
+         
+     * Remove the Solve button if the game doesn't support it.
+     
+     * Retrieve the game's colours, and convert them into #abcdef type
+     * hex ID strings.
+     
+     * Request notification when the game ids change (e.g. if the user
+     * presses 'n', and also when Mines supersedes its game
+     * description), so that we can proactively update the permalink.
+     
+     * Draw the puzzle's initial state, and set up the permalinks and
+     * undo/redo greying out.
+     
+     * If we were given an erroneous game ID in argv[1], now's the
+     * time to put up the error box about it, after we've fully set up
+     * a random puzzle. Then when the user clicks 'ok', we have a
+     * puzzle for them.
+     
+     * Done. Return to JS, and await callbacks!
+     
+ * emcc.c: the C component of an Emscripten-based web/Javascript front
+ * end for Puzzles.
+ *
+ * The Javascript parts of this system live in emcclib.js and
+ * emccpre.js. It also depends on being run in the context of a web
+ * page containing an appropriate collection of bits and pieces (a
+ * canvas, some buttons and links etc), which is generated for each
+ * puzzle by the script html/jspage.pl.
+ 
+ * Further thoughts on possible enhancements:
+ *
+ *  - I think it might be feasible to have these JS puzzles permit
+ *    loading and saving games in disk files. Saving would be done by
+ *    constructing a data: URI encapsulating the save file, and then
+ *    telling the browser to visit that URI with the effect that it
+ *    would naturally pop up a 'where would you like to save this'
+ *    dialog box. Loading, more or less similarly, might be feasible
+ *    by using the DOM File API to ask the user to select a file and
+ *    permit us to see its contents.
+ *
+ *  - I should think about whether these webified puzzles can support
+ *    touchscreen-based tablet browsers (assuming there are any that
+ *    can cope with the reasonably modern JS and run it fast enough to
+ *    be worthwhile).
+ *
+ *  - think about making use of localStorage. It might be useful to
+ *    let the user save games into there as an alternative to disk
+ *    files - disk files are all very well for getting the save right
+ *    out of your browser to (e.g.) email to me as a bug report, but
+ *    for just resuming a game you were in the middle of, you'd
+ *    probably rather have a nice simple 'quick save' and 'quick load'
+ *    button pair. Also, that might be a useful place to store
+ *    preferences, if I ever get round to writing a preferences UI.
+ *
+ *  - some CSS to make the button bar and configuration dialogs a
+ *    little less ugly would probably not go amiss.
+ *
+ *  - this is a downright silly idea, but it does occur to me that if
+ *    I were to write a PDF output driver for the Puzzles printing
+ *    API, then I might be able to implement a sort of 'printing'
+ *    feature in this front end, using data: URIs again. (Ask the user
+ *    exactly what they want printed, then construct an appropriate
+ *    PDF and embed it in a gigantic data: URI. Then they can print
+ *    that using whatever they normally use to print PDFs!)
+ 
+ * Extern references to Javascript functions provided in emcclib.js.
+ 
+ * Call JS to get the date, and use that to initialise our random
+ * number generator to invent the first game seed.
+ 
+ * Fatal error, called in cases of complete despair such as when
+ * malloc() has returned NULL.
+ 
+ * Helper function that makes it easy to test strings that might be
+ * NULL.
+ 
+ * HTMLish names for the colours allocated by the puzzle.
+ 
+ * The global midend object.
+  ----------------------------------------------------------------------
+ * Timing functions.
+  ----------------------------------------------------------------------
+ * Helper functions to resize the canvas, and variables to remember
+ * its size for other functions (e.g. trimming blitter rectangles).
+  Called when we resize as a result of changing puzzle settings  Called from JS when the user uses the resize handle  Called from JS when the user uses the restore button 
+ * HTML doesn't give us a default frontend colour of its own, so we
+ * just make up a lightish grey ourselves.
+ 
+ * Helper function called from all over the place to ensure the undo
+ * and redo buttons get properly enabled and disabled after every move
+ * or undo or new-game event.
+ 
+ * Mouse event handlers called from JS.
+ 
+ * Keyboard handler called from JS.
+  Backspace / Delete  return 
+         * We interpret Home, End, PgUp and PgDn as numeric keypad
+         * controls regardless of whether they're the ones on the
+         * numeric keypad (since we can't tell). The effect of
+         * this should only be that the non-numeric-pad versions
+         * of those keys generate directions in 8-way movement
+         * puzzles like Cube and Inertia.
+          space / CURSOR_SELECT2 
+ * Helper function called from several places to update the permalinks
+ * whenever a new game is created.
+ 
+ * Callback from the midend when the game ids change, so we can update
+ * the permalinks.
+  ----------------------------------------------------------------------
+ * Implementation of the drawing API by calling Javascript canvas
+ * drawing functions. (Well, half of it; the other half is on the JS
+ * side.)
+  allocated on the js side  easier to retain here 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  Emscripten has no trouble with UTF-8  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  ----------------------------------------------------------------------
+ * Presets and game-configuration dialog support.
+ 
+ * Set up a dialog box. This is pretty easy on the C side; most of the
+ * work is done in JS.
+ 
+ * Callbacks from JS when the OK button is clicked, to return the
+ * final state of each control.
+ 
+ * Called when the user clicks OK or Cancel. use_results will be true
+ * or false respectively, in those cases. We terminate the dialog box,
+ * unless the user selected an invalid combination of parameters.
+ 
+         * User hit OK.
+         
+             * The settings were unacceptable, so leave the config box
+             * open for the user to adjust them and try again.
+             
+             * New settings are fine; start a new game and close the
+             * dialog.
+             
+         * User hit Cancel. Close the dialog, but also we must still
+         * reselect the right element of the dropdown list.
+         *
+         * (Because: imagine you have a preset selected, and then you
+         * select Custom from the list, but change your mind and hit
+         * Esc. The Custom option will now still be selected in the
+         * list, whereas obviously it should show the preset you still
+         * _actually_ have selected. Worse still, it'll be the visible
+         * rather than invisible Custom option - see the comment in
+         * js_add_preset in emcclib.js - so you won't even be able to
+         * select Custom without a faffy workaround.)
+          ----------------------------------------------------------------------
+ * Called from JS when a command is given to the puzzle by clicking a
+ * button or control of some sort.
+  specific game ID  random game seed  game parameter dropdown changed 
+                 * The user selected 'Custom', so launch the config
+                 * box.
+                  (double-check just in case) 
+                 * The user selected a preset, so just switch straight
+                 * to that.
+                  OK clicked in a config box  Cancel clicked in a config box  New Game  Restart  Undo  Redo  Solve  ----------------------------------------------------------------------
+ * Called from JS to prepare a save-game file, and free one after it's
+ * been used.
+  First pass, to count up the size  Second pass, to actually write out the data. We have to put a
+     * terminating \0 on the end (which we expect never to show up in
+     * the actual serialisation format - it's text, not binary) so
+     * that the Javascript side can easily find out the length.  ----------------------------------------------------------------------
+ * Setup function called at page load time. It's called main() because
+ * that's the most convenient thing in Emscripten, but it's not main()
+ * in the usual sense of bounding the program's entire execution.
+ * Instead, this function returns once the initial puzzle is set up
+ * and working, and everything thereafter happens by means of JS event
+ * handlers sending us callbacks.
+ 
+     * Instantiate a midend.
+     
+     * Chuck in the HTML fragment ID if we have one (trimming the
+     * leading # off the front first). If that's invalid, we retain
+     * the error message and will display it at the end, after setting
+     * up a random puzzle as usual.
+     
+     * Create either a random game or the specified one, and set the
+     * canvas size appropriately.
+     
+     * Create a status bar, if needed.
+     
+     * Set up the game-type dropdown with presets and/or the Custom
+     * option.
+     
+         * Now ensure the appropriate element of the presets menu
+         * starts off selected, in case it isn't the first one in the
+         * list (e.g. Slant).
+         
+     * Remove the Solve button if the game doesn't support it.
+     
+     * Retrieve the game's colours, and convert them into #abcdef type
+     * hex ID strings.
+     
+     * Request notification when the game ids change (e.g. if the user
+     * presses 'n', and also when Mines supersedes its game
+     * description), so that we can proactively update the permalink.
+     
+     * Draw the puzzle's initial state, and set up the permalinks and
+     * undo/redo greying out.
+     
+     * If we were given an erroneous game ID in argv[1], now's the
+     * time to put up the error box about it, after we've fully set up
+     * a random puzzle. Then when the user clicks 'ok', we have a
+     * puzzle for them.
+     
+     * Done. Return to JS, and await callbacks!
+     

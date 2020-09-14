@@ -1,0 +1,232 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * RMI API
+  cached value of control register  NOTE:
+ * RMI over i2c supports some special aliases on page 0x2 but this driver don't
+ * use them  Represent a typical RMI transaction: a first transfer to select the page
+ * and a second transfer to read/write registers. The API takes care of annoying
+ * details and will simply call the callback at the end of the transfer.  first transfer: page select  second transfer: read/write  write command to select page  write command to select register  transfer status  callback  Synchronous transfer: add a semaphore to block  semaphore for completion  callback for first transfer: record error if any  record status  callback for first transfer: handle error and callback  record status, only if not skipping (ie the error was in first transfer)  callback  build a rmi transaction to read/write registers; do NOT cross page boundary !  first transfer: change page  second transfer: read/write  general things * IMPORTANT NOTE
+ *
+ * All transfers are built using rmi_build_xfer which constructs a transaction
+ * consisting in a page select and register read/writes. Since transactions are
+ * executed "atomically" and are queued, it is safe to call transfers functions
+ * concurrently. However only asynchronous transfers can be used in IRQ context.
+ * In all cases, make sure the the rmi_xfer_t structure lives at least until the
+ * completion of the transfer (callback).
+  queue transfer to change sleep mode, return true if transfer was queued
+ * and false if ignored because requested mode is already the current one.
+ * call must provide a transfer structure that must exist until completion  avoid any race with concurrent changes to the mode  valid value different from the actual one  change cached version  build transfer and kick  synchronous callback: release semaphore  synchronous read/write  kick and wait  read registers synchronously  read single register synchronously  write single register synchronously  synchronously change sleep mode, this is a nop if current mode is the same as requested  kick asynchronous transfer and only wait if mode was actually changed  cache control register *
+ * Touchpad API
+  we emulate a 3x3 grid, this gives the button mapping  timeout before lowering touchpad power from lack of activity  deadzone multiplier  power level when touchpad is active: experiments show that "low power" reduce
+ * power consumption and hardly makes a difference in quality.  button bitmap for the touchpad  tick of the last touchpad activity  is touchpad enabled?  deadzone size  activity timeout  Ignore deadzone function. If outside of the pad, project to border.  compute grid coordinate  find button ignoring deadzones  To check if we are in a deadzone, we try to shift the coordinates
+     * and see if we get the same button. Not that we do not want to apply
+     * the deadzone in the borders ! The code works even in the borders because
+     * the find_button_no_deadzone() project out-of-bound coordinates to the
+     * borders  i2c transfer only used for irq processing
+ * NOTE we use two sets of transfers because we setup one in the callback of the
+ * other, using one would be unsafe  buffer to hold irq status register and sleep mode  buffer to hold touchpad data  callback for i2c transfer to change power level after irq  we do not recover from error for now  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read/clear interrupt status register  we do not recover from error for now  at this point, we might have processed an event and the touchpad still be
+     * in very low power mode because of some previous inactivity; if it's the case,
+     * schedule another transfer to switch to a higher power mode before accepting the
+     * next event  kick asynchronous transfer and only wait if mode was actually changed  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read touchpad data registers  we do not recover from error for now  now that we have the data, setup another transfer to clear interrupt  kick transfer  now process touchpad data  touchpad attention line interrupt  build transfer to read data registers  kick transfer  update last activity  handle negative values as well !  transfer used by the activity timeout to change power level  activity timeout: lower power level after some inactivity  don't change power mode if touchpad is disabled, it's already in sleep mode  next check in 1 second  Synaptics TouchPad information:
+     * - product id: 1533
+     * - nr function: 1 (0x10 = 2D touchpad)
+     * 2D Touchpad information (function 0x10)
+     * - nr data sources: 3
+     * - standard layout
+     * - extra data registers: 7
+     * - nr sensors: 1
+     * 2D Touchpad Sensor #0 information:
+     * - has relative data: yes
+     * - has palm detect: yes
+     * - has multi finger: yes
+     * - has enhanced gesture: yes
+     * - has scroller: no
+     * - has 2D scrollers: no
+     * - Maximum X: 3009
+     * - Maxumum Y: 1974
+     * - Resolution: 82
+      use a timer to monitor touchpad activity and manage power level  The OF adjust the sensitivity based on product_id[1] compared to 2.
+     * Since it doesn't seem to work great, just hardcode the sensitivity to
+     * some reasonable value for now.  we don't know in which mode the touchpad start so use a sane default  enable interrupt *
+ * Debug screen
+  Device to screen  remember tick of last gestures  BUG the data register are usually read by the IRQ already and it is
+     * important to not read them again, otherwise we could miss some events
+     * (most notable gestures). However, we only read registers when the
+     * touchpad is active so the data might be outdated if touchpad is
+     * inactive. We should implement a continuous reading mode for the debug
+     * screen.  call button_get() to avoid an overflow in the button queue  Disable IRQs when reading to avoid reading incorrect data  display virtual touchpad with deadzones  put a done at the reported position of the finger
+         * also display relative motion by a line as reported by the device  BOOTLOADER *
+ * Button API
+  generic **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * RMI API
+  cached value of control register  NOTE:
+ * RMI over i2c supports some special aliases on page 0x2 but this driver don't
+ * use them  Represent a typical RMI transaction: a first transfer to select the page
+ * and a second transfer to read/write registers. The API takes care of annoying
+ * details and will simply call the callback at the end of the transfer.  first transfer: page select  second transfer: read/write  write command to select page  write command to select register  transfer status  callback  Synchronous transfer: add a semaphore to block  semaphore for completion  callback for first transfer: record error if any  record status  callback for first transfer: handle error and callback  record status, only if not skipping (ie the error was in first transfer)  callback  build a rmi transaction to read/write registers; do NOT cross page boundary !  first transfer: change page  second transfer: read/write  general things * IMPORTANT NOTE
+ *
+ * All transfers are built using rmi_build_xfer which constructs a transaction
+ * consisting in a page select and register read/writes. Since transactions are
+ * executed "atomically" and are queued, it is safe to call transfers functions
+ * concurrently. However only asynchronous transfers can be used in IRQ context.
+ * In all cases, make sure the the rmi_xfer_t structure lives at least until the
+ * completion of the transfer (callback).
+  queue transfer to change sleep mode, return true if transfer was queued
+ * and false if ignored because requested mode is already the current one.
+ * call must provide a transfer structure that must exist until completion  avoid any race with concurrent changes to the mode  valid value different from the actual one  change cached version  build transfer and kick  synchronous callback: release semaphore  synchronous read/write  kick and wait  read registers synchronously  read single register synchronously  write single register synchronously  synchronously change sleep mode, this is a nop if current mode is the same as requested  kick asynchronous transfer and only wait if mode was actually changed  cache control register *
+ * Touchpad API
+  we emulate a 3x3 grid, this gives the button mapping  timeout before lowering touchpad power from lack of activity  deadzone multiplier  power level when touchpad is active: experiments show that "low power" reduce
+ * power consumption and hardly makes a difference in quality.  button bitmap for the touchpad  tick of the last touchpad activity  is touchpad enabled?  deadzone size  activity timeout  Ignore deadzone function. If outside of the pad, project to border.  compute grid coordinate  find button ignoring deadzones  To check if we are in a deadzone, we try to shift the coordinates
+     * and see if we get the same button. Not that we do not want to apply
+     * the deadzone in the borders ! The code works even in the borders because
+     * the find_button_no_deadzone() project out-of-bound coordinates to the
+     * borders  i2c transfer only used for irq processing
+ * NOTE we use two sets of transfers because we setup one in the callback of the
+ * other, using one would be unsafe  buffer to hold irq status register and sleep mode  buffer to hold touchpad data  callback for i2c transfer to change power level after irq  we do not recover from error for now  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read/clear interrupt status register  we do not recover from error for now  at this point, we might have processed an event and the touchpad still be
+     * in very low power mode because of some previous inactivity; if it's the case,
+     * schedule another transfer to switch to a higher power mode before accepting the
+     * next event  kick asynchronous transfer and only wait if mode was actually changed  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read touchpad data registers  we do not recover from error for now  now that we have the data, setup another transfer to clear interrupt  kick transfer  now process touchpad data  touchpad attention line interrupt  build transfer to read data registers  kick transfer  update last activity  handle negative values as well !  transfer used by the activity timeout to change power level  activity timeout: lower power level after some inactivity  don't change power mode if touchpad is disabled, it's already in sleep mode  next check in 1 second  Synaptics TouchPad information:
+     * - product id: 1533
+     * - nr function: 1 (0x10 = 2D touchpad)
+     * 2D Touchpad information (function 0x10)
+     * - nr data sources: 3
+     * - standard layout
+     * - extra data registers: 7
+     * - nr sensors: 1
+     * 2D Touchpad Sensor #0 information:
+     * - has relative data: yes
+     * - has palm detect: yes
+     * - has multi finger: yes
+     * - has enhanced gesture: yes
+     * - has scroller: no
+     * - has 2D scrollers: no
+     * - Maximum X: 3009
+     * - Maxumum Y: 1974
+     * - Resolution: 82
+      use a timer to monitor touchpad activity and manage power level  The OF adjust the sensitivity based on product_id[1] compared to 2.
+     * Since it doesn't seem to work great, just hardcode the sensitivity to
+     * some reasonable value for now.  we don't know in which mode the touchpad start so use a sane default  enable interrupt *
+ * Debug screen
+  Device to screen  remember tick of last gestures  BUG the data register are usually read by the IRQ already and it is
+     * important to not read them again, otherwise we could miss some events
+     * (most notable gestures). However, we only read registers when the
+     * touchpad is active so the data might be outdated if touchpad is
+     * inactive. We should implement a continuous reading mode for the debug
+     * screen.  call button_get() to avoid an overflow in the button queue  Disable IRQs when reading to avoid reading incorrect data  display virtual touchpad with deadzones  put a done at the reported position of the finger
+         * also display relative motion by a line as reported by the device  BOOTLOADER *
+ * Button API
+  generic **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * RMI API
+  cached value of control register  NOTE:
+ * RMI over i2c supports some special aliases on page 0x2 but this driver don't
+ * use them  Represent a typical RMI transaction: a first transfer to select the page
+ * and a second transfer to read/write registers. The API takes care of annoying
+ * details and will simply call the callback at the end of the transfer.  first transfer: page select  second transfer: read/write  write command to select page  write command to select register  transfer status  callback  Synchronous transfer: add a semaphore to block  semaphore for completion  callback for first transfer: record error if any  record status  callback for first transfer: handle error and callback  record status, only if not skipping (ie the error was in first transfer)  callback  build a rmi transaction to read/write registers; do NOT cross page boundary !  first transfer: change page  second transfer: read/write  general things * IMPORTANT NOTE
+ *
+ * All transfers are built using rmi_build_xfer which constructs a transaction
+ * consisting in a page select and register read/writes. Since transactions are
+ * executed "atomically" and are queued, it is safe to call transfers functions
+ * concurrently. However only asynchronous transfers can be used in IRQ context.
+ * In all cases, make sure the the rmi_xfer_t structure lives at least until the
+ * completion of the transfer (callback).
+  queue transfer to change sleep mode, return true if transfer was queued
+ * and false if ignored because requested mode is already the current one.
+ * call must provide a transfer structure that must exist until completion  avoid any race with concurrent changes to the mode  valid value different from the actual one  change cached version  build transfer and kick  synchronous callback: release semaphore  synchronous read/write  kick and wait  read registers synchronously  read single register synchronously  write single register synchronously  synchronously change sleep mode, this is a nop if current mode is the same as requested  kick asynchronous transfer and only wait if mode was actually changed  cache control register *
+ * Touchpad API
+  we emulate a 3x3 grid, this gives the button mapping  timeout before lowering touchpad power from lack of activity  deadzone multiplier  power level when touchpad is active: experiments show that "low power" reduce
+ * power consumption and hardly makes a difference in quality.  button bitmap for the touchpad  tick of the last touchpad activity  is touchpad enabled?  deadzone size  activity timeout  Ignore deadzone function. If outside of the pad, project to border.  compute grid coordinate  find button ignoring deadzones  To check if we are in a deadzone, we try to shift the coordinates
+     * and see if we get the same button. Not that we do not want to apply
+     * the deadzone in the borders ! The code works even in the borders because
+     * the find_button_no_deadzone() project out-of-bound coordinates to the
+     * borders  i2c transfer only used for irq processing
+ * NOTE we use two sets of transfers because we setup one in the callback of the
+ * other, using one would be unsafe  buffer to hold irq status register and sleep mode  buffer to hold touchpad data  callback for i2c transfer to change power level after irq  we do not recover from error for now  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read/clear interrupt status register  we do not recover from error for now  at this point, we might have processed an event and the touchpad still be
+     * in very low power mode because of some previous inactivity; if it's the case,
+     * schedule another transfer to switch to a higher power mode before accepting the
+     * next event  kick asynchronous transfer and only wait if mode was actually changed  now that interrupt is cleared, we can renable attention irq  callback for i2c transfer to read touchpad data registers  we do not recover from error for now  now that we have the data, setup another transfer to clear interrupt  kick transfer  now process touchpad data  touchpad attention line interrupt  build transfer to read data registers  kick transfer  update last activity  handle negative values as well !  transfer used by the activity timeout to change power level  activity timeout: lower power level after some inactivity  don't change power mode if touchpad is disabled, it's already in sleep mode  next check in 1 second  Synaptics TouchPad information:
+     * - product id: 1533
+     * - nr function: 1 (0x10 = 2D touchpad)
+     * 2D Touchpad information (function 0x10)
+     * - nr data sources: 3
+     * - standard layout
+     * - extra data registers: 7
+     * - nr sensors: 1
+     * 2D Touchpad Sensor #0 information:
+     * - has relative data: yes
+     * - has palm detect: yes
+     * - has multi finger: yes
+     * - has enhanced gesture: yes
+     * - has scroller: no
+     * - has 2D scrollers: no
+     * - Maximum X: 3009
+     * - Maxumum Y: 1974
+     * - Resolution: 82
+      use a timer to monitor touchpad activity and manage power level  The OF adjust the sensitivity based on product_id[1] compared to 2.
+     * Since it doesn't seem to work great, just hardcode the sensitivity to
+     * some reasonable value for now.  we don't know in which mode the touchpad start so use a sane default  enable interrupt *
+ * Debug screen
+  Device to screen  remember tick of last gestures  BUG the data register are usually read by the IRQ already and it is
+     * important to not read them again, otherwise we could miss some events
+     * (most notable gestures). However, we only read registers when the
+     * touchpad is active so the data might be outdated if touchpad is
+     * inactive. We should implement a continuous reading mode for the debug
+     * screen.  call button_get() to avoid an overflow in the button queue  Disable IRQs when reading to avoid reading incorrect data  display virtual touchpad with deadzones  put a done at the reported position of the finger
+         * also display relative motion by a line as reported by the device  BOOTLOADER *
+ * Button API
+  generic 

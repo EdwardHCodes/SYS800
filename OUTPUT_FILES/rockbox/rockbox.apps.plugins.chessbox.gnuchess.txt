@@ -1,0 +1,529 @@
+
+  C source for CHESS.
+
+  Revision: 5-23-88
+
+  Copyright (C) 1986, 1987, 1988 Free Software Foundation, Inc.
+  Copyright (c) 1988  John Stanback
+
+  This file is part of CHESS.
+
+  CHESS is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY.  No author or distributor
+  accepts responsibility to anyone for the consequences of using it
+  or for whether it serves any particular purpose or works at all,
+  unless he says so in writing.  Refer to the CHESS General Public
+  License for full details.
+
+  Everyone is granted permission to copy, modify and redistribute
+  CHESS, but only under the conditions described in the
+  CHESS General Public License.   A copy of this license is
+  supposed to have been given to you along with CHESS so you
+  can know your rights and responsibilities.  It should be in a
+  file named COPYING.  Among other things, the copyright notice
+  and this notice must be preserved on all copies.
+ ---- Chess datatypes and variables ---- Bug fix now rolls over instead of overflow ............ prototypes ............  ............    POSITIONAL EVALUATION ROUTINES    ............ 
+   Perform normal static evaluation of board position. A score is
+   generated for each piece and these are summed to get a score for each
+   side.
+
+   Static evaluation when loser has only a king and winner has no pawns
+   or no pieces.
+
+   Score King and Pawns versus King endings.
+
+   Score King+Bishop+Knight versus King endings.
+   This doesn't work all that well but it's better than nothing.
+
+   Calculate the positional value for the piece on 'sq'.
+
+   Assign penalties if king can be threatened by checks, if squares
+   near the king are controlled by the enemy (especially the queen),
+   or if there are no pawns near the king.
+
+   Find Bishop and Rook mobility, XRAY attacks, and pins. Increment the
+   hung[] array if a pin is found.
+
+   See if the attacked piece has unattacked squares to move to.
+
+   This is done one time before the search is started. Set up arrays
+   Mwpawn, Mbpawn, Mknight, Mbishop, Mking which are used in the
+   SqValue() function to determine the positional value of each piece.
+
+   If material balance has changed, determine the values for the
+   positional evaluation terms.
+ centre pawn on 2nd rank & blocked  blocked backward pawn  doubled pawn  weak pawn on half open file  pawn near friendly king  advanced pawn multiplier  muliplier for isolated pawn  knight near enemy pieces  occupies pawn hole  occupies pawn hole  rook on half open file  Xray attack on piece  Pin  king on half open file  king moved before castling  B,R attacks near enemy king  defender > attacker  each hung piece  extra for >1 hung piece  ............    MOVE GENERATION & SEARCH ROUTINES    .............. 
+   Select a move by calling function search() at progressively deeper
+   ply until time is up or a mate or draw is reached. An alpha-beta
+   window of -90 to +90 points is set around the score returned from the
+   previous iteration. If Sdepth != 0 then the program has correctly
+   predicted the opponents move and the search will start at a depth of
+   Sdepth+1 rather than a depth of 1.
+SearchStartStuff(side);ShowDepth(' ');ShowDepth('-');ShowDepth('+');ShowResults(score,PrVar,'.');OutputMove();
+   Go thru each of the opening lines of play and check for a match with
+   the current game listing. If a match occurs, generate a random number.
+   If this number is the largest generated so far then the next move in
+   this line becomes the current "candidate". After all lines are
+   checked, the candidate move is put at the top of the Tree[] array and
+   will be played by the program. Note that the program does not handle
+   book transpositions.
+ I added ( m != OBook[o_c][m_c] ) trying to get more random games 
+   Perform an alpha-beta search to determine the score for the current
+   board position. If depth <= 0 only capturing moves, pawn promotions
+   and responses to check are generated and searched, otherwise all
+   moves are processed. The search depth is modified for check evasions,
+   certain re-captures and threats. Extensions may continue for up to 11
+   ply beyond the nominal search depth.
+ this is the only place we need to yield  and check for user interaction if (Sdepth > 2)
+                if (best > beta) ShowResults(best,bstline,'+');
+                else if (best < alpha) ShowResults(best,bstline,'-');
+                else ShowResults(best,bstline,'&');
+   Compute an estimate of the score by adding the positional score from
+   the previous ply to the material difference. If this score falls
+   inside a window which is 180 points wider than the alpha-beta window
+   (or within a 50 point window during quiescence search) call
+   ScorePosition() to determine a score, otherwise return the estimated
+   score. If one side has only a king and the other either has no pawns
+   or no pieces then the function ScoreLoneKing() is called.
+
+   Look for the current board position in the transposition table.
+
+      else if (ptbl->flags & upperbound)
+        {
+          if (ptbl->score < *beta) *beta = ptbl->score+1;
+        }
+
+   Store the current board position in the transposition table.
+
+   Fill the array Tree[] with all available moves for side to play. Array
+   TrPnt[ply] contains the index into Tree[] of the first move at a ply.
+
+   Generate moves for a piece. The from square is mapped onto a special
+   board and offsets (taken from array Dir[]) are added to the mapped
+   location. The newly generated square is tested to see if it falls off
+   the board by ANDing the square with 88 HEX. Legal moves are linked
+   into the tree.
+
+   Add a move to the tree.  Assign a bonus to order the moves
+   as follows:
+     1. Principle variation
+     2. Capture of last moved piece
+     3. Other captures (major pieces first)
+     4. Killer moves
+     5. "history" killers
+
+    Generate captures and Pawn promotions only.
+
+   Make or Unmake a castling move.
+
+   Make or unmake an en passant move.
+
+   Update Arrays board[], color[], and Pindex[] to reflect the new board
+   position obtained after making the move pointed to by node. Also
+   update miscellaneous stuff that changes when a move is made.
+
+   Take back a move.
+
+   hashbd contains a 32 bit "signature" of the board position. hashkey
+   contains a 16 bit code used to address the hash table. When a move is
+   made, XOR'ing the hashcode of moved piece on the from and to squares
+   with the hashbd and hashkey values keeps things current.
+
+   Update the PieceList and Pindex arrays when a piece is captured or
+   when a capture is unmade.
+
+   Scan thru the board seeing what's on each square. If a piece is found,
+   update the variables PieceCnt, PawnCnt, Pindex and PieceList. Also
+   determine the material for each side and set the hashkey and hashbd
+   variables to represent the current board position. Array
+   PieceList[side][indx] contains the location of all the pieces of
+   either side. Array Pindex[sq] contains the indx into PieceList for a
+   given square.
+
+   Find the best move in the tree between indexes p1 and p2. Swap the
+   best move into the p1 element.
+
+    Check for draw by threefold repetition.
+
+  See if any piece with color 'side' ataks sq.  First check for pawns
+  or king, then try other pieces. Array Dcode is used to check for
+  knight attacks or R,B,Q co-linearity.
+
+    Fill array atak[][] with info about ataks to a square.  Bits 8-15
+    are set if the piece (king..pawn) ataks the square. Bits 0-7
+    contain a count of total ataks to the square.
+
+   Determine the time that has passed since the search was started. If
+   the elapsed time exceeds the target (ResponseTime+ExtraTime) then set
+   timeout to true which will terminate the search.
+et = time((long *)0) - time0;time0 = time((long *)0);(void) times(&tmbuf2);
+      cputimer = 100*(tmbuf2.tms_utime - tmbuf1.tms_utime) / HZ;
+      if (cputimer > 0) evrate = (100*NodeCnt)/(cputimer+100*ft);
+      else evrate = 0;UpdateClocks(); ............    INTERFACE ROUTINES    ........................... static void VoidFunction ( void ) {
+  while (!(quit))
+    {
+      if (bothsides && !mate) SelectMove(opponent,1); else InputCommand();
+      if (!(quit || mate || force)) SelectMove(computer,1);
+    }
+  ExitChess();
+}
+   Compare the string 's' to the list of legal moves available for the
+   player. If a match is found, make the move on the board. This was originally
+   fixed for the opponent, but allowing the player to be specified will make
+   possible to use GnuChess as a human vs human game verifier. It also allows
+   the PGN functions to verify checkmates.
+ShowMessage("Illegal Move!!");if (xnode.flags & epmask) UpdateDisplay(0,0,1,0);
+          else UpdateDisplay(xnode.f,xnode.t,0,xnode.flags & cstlmask);if (cnt > 1) ShowMessage("Ambiguous Move!"); ---- Reset the board and other variables to start a new game. ---- else if (Level == 0) SelectLevel();UpdateDisplay(0,0,1,0);time0 = time((long *)0); ---- Initialize variables and reset board ---- ttable = (struct hashentry *)malloc(ttblsz *
+           (unsigned long)sizeof(struct hashentry)); no malloc, statically allocated 
+  C source for CHESS.
+
+  Revision: 5-23-88
+
+  Copyright (C) 1986, 1987, 1988 Free Software Foundation, Inc.
+  Copyright (c) 1988  John Stanback
+
+  This file is part of CHESS.
+
+  CHESS is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY.  No author or distributor
+  accepts responsibility to anyone for the consequences of using it
+  or for whether it serves any particular purpose or works at all,
+  unless he says so in writing.  Refer to the CHESS General Public
+  License for full details.
+
+  Everyone is granted permission to copy, modify and redistribute
+  CHESS, but only under the conditions described in the
+  CHESS General Public License.   A copy of this license is
+  supposed to have been given to you along with CHESS so you
+  can know your rights and responsibilities.  It should be in a
+  file named COPYING.  Among other things, the copyright notice
+  and this notice must be preserved on all copies.
+ ---- Chess datatypes and variables ---- Bug fix now rolls over instead of overflow ............ prototypes ............  ............    POSITIONAL EVALUATION ROUTINES    ............ 
+   Perform normal static evaluation of board position. A score is
+   generated for each piece and these are summed to get a score for each
+   side.
+
+   Static evaluation when loser has only a king and winner has no pawns
+   or no pieces.
+
+   Score King and Pawns versus King endings.
+
+   Score King+Bishop+Knight versus King endings.
+   This doesn't work all that well but it's better than nothing.
+
+   Calculate the positional value for the piece on 'sq'.
+
+   Assign penalties if king can be threatened by checks, if squares
+   near the king are controlled by the enemy (especially the queen),
+   or if there are no pawns near the king.
+
+   Find Bishop and Rook mobility, XRAY attacks, and pins. Increment the
+   hung[] array if a pin is found.
+
+   See if the attacked piece has unattacked squares to move to.
+
+   This is done one time before the search is started. Set up arrays
+   Mwpawn, Mbpawn, Mknight, Mbishop, Mking which are used in the
+   SqValue() function to determine the positional value of each piece.
+
+   If material balance has changed, determine the values for the
+   positional evaluation terms.
+ centre pawn on 2nd rank & blocked  blocked backward pawn  doubled pawn  weak pawn on half open file  pawn near friendly king  advanced pawn multiplier  muliplier for isolated pawn  knight near enemy pieces  occupies pawn hole  occupies pawn hole  rook on half open file  Xray attack on piece  Pin  king on half open file  king moved before castling  B,R attacks near enemy king  defender > attacker  each hung piece  extra for >1 hung piece  ............    MOVE GENERATION & SEARCH ROUTINES    .............. 
+   Select a move by calling function search() at progressively deeper
+   ply until time is up or a mate or draw is reached. An alpha-beta
+   window of -90 to +90 points is set around the score returned from the
+   previous iteration. If Sdepth != 0 then the program has correctly
+   predicted the opponents move and the search will start at a depth of
+   Sdepth+1 rather than a depth of 1.
+SearchStartStuff(side);ShowDepth(' ');ShowDepth('-');ShowDepth('+');ShowResults(score,PrVar,'.');OutputMove();
+   Go thru each of the opening lines of play and check for a match with
+   the current game listing. If a match occurs, generate a random number.
+   If this number is the largest generated so far then the next move in
+   this line becomes the current "candidate". After all lines are
+   checked, the candidate move is put at the top of the Tree[] array and
+   will be played by the program. Note that the program does not handle
+   book transpositions.
+ I added ( m != OBook[o_c][m_c] ) trying to get more random games 
+   Perform an alpha-beta search to determine the score for the current
+   board position. If depth <= 0 only capturing moves, pawn promotions
+   and responses to check are generated and searched, otherwise all
+   moves are processed. The search depth is modified for check evasions,
+   certain re-captures and threats. Extensions may continue for up to 11
+   ply beyond the nominal search depth.
+ this is the only place we need to yield  and check for user interaction if (Sdepth > 2)
+                if (best > beta) ShowResults(best,bstline,'+');
+                else if (best < alpha) ShowResults(best,bstline,'-');
+                else ShowResults(best,bstline,'&');
+   Compute an estimate of the score by adding the positional score from
+   the previous ply to the material difference. If this score falls
+   inside a window which is 180 points wider than the alpha-beta window
+   (or within a 50 point window during quiescence search) call
+   ScorePosition() to determine a score, otherwise return the estimated
+   score. If one side has only a king and the other either has no pawns
+   or no pieces then the function ScoreLoneKing() is called.
+
+   Look for the current board position in the transposition table.
+
+      else if (ptbl->flags & upperbound)
+        {
+          if (ptbl->score < *beta) *beta = ptbl->score+1;
+        }
+
+   Store the current board position in the transposition table.
+
+   Fill the array Tree[] with all available moves for side to play. Array
+   TrPnt[ply] contains the index into Tree[] of the first move at a ply.
+
+   Generate moves for a piece. The from square is mapped onto a special
+   board and offsets (taken from array Dir[]) are added to the mapped
+   location. The newly generated square is tested to see if it falls off
+   the board by ANDing the square with 88 HEX. Legal moves are linked
+   into the tree.
+
+   Add a move to the tree.  Assign a bonus to order the moves
+   as follows:
+     1. Principle variation
+     2. Capture of last moved piece
+     3. Other captures (major pieces first)
+     4. Killer moves
+     5. "history" killers
+
+    Generate captures and Pawn promotions only.
+
+   Make or Unmake a castling move.
+
+   Make or unmake an en passant move.
+
+   Update Arrays board[], color[], and Pindex[] to reflect the new board
+   position obtained after making the move pointed to by node. Also
+   update miscellaneous stuff that changes when a move is made.
+
+   Take back a move.
+
+   hashbd contains a 32 bit "signature" of the board position. hashkey
+   contains a 16 bit code used to address the hash table. When a move is
+   made, XOR'ing the hashcode of moved piece on the from and to squares
+   with the hashbd and hashkey values keeps things current.
+
+   Update the PieceList and Pindex arrays when a piece is captured or
+   when a capture is unmade.
+
+   Scan thru the board seeing what's on each square. If a piece is found,
+   update the variables PieceCnt, PawnCnt, Pindex and PieceList. Also
+   determine the material for each side and set the hashkey and hashbd
+   variables to represent the current board position. Array
+   PieceList[side][indx] contains the location of all the pieces of
+   either side. Array Pindex[sq] contains the indx into PieceList for a
+   given square.
+
+   Find the best move in the tree between indexes p1 and p2. Swap the
+   best move into the p1 element.
+
+    Check for draw by threefold repetition.
+
+  See if any piece with color 'side' ataks sq.  First check for pawns
+  or king, then try other pieces. Array Dcode is used to check for
+  knight attacks or R,B,Q co-linearity.
+
+    Fill array atak[][] with info about ataks to a square.  Bits 8-15
+    are set if the piece (king..pawn) ataks the square. Bits 0-7
+    contain a count of total ataks to the square.
+
+   Determine the time that has passed since the search was started. If
+   the elapsed time exceeds the target (ResponseTime+ExtraTime) then set
+   timeout to true which will terminate the search.
+et = time((long *)0) - time0;time0 = time((long *)0);(void) times(&tmbuf2);
+      cputimer = 100*(tmbuf2.tms_utime - tmbuf1.tms_utime) / HZ;
+      if (cputimer > 0) evrate = (100*NodeCnt)/(cputimer+100*ft);
+      else evrate = 0;UpdateClocks(); ............    INTERFACE ROUTINES    ........................... static void VoidFunction ( void ) {
+  while (!(quit))
+    {
+      if (bothsides && !mate) SelectMove(opponent,1); else InputCommand();
+      if (!(quit || mate || force)) SelectMove(computer,1);
+    }
+  ExitChess();
+}
+   Compare the string 's' to the list of legal moves available for the
+   player. If a match is found, make the move on the board. This was originally
+   fixed for the opponent, but allowing the player to be specified will make
+   possible to use GnuChess as a human vs human game verifier. It also allows
+   the PGN functions to verify checkmates.
+ShowMessage("Illegal Move!!");if (xnode.flags & epmask) UpdateDisplay(0,0,1,0);
+          else UpdateDisplay(xnode.f,xnode.t,0,xnode.flags & cstlmask);if (cnt > 1) ShowMessage("Ambiguous Move!"); ---- Reset the board and other variables to start a new game. ---- else if (Level == 0) SelectLevel();UpdateDisplay(0,0,1,0);time0 = time((long *)0); ---- Initialize variables and reset board ---- ttable = (struct hashentry *)malloc(ttblsz *
+           (unsigned long)sizeof(struct hashentry)); no malloc, statically allocated 
+  C source for CHESS.
+
+  Revision: 5-23-88
+
+  Copyright (C) 1986, 1987, 1988 Free Software Foundation, Inc.
+  Copyright (c) 1988  John Stanback
+
+  This file is part of CHESS.
+
+  CHESS is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY.  No author or distributor
+  accepts responsibility to anyone for the consequences of using it
+  or for whether it serves any particular purpose or works at all,
+  unless he says so in writing.  Refer to the CHESS General Public
+  License for full details.
+
+  Everyone is granted permission to copy, modify and redistribute
+  CHESS, but only under the conditions described in the
+  CHESS General Public License.   A copy of this license is
+  supposed to have been given to you along with CHESS so you
+  can know your rights and responsibilities.  It should be in a
+  file named COPYING.  Among other things, the copyright notice
+  and this notice must be preserved on all copies.
+ ---- Chess datatypes and variables ---- Bug fix now rolls over instead of overflow ............ prototypes ............  ............    POSITIONAL EVALUATION ROUTINES    ............ 
+   Perform normal static evaluation of board position. A score is
+   generated for each piece and these are summed to get a score for each
+   side.
+
+   Static evaluation when loser has only a king and winner has no pawns
+   or no pieces.
+
+   Score King and Pawns versus King endings.
+
+   Score King+Bishop+Knight versus King endings.
+   This doesn't work all that well but it's better than nothing.
+
+   Calculate the positional value for the piece on 'sq'.
+
+   Assign penalties if king can be threatened by checks, if squares
+   near the king are controlled by the enemy (especially the queen),
+   or if there are no pawns near the king.
+
+   Find Bishop and Rook mobility, XRAY attacks, and pins. Increment the
+   hung[] array if a pin is found.
+
+   See if the attacked piece has unattacked squares to move to.
+
+   This is done one time before the search is started. Set up arrays
+   Mwpawn, Mbpawn, Mknight, Mbishop, Mking which are used in the
+   SqValue() function to determine the positional value of each piece.
+
+   If material balance has changed, determine the values for the
+   positional evaluation terms.
+ centre pawn on 2nd rank & blocked  blocked backward pawn  doubled pawn  weak pawn on half open file  pawn near friendly king  advanced pawn multiplier  muliplier for isolated pawn  knight near enemy pieces  occupies pawn hole  occupies pawn hole  rook on half open file  Xray attack on piece  Pin  king on half open file  king moved before castling  B,R attacks near enemy king  defender > attacker  each hung piece  extra for >1 hung piece  ............    MOVE GENERATION & SEARCH ROUTINES    .............. 
+   Select a move by calling function search() at progressively deeper
+   ply until time is up or a mate or draw is reached. An alpha-beta
+   window of -90 to +90 points is set around the score returned from the
+   previous iteration. If Sdepth != 0 then the program has correctly
+   predicted the opponents move and the search will start at a depth of
+   Sdepth+1 rather than a depth of 1.
+SearchStartStuff(side);ShowDepth(' ');ShowDepth('-');ShowDepth('+');ShowResults(score,PrVar,'.');OutputMove();
+   Go thru each of the opening lines of play and check for a match with
+   the current game listing. If a match occurs, generate a random number.
+   If this number is the largest generated so far then the next move in
+   this line becomes the current "candidate". After all lines are
+   checked, the candidate move is put at the top of the Tree[] array and
+   will be played by the program. Note that the program does not handle
+   book transpositions.
+ I added ( m != OBook[o_c][m_c] ) trying to get more random games 
+   Perform an alpha-beta search to determine the score for the current
+   board position. If depth <= 0 only capturing moves, pawn promotions
+   and responses to check are generated and searched, otherwise all
+   moves are processed. The search depth is modified for check evasions,
+   certain re-captures and threats. Extensions may continue for up to 11
+   ply beyond the nominal search depth.
+ this is the only place we need to yield  and check for user interaction if (Sdepth > 2)
+                if (best > beta) ShowResults(best,bstline,'+');
+                else if (best < alpha) ShowResults(best,bstline,'-');
+                else ShowResults(best,bstline,'&');
+   Compute an estimate of the score by adding the positional score from
+   the previous ply to the material difference. If this score falls
+   inside a window which is 180 points wider than the alpha-beta window
+   (or within a 50 point window during quiescence search) call
+   ScorePosition() to determine a score, otherwise return the estimated
+   score. If one side has only a king and the other either has no pawns
+   or no pieces then the function ScoreLoneKing() is called.
+
+   Look for the current board position in the transposition table.
+
+      else if (ptbl->flags & upperbound)
+        {
+          if (ptbl->score < *beta) *beta = ptbl->score+1;
+        }
+
+   Store the current board position in the transposition table.
+
+   Fill the array Tree[] with all available moves for side to play. Array
+   TrPnt[ply] contains the index into Tree[] of the first move at a ply.
+
+   Generate moves for a piece. The from square is mapped onto a special
+   board and offsets (taken from array Dir[]) are added to the mapped
+   location. The newly generated square is tested to see if it falls off
+   the board by ANDing the square with 88 HEX. Legal moves are linked
+   into the tree.
+
+   Add a move to the tree.  Assign a bonus to order the moves
+   as follows:
+     1. Principle variation
+     2. Capture of last moved piece
+     3. Other captures (major pieces first)
+     4. Killer moves
+     5. "history" killers
+
+    Generate captures and Pawn promotions only.
+
+   Make or Unmake a castling move.
+
+   Make or unmake an en passant move.
+
+   Update Arrays board[], color[], and Pindex[] to reflect the new board
+   position obtained after making the move pointed to by node. Also
+   update miscellaneous stuff that changes when a move is made.
+
+   Take back a move.
+
+   hashbd contains a 32 bit "signature" of the board position. hashkey
+   contains a 16 bit code used to address the hash table. When a move is
+   made, XOR'ing the hashcode of moved piece on the from and to squares
+   with the hashbd and hashkey values keeps things current.
+
+   Update the PieceList and Pindex arrays when a piece is captured or
+   when a capture is unmade.
+
+   Scan thru the board seeing what's on each square. If a piece is found,
+   update the variables PieceCnt, PawnCnt, Pindex and PieceList. Also
+   determine the material for each side and set the hashkey and hashbd
+   variables to represent the current board position. Array
+   PieceList[side][indx] contains the location of all the pieces of
+   either side. Array Pindex[sq] contains the indx into PieceList for a
+   given square.
+
+   Find the best move in the tree between indexes p1 and p2. Swap the
+   best move into the p1 element.
+
+    Check for draw by threefold repetition.
+
+  See if any piece with color 'side' ataks sq.  First check for pawns
+  or king, then try other pieces. Array Dcode is used to check for
+  knight attacks or R,B,Q co-linearity.
+
+    Fill array atak[][] with info about ataks to a square.  Bits 8-15
+    are set if the piece (king..pawn) ataks the square. Bits 0-7
+    contain a count of total ataks to the square.
+
+   Determine the time that has passed since the search was started. If
+   the elapsed time exceeds the target (ResponseTime+ExtraTime) then set
+   timeout to true which will terminate the search.
+et = time((long *)0) - time0;time0 = time((long *)0);(void) times(&tmbuf2);
+      cputimer = 100*(tmbuf2.tms_utime - tmbuf1.tms_utime) / HZ;
+      if (cputimer > 0) evrate = (100*NodeCnt)/(cputimer+100*ft);
+      else evrate = 0;UpdateClocks(); ............    INTERFACE ROUTINES    ........................... static void VoidFunction ( void ) {
+  while (!(quit))
+    {
+      if (bothsides && !mate) SelectMove(opponent,1); else InputCommand();
+      if (!(quit || mate || force)) SelectMove(computer,1);
+    }
+  ExitChess();
+}
+   Compare the string 's' to the list of legal moves available for the
+   player. If a match is found, make the move on the board. This was originally
+   fixed for the opponent, but allowing the player to be specified will make
+   possible to use GnuChess as a human vs human game verifier. It also allows
+   the PGN functions to verify checkmates.
+ShowMessage("Illegal Move!!");if (xnode.flags & epmask) UpdateDisplay(0,0,1,0);
+          else UpdateDisplay(xnode.f,xnode.t,0,xnode.flags & cstlmask);if (cnt > 1) ShowMessage("Ambiguous Move!"); ---- Reset the board and other variables to start a new game. ---- else if (Level == 0) SelectLevel();UpdateDisplay(0,0,1,0);time0 = time((long *)0); ---- Initialize variables and reset board ---- ttable = (struct hashentry *)malloc(ttblsz *
+           (unsigned long)sizeof(struct hashentry)); no malloc, statically allocated 

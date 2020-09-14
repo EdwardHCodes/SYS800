@@ -1,0 +1,103 @@
+
+** $Id: lparser.c,v 2.42.1.4 2011/10/21 19:31:42 roberto Exp $
+** Lua Parser
+** See Copyright Notice in lua.h
+
+** nodes for block list (list of active blocks)
+ chain  list of jumps out of this loop  # active locals outside the breakable structure  true if some variable in the block is an upvalue  true if `block' is a loop 
+** prototypes for recursive non-terminal functions
+ new one  not found  no more levels?  default is global variable  look up at current level  local will be used as an upval  not found at current level; try upper one  else was LOCAL or UPVAL  upvalue in this level  info points to global name  includes call itself  last exp. provides the difference  close last expression  a block either controls scope or breaks (never both)  free registers  linked list of funcstates  registers 0/1 are always valid  anchor table of constants and prototype (to avoid being collected)  final return  last token read was anchored in defunct function; must reanchor it  remove table and prototype from the stack  protect name  main func. is always vararg  read first token  remove 'name' from stack ============================================================ GRAMMAR RULES ============================================================ field -> ['.' | ':'] NAME  skip the dot or colon  index -> '[' expr ']'  skip the '[' 
+** {======================================================================
+** Rules for Constructors
+** =======================================================================
+ last list item read  table descriptor  total number of `record' elements  total number of array elements  number of array elements pending to be stored  recfield -> (NAME | `['exp1`]') = exp1  ls->t.token == '['  free registers  there is no list item  flush  no more items pending  do not count last expression (unknown number of elements)  constructor -> ??  no value (yet)  fix it at stack top (for gc)  may be listfields or recfields  expression?  constructor_item -> recfield  constructor_part -> listfield  set initial array size  set initial table size  }======================================================================  parlist -> [ param { `,' param } ]  is `parlist' not empty?  param -> NAME  param -> `...'  use `arg' as default name  reserve register for parameters  body ->  `(' parlist `)' chunk END  explist1 -> expr { `,' expr }  at least one expression  funcargs -> `(' [ explist1 ] `)'  arg list is empty?  funcargs -> constructor  funcargs -> STRING  must use `seminfo' before `next'  base register for call  open call  close last argument  call remove function and arguments and leaves
+                            (unless changed) one result 
+** {======================================================================
+** Expression parsing
+** =======================================================================
+ prefixexp -> NAME | '(' expr ')'  primaryexp ->
+        prefixexp { `.' NAME | `[' exp `]' | `:' NAME funcargs | funcargs }  field  `[' exp1 `]'  `:' NAME funcargs  funcargs  simpleexp -> NUMBER | STRING | NIL | true | false | ... |
+                  constructor | FUNCTION body | primaryexp  vararg  don't need 'arg'  constructor  left priority for each binary operator  right priority  ORDER OPR  `+' `-' `/' `%'  power and concat (right associative)  equality and inequality  order  logical (and/or)  priority for unary operators 
+** subexpr -> (simpleexp | unop subexpr) { binop subexpr }
+** where `binop' is any binary operator with a priority higher than `limit'
+ expand while operators have priorities higher than `limit'  read sub-expression with higher priority  return first untreated operator  }==================================================================== 
+** {======================================================================
+** Rules for Statements
+** =======================================================================
+ block -> chunk 
+** structure to chain all variables in the left-hand side of an
+** assignment
+ variable (global, local, upvalue, or indexed) 
+** check whether, in an assignment to a local variable, the local variable
+** is needed in a previous assignment (to a table). If so, save original
+** local value in a safe place and use this safe copy in the previous
+** assignment.
+ eventual position to save local variable  conflict?  previous assignment will use safe copy  conflict?  previous assignment will use safe copy  make copy  assignment -> `,' primaryexp assignment  assignment -> `=' explist1  remove extra values  close last expression  avoid default  default assignment  cond -> exp  read condition  `falses' are all equal here  whilestat -> WHILE cond DO block END  skip WHILE  false conditions finish the loop  repeatstat -> REPEAT block UNTIL cond  loop block  scope block  skip REPEAT  read condition (inside scope block)  no upvalues?  finish scope  close the loop  complete semantics when there are upvalues  if condition then break  else...  finish scope...  and repeat  finish loop  forbody -> DO block  control variables  scope for declared variables  end of scope for declared variables  pretend that `OP_FOR' starts the loop  fornum -> NAME = exp1,exp1[,exp1] forbody  initial value  limit  optional step  default step = 1  forlist -> NAME {,NAME} IN explist1 forbody  create control variables  create declared variables  extra space to call generator  forstat -> FOR (fornum | forlist) END  scope for loop and control variables  skip `for'  first variable name  loop scope (`break' jumps to this point)  test_then_block -> [IF | ELSEIF] cond THEN block  skip IF or ELSEIF  `then' part  ifstat -> IF cond THEN block {ELSEIF cond THEN block} [ELSE block] END  IF cond THEN block  ELSEIF cond THEN block  skip ELSE (after patch, for correct line info)  `else' part  debug information will only see the variable after this point!  stat -> LOCAL NAME {`,' NAME} [`=' explist1]  funcname -> NAME {field} [`:' NAME]  funcstat -> FUNCTION funcname body  skip FUNCTION  definition `happens' in the first line  stat -> func | assignment  stat -> func  call statement uses no results  stat -> assignment  stat -> RETURN explist  registers with returned values  skip RETURN  return no values  optional return values  tail call?  return all values  only one single value?  values must go to the `stack'  return all `active' values  may be needed for error messages  stat -> ifstat  stat -> whilestat  stat -> DO block END  skip DO  stat -> forstat  stat -> repeatstat  stat -> funcstat  stat -> localstat  skip LOCAL  local function?  stat -> retstat  must be last statement  stat -> breakstat  skip BREAK  must be last statement  to avoid warnings  chunk -> { stat [`;'] }  free registers  }====================================================================== 
+** $Id: lparser.c,v 2.42.1.4 2011/10/21 19:31:42 roberto Exp $
+** Lua Parser
+** See Copyright Notice in lua.h
+
+** nodes for block list (list of active blocks)
+ chain  list of jumps out of this loop  # active locals outside the breakable structure  true if some variable in the block is an upvalue  true if `block' is a loop 
+** prototypes for recursive non-terminal functions
+ new one  not found  no more levels?  default is global variable  look up at current level  local will be used as an upval  not found at current level; try upper one  else was LOCAL or UPVAL  upvalue in this level  info points to global name  includes call itself  last exp. provides the difference  close last expression  a block either controls scope or breaks (never both)  free registers  linked list of funcstates  registers 0/1 are always valid  anchor table of constants and prototype (to avoid being collected)  final return  last token read was anchored in defunct function; must reanchor it  remove table and prototype from the stack  protect name  main func. is always vararg  read first token  remove 'name' from stack ============================================================ GRAMMAR RULES ============================================================ field -> ['.' | ':'] NAME  skip the dot or colon  index -> '[' expr ']'  skip the '[' 
+** {======================================================================
+** Rules for Constructors
+** =======================================================================
+ last list item read  table descriptor  total number of `record' elements  total number of array elements  number of array elements pending to be stored  recfield -> (NAME | `['exp1`]') = exp1  ls->t.token == '['  free registers  there is no list item  flush  no more items pending  do not count last expression (unknown number of elements)  constructor -> ??  no value (yet)  fix it at stack top (for gc)  may be listfields or recfields  expression?  constructor_item -> recfield  constructor_part -> listfield  set initial array size  set initial table size  }======================================================================  parlist -> [ param { `,' param } ]  is `parlist' not empty?  param -> NAME  param -> `...'  use `arg' as default name  reserve register for parameters  body ->  `(' parlist `)' chunk END  explist1 -> expr { `,' expr }  at least one expression  funcargs -> `(' [ explist1 ] `)'  arg list is empty?  funcargs -> constructor  funcargs -> STRING  must use `seminfo' before `next'  base register for call  open call  close last argument  call remove function and arguments and leaves
+                            (unless changed) one result 
+** {======================================================================
+** Expression parsing
+** =======================================================================
+ prefixexp -> NAME | '(' expr ')'  primaryexp ->
+        prefixexp { `.' NAME | `[' exp `]' | `:' NAME funcargs | funcargs }  field  `[' exp1 `]'  `:' NAME funcargs  funcargs  simpleexp -> NUMBER | STRING | NIL | true | false | ... |
+                  constructor | FUNCTION body | primaryexp  vararg  don't need 'arg'  constructor  left priority for each binary operator  right priority  ORDER OPR  `+' `-' `/' `%'  power and concat (right associative)  equality and inequality  order  logical (and/or)  priority for unary operators 
+** subexpr -> (simpleexp | unop subexpr) { binop subexpr }
+** where `binop' is any binary operator with a priority higher than `limit'
+ expand while operators have priorities higher than `limit'  read sub-expression with higher priority  return first untreated operator  }==================================================================== 
+** {======================================================================
+** Rules for Statements
+** =======================================================================
+ block -> chunk 
+** structure to chain all variables in the left-hand side of an
+** assignment
+ variable (global, local, upvalue, or indexed) 
+** check whether, in an assignment to a local variable, the local variable
+** is needed in a previous assignment (to a table). If so, save original
+** local value in a safe place and use this safe copy in the previous
+** assignment.
+ eventual position to save local variable  conflict?  previous assignment will use safe copy  conflict?  previous assignment will use safe copy  make copy  assignment -> `,' primaryexp assignment  assignment -> `=' explist1  remove extra values  close last expression  avoid default  default assignment  cond -> exp  read condition  `falses' are all equal here  whilestat -> WHILE cond DO block END  skip WHILE  false conditions finish the loop  repeatstat -> REPEAT block UNTIL cond  loop block  scope block  skip REPEAT  read condition (inside scope block)  no upvalues?  finish scope  close the loop  complete semantics when there are upvalues  if condition then break  else...  finish scope...  and repeat  finish loop  forbody -> DO block  control variables  scope for declared variables  end of scope for declared variables  pretend that `OP_FOR' starts the loop  fornum -> NAME = exp1,exp1[,exp1] forbody  initial value  limit  optional step  default step = 1  forlist -> NAME {,NAME} IN explist1 forbody  create control variables  create declared variables  extra space to call generator  forstat -> FOR (fornum | forlist) END  scope for loop and control variables  skip `for'  first variable name  loop scope (`break' jumps to this point)  test_then_block -> [IF | ELSEIF] cond THEN block  skip IF or ELSEIF  `then' part  ifstat -> IF cond THEN block {ELSEIF cond THEN block} [ELSE block] END  IF cond THEN block  ELSEIF cond THEN block  skip ELSE (after patch, for correct line info)  `else' part  debug information will only see the variable after this point!  stat -> LOCAL NAME {`,' NAME} [`=' explist1]  funcname -> NAME {field} [`:' NAME]  funcstat -> FUNCTION funcname body  skip FUNCTION  definition `happens' in the first line  stat -> func | assignment  stat -> func  call statement uses no results  stat -> assignment  stat -> RETURN explist  registers with returned values  skip RETURN  return no values  optional return values  tail call?  return all values  only one single value?  values must go to the `stack'  return all `active' values  may be needed for error messages  stat -> ifstat  stat -> whilestat  stat -> DO block END  skip DO  stat -> forstat  stat -> repeatstat  stat -> funcstat  stat -> localstat  skip LOCAL  local function?  stat -> retstat  must be last statement  stat -> breakstat  skip BREAK  must be last statement  to avoid warnings  chunk -> { stat [`;'] }  free registers  }====================================================================== 
+** $Id: lparser.c,v 2.42.1.4 2011/10/21 19:31:42 roberto Exp $
+** Lua Parser
+** See Copyright Notice in lua.h
+
+** nodes for block list (list of active blocks)
+ chain  list of jumps out of this loop  # active locals outside the breakable structure  true if some variable in the block is an upvalue  true if `block' is a loop 
+** prototypes for recursive non-terminal functions
+ new one  not found  no more levels?  default is global variable  look up at current level  local will be used as an upval  not found at current level; try upper one  else was LOCAL or UPVAL  upvalue in this level  info points to global name  includes call itself  last exp. provides the difference  close last expression  a block either controls scope or breaks (never both)  free registers  linked list of funcstates  registers 0/1 are always valid  anchor table of constants and prototype (to avoid being collected)  final return  last token read was anchored in defunct function; must reanchor it  remove table and prototype from the stack  protect name  main func. is always vararg  read first token  remove 'name' from stack ============================================================ GRAMMAR RULES ============================================================ field -> ['.' | ':'] NAME  skip the dot or colon  index -> '[' expr ']'  skip the '[' 
+** {======================================================================
+** Rules for Constructors
+** =======================================================================
+ last list item read  table descriptor  total number of `record' elements  total number of array elements  number of array elements pending to be stored  recfield -> (NAME | `['exp1`]') = exp1  ls->t.token == '['  free registers  there is no list item  flush  no more items pending  do not count last expression (unknown number of elements)  constructor -> ??  no value (yet)  fix it at stack top (for gc)  may be listfields or recfields  expression?  constructor_item -> recfield  constructor_part -> listfield  set initial array size  set initial table size  }======================================================================  parlist -> [ param { `,' param } ]  is `parlist' not empty?  param -> NAME  param -> `...'  use `arg' as default name  reserve register for parameters  body ->  `(' parlist `)' chunk END  explist1 -> expr { `,' expr }  at least one expression  funcargs -> `(' [ explist1 ] `)'  arg list is empty?  funcargs -> constructor  funcargs -> STRING  must use `seminfo' before `next'  base register for call  open call  close last argument  call remove function and arguments and leaves
+                            (unless changed) one result 
+** {======================================================================
+** Expression parsing
+** =======================================================================
+ prefixexp -> NAME | '(' expr ')'  primaryexp ->
+        prefixexp { `.' NAME | `[' exp `]' | `:' NAME funcargs | funcargs }  field  `[' exp1 `]'  `:' NAME funcargs  funcargs  simpleexp -> NUMBER | STRING | NIL | true | false | ... |
+                  constructor | FUNCTION body | primaryexp  vararg  don't need 'arg'  constructor  left priority for each binary operator  right priority  ORDER OPR  `+' `-' `/' `%'  power and concat (right associative)  equality and inequality  order  logical (and/or)  priority for unary operators 
+** subexpr -> (simpleexp | unop subexpr) { binop subexpr }
+** where `binop' is any binary operator with a priority higher than `limit'
+ expand while operators have priorities higher than `limit'  read sub-expression with higher priority  return first untreated operator  }==================================================================== 
+** {======================================================================
+** Rules for Statements
+** =======================================================================
+ block -> chunk 
+** structure to chain all variables in the left-hand side of an
+** assignment
+ variable (global, local, upvalue, or indexed) 
+** check whether, in an assignment to a local variable, the local variable
+** is needed in a previous assignment (to a table). If so, save original
+** local value in a safe place and use this safe copy in the previous
+** assignment.
+ eventual position to save local variable  conflict?  previous assignment will use safe copy  conflict?  previous assignment will use safe copy  make copy  assignment -> `,' primaryexp assignment  assignment -> `=' explist1  remove extra values  close last expression  avoid default  default assignment  cond -> exp  read condition  `falses' are all equal here  whilestat -> WHILE cond DO block END  skip WHILE  false conditions finish the loop  repeatstat -> REPEAT block UNTIL cond  loop block  scope block  skip REPEAT  read condition (inside scope block)  no upvalues?  finish scope  close the loop  complete semantics when there are upvalues  if condition then break  else...  finish scope...  and repeat  finish loop  forbody -> DO block  control variables  scope for declared variables  end of scope for declared variables  pretend that `OP_FOR' starts the loop  fornum -> NAME = exp1,exp1[,exp1] forbody  initial value  limit  optional step  default step = 1  forlist -> NAME {,NAME} IN explist1 forbody  create control variables  create declared variables  extra space to call generator  forstat -> FOR (fornum | forlist) END  scope for loop and control variables  skip `for'  first variable name  loop scope (`break' jumps to this point)  test_then_block -> [IF | ELSEIF] cond THEN block  skip IF or ELSEIF  `then' part  ifstat -> IF cond THEN block {ELSEIF cond THEN block} [ELSE block] END  IF cond THEN block  ELSEIF cond THEN block  skip ELSE (after patch, for correct line info)  `else' part  debug information will only see the variable after this point!  stat -> LOCAL NAME {`,' NAME} [`=' explist1]  funcname -> NAME {field} [`:' NAME]  funcstat -> FUNCTION funcname body  skip FUNCTION  definition `happens' in the first line  stat -> func | assignment  stat -> func  call statement uses no results  stat -> assignment  stat -> RETURN explist  registers with returned values  skip RETURN  return no values  optional return values  tail call?  return all values  only one single value?  values must go to the `stack'  return all `active' values  may be needed for error messages  stat -> ifstat  stat -> whilestat  stat -> DO block END  skip DO  stat -> forstat  stat -> repeatstat  stat -> funcstat  stat -> localstat  skip LOCAL  local function?  stat -> retstat  must be last statement  stat -> breakstat  skip BREAK  must be last statement  to avoid warnings  chunk -> { stat [`;'] }  free registers  }====================================================================== 

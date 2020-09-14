@@ -1,0 +1,499 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David H�deman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+  tagResolver and associated code copyright 2003 Thomas Paul Diffenbach
+  winamp extensions 
+    HOW TO ADD ADDITIONAL ID3 VERSION 2 TAGS
+    Code and comments by Thomas Paul Diffenbach
+
+    To add another ID3v2 Tag, do the following:
+    1.  add a char* named for the tag to struct mp3entry in id3.h,
+        (I (tpd) prefer to use char* rather than ints, even for what seems like
+        numerical values, for cases where a number won't do, e.g.,
+        YEAR: "circa 1765", "1790/1977" (composed/performed), "28 Feb 1969"
+        TRACK: "1/12", "1 of 12", GENRE: "Freeform genre name"
+        Text is more flexible, and as the main use of id3 data is to
+        display it, converting it to an int just means reconverting to
+        display it, at a runtime cost.)
+
+    2. If any special processing beyond copying the tag value from the Id3
+       block to the struct mp3entry is rrequired (such as converting to an
+       int), write a function to perform this special processing.
+
+       This function's prototype must match that of
+       typedef tagPostProcessFunc, that is it must be:
+         int func( struct mp3entry*, char* tag, int bufferpos )
+       the first argument is a pointer to the current mp3entry structure the
+       second argument is a pointer to the null terminated string value of the
+       tag found the third argument is the offset of the next free byte in the
+       mp3entry's buffer your function should return the corrected offset; if
+       you don't lengthen or shorten the tag string, you can return the third
+       argument unchanged.
+
+       Unless you have a good reason no to, make the function static.
+       TO JUST COPY THE TAG NO SPECIAL PROCESSING FUNCTION IS NEEDED.
+
+    3. add one or more entries to the tagList array, using the format:
+            char* ID3 Tag symbolic name -- see the ID3 specification for these,
+            sizeof() that name minus 1,
+            offsetof( struct mp3entry, variable_name_in_struct_mp3entry ),
+            pointer to your special processing function or NULL
+                if you need no special processing
+            flag indicating if this tag is binary or textual
+        Many ID3 symbolic names come in more than one form. You can add both
+        forms, each referencing the same variable in struct mp3entry.
+        If both forms are present, the last found will be used.
+        Note that the offset can be zero, in which case no entry will be set
+        in the mp3entry struct; the frame is still read into the buffer and
+        the special processing function is called (several times, if there
+        are several frames with the same name).
+
+    4. Alternately, use the TAG_LIST_ENTRY macro with
+         ID3 tag symbolic name,
+         variable in struct mp3entry,
+         special processing function address
+
+    5.  Add code to wps-display.c function get_tag to assign a printf-like
+        format specifier for the tag  Structure for ID3 Tag extraction information  Read the next byte and write it back, but don't increment the
+           write pointer  Increment the write pointer if it isn't an unsynch pattern  parse numeric value from string  parse numeric value from string  parse numeric value from string  parse numeric genre from string, version 2.2 and 2.3  Use bufferpos to hold current position in entry->id3v2buf.  In version 2.4 and up, there are no parentheses, and the genre frame
+           is a list of strings, either numbers or text.  Is it a number?  parse embed albumart  don't parse albumart if already one found. This callback function is
+     * called unconditionally.  we currently don't support unsynchronizing albumart  skip text encoding  ID3 v2.3+  image/jpg is technically invalid, but it does occur in
+             * the wild  ID3 v2.2  skip picture type  skip description  fixup offset&size for image data  check for malformed tag with no picture data  return bufferpos as we didn't store anything in id3v2buf  parse user defined text, looking for album artist and replaygain 
+ * information.
+  At least part of the value was read, so we can safely try to
+         * parse it  Call parse_replaygain().  parse RVA2 binary data and convert to replaygain information.  Only parse RVA2 replaygain tags if tag version == 2.4 and channel
+     * type is master volume.
+      The RVA2 specification is unclear on some things (id string and
+         * peak volume), but this matches how Quod Libet use them.
+          Only use the topmost 24 bits for peak volume  Make sure the peak bits were read  Only accept non-track values if we don't have any previous
+             * value.
+             DEBUGF("MBID len: %d\n", desc_len); Musicbrainz track IDs are always 36 chars long  Get the length of an ID3 string in the given encoding. Returns the length
+ * in bytes, including end nil, or -1 if the encoding is unknown.
+  string might be unaligned, so using short* can crash on ARM and SH1  Checks to see if the passed in string is a 16-bit wide Unicode v2
+   string.  If it is, we convert it to a UTF-8 string.  If it's not unicode,
+   we convert from the default codepage  Type 0x00 is ordinary ISO 8859-1  Unicode with or without BOM  Handle frames with more than one string
+               (needed for TXXX frames). Now check if there is a BOM
+                   (zero-width non-breaking space, 0xfeff)
+                   and if it is in little or big endian format  Little endian?  Big endian?  If there is no BOM (which is a specification violation),
+                   let's try to guess it. If one of the bytes is 0x00, it is
+                   probably the most significant one.  Terminate the string  UTF-8 encoded string  Plain old string 
+ * Sets the title of an MP3 entry based on its ID3v1 tag.
+ *
+ * Arguments: file - the MP3 file to scen for a ID3v1 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+  kill trailing space in strings  convert string to utf8  make sure string is terminated  kill trailing space in strings  convert string to utf8  make sure string is terminated  id3v1.1 uses last two bytes of comment field for track
+                   number: first must be 0 and second is track num  genre 
+ * Sets the title of an MP3 entry based on its ID3v2 tag.
+ *
+ * Arguments: file - the MP3 file to scan for a ID3v2 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+ *
+ * Assumes that the offset of file is at the start of the ID3 header.
+ * (if the header is at the begining of the file getid3v2len() will ensure this.)
+  Bail out if the tag is shorter than 10 bytes  Read the ID3 tag version from the header.
+       Assumes fd is already at the begining of the header  Get the total ID3 tag size  unsupported id3 version  FIXME incomplete  Skip the extended header if it is present  The 2.3 extended header size doesn't include the header size
+               field itself. Also, it is not unsynched.  Skip the rest of the header  The 2.4 extended header size does include the entire header,
+               so here we can just skip it. This header is unsynched.  Is unsynchronization applied? 
+     * We must have at least minframesize bytes left for the
+     * remaining frames to be interesting
+      Read frame header and check length  Adjust for the 10 bytes we read  version .3 files don't use synchsafe ints for
+                 * size  Adjust for the 6 bytes we read  Grouping identity  Skip 1 byte  Grouping identity  Skip 1 byte  Compression or encryption  Skip it  Unsynchronization  Data length indicator  We don't need the data length  Keep track of the remaining frame size  If the frame is larger than the remaining buffer space we try
+           to read as much as would fit in the buffer  Limit the maximum length of an id3 data item to ID3V2_MAX_ITEM_SIZE
+           bytes. This reduces the chance that the available buffer is filled
+           by single metadata items like large comments.  Check for certain frame headers
+
+           'size' is the amount of frame bytes remaining.  We decrement it by
+           the amount of bytes we read.  If we fail to read as many bytes as
+           we expect, we assume that we can't read from this file, and bail
+           out.
+
+           For each frame. we will iterate over the list of supported tags,
+           and read the tag into entry's buffer. All tags will be kept as
+           strings, for cases where a number won't do, e.g., YEAR: "circa
+           1765", "1790/1977" (composed/performed), "28 Feb 1969" TRACK:
+           "1/12", "1 of 12", GENRE: "Freeform genre name" Text is more
+           flexible, and as the main use of id3 data is to display it,
+           converting it to an int just means reconverting to display it, at a
+           runtime cost.
+
+           For tags that the current code does convert to ints, a post
+           processing function will be called via a pointer to function.  Only ID3_VER_2_2 uses frames with three-character names.  found a tag matching one in tagList, and not yet filled  the COMM frame has a 3 char field to hold an ISO-639-1 
+                 * language string and an optional short description;
+                 * remove them so unicode_munge can work correctly
+                  check for iTunes gapless information  ignore other with iTunes tags  Attempt to parse Unicode string only if the tag contents
+                   aren't binary  UTF-8 could potentially be 3 times larger  so we need to create a new buffer          Is it an embedded cuesheet?  [enc type]+"CUESHEET\0" = 10  \1 + BOM(2) + C0U0E0S0H0E0E0T000 = 21  \2 + 0C0U0E0S0H0E0E0T00 = 19  remove trailing spaces  Skip empty frames  parse the tag if it contains iTunes gapless info  Note that parser functions sometimes set *ptag to NULL, so
+                 * the "!*ptag" check here doesn't always have the desired
+                 * effect. Should the parser functions (parsegenre in
+                 * particular) be updated to handle the case of being called
+                 * multiple times, or should the "*ptag" check be removed?
+                  albumart  no tag in tagList was found, or it was a repeat.
+               skip it using the total size  Seek to the next frame 
+ * Calculates the size of the ID3v1 tag if any.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+ 
+ * Calculates the size of the ID3v2 tag.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+  Make sure file has a ID3 tag  Now check what the ID3v2 size field says **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David H�deman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+  tagResolver and associated code copyright 2003 Thomas Paul Diffenbach
+  winamp extensions 
+    HOW TO ADD ADDITIONAL ID3 VERSION 2 TAGS
+    Code and comments by Thomas Paul Diffenbach
+
+    To add another ID3v2 Tag, do the following:
+    1.  add a char* named for the tag to struct mp3entry in id3.h,
+        (I (tpd) prefer to use char* rather than ints, even for what seems like
+        numerical values, for cases where a number won't do, e.g.,
+        YEAR: "circa 1765", "1790/1977" (composed/performed), "28 Feb 1969"
+        TRACK: "1/12", "1 of 12", GENRE: "Freeform genre name"
+        Text is more flexible, and as the main use of id3 data is to
+        display it, converting it to an int just means reconverting to
+        display it, at a runtime cost.)
+
+    2. If any special processing beyond copying the tag value from the Id3
+       block to the struct mp3entry is rrequired (such as converting to an
+       int), write a function to perform this special processing.
+
+       This function's prototype must match that of
+       typedef tagPostProcessFunc, that is it must be:
+         int func( struct mp3entry*, char* tag, int bufferpos )
+       the first argument is a pointer to the current mp3entry structure the
+       second argument is a pointer to the null terminated string value of the
+       tag found the third argument is the offset of the next free byte in the
+       mp3entry's buffer your function should return the corrected offset; if
+       you don't lengthen or shorten the tag string, you can return the third
+       argument unchanged.
+
+       Unless you have a good reason no to, make the function static.
+       TO JUST COPY THE TAG NO SPECIAL PROCESSING FUNCTION IS NEEDED.
+
+    3. add one or more entries to the tagList array, using the format:
+            char* ID3 Tag symbolic name -- see the ID3 specification for these,
+            sizeof() that name minus 1,
+            offsetof( struct mp3entry, variable_name_in_struct_mp3entry ),
+            pointer to your special processing function or NULL
+                if you need no special processing
+            flag indicating if this tag is binary or textual
+        Many ID3 symbolic names come in more than one form. You can add both
+        forms, each referencing the same variable in struct mp3entry.
+        If both forms are present, the last found will be used.
+        Note that the offset can be zero, in which case no entry will be set
+        in the mp3entry struct; the frame is still read into the buffer and
+        the special processing function is called (several times, if there
+        are several frames with the same name).
+
+    4. Alternately, use the TAG_LIST_ENTRY macro with
+         ID3 tag symbolic name,
+         variable in struct mp3entry,
+         special processing function address
+
+    5.  Add code to wps-display.c function get_tag to assign a printf-like
+        format specifier for the tag  Structure for ID3 Tag extraction information  Read the next byte and write it back, but don't increment the
+           write pointer  Increment the write pointer if it isn't an unsynch pattern  parse numeric value from string  parse numeric value from string  parse numeric value from string  parse numeric genre from string, version 2.2 and 2.3  Use bufferpos to hold current position in entry->id3v2buf.  In version 2.4 and up, there are no parentheses, and the genre frame
+           is a list of strings, either numbers or text.  Is it a number?  parse embed albumart  don't parse albumart if already one found. This callback function is
+     * called unconditionally.  we currently don't support unsynchronizing albumart  skip text encoding  ID3 v2.3+  image/jpg is technically invalid, but it does occur in
+             * the wild  ID3 v2.2  skip picture type  skip description  fixup offset&size for image data  check for malformed tag with no picture data  return bufferpos as we didn't store anything in id3v2buf  parse user defined text, looking for album artist and replaygain 
+ * information.
+  At least part of the value was read, so we can safely try to
+         * parse it  Call parse_replaygain().  parse RVA2 binary data and convert to replaygain information.  Only parse RVA2 replaygain tags if tag version == 2.4 and channel
+     * type is master volume.
+      The RVA2 specification is unclear on some things (id string and
+         * peak volume), but this matches how Quod Libet use them.
+          Only use the topmost 24 bits for peak volume  Make sure the peak bits were read  Only accept non-track values if we don't have any previous
+             * value.
+             DEBUGF("MBID len: %d\n", desc_len); Musicbrainz track IDs are always 36 chars long  Get the length of an ID3 string in the given encoding. Returns the length
+ * in bytes, including end nil, or -1 if the encoding is unknown.
+  string might be unaligned, so using short* can crash on ARM and SH1  Checks to see if the passed in string is a 16-bit wide Unicode v2
+   string.  If it is, we convert it to a UTF-8 string.  If it's not unicode,
+   we convert from the default codepage  Type 0x00 is ordinary ISO 8859-1  Unicode with or without BOM  Handle frames with more than one string
+               (needed for TXXX frames). Now check if there is a BOM
+                   (zero-width non-breaking space, 0xfeff)
+                   and if it is in little or big endian format  Little endian?  Big endian?  If there is no BOM (which is a specification violation),
+                   let's try to guess it. If one of the bytes is 0x00, it is
+                   probably the most significant one.  Terminate the string  UTF-8 encoded string  Plain old string 
+ * Sets the title of an MP3 entry based on its ID3v1 tag.
+ *
+ * Arguments: file - the MP3 file to scen for a ID3v1 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+  kill trailing space in strings  convert string to utf8  make sure string is terminated  kill trailing space in strings  convert string to utf8  make sure string is terminated  id3v1.1 uses last two bytes of comment field for track
+                   number: first must be 0 and second is track num  genre 
+ * Sets the title of an MP3 entry based on its ID3v2 tag.
+ *
+ * Arguments: file - the MP3 file to scan for a ID3v2 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+ *
+ * Assumes that the offset of file is at the start of the ID3 header.
+ * (if the header is at the begining of the file getid3v2len() will ensure this.)
+  Bail out if the tag is shorter than 10 bytes  Read the ID3 tag version from the header.
+       Assumes fd is already at the begining of the header  Get the total ID3 tag size  unsupported id3 version  FIXME incomplete  Skip the extended header if it is present  The 2.3 extended header size doesn't include the header size
+               field itself. Also, it is not unsynched.  Skip the rest of the header  The 2.4 extended header size does include the entire header,
+               so here we can just skip it. This header is unsynched.  Is unsynchronization applied? 
+     * We must have at least minframesize bytes left for the
+     * remaining frames to be interesting
+      Read frame header and check length  Adjust for the 10 bytes we read  version .3 files don't use synchsafe ints for
+                 * size  Adjust for the 6 bytes we read  Grouping identity  Skip 1 byte  Grouping identity  Skip 1 byte  Compression or encryption  Skip it  Unsynchronization  Data length indicator  We don't need the data length  Keep track of the remaining frame size  If the frame is larger than the remaining buffer space we try
+           to read as much as would fit in the buffer  Limit the maximum length of an id3 data item to ID3V2_MAX_ITEM_SIZE
+           bytes. This reduces the chance that the available buffer is filled
+           by single metadata items like large comments.  Check for certain frame headers
+
+           'size' is the amount of frame bytes remaining.  We decrement it by
+           the amount of bytes we read.  If we fail to read as many bytes as
+           we expect, we assume that we can't read from this file, and bail
+           out.
+
+           For each frame. we will iterate over the list of supported tags,
+           and read the tag into entry's buffer. All tags will be kept as
+           strings, for cases where a number won't do, e.g., YEAR: "circa
+           1765", "1790/1977" (composed/performed), "28 Feb 1969" TRACK:
+           "1/12", "1 of 12", GENRE: "Freeform genre name" Text is more
+           flexible, and as the main use of id3 data is to display it,
+           converting it to an int just means reconverting to display it, at a
+           runtime cost.
+
+           For tags that the current code does convert to ints, a post
+           processing function will be called via a pointer to function.  Only ID3_VER_2_2 uses frames with three-character names.  found a tag matching one in tagList, and not yet filled  the COMM frame has a 3 char field to hold an ISO-639-1 
+                 * language string and an optional short description;
+                 * remove them so unicode_munge can work correctly
+                  check for iTunes gapless information  ignore other with iTunes tags  Attempt to parse Unicode string only if the tag contents
+                   aren't binary  UTF-8 could potentially be 3 times larger  so we need to create a new buffer          Is it an embedded cuesheet?  [enc type]+"CUESHEET\0" = 10  \1 + BOM(2) + C0U0E0S0H0E0E0T000 = 21  \2 + 0C0U0E0S0H0E0E0T00 = 19  remove trailing spaces  Skip empty frames  parse the tag if it contains iTunes gapless info  Note that parser functions sometimes set *ptag to NULL, so
+                 * the "!*ptag" check here doesn't always have the desired
+                 * effect. Should the parser functions (parsegenre in
+                 * particular) be updated to handle the case of being called
+                 * multiple times, or should the "*ptag" check be removed?
+                  albumart  no tag in tagList was found, or it was a repeat.
+               skip it using the total size  Seek to the next frame 
+ * Calculates the size of the ID3v1 tag if any.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+ 
+ * Calculates the size of the ID3v2 tag.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+  Make sure file has a ID3 tag  Now check what the ID3v2 size field says **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David H�deman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+  tagResolver and associated code copyright 2003 Thomas Paul Diffenbach
+  winamp extensions 
+    HOW TO ADD ADDITIONAL ID3 VERSION 2 TAGS
+    Code and comments by Thomas Paul Diffenbach
+
+    To add another ID3v2 Tag, do the following:
+    1.  add a char* named for the tag to struct mp3entry in id3.h,
+        (I (tpd) prefer to use char* rather than ints, even for what seems like
+        numerical values, for cases where a number won't do, e.g.,
+        YEAR: "circa 1765", "1790/1977" (composed/performed), "28 Feb 1969"
+        TRACK: "1/12", "1 of 12", GENRE: "Freeform genre name"
+        Text is more flexible, and as the main use of id3 data is to
+        display it, converting it to an int just means reconverting to
+        display it, at a runtime cost.)
+
+    2. If any special processing beyond copying the tag value from the Id3
+       block to the struct mp3entry is rrequired (such as converting to an
+       int), write a function to perform this special processing.
+
+       This function's prototype must match that of
+       typedef tagPostProcessFunc, that is it must be:
+         int func( struct mp3entry*, char* tag, int bufferpos )
+       the first argument is a pointer to the current mp3entry structure the
+       second argument is a pointer to the null terminated string value of the
+       tag found the third argument is the offset of the next free byte in the
+       mp3entry's buffer your function should return the corrected offset; if
+       you don't lengthen or shorten the tag string, you can return the third
+       argument unchanged.
+
+       Unless you have a good reason no to, make the function static.
+       TO JUST COPY THE TAG NO SPECIAL PROCESSING FUNCTION IS NEEDED.
+
+    3. add one or more entries to the tagList array, using the format:
+            char* ID3 Tag symbolic name -- see the ID3 specification for these,
+            sizeof() that name minus 1,
+            offsetof( struct mp3entry, variable_name_in_struct_mp3entry ),
+            pointer to your special processing function or NULL
+                if you need no special processing
+            flag indicating if this tag is binary or textual
+        Many ID3 symbolic names come in more than one form. You can add both
+        forms, each referencing the same variable in struct mp3entry.
+        If both forms are present, the last found will be used.
+        Note that the offset can be zero, in which case no entry will be set
+        in the mp3entry struct; the frame is still read into the buffer and
+        the special processing function is called (several times, if there
+        are several frames with the same name).
+
+    4. Alternately, use the TAG_LIST_ENTRY macro with
+         ID3 tag symbolic name,
+         variable in struct mp3entry,
+         special processing function address
+
+    5.  Add code to wps-display.c function get_tag to assign a printf-like
+        format specifier for the tag  Structure for ID3 Tag extraction information  Read the next byte and write it back, but don't increment the
+           write pointer  Increment the write pointer if it isn't an unsynch pattern  parse numeric value from string  parse numeric value from string  parse numeric value from string  parse numeric genre from string, version 2.2 and 2.3  Use bufferpos to hold current position in entry->id3v2buf.  In version 2.4 and up, there are no parentheses, and the genre frame
+           is a list of strings, either numbers or text.  Is it a number?  parse embed albumart  don't parse albumart if already one found. This callback function is
+     * called unconditionally.  we currently don't support unsynchronizing albumart  skip text encoding  ID3 v2.3+  image/jpg is technically invalid, but it does occur in
+             * the wild  ID3 v2.2  skip picture type  skip description  fixup offset&size for image data  check for malformed tag with no picture data  return bufferpos as we didn't store anything in id3v2buf  parse user defined text, looking for album artist and replaygain 
+ * information.
+  At least part of the value was read, so we can safely try to
+         * parse it  Call parse_replaygain().  parse RVA2 binary data and convert to replaygain information.  Only parse RVA2 replaygain tags if tag version == 2.4 and channel
+     * type is master volume.
+      The RVA2 specification is unclear on some things (id string and
+         * peak volume), but this matches how Quod Libet use them.
+          Only use the topmost 24 bits for peak volume  Make sure the peak bits were read  Only accept non-track values if we don't have any previous
+             * value.
+             DEBUGF("MBID len: %d\n", desc_len); Musicbrainz track IDs are always 36 chars long  Get the length of an ID3 string in the given encoding. Returns the length
+ * in bytes, including end nil, or -1 if the encoding is unknown.
+  string might be unaligned, so using short* can crash on ARM and SH1  Checks to see if the passed in string is a 16-bit wide Unicode v2
+   string.  If it is, we convert it to a UTF-8 string.  If it's not unicode,
+   we convert from the default codepage  Type 0x00 is ordinary ISO 8859-1  Unicode with or without BOM  Handle frames with more than one string
+               (needed for TXXX frames). Now check if there is a BOM
+                   (zero-width non-breaking space, 0xfeff)
+                   and if it is in little or big endian format  Little endian?  Big endian?  If there is no BOM (which is a specification violation),
+                   let's try to guess it. If one of the bytes is 0x00, it is
+                   probably the most significant one.  Terminate the string  UTF-8 encoded string  Plain old string 
+ * Sets the title of an MP3 entry based on its ID3v1 tag.
+ *
+ * Arguments: file - the MP3 file to scen for a ID3v1 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+  kill trailing space in strings  convert string to utf8  make sure string is terminated  kill trailing space in strings  convert string to utf8  make sure string is terminated  id3v1.1 uses last two bytes of comment field for track
+                   number: first must be 0 and second is track num  genre 
+ * Sets the title of an MP3 entry based on its ID3v2 tag.
+ *
+ * Arguments: file - the MP3 file to scan for a ID3v2 tag
+ *            entry - the entry to set the title in
+ *
+ * Returns: true if a title was found and created, else false
+ *
+ * Assumes that the offset of file is at the start of the ID3 header.
+ * (if the header is at the begining of the file getid3v2len() will ensure this.)
+  Bail out if the tag is shorter than 10 bytes  Read the ID3 tag version from the header.
+       Assumes fd is already at the begining of the header  Get the total ID3 tag size  unsupported id3 version  FIXME incomplete  Skip the extended header if it is present  The 2.3 extended header size doesn't include the header size
+               field itself. Also, it is not unsynched.  Skip the rest of the header  The 2.4 extended header size does include the entire header,
+               so here we can just skip it. This header is unsynched.  Is unsynchronization applied? 
+     * We must have at least minframesize bytes left for the
+     * remaining frames to be interesting
+      Read frame header and check length  Adjust for the 10 bytes we read  version .3 files don't use synchsafe ints for
+                 * size  Adjust for the 6 bytes we read  Grouping identity  Skip 1 byte  Grouping identity  Skip 1 byte  Compression or encryption  Skip it  Unsynchronization  Data length indicator  We don't need the data length  Keep track of the remaining frame size  If the frame is larger than the remaining buffer space we try
+           to read as much as would fit in the buffer  Limit the maximum length of an id3 data item to ID3V2_MAX_ITEM_SIZE
+           bytes. This reduces the chance that the available buffer is filled
+           by single metadata items like large comments.  Check for certain frame headers
+
+           'size' is the amount of frame bytes remaining.  We decrement it by
+           the amount of bytes we read.  If we fail to read as many bytes as
+           we expect, we assume that we can't read from this file, and bail
+           out.
+
+           For each frame. we will iterate over the list of supported tags,
+           and read the tag into entry's buffer. All tags will be kept as
+           strings, for cases where a number won't do, e.g., YEAR: "circa
+           1765", "1790/1977" (composed/performed), "28 Feb 1969" TRACK:
+           "1/12", "1 of 12", GENRE: "Freeform genre name" Text is more
+           flexible, and as the main use of id3 data is to display it,
+           converting it to an int just means reconverting to display it, at a
+           runtime cost.
+
+           For tags that the current code does convert to ints, a post
+           processing function will be called via a pointer to function.  Only ID3_VER_2_2 uses frames with three-character names.  found a tag matching one in tagList, and not yet filled  the COMM frame has a 3 char field to hold an ISO-639-1 
+                 * language string and an optional short description;
+                 * remove them so unicode_munge can work correctly
+                  check for iTunes gapless information  ignore other with iTunes tags  Attempt to parse Unicode string only if the tag contents
+                   aren't binary  UTF-8 could potentially be 3 times larger  so we need to create a new buffer          Is it an embedded cuesheet?  [enc type]+"CUESHEET\0" = 10  \1 + BOM(2) + C0U0E0S0H0E0E0T000 = 21  \2 + 0C0U0E0S0H0E0E0T00 = 19  remove trailing spaces  Skip empty frames  parse the tag if it contains iTunes gapless info  Note that parser functions sometimes set *ptag to NULL, so
+                 * the "!*ptag" check here doesn't always have the desired
+                 * effect. Should the parser functions (parsegenre in
+                 * particular) be updated to handle the case of being called
+                 * multiple times, or should the "*ptag" check be removed?
+                  albumart  no tag in tagList was found, or it was a repeat.
+               skip it using the total size  Seek to the next frame 
+ * Calculates the size of the ID3v1 tag if any.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+ 
+ * Calculates the size of the ID3v2 tag.
+ *
+ * Arguments: file - the file to search for a tag.
+ *
+ * Returns: the size of the tag or 0 if none was found
+  Make sure file has a ID3 tag  Now check what the ID3v2 size field says 

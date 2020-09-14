@@ -1,0 +1,187 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIDRIVE  Comparing documentations of various MMC/SD controllers revealed,  that this controller seems to be a mix of PXA27x, PXA255 and  some PP specific stuff. The register and bit definitions are  taken from the 'PXA27x Developers Manual', as it appears to be  the closest match. Known differences and obscurities are commented. PXA255/27x have separate RX/TX FIFOs with 32x8 bit  PP502x has a combined Data FIFO with 16x16 bit  PP specific registers, no other controller seem to have such.  MMC_STAT bits  taken from PXA255  taken from PXA255  MMC_CMDAT bits  Some of the bits used by the OF don't make much sense with these  definitions. So they're probably different between PXA and PP502x  Bits 0-5 appear to match though.  MMC_I_MASK bits  PP502x apparently only has bits 0-3  FIFO is 16 words deep  for compatibility  current active card  Private Functions  Enable controller  Disable controller  Number of 16 bit words to read from MMC_RES  Error sending command  no response here  MMC_RES is read MSB first  Read most significant 16-bit word  response discarded  Response type 2 has the following structure:
+         * [135:135] Start Bit - '0'
+         * [134:134] Transmission bit - '0'
+         * [133:128] Reserved - '111111'
+         * [127:001] CID or CSD register including internal CRC7
+         * [000:000] End Bit - '1'
+          Response types 1, 1b, 3, 6, 7 have the following structure:
+         * Types 4 and 5 are not supported.
+         *
+         *     [47] Start bit - '0'
+         *     [46] Transmission bit - '0'
+         *  [45:40] R1, R1b, R6, R7: Command index
+         *          R3: Reserved - '111111'
+         *   [39:8] R1, R1b: Card Status
+         *          R3: OCR Register
+         *          R6: [31:16] RCA
+         *              [15: 0] Card Status Bits 23, 22, 19, 12:0
+         *                     [23] COM_CRC_ERROR
+         *                     [22] ILLEGAL_COMMAND
+         *                     [19] ERROR
+         *                   [12:9] CURRENT_STATE
+         *                      [8] READY_FOR_DATA
+         *                    [7:6]
+         *                      [5] SD_APP_CMD
+         *                      [4]
+         *                      [3] AKE_SEQ_ERROR
+         *                      [2] Reserved
+         *                    [1:0] Reserved for test mode
+         *          R7: [19:16] Voltage accepted
+         *              [15:8]  echo-back of check pattern
+         *    [7:1] R1, R1b: CRC7
+         *          R3: Reserved - '1111111'
+         *      [0] End Bit - '1'
+          low active  high active  Copy one chunk of 16 words using best method for start alignment  Copy one chunk of 16 words  Writes have to be kept slow for now  tail loop is faster  Don't write the last word before at least 3 usec have elapsed since FIFO_EMPTY  This prevents the 'two bytes inserted' bug.  FIFO_LEN words=FIFO_LEN*2 bytes CMD35 is vendor specific  Write the card data  Wait for the FIFO to empty  Copy one chunk of 16 words  clear buffer: only the first chunk contains interesting data (bank), the remaining is zero filling  Set the current card mux  only 1 "card" (no external memory card)  SD Protocol registers  Enable and initialise controller  switch to lowest clock rate  Initialise card data as blank  Switch card mux to card to initialize  Init NAND  Enable controller  Reset controller  Clear Reset  disable interrupts  Check for SDHC:
+       - non-SDHC cards simply ignore SD_SEND_IF_COND (CMD8) and we get error -219,
+         which we can just ignore and assume we're dealing with standard SD.
+       - SDHC cards echo back the argument into the response. This is how we
+         tell if the card is SDHC.
+      until card is powered up  SDHC  HAVE_HOTSWAP  SD Standard  switch to highest clock rate  4 bit  If this card is >4GB & not SDHC, then we need to enable bank switching  Read 512 bytes from the card.
+        The first 512 bits contain the status information
+        TODO: Do something useful with this!  Wait for the FIFO to be full  Card failed to initialize so disable it  lock must already be aquired  Main card always gets a chance  This card is already initialized - switch to it  Card needs (re)init  API Functions  TODO: Add DMA support.  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  TODO: Don't assume SD_BLOCK_SIZE == SECTOR_SIZE  Wait for the FIFO to be full  Copy one chunk of 16 words  TODO: Switch bank if necessary  Write support is not finished yet  TODO: The standard suggests using ACMD23 prior to writing multiple blocks
+   to improve performance  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  Set MMC_SD_STATE to SD_PRG for the last buffer fill  Copy one chunk of 16 words  TODO: Switch bank if necessary  Wait for the FIFO to empty  init controller  enable card detection port - mask interrupt first  enable interupt for the mSD card  enable the card detect interrupt  enable the card detect interrupt  HAVE_HOTSWAP  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  HAVE_HOTSWAP  Store which logical drive number(s) we have been assigned  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  Access is now safe  HAVE_HOTSWAP  never let a timer wrap confuse us **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIDRIVE  Comparing documentations of various MMC/SD controllers revealed,  that this controller seems to be a mix of PXA27x, PXA255 and  some PP specific stuff. The register and bit definitions are  taken from the 'PXA27x Developers Manual', as it appears to be  the closest match. Known differences and obscurities are commented. PXA255/27x have separate RX/TX FIFOs with 32x8 bit  PP502x has a combined Data FIFO with 16x16 bit  PP specific registers, no other controller seem to have such.  MMC_STAT bits  taken from PXA255  taken from PXA255  MMC_CMDAT bits  Some of the bits used by the OF don't make much sense with these  definitions. So they're probably different between PXA and PP502x  Bits 0-5 appear to match though.  MMC_I_MASK bits  PP502x apparently only has bits 0-3  FIFO is 16 words deep  for compatibility  current active card  Private Functions  Enable controller  Disable controller  Number of 16 bit words to read from MMC_RES  Error sending command  no response here  MMC_RES is read MSB first  Read most significant 16-bit word  response discarded  Response type 2 has the following structure:
+         * [135:135] Start Bit - '0'
+         * [134:134] Transmission bit - '0'
+         * [133:128] Reserved - '111111'
+         * [127:001] CID or CSD register including internal CRC7
+         * [000:000] End Bit - '1'
+          Response types 1, 1b, 3, 6, 7 have the following structure:
+         * Types 4 and 5 are not supported.
+         *
+         *     [47] Start bit - '0'
+         *     [46] Transmission bit - '0'
+         *  [45:40] R1, R1b, R6, R7: Command index
+         *          R3: Reserved - '111111'
+         *   [39:8] R1, R1b: Card Status
+         *          R3: OCR Register
+         *          R6: [31:16] RCA
+         *              [15: 0] Card Status Bits 23, 22, 19, 12:0
+         *                     [23] COM_CRC_ERROR
+         *                     [22] ILLEGAL_COMMAND
+         *                     [19] ERROR
+         *                   [12:9] CURRENT_STATE
+         *                      [8] READY_FOR_DATA
+         *                    [7:6]
+         *                      [5] SD_APP_CMD
+         *                      [4]
+         *                      [3] AKE_SEQ_ERROR
+         *                      [2] Reserved
+         *                    [1:0] Reserved for test mode
+         *          R7: [19:16] Voltage accepted
+         *              [15:8]  echo-back of check pattern
+         *    [7:1] R1, R1b: CRC7
+         *          R3: Reserved - '1111111'
+         *      [0] End Bit - '1'
+          low active  high active  Copy one chunk of 16 words using best method for start alignment  Copy one chunk of 16 words  Writes have to be kept slow for now  tail loop is faster  Don't write the last word before at least 3 usec have elapsed since FIFO_EMPTY  This prevents the 'two bytes inserted' bug.  FIFO_LEN words=FIFO_LEN*2 bytes CMD35 is vendor specific  Write the card data  Wait for the FIFO to empty  Copy one chunk of 16 words  clear buffer: only the first chunk contains interesting data (bank), the remaining is zero filling  Set the current card mux  only 1 "card" (no external memory card)  SD Protocol registers  Enable and initialise controller  switch to lowest clock rate  Initialise card data as blank  Switch card mux to card to initialize  Init NAND  Enable controller  Reset controller  Clear Reset  disable interrupts  Check for SDHC:
+       - non-SDHC cards simply ignore SD_SEND_IF_COND (CMD8) and we get error -219,
+         which we can just ignore and assume we're dealing with standard SD.
+       - SDHC cards echo back the argument into the response. This is how we
+         tell if the card is SDHC.
+      until card is powered up  SDHC  HAVE_HOTSWAP  SD Standard  switch to highest clock rate  4 bit  If this card is >4GB & not SDHC, then we need to enable bank switching  Read 512 bytes from the card.
+        The first 512 bits contain the status information
+        TODO: Do something useful with this!  Wait for the FIFO to be full  Card failed to initialize so disable it  lock must already be aquired  Main card always gets a chance  This card is already initialized - switch to it  Card needs (re)init  API Functions  TODO: Add DMA support.  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  TODO: Don't assume SD_BLOCK_SIZE == SECTOR_SIZE  Wait for the FIFO to be full  Copy one chunk of 16 words  TODO: Switch bank if necessary  Write support is not finished yet  TODO: The standard suggests using ACMD23 prior to writing multiple blocks
+   to improve performance  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  Set MMC_SD_STATE to SD_PRG for the last buffer fill  Copy one chunk of 16 words  TODO: Switch bank if necessary  Wait for the FIFO to empty  init controller  enable card detection port - mask interrupt first  enable interupt for the mSD card  enable the card detect interrupt  enable the card detect interrupt  HAVE_HOTSWAP  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  HAVE_HOTSWAP  Store which logical drive number(s) we have been assigned  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  Access is now safe  HAVE_HOTSWAP  never let a timer wrap confuse us **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for HAVE_MULTIDRIVE  Comparing documentations of various MMC/SD controllers revealed,  that this controller seems to be a mix of PXA27x, PXA255 and  some PP specific stuff. The register and bit definitions are  taken from the 'PXA27x Developers Manual', as it appears to be  the closest match. Known differences and obscurities are commented. PXA255/27x have separate RX/TX FIFOs with 32x8 bit  PP502x has a combined Data FIFO with 16x16 bit  PP specific registers, no other controller seem to have such.  MMC_STAT bits  taken from PXA255  taken from PXA255  MMC_CMDAT bits  Some of the bits used by the OF don't make much sense with these  definitions. So they're probably different between PXA and PP502x  Bits 0-5 appear to match though.  MMC_I_MASK bits  PP502x apparently only has bits 0-3  FIFO is 16 words deep  for compatibility  current active card  Private Functions  Enable controller  Disable controller  Number of 16 bit words to read from MMC_RES  Error sending command  no response here  MMC_RES is read MSB first  Read most significant 16-bit word  response discarded  Response type 2 has the following structure:
+         * [135:135] Start Bit - '0'
+         * [134:134] Transmission bit - '0'
+         * [133:128] Reserved - '111111'
+         * [127:001] CID or CSD register including internal CRC7
+         * [000:000] End Bit - '1'
+          Response types 1, 1b, 3, 6, 7 have the following structure:
+         * Types 4 and 5 are not supported.
+         *
+         *     [47] Start bit - '0'
+         *     [46] Transmission bit - '0'
+         *  [45:40] R1, R1b, R6, R7: Command index
+         *          R3: Reserved - '111111'
+         *   [39:8] R1, R1b: Card Status
+         *          R3: OCR Register
+         *          R6: [31:16] RCA
+         *              [15: 0] Card Status Bits 23, 22, 19, 12:0
+         *                     [23] COM_CRC_ERROR
+         *                     [22] ILLEGAL_COMMAND
+         *                     [19] ERROR
+         *                   [12:9] CURRENT_STATE
+         *                      [8] READY_FOR_DATA
+         *                    [7:6]
+         *                      [5] SD_APP_CMD
+         *                      [4]
+         *                      [3] AKE_SEQ_ERROR
+         *                      [2] Reserved
+         *                    [1:0] Reserved for test mode
+         *          R7: [19:16] Voltage accepted
+         *              [15:8]  echo-back of check pattern
+         *    [7:1] R1, R1b: CRC7
+         *          R3: Reserved - '1111111'
+         *      [0] End Bit - '1'
+          low active  high active  Copy one chunk of 16 words using best method for start alignment  Copy one chunk of 16 words  Writes have to be kept slow for now  tail loop is faster  Don't write the last word before at least 3 usec have elapsed since FIFO_EMPTY  This prevents the 'two bytes inserted' bug.  FIFO_LEN words=FIFO_LEN*2 bytes CMD35 is vendor specific  Write the card data  Wait for the FIFO to empty  Copy one chunk of 16 words  clear buffer: only the first chunk contains interesting data (bank), the remaining is zero filling  Set the current card mux  only 1 "card" (no external memory card)  SD Protocol registers  Enable and initialise controller  switch to lowest clock rate  Initialise card data as blank  Switch card mux to card to initialize  Init NAND  Enable controller  Reset controller  Clear Reset  disable interrupts  Check for SDHC:
+       - non-SDHC cards simply ignore SD_SEND_IF_COND (CMD8) and we get error -219,
+         which we can just ignore and assume we're dealing with standard SD.
+       - SDHC cards echo back the argument into the response. This is how we
+         tell if the card is SDHC.
+      until card is powered up  SDHC  HAVE_HOTSWAP  SD Standard  switch to highest clock rate  4 bit  If this card is >4GB & not SDHC, then we need to enable bank switching  Read 512 bytes from the card.
+        The first 512 bits contain the status information
+        TODO: Do something useful with this!  Wait for the FIFO to be full  Card failed to initialize so disable it  lock must already be aquired  Main card always gets a chance  This card is already initialized - switch to it  Card needs (re)init  API Functions  TODO: Add DMA support.  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  TODO: Don't assume SD_BLOCK_SIZE == SECTOR_SIZE  Wait for the FIFO to be full  Copy one chunk of 16 words  TODO: Switch bank if necessary  Write support is not finished yet  TODO: The standard suggests using ACMD23 prior to writing multiple blocks
+   to improve performance  no external sd-card inserted  Only switch banks with non-SDHC cards  SDHC  Set MMC_SD_STATE to SD_PRG for the last buffer fill  Copy one chunk of 16 words  TODO: Switch bank if necessary  Wait for the FIFO to empty  init controller  enable card detection port - mask interrupt first  enable interupt for the mSD card  enable the card detect interrupt  enable the card detect interrupt  HAVE_HOTSWAP  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  HAVE_HOTSWAP  Store which logical drive number(s) we have been assigned  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  Access is now safe  HAVE_HOTSWAP  never let a timer wrap confuse us 

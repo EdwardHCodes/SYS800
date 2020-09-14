@@ -1,0 +1,814 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** TODO: The audio thread really is doing multitasking of acting like a
+         consumer and producer of tracks. It may be advantageous to better
+         logically separate the two functions. I won't go that far just yet.  Internal support for voice playback  Application builds don't support direct code loading  Amount of guess-space to allow for codecs that must hunt and peck
+ * for their correct seek target, 32k seems a good size  Define LOGF_ENABLE to enable logf output in this file  Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec, O=other. A suffix of "-" indicates that the variable is
+ * read but not updated on that thread. Audio is the only user unless otherwise
+ * specified.
+ * Miscellaneous * from audio_thread.c  from audio_thread.c  from audio_thread.c  from codecs.c * Possible arrangements of the main buffer * trashed; must be reset  voice+audio OR audio-only  (A,O) * Main state control * Pre-ff-rewind mode (A,O-)  Sizeable things that only need exist during playback and not when stopped  (A,C)  Will follow this structure  These are used to store the current, next and optionally the peek-ahead
+ * mp3entry's - this guarantees that the pointer returned by audio_current/
+ * next_track will be valid for the full duration of the currently playing
+ * track  These are allocated statically  The real playing metadata must has to be protected since it contains
+       critical info for other features  These go in the scratch memory  (A,O)  Peeking functions can yield and mess us up  (A,O)* For album art support * Holds width, height of the albumart  Counter; increments if something uses it  (A,O)  HAVE_ALBUMART * Information used for tracking buffer fills * Buffer and thread state tracking  audio is stopped: nothing to do  adding tracks to the buffer  can't add any more tracks  all remaining tracks have been added  all remaining tracks are fully buffered  audio playback is ending  audio playback is done  Track info - holds information about each track in the buffer  handle for the info on buffer  In per-track allocated order:  array mirror for efficient wipe/close  Metadata handle ID  Parsed cuesheet handle ID  Album art handle IDs  Buffered codec handle ID  Main audio data handle ID  On-buffer info format; includes links  prev/next handles  TODO: perhaps cache -1/+1 delta handles if speed ever matters much
+       because those lookups are common; also could cache a few recent
+       acccesses  handle of first track in list  handle of track delta 0  handle of last track in list  track in process of loading  number of tracks in list  (A, O-)  Playlist steps from playlist position to next track to be buffered  Buffer margin A.K.A. anti-skip buffer (in seconds)  Values returned for track loading * Track change controls * What sort of skip is pending globally?  Relative to what user is intended to see:  Codec: +0, Track List: +0, Playlist: +0  no track skip  Codec: +1, Track List: +1, Playlist: +0  codec-initiated skip  Codec: +1, Track List: +1, Playlist: +1  codec-initiated skip is new playlist  Codec: xx, Track List: +0, Playlist: +0  codec-initiated end of playlist  Manual skip: Never pends  manual track skip  Manual skip: Never pends  manual directory skip  Note about TRACK_SKIP_AUTO_NEW_PLAYLIST:
+   Fixing playlist code to be able to peek into the first song of
+   the next playlist would fix any issues and this wouldn't need
+   to be a special case since pre-advancing the playlist would be
+   unneeded - it could be much more like TRACK_SKIP_AUTO and all
+   actions that require reversal during an in-progress transition
+   would work as expected  Used to indicate status for the events. Must be separate to satisfy all
+   clients so the correct metadata is read when sending the change events.  (A, O-)  Pending manual track skip offset  (A, O)  Track change notification  Number of pcmbuf posts (audio isr)  Number of times audio has read the difference * Codec status * Did the codec notify us it finished while we were paused or while still
+   in an automatic transition?
+
+   If paused, it is necessary to defer a codec-initiated skip until resuming
+   or else the track will move forward while not playing audio!
+
+   If in-progress, skips should not build-up ahead of where the WPS is when
+   really short tracks finish decoding.
+
+   If it is forgotten, it will be missed altogether and playback will just sit
+   there looking stupid and comatose until the user does something  Codec seeking ack expected?  Forward declarations  "Restart" playback (flush _all_ tracks)  Mark the audiobuffer as invalid ************************************* --- MP3Entry --- * Does the mp3entry have enough info for us to use it?  Return a pointer to an mp3entry on the buffer, as it is  Read an mp3entry from the buffer, adjusted  Lock the id3 mutex  Unlock the id3 mutex  Return one of the collection of mp3entry pointers - collect them all here  Copy an mp3entry into one of the mp3 entries  Call id3_write "safely" because peek aheads can yield, even if the fast
+   preview isn't enabled * --- Track info --- * HAVE_CODEC_BUFFERING  Invalidate all members to initial values - does not close handles or sync  don't touch ->self_hid * --- Track list --- * Clear tracks in the list, optionally preserving the current track -
+   returns 'false' if the operation was changed  Clear all tracks  Keep current only; clear before + after  Keep current and those that follow  Initialize the track list  Return number of items allocated in the list  Return true if the list is empty  Returns a pointer to the track info data on the buffer  Synchronize the buffer object with the cached track info  Return track info a given offset from the info referenced by hid and
+ * place a copy into *infop, if provided  Commit the track info to the buffer updated with the provided source info  Leaves the list unmodified if anything fails  Insert last  "In list"  Free the track buffer entry and possibly remove it from the list if it
+   was succesfully added at some point  If this one is the current track; new current track is next one,
+           if any, else, the previous  Fixup list links  No movement allowed during bufclose calls  Finally, the handle itself  Return current track plus an offset  Return current based upon what's intended that the user sees - not
+   necessarily where decoding is taking place  Advance current track by an offset, return false if result is out of
+   bounds  Return the info of the last allocation plus an offset, NULL if result is
+   out of bounds  Allocate a new struct track_info on the buffer; does not add to list  "Not in list"  Actually commit the track info to the track list  Free the track entry and possibly remove it from the list if it was
+   succesfully added at some point  Close all open handles in the range except the for the current track
+   if preserving that  Don't care now since rebuffering is imminent  Nothing worthwhile keeping  If this is the in-progress load, abort it * --- Audio buffer -- * What size is needed for the scratch buffer?  Initialize the memory area where data is stored that is only used when
+   playing audio and anything depending upon it  if allocated return what we can give  Set up the audio buffer for playback
+ * filebuflen must be pre-initialized with the maximum size 
+     * Layout audio buffer as follows:
+     * [|SCRATCH|BUFFERING|PCM]
+      If the setup of anything allocated before the file buffer is
+       changed, do check the adjustments after the buffer_alloc call
+       as it will likely be affected and need sliding over  Subtract whatever the pcm buffer says it used plus the guard
+       buffer  Make sure filebuflen is a pointer sized multiple after
+       adjustment  Scratch memory  Make sure everything adds up - yes, some info is a bit redundant but
+       aids viewing and the summation of certain variables should add up to
+       the location of others.  Buffer must not move.  codec messages  filebuflen is, at this point, the buffering.c buffer size,
+     * i.e. the audiobuf except voice, scratch mem, pcm, ...  check what buflib requests  check if buflib needs the memory really hard. if yes we give
+         * up playback for now, otherwise refuse to shrink to keep at least
+         * 256K for the buffering  TODO: Do it without stopping playback, if possible  resume if playing  There's one problem with stoping and resuming: If it happens in a too
+     * frequent fashion, the codecs lose the resume postion and playback
+     * begins from the beginning.
+     * To work around use queue_post() to effectively delay the resume in case
+     * we're called another time. However this has another problem: id3->offset
+     * gets zero since playback is stopped. Therefore, try to peek at the
+     * queue_post from the last call to get the correct offset. This also
+     * lets us conviniently remove the queue event so Q_AUDIO_PLAY is only
+     * processed once.  current id3->elapsed/offset are king  don't call audio_hard_stop() as it frees this handle  inline case Q_AUDIO_STOP (audio_hard_stop() response
+         * if we're in the audio thread  we should be free to change the buffer now  set final buffer size before calling audio_reset_buffer_noalloc()
+     * (now it's the total size, the call will subtract voice etc)  post, to make subsequent calls not break the resume position  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Set the buffer margin to begin rebuffering when 'seconds' from empty  By current setting  New setting  Write a watermark only if the audio thread already did so for
+               itself or it will fail to set the event and the watermark - if
+               it hasn't yet, it will use the new setting when it does  flash storage  Watermark is a function of the bitrate of the last track in the buffer  Bitrate has no meaning to buffering margin for atomic audio -
+               rebuffer when it's the only track left unless it's the only
+               track that fits, in which case we should avoid constant buffer
+               low events  Then set the minimum - this should not occur anyway  Actually setting zero disables the notification and we use that
+       to detect that it has been reset * -- Track change notification -- * Check the pcmbuf track changes and return write the message into the event
+   if there are any  Clear outstanding track change posts  Post a track change notification - called by audio ISR * --- Helper functions --- * Removes messages that might end up in the queue before or while processing
+   a manual track change. Responding to them would be harmful since they
+   belong to a previous track's playback period. Anything that would generate
+   the stale messages must first be put into a state where it will not do so.
+  codec messages  track change messages  Remove any pcmbuf notifications  Scrub the audio queue of the old mold  Not strictly needed, per se, ad infinitum, ra, ra  Takes actions based upon track load status codes  Send track events that use a struct track_event for data  Announce the end of playing the current track  Announce the beginning of the new track  Change the data for the next track and send the event  Bring the user current mp3entry up to date and set a new offset for the
+   buffered metadata  Wipe-out track metadata - current is optional  Called when buffering is completed on the last track handle  There's no more to load or watch for  Stop the codec decoding or waiting for its data to be ready - returns
+   'false' if the codec ended up stopped  If it was waiting for us to clear the buffer to make a rebuffer
+       happen, it should cease otherwise codec_stop could deadlock waiting
+       for the codec to go to its main loop - codec's request will now
+       force-fail  We now know it's idle and not waiting for buffered data  Wait for any in-progress fade to complete  Just loop until it's done  End the ff/rw mode  A seamless seek (not calling audio_pre_ff_rewind) skips this
+       section  Clear the buffer  Seeking-while-playing, resume PCM playback  Complete the codec seek  If a seek completed while paused, 'paused' is true.
+     * If seeking from seek mode, 'ff_rw_mode' is true.  set _after_ the call!  else it's waiting and we must repond  Get the current cuesheet pointer  Read the cuesheet from the buffer  Backend to peek/current/next track metadata interface functions -
+   fill in the mp3entry with as much information as we may obtain about
+   the track at the specified offset from the user current track -
+   returns false if no information exists with us  Already filled  Try the unbuffered id3 since we're moving forward  We didn't find the ID3 metadata, so we fill it with the little info we
+       have and return that  Try to get it from the database  By now, filename is the only source of info  Get resume rewind adjusted progress from the ID3  Get the codec into ram and initialize it - keep it if it's ready  Codec is the same base type  Close any buffered codec (we could have skipped directly to a
+               format transistion that is the same format as the current track
+               and the buffered one is no longer needed)  HAVE_CODEC_BUFFERING  New codec - first make sure the old one's gone  Codec thread will close the handle even if it fails and will load from
+       storage if hid is not valid or the buffer load fails  When codec buffering isn't supported  Check settings for whether the file should be autoresumed  result cached?  search terms left?  Skip empty search patterns  FIXME: As soon as strcspn or strchrnul are made available in
+               the core, the following can be made more efficient.  Note: At this point, len is always > 0  Full directory-name matches only.  Trailing '/' in
+                   search path OK.  cache result  HAVE_TAGCACHE  Start the codec for the current track scheduled to be decoded  Resume all manually selected tracks  Send the "buffer" event to obtain the resume position for the codec  Automatic skip - do further tests to see if we should just
+               ignore any autoresume position  Just resume unconditionally  Force-rewind it  Not "never resume" - pass resume filter?  HAVE_TAGCACHE  Rewind the required amount - if an autoresume was done, this also rewinds
+       that by the setting's amount
+
+       It would be best to have bookkeeping about whether or not the track
+       sounded or not since skipping to it or else skipping to it while paused
+       and back again will cause accumulation of silent rewinds - that's not
+       our job to track directly nor could it be in any reasonable way
+      Update the codec API with the metadata and track info  All required data is now available for the codec  Send the "buffer" event now  ifndef HAVE_TAGCACHE * --- Audio thread --- * Load and parse a cuesheet for the file - returns false if the buffer
+   is full  If error other than a full buffer, then mark it "unsupported" to
+           avoid reloading attempt  Indicate cuesheet is present (while track remains
+                       buffered)  Load any album art for the file - returns false if the buffer is full  albumart_slots may change during a yield of bufopen,
+         * but that's no problem  We can only decode jpeg for embedded AA  No embedded AA or it couldn't be loaded - try other sources  If error other than a full buffer, then mark it "unsupported"
+               to avoid reloading attempt  HAVE_ALBUMART  Load a codec for the file onto the buffer - assumes we're working from the
+   currently loading track - not called for the current track  This will not be the current track -> it cannot be the first and the
+       current track cannot be ahead of buffering -> there is a previous
+       track entry which is either current or ahead of the current  If the previous codec is the same as this one, there is no need to
+       put another copy of it on the file buffer (in other words, only
+       buffer codecs at format transitions)  else just load it (harmless)  Load the codec onto the buffer if possible  Full path to codec  HAVE_CODEC_BUFFERING  Load metadata for the next track (with bufopen). The rest of the track
+   loading will be handled by audio_finish_load_track once the metadata has
+   been actually loaded by the buffering thread.
+
+   Each track is arranged in the buffer as follows:
+        <id3|[cuesheet|][album art|][codec|]audio>
+
+   The next will not be loaded until the previous succeeds if the buffer was
+   full at the time. To put any metadata after audio would make those handles
+   unmovable.
+ There must be an info pointer if the in-progress id3 is even there  Haven't finished the metadata but the notification is
+                   anticipated to come soon  Buffer was full trying to complete the load after the
+                   metadata finished, so attempt to continue - older handles
+                   should have been cleared already  Some old, stray buffering message  List is full so stop buffering tracks - however, attempt to obtain
+           metadata as the unbuffered id3  Get track name from current playlist read position  No track - exhausted the playlist entries  Free this entry  Maintain at last index  We can end up here after the real last track signals its completion
+           and miss the transition to STATE_FINISHED esp. if dropping the last
+           songs of a playlist late in their load (2nd stage)  Successfully opened the file - get track metadata  Buffer or track list is full  Load the metadata for the first unbuffered track  Successful load initiation  Second part of the track loading: We now have the metadata available, so we
+   can load the codec, the album art and finally the audio data.
+   This is called on the audio thread after the buffering thread calls the
+   buffering_handle_finished_callback callback.  We must not be here if not!  The current track for decoding (there is always one if the list is
+       populated)  This is an error condition. Track cannot be played without valid
+           metadata; skip the track.  Try to load a cuesheet for the track  No space for cuesheet on buffer, not an error  Try to load album art for the track  No space for album art on buffer, not an error  All handles available to external routines are ready - audio and codec
+       information is private  Send only when the track handles could not all be opened ahead of
+           time for the user's current track - otherwise everything is ready
+           by the time PLAYBACK_EVENT_TRACK_CHANGE is sent  Try to buffer a codec for the track  No space for codec on buffer, not an error  This is an error condition, either no codec was found, or
+               reading the codec file failed part way through, either way,
+               skip the track  HAVE_CODEC_BUFFERING * Finally, load the audio * Adjust for resume rewind so we know what to buffer - starting the codec
+       calls it again, so we don't save it (and they shouldn't accumulate)  This format can begin buffering from any point  We can buffer later in the file, adjust the hunt-and-peck margin  No offset given or it is very minimal - begin at the first frame
+           according to the metadata  This is the current track to decode - should be started now  Buffer could be full but not properly so if this is the only
+           track!  Nothing to play if no audio handle - skip this  Load next track - error or not  Full  Start a new track load  Must reset the buffer before use if trashed or voice only - voice
+       file size shouldn't have changed so we can go straight from
+       AUDIOBUF_STATE_VOICED_ONLY to AUDIOBUF_STATE_INITIALIZED  There are no user tracks on the buffer after this therefore
+               this is the next track  Discard unwanted tracks and start refill from after the specified playlist
+   offset  Remove unwanted tracks - caller must have ensured codec isn't using
+       any  Refill at specified position (-1 starts at index offset 0)  Fill the buffer  Handle buffering events
+   (Q_AUDIO_BUFFERING)  Should be nothing left to fill  Clear old tracks and continue buffering where it left off  Remove all but the currently decoding track and redo buffering
+           after that  Already finished  Invalid  Handle starting the next track load
+   (Q_AUDIO_FILL_BUFFER)  Handle posted load track finish event
+   (Q_AUDIO_FINISH_LOAD_TRACK)  Just loaded the metadata right after the current position  Not current track  Copy cuesheet  Be sure all tagtree info is synchronized; it will be needed for the
+               track finish event - the sync will happen when finalizing a track
+               change otherwise  Playing id3 hadn't been updated yet because no valid track
+                   was yet available - treat like the first track  Called when handles other than metadata handles have finished buffering
+   (Q_AUDIO_HANDLE_FINISHED)  Right now, only audio handles should end up calling this  Really we don't know which order the handles will actually complete
+           to zero bytes remaining since another thread is doing it - be sure
+           it's the right one  This was the last track in the playlist and we now have all the
+               data we need  Called to make an outstanding track skip the current track and to send the
+   transition events  Manual skip  Track ended up rejected - push things ahead like the codec blew
+               it (because it was never started and now we're here where it
+               should have been decoding the next track by now) - next, a
+               directory change or end of playback will most likely happen  What!? Disappear? Hopeless bleak despair  Fallthrough  Invalid  Update the current cuesheet if any and enabled  The skip is technically over  Sync the next track information  Actually begin a transition and take care of the codec change - may complete
+   it now or ask pcmbuf for notification depending on the type  Even if the new track is bad, the old track must be finished off  Manual track change happens now  Stopped us  Everything needed for the codec is ready - start it  Transition to end-of-playlist state and begin wait for PCM to finish  Codec has completed decoding the track
+   (usually Q_AUDIO_CODEC_COMPLETE)  If it didn't notify us first, don't expect "seek complete" message
+       since the codec can't post it now - do things like it would have
+       done  Old-hay on the ip-skay - codec has completed decoding
+
+           Paused: We're not sounding it, so just remember that it happened
+                   and the resume will begin the transition
+
+           Skipping: There was already a skip in progress, remember it and
+                     allow no further progress until the PCM from the previous
+                     song has finished
+
+           This function will be reentered upon completing the existing
+           transition in order to do the one that was just tried (below)
+          PCM buffer must know; audio could still be filling and hasn't
+           yet reached the play watermark  Does this track have an entry allocated?  Track load is not complete - it might have stopped on a
+               full buffer without reaching the audio handle or we just
+               arrived at it early
+
+               If this type is atomic and we couldn't get the audio,
+               perhaps it would need to wrap to make the allocation and
+               handles are in the way - to maximize the liklihood it can
+               be allocated, clear all handles to reset the buffer and
+               its indexes to 0 - for packet audio, this should not be an
+               issue and a pointless full reload of all the track's
+               metadata may be avoided  Continue filling after this track  else rebuffer at this track; status applies to the track we
+               want  Play sequence is complete - directory change or other playlist
+               resequencing - the playlist must now be advanced in order to
+               continue since a peek ahead to the next track is not possible  Failed to find anything after all - do playlist switchover
+                   instead  Called when codec completes seek operation
+   (usually Q_AUDIO_CODEC_SEEK_COMPLETE)  Called when PCM track change has completed
+   (Q_AUDIO_TRACK_CHANGED)  Finish whatever is pending so that the WPS is in sync  Codec got ahead completing a short track - complete the
+           codec's skip and begin the next  Begin playback from an idle state, transition to a new playlist or
+   invalidate the buffer and resume (if playing).
+   (usually Q_AUDIO_PLAY, Q_AUDIO_REMAKE_AUDIO_BUFFER)  Mark the buffer dirty - if not playing, it will be reset next
+           time  Clear out some stuff to resume the current track where it
+               left off  This is more-or-less treated as manual track transition  Save resume information for current track  Indicate manual track change  Set after track finish event in case skip was in progress  Must already be playing  Cold playback start from a stopped state  Set audio parameters  Be sure channel is audible  Update our state  Codec's position should be available as soon as it knows it  Start fill from beginning of playlist  Officially playing  Add these now - finish event for the first id3 will most likely be sent
+       immediately  Send coldstart event  Fill the buffer  This is the currently playing track - get metadata, stat  Only if actually changing tracks...  Found nothing playable  Stop playback and enter an idle state
+   (usually Q_AUDIO_STOP)  Wait for fade-out  Stop the codec and unload it  Save resume information  - "filling" might have been set to
+       "STATE_ENDED" by caller in order to facilitate end of playlist  Close all tracks and mark them NULL  Update our state  Go idle  Pause the playback of the current track
+   (Q_AUDIO_PAUSE)  Actually do the skip that is due - resets the status flag  Not in ff/rw mode - can actually change the audio state now  Skip a certain number of tracks forwards or backwards
+   (Q_AUDIO_SKIP)  Eat the delta to keep it synced, even if not playing  Force codec to abort this track  Kill the ff/rw halt  Manual skip  If there was an auto skip in progress, there will be residual
+       advancement of the playlist and/or track list so compensation will be
+       required in order to end up in the right spot  Update the playlist current track now  Some variety of fatal error while updating playlist  Manual skip out of range (because the playlist wasn't updated
+           yet by us and so the check in audio_skip returned 'ok') - bring
+           back into range  Had to move the opposite direction to correct, which is
+                   wrong - this is the end  Adjust things by how much the playlist was manually moved  We don't know the next track thus we know we don't have it  Skip to the next/previous directory
+   (Q_AUDIO_DIR_SKIP)  Force codec to abort this track  Kill the ff/rw halt  Manual skip  Unless automatic and gapless, skips do not pend  Regardless of the return value we need to rebuffer. If it fails the old
+       playlist will resume, else the next dir will start playing.  The day the music died - finish-off whatever is playing and call it
+           quits  Enter seek mode in order to start a seek
+   (Q_AUDIO_PRE_FF_REWIND)  Seek the playback of the current track to the specified time
+   (Q_AUDIO_FF_REWIND)  The usual case  Have to back it out (fun!)  Still have the last codec used  Send event before clobbering the time if rewinding.  Need this set in case ff/rw mode + error but _after_ the codec
+           halt that will reset it  If in transition, key will have changed - sync to it  Not in list - must rebuffer at the current playlist index  Codec is stopped  Set after audio_fill_file_buffer to disable playing id3 clobber if
+           rebuffer is needed  Track must complete the loading _now_ since a codec and audio
+           handle are needed in order to do the seek  Call above should push any load sequence - no need for
+               halt_decoding_track here if no skip was pending here because
+               there would not be a codec started if no audio handle was yet
+               opened  We should have still been able to get it - skip it and move
+                   onto the next one - like it or not this track is broken  Set the codec API to the correct metadata and track info  If codec must be (re)started, reset the resume info so that
+               it doesn't execute resume procedures  We cannot do this because the playlist must be reversed by one
+           and it doesn't always return the same song when going backwards
+           across boundaries as forwards (either because of randomization
+           or inconsistency in deciding what the previous track should be),
+           therefore the whole operation would often end up as nonsense -
+           lock out seeking for a couple seconds  Sure as heck cancel seek mode too!  Won't see this  Playback ended because of an error completing a track load  Always fake it as a codec start error which will handle mode
+       cancellations and skip to the next track  Invalidates all but currently playing track
+   (Q_AUDIO_FLUSH)  Nothing to flush out  Remove all but the currently playing track from the list and
+           refill after that  Ignore return since it's about the next track, not this one  There's now a track after this one now - convert to auto skip -
+           no skip should pend right now because multiple flush messages can
+           be fired which would cause a restart in the below cases  Precisely removing what it already decoded for the next track is
+           not possible so a restart is required in order to continue the
+           currently playing track without the now invalid future track
+           playing  Nothing else is a state  Called by audio thread when playback is started * Codec and track change messages * Codec is done processing track and has gone idle  Codec is done seeking  PCM track change done * Control messages * So we can go straight from playback to recording  no more playback * Buffering messages * some buffering event  continue buffering next track  metadata is buffered  some other type is buffered * Miscellaneous messages * buffer needs to be reinitialized  just need to change buffer state  buffering watermark needs updating  just need to update setting  HAVE_DISK_STORAGE  LOGFQUEUE("audio < default : %08lX", ev->id);  end switch  Active states  End of buffering for now, let's calculate the watermark,
+                   register for a low buffer event and unboost  Fall-through  All data was buffered  Fall-through  Transfer notification to audio queue event  If doing auto skip, poll pcmbuf track notifications a bit
+                   faster to promply detect the transition  Idle states  end while  --- Buffering callbacks ---  Called when fullness is below the watermark level  Called when handles must be discarded in order to buffer new data  A handle has completed buffering and all required data is available  Limit queue traffic  The metadata handle for the last loaded track has been buffered.
+           We can ask the audio thread to load the rest of the track's data.  Strip any useless trailing tags that are left.  Fall-through  Don't care to know about these * -- Codec callbacks -- * Update elapsed time for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Update offset for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Codec has finished running  Normal automatic skip  Codec has finished seeking * --- Pcmbuf callbacks --- * Update the elapsed and offset from the information cached during the
+   PCM buffer insert  Synchronize position info to the codec's  Post message from pcmbuf that the end of the previous track has just
+ * been played  Notify of the change in special-purpose semaphore object  Safe to post directly to the queue  May pcmbuf start PCM playback when the buffer is full enough? * -- External interfaces -- * Get a copy of the id3 data for the for current track + offset + skip delta  Null path means it should be filled now  Return the mp3entry for the currently playing track  This is a peekahead  Normal case  Obtains the mp3entry for the next track from the current  This is a peekahead  Normal case  Start playback at the specified elapsed time or offset  Truncate any existing voice output so we don't have spelling
+     * etc. over the first part of the played track  Stop playback if playing  Pause playback if playing  This sends a stop message and the audio thread will dump all its
+   subsequent messages  Stop playback  Resume playback if paused  Skip the specified number of tracks forward or backward from the current  If offset has to be backed-out to stay in range, no skip is done  Accumulate net manual skip count since the audio thread last
+           processed one  Do this before posting so that the audio thread can correct us
+           when things settle down - additionally, if audio gets a message
+           and the delta is zero, the Q_AUDIO_SKIP handler (audio_on_skip)
+           handler a skip event with the correct info but doesn't skip  AUDIO_FAST_SKIP_PREVIEW  Playback only needs the final state even if more than one is
+           processed because it wasn't removed in time  No more tracks  Skip one track forward from the current  Skip one track backward from the current  Move one directory forward  Move one directory backward  Pause playback in order to start a seek that flushes the old audio  Seek to the new time in the current track  Clear all but the currently playing track then rebuffer * --- Miscellaneous public interfaces --- * Return which album art handle is current for the user in the given slot  Give the actual position a go  Find an album art slot that doesn't match the dimensions of another that
+   is already claimed - increment the use count if it is  First try to find a slot already having the size to reuse it since we
+       don't want albumart of the same size buffered multiple times  Size is new, find a free slot  Sorry, no free slot  Invalidate the albumart_slot - decrement the use count if > 0  HAVE_ALBUMART  Return file byte offset  Return total file buffer length after accounting for the talk buf  How many tracks exist on the buffer - full or partial  Return total ringbuffer space occupied - ridx to widx * -- Settings -- * Enable or disable cuesheet support and allocate/don't allocate the
+   extra associated resources  Set the audio antiskip buffer margin in SECONDS SECONDS HAVE_DISK_STORAGE  Take necessary steps to enable or disable the crossfade setting  Tell it the next setting to use  Return if size hasn't changed or this is too early to determine
+       which in the second case there's no way we could be playing
+       anything at all  HAVE_CROSSFADE  [0] is "automatic"  HAVE_PLAY_FREQ * -- Startup -- * Initialize the track buffering system  Set crossfade setting for next buffer init which should be about... **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** TODO: The audio thread really is doing multitasking of acting like a
+         consumer and producer of tracks. It may be advantageous to better
+         logically separate the two functions. I won't go that far just yet.  Internal support for voice playback  Application builds don't support direct code loading  Amount of guess-space to allow for codecs that must hunt and peck
+ * for their correct seek target, 32k seems a good size  Define LOGF_ENABLE to enable logf output in this file  Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec, O=other. A suffix of "-" indicates that the variable is
+ * read but not updated on that thread. Audio is the only user unless otherwise
+ * specified.
+ * Miscellaneous * from audio_thread.c  from audio_thread.c  from audio_thread.c  from codecs.c * Possible arrangements of the main buffer * trashed; must be reset  voice+audio OR audio-only  (A,O) * Main state control * Pre-ff-rewind mode (A,O-)  Sizeable things that only need exist during playback and not when stopped  (A,C)  Will follow this structure  These are used to store the current, next and optionally the peek-ahead
+ * mp3entry's - this guarantees that the pointer returned by audio_current/
+ * next_track will be valid for the full duration of the currently playing
+ * track  These are allocated statically  The real playing metadata must has to be protected since it contains
+       critical info for other features  These go in the scratch memory  (A,O)  Peeking functions can yield and mess us up  (A,O)* For album art support * Holds width, height of the albumart  Counter; increments if something uses it  (A,O)  HAVE_ALBUMART * Information used for tracking buffer fills * Buffer and thread state tracking  audio is stopped: nothing to do  adding tracks to the buffer  can't add any more tracks  all remaining tracks have been added  all remaining tracks are fully buffered  audio playback is ending  audio playback is done  Track info - holds information about each track in the buffer  handle for the info on buffer  In per-track allocated order:  array mirror for efficient wipe/close  Metadata handle ID  Parsed cuesheet handle ID  Album art handle IDs  Buffered codec handle ID  Main audio data handle ID  On-buffer info format; includes links  prev/next handles  TODO: perhaps cache -1/+1 delta handles if speed ever matters much
+       because those lookups are common; also could cache a few recent
+       acccesses  handle of first track in list  handle of track delta 0  handle of last track in list  track in process of loading  number of tracks in list  (A, O-)  Playlist steps from playlist position to next track to be buffered  Buffer margin A.K.A. anti-skip buffer (in seconds)  Values returned for track loading * Track change controls * What sort of skip is pending globally?  Relative to what user is intended to see:  Codec: +0, Track List: +0, Playlist: +0  no track skip  Codec: +1, Track List: +1, Playlist: +0  codec-initiated skip  Codec: +1, Track List: +1, Playlist: +1  codec-initiated skip is new playlist  Codec: xx, Track List: +0, Playlist: +0  codec-initiated end of playlist  Manual skip: Never pends  manual track skip  Manual skip: Never pends  manual directory skip  Note about TRACK_SKIP_AUTO_NEW_PLAYLIST:
+   Fixing playlist code to be able to peek into the first song of
+   the next playlist would fix any issues and this wouldn't need
+   to be a special case since pre-advancing the playlist would be
+   unneeded - it could be much more like TRACK_SKIP_AUTO and all
+   actions that require reversal during an in-progress transition
+   would work as expected  Used to indicate status for the events. Must be separate to satisfy all
+   clients so the correct metadata is read when sending the change events.  (A, O-)  Pending manual track skip offset  (A, O)  Track change notification  Number of pcmbuf posts (audio isr)  Number of times audio has read the difference * Codec status * Did the codec notify us it finished while we were paused or while still
+   in an automatic transition?
+
+   If paused, it is necessary to defer a codec-initiated skip until resuming
+   or else the track will move forward while not playing audio!
+
+   If in-progress, skips should not build-up ahead of where the WPS is when
+   really short tracks finish decoding.
+
+   If it is forgotten, it will be missed altogether and playback will just sit
+   there looking stupid and comatose until the user does something  Codec seeking ack expected?  Forward declarations  "Restart" playback (flush _all_ tracks)  Mark the audiobuffer as invalid ************************************* --- MP3Entry --- * Does the mp3entry have enough info for us to use it?  Return a pointer to an mp3entry on the buffer, as it is  Read an mp3entry from the buffer, adjusted  Lock the id3 mutex  Unlock the id3 mutex  Return one of the collection of mp3entry pointers - collect them all here  Copy an mp3entry into one of the mp3 entries  Call id3_write "safely" because peek aheads can yield, even if the fast
+   preview isn't enabled * --- Track info --- * HAVE_CODEC_BUFFERING  Invalidate all members to initial values - does not close handles or sync  don't touch ->self_hid * --- Track list --- * Clear tracks in the list, optionally preserving the current track -
+   returns 'false' if the operation was changed  Clear all tracks  Keep current only; clear before + after  Keep current and those that follow  Initialize the track list  Return number of items allocated in the list  Return true if the list is empty  Returns a pointer to the track info data on the buffer  Synchronize the buffer object with the cached track info  Return track info a given offset from the info referenced by hid and
+ * place a copy into *infop, if provided  Commit the track info to the buffer updated with the provided source info  Leaves the list unmodified if anything fails  Insert last  "In list"  Free the track buffer entry and possibly remove it from the list if it
+   was succesfully added at some point  If this one is the current track; new current track is next one,
+           if any, else, the previous  Fixup list links  No movement allowed during bufclose calls  Finally, the handle itself  Return current track plus an offset  Return current based upon what's intended that the user sees - not
+   necessarily where decoding is taking place  Advance current track by an offset, return false if result is out of
+   bounds  Return the info of the last allocation plus an offset, NULL if result is
+   out of bounds  Allocate a new struct track_info on the buffer; does not add to list  "Not in list"  Actually commit the track info to the track list  Free the track entry and possibly remove it from the list if it was
+   succesfully added at some point  Close all open handles in the range except the for the current track
+   if preserving that  Don't care now since rebuffering is imminent  Nothing worthwhile keeping  If this is the in-progress load, abort it * --- Audio buffer -- * What size is needed for the scratch buffer?  Initialize the memory area where data is stored that is only used when
+   playing audio and anything depending upon it  if allocated return what we can give  Set up the audio buffer for playback
+ * filebuflen must be pre-initialized with the maximum size 
+     * Layout audio buffer as follows:
+     * [|SCRATCH|BUFFERING|PCM]
+      If the setup of anything allocated before the file buffer is
+       changed, do check the adjustments after the buffer_alloc call
+       as it will likely be affected and need sliding over  Subtract whatever the pcm buffer says it used plus the guard
+       buffer  Make sure filebuflen is a pointer sized multiple after
+       adjustment  Scratch memory  Make sure everything adds up - yes, some info is a bit redundant but
+       aids viewing and the summation of certain variables should add up to
+       the location of others.  Buffer must not move.  codec messages  filebuflen is, at this point, the buffering.c buffer size,
+     * i.e. the audiobuf except voice, scratch mem, pcm, ...  check what buflib requests  check if buflib needs the memory really hard. if yes we give
+         * up playback for now, otherwise refuse to shrink to keep at least
+         * 256K for the buffering  TODO: Do it without stopping playback, if possible  resume if playing  There's one problem with stoping and resuming: If it happens in a too
+     * frequent fashion, the codecs lose the resume postion and playback
+     * begins from the beginning.
+     * To work around use queue_post() to effectively delay the resume in case
+     * we're called another time. However this has another problem: id3->offset
+     * gets zero since playback is stopped. Therefore, try to peek at the
+     * queue_post from the last call to get the correct offset. This also
+     * lets us conviniently remove the queue event so Q_AUDIO_PLAY is only
+     * processed once.  current id3->elapsed/offset are king  don't call audio_hard_stop() as it frees this handle  inline case Q_AUDIO_STOP (audio_hard_stop() response
+         * if we're in the audio thread  we should be free to change the buffer now  set final buffer size before calling audio_reset_buffer_noalloc()
+     * (now it's the total size, the call will subtract voice etc)  post, to make subsequent calls not break the resume position  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Set the buffer margin to begin rebuffering when 'seconds' from empty  By current setting  New setting  Write a watermark only if the audio thread already did so for
+               itself or it will fail to set the event and the watermark - if
+               it hasn't yet, it will use the new setting when it does  flash storage  Watermark is a function of the bitrate of the last track in the buffer  Bitrate has no meaning to buffering margin for atomic audio -
+               rebuffer when it's the only track left unless it's the only
+               track that fits, in which case we should avoid constant buffer
+               low events  Then set the minimum - this should not occur anyway  Actually setting zero disables the notification and we use that
+       to detect that it has been reset * -- Track change notification -- * Check the pcmbuf track changes and return write the message into the event
+   if there are any  Clear outstanding track change posts  Post a track change notification - called by audio ISR * --- Helper functions --- * Removes messages that might end up in the queue before or while processing
+   a manual track change. Responding to them would be harmful since they
+   belong to a previous track's playback period. Anything that would generate
+   the stale messages must first be put into a state where it will not do so.
+  codec messages  track change messages  Remove any pcmbuf notifications  Scrub the audio queue of the old mold  Not strictly needed, per se, ad infinitum, ra, ra  Takes actions based upon track load status codes  Send track events that use a struct track_event for data  Announce the end of playing the current track  Announce the beginning of the new track  Change the data for the next track and send the event  Bring the user current mp3entry up to date and set a new offset for the
+   buffered metadata  Wipe-out track metadata - current is optional  Called when buffering is completed on the last track handle  There's no more to load or watch for  Stop the codec decoding or waiting for its data to be ready - returns
+   'false' if the codec ended up stopped  If it was waiting for us to clear the buffer to make a rebuffer
+       happen, it should cease otherwise codec_stop could deadlock waiting
+       for the codec to go to its main loop - codec's request will now
+       force-fail  We now know it's idle and not waiting for buffered data  Wait for any in-progress fade to complete  Just loop until it's done  End the ff/rw mode  A seamless seek (not calling audio_pre_ff_rewind) skips this
+       section  Clear the buffer  Seeking-while-playing, resume PCM playback  Complete the codec seek  If a seek completed while paused, 'paused' is true.
+     * If seeking from seek mode, 'ff_rw_mode' is true.  set _after_ the call!  else it's waiting and we must repond  Get the current cuesheet pointer  Read the cuesheet from the buffer  Backend to peek/current/next track metadata interface functions -
+   fill in the mp3entry with as much information as we may obtain about
+   the track at the specified offset from the user current track -
+   returns false if no information exists with us  Already filled  Try the unbuffered id3 since we're moving forward  We didn't find the ID3 metadata, so we fill it with the little info we
+       have and return that  Try to get it from the database  By now, filename is the only source of info  Get resume rewind adjusted progress from the ID3  Get the codec into ram and initialize it - keep it if it's ready  Codec is the same base type  Close any buffered codec (we could have skipped directly to a
+               format transistion that is the same format as the current track
+               and the buffered one is no longer needed)  HAVE_CODEC_BUFFERING  New codec - first make sure the old one's gone  Codec thread will close the handle even if it fails and will load from
+       storage if hid is not valid or the buffer load fails  When codec buffering isn't supported  Check settings for whether the file should be autoresumed  result cached?  search terms left?  Skip empty search patterns  FIXME: As soon as strcspn or strchrnul are made available in
+               the core, the following can be made more efficient.  Note: At this point, len is always > 0  Full directory-name matches only.  Trailing '/' in
+                   search path OK.  cache result  HAVE_TAGCACHE  Start the codec for the current track scheduled to be decoded  Resume all manually selected tracks  Send the "buffer" event to obtain the resume position for the codec  Automatic skip - do further tests to see if we should just
+               ignore any autoresume position  Just resume unconditionally  Force-rewind it  Not "never resume" - pass resume filter?  HAVE_TAGCACHE  Rewind the required amount - if an autoresume was done, this also rewinds
+       that by the setting's amount
+
+       It would be best to have bookkeeping about whether or not the track
+       sounded or not since skipping to it or else skipping to it while paused
+       and back again will cause accumulation of silent rewinds - that's not
+       our job to track directly nor could it be in any reasonable way
+      Update the codec API with the metadata and track info  All required data is now available for the codec  Send the "buffer" event now  ifndef HAVE_TAGCACHE * --- Audio thread --- * Load and parse a cuesheet for the file - returns false if the buffer
+   is full  If error other than a full buffer, then mark it "unsupported" to
+           avoid reloading attempt  Indicate cuesheet is present (while track remains
+                       buffered)  Load any album art for the file - returns false if the buffer is full  albumart_slots may change during a yield of bufopen,
+         * but that's no problem  We can only decode jpeg for embedded AA  No embedded AA or it couldn't be loaded - try other sources  If error other than a full buffer, then mark it "unsupported"
+               to avoid reloading attempt  HAVE_ALBUMART  Load a codec for the file onto the buffer - assumes we're working from the
+   currently loading track - not called for the current track  This will not be the current track -> it cannot be the first and the
+       current track cannot be ahead of buffering -> there is a previous
+       track entry which is either current or ahead of the current  If the previous codec is the same as this one, there is no need to
+       put another copy of it on the file buffer (in other words, only
+       buffer codecs at format transitions)  else just load it (harmless)  Load the codec onto the buffer if possible  Full path to codec  HAVE_CODEC_BUFFERING  Load metadata for the next track (with bufopen). The rest of the track
+   loading will be handled by audio_finish_load_track once the metadata has
+   been actually loaded by the buffering thread.
+
+   Each track is arranged in the buffer as follows:
+        <id3|[cuesheet|][album art|][codec|]audio>
+
+   The next will not be loaded until the previous succeeds if the buffer was
+   full at the time. To put any metadata after audio would make those handles
+   unmovable.
+ There must be an info pointer if the in-progress id3 is even there  Haven't finished the metadata but the notification is
+                   anticipated to come soon  Buffer was full trying to complete the load after the
+                   metadata finished, so attempt to continue - older handles
+                   should have been cleared already  Some old, stray buffering message  List is full so stop buffering tracks - however, attempt to obtain
+           metadata as the unbuffered id3  Get track name from current playlist read position  No track - exhausted the playlist entries  Free this entry  Maintain at last index  We can end up here after the real last track signals its completion
+           and miss the transition to STATE_FINISHED esp. if dropping the last
+           songs of a playlist late in their load (2nd stage)  Successfully opened the file - get track metadata  Buffer or track list is full  Load the metadata for the first unbuffered track  Successful load initiation  Second part of the track loading: We now have the metadata available, so we
+   can load the codec, the album art and finally the audio data.
+   This is called on the audio thread after the buffering thread calls the
+   buffering_handle_finished_callback callback.  We must not be here if not!  The current track for decoding (there is always one if the list is
+       populated)  This is an error condition. Track cannot be played without valid
+           metadata; skip the track.  Try to load a cuesheet for the track  No space for cuesheet on buffer, not an error  Try to load album art for the track  No space for album art on buffer, not an error  All handles available to external routines are ready - audio and codec
+       information is private  Send only when the track handles could not all be opened ahead of
+           time for the user's current track - otherwise everything is ready
+           by the time PLAYBACK_EVENT_TRACK_CHANGE is sent  Try to buffer a codec for the track  No space for codec on buffer, not an error  This is an error condition, either no codec was found, or
+               reading the codec file failed part way through, either way,
+               skip the track  HAVE_CODEC_BUFFERING * Finally, load the audio * Adjust for resume rewind so we know what to buffer - starting the codec
+       calls it again, so we don't save it (and they shouldn't accumulate)  This format can begin buffering from any point  We can buffer later in the file, adjust the hunt-and-peck margin  No offset given or it is very minimal - begin at the first frame
+           according to the metadata  This is the current track to decode - should be started now  Buffer could be full but not properly so if this is the only
+           track!  Nothing to play if no audio handle - skip this  Load next track - error or not  Full  Start a new track load  Must reset the buffer before use if trashed or voice only - voice
+       file size shouldn't have changed so we can go straight from
+       AUDIOBUF_STATE_VOICED_ONLY to AUDIOBUF_STATE_INITIALIZED  There are no user tracks on the buffer after this therefore
+               this is the next track  Discard unwanted tracks and start refill from after the specified playlist
+   offset  Remove unwanted tracks - caller must have ensured codec isn't using
+       any  Refill at specified position (-1 starts at index offset 0)  Fill the buffer  Handle buffering events
+   (Q_AUDIO_BUFFERING)  Should be nothing left to fill  Clear old tracks and continue buffering where it left off  Remove all but the currently decoding track and redo buffering
+           after that  Already finished  Invalid  Handle starting the next track load
+   (Q_AUDIO_FILL_BUFFER)  Handle posted load track finish event
+   (Q_AUDIO_FINISH_LOAD_TRACK)  Just loaded the metadata right after the current position  Not current track  Copy cuesheet  Be sure all tagtree info is synchronized; it will be needed for the
+               track finish event - the sync will happen when finalizing a track
+               change otherwise  Playing id3 hadn't been updated yet because no valid track
+                   was yet available - treat like the first track  Called when handles other than metadata handles have finished buffering
+   (Q_AUDIO_HANDLE_FINISHED)  Right now, only audio handles should end up calling this  Really we don't know which order the handles will actually complete
+           to zero bytes remaining since another thread is doing it - be sure
+           it's the right one  This was the last track in the playlist and we now have all the
+               data we need  Called to make an outstanding track skip the current track and to send the
+   transition events  Manual skip  Track ended up rejected - push things ahead like the codec blew
+               it (because it was never started and now we're here where it
+               should have been decoding the next track by now) - next, a
+               directory change or end of playback will most likely happen  What!? Disappear? Hopeless bleak despair  Fallthrough  Invalid  Update the current cuesheet if any and enabled  The skip is technically over  Sync the next track information  Actually begin a transition and take care of the codec change - may complete
+   it now or ask pcmbuf for notification depending on the type  Even if the new track is bad, the old track must be finished off  Manual track change happens now  Stopped us  Everything needed for the codec is ready - start it  Transition to end-of-playlist state and begin wait for PCM to finish  Codec has completed decoding the track
+   (usually Q_AUDIO_CODEC_COMPLETE)  If it didn't notify us first, don't expect "seek complete" message
+       since the codec can't post it now - do things like it would have
+       done  Old-hay on the ip-skay - codec has completed decoding
+
+           Paused: We're not sounding it, so just remember that it happened
+                   and the resume will begin the transition
+
+           Skipping: There was already a skip in progress, remember it and
+                     allow no further progress until the PCM from the previous
+                     song has finished
+
+           This function will be reentered upon completing the existing
+           transition in order to do the one that was just tried (below)
+          PCM buffer must know; audio could still be filling and hasn't
+           yet reached the play watermark  Does this track have an entry allocated?  Track load is not complete - it might have stopped on a
+               full buffer without reaching the audio handle or we just
+               arrived at it early
+
+               If this type is atomic and we couldn't get the audio,
+               perhaps it would need to wrap to make the allocation and
+               handles are in the way - to maximize the liklihood it can
+               be allocated, clear all handles to reset the buffer and
+               its indexes to 0 - for packet audio, this should not be an
+               issue and a pointless full reload of all the track's
+               metadata may be avoided  Continue filling after this track  else rebuffer at this track; status applies to the track we
+               want  Play sequence is complete - directory change or other playlist
+               resequencing - the playlist must now be advanced in order to
+               continue since a peek ahead to the next track is not possible  Failed to find anything after all - do playlist switchover
+                   instead  Called when codec completes seek operation
+   (usually Q_AUDIO_CODEC_SEEK_COMPLETE)  Called when PCM track change has completed
+   (Q_AUDIO_TRACK_CHANGED)  Finish whatever is pending so that the WPS is in sync  Codec got ahead completing a short track - complete the
+           codec's skip and begin the next  Begin playback from an idle state, transition to a new playlist or
+   invalidate the buffer and resume (if playing).
+   (usually Q_AUDIO_PLAY, Q_AUDIO_REMAKE_AUDIO_BUFFER)  Mark the buffer dirty - if not playing, it will be reset next
+           time  Clear out some stuff to resume the current track where it
+               left off  This is more-or-less treated as manual track transition  Save resume information for current track  Indicate manual track change  Set after track finish event in case skip was in progress  Must already be playing  Cold playback start from a stopped state  Set audio parameters  Be sure channel is audible  Update our state  Codec's position should be available as soon as it knows it  Start fill from beginning of playlist  Officially playing  Add these now - finish event for the first id3 will most likely be sent
+       immediately  Send coldstart event  Fill the buffer  This is the currently playing track - get metadata, stat  Only if actually changing tracks...  Found nothing playable  Stop playback and enter an idle state
+   (usually Q_AUDIO_STOP)  Wait for fade-out  Stop the codec and unload it  Save resume information  - "filling" might have been set to
+       "STATE_ENDED" by caller in order to facilitate end of playlist  Close all tracks and mark them NULL  Update our state  Go idle  Pause the playback of the current track
+   (Q_AUDIO_PAUSE)  Actually do the skip that is due - resets the status flag  Not in ff/rw mode - can actually change the audio state now  Skip a certain number of tracks forwards or backwards
+   (Q_AUDIO_SKIP)  Eat the delta to keep it synced, even if not playing  Force codec to abort this track  Kill the ff/rw halt  Manual skip  If there was an auto skip in progress, there will be residual
+       advancement of the playlist and/or track list so compensation will be
+       required in order to end up in the right spot  Update the playlist current track now  Some variety of fatal error while updating playlist  Manual skip out of range (because the playlist wasn't updated
+           yet by us and so the check in audio_skip returned 'ok') - bring
+           back into range  Had to move the opposite direction to correct, which is
+                   wrong - this is the end  Adjust things by how much the playlist was manually moved  We don't know the next track thus we know we don't have it  Skip to the next/previous directory
+   (Q_AUDIO_DIR_SKIP)  Force codec to abort this track  Kill the ff/rw halt  Manual skip  Unless automatic and gapless, skips do not pend  Regardless of the return value we need to rebuffer. If it fails the old
+       playlist will resume, else the next dir will start playing.  The day the music died - finish-off whatever is playing and call it
+           quits  Enter seek mode in order to start a seek
+   (Q_AUDIO_PRE_FF_REWIND)  Seek the playback of the current track to the specified time
+   (Q_AUDIO_FF_REWIND)  The usual case  Have to back it out (fun!)  Still have the last codec used  Send event before clobbering the time if rewinding.  Need this set in case ff/rw mode + error but _after_ the codec
+           halt that will reset it  If in transition, key will have changed - sync to it  Not in list - must rebuffer at the current playlist index  Codec is stopped  Set after audio_fill_file_buffer to disable playing id3 clobber if
+           rebuffer is needed  Track must complete the loading _now_ since a codec and audio
+           handle are needed in order to do the seek  Call above should push any load sequence - no need for
+               halt_decoding_track here if no skip was pending here because
+               there would not be a codec started if no audio handle was yet
+               opened  We should have still been able to get it - skip it and move
+                   onto the next one - like it or not this track is broken  Set the codec API to the correct metadata and track info  If codec must be (re)started, reset the resume info so that
+               it doesn't execute resume procedures  We cannot do this because the playlist must be reversed by one
+           and it doesn't always return the same song when going backwards
+           across boundaries as forwards (either because of randomization
+           or inconsistency in deciding what the previous track should be),
+           therefore the whole operation would often end up as nonsense -
+           lock out seeking for a couple seconds  Sure as heck cancel seek mode too!  Won't see this  Playback ended because of an error completing a track load  Always fake it as a codec start error which will handle mode
+       cancellations and skip to the next track  Invalidates all but currently playing track
+   (Q_AUDIO_FLUSH)  Nothing to flush out  Remove all but the currently playing track from the list and
+           refill after that  Ignore return since it's about the next track, not this one  There's now a track after this one now - convert to auto skip -
+           no skip should pend right now because multiple flush messages can
+           be fired which would cause a restart in the below cases  Precisely removing what it already decoded for the next track is
+           not possible so a restart is required in order to continue the
+           currently playing track without the now invalid future track
+           playing  Nothing else is a state  Called by audio thread when playback is started * Codec and track change messages * Codec is done processing track and has gone idle  Codec is done seeking  PCM track change done * Control messages * So we can go straight from playback to recording  no more playback * Buffering messages * some buffering event  continue buffering next track  metadata is buffered  some other type is buffered * Miscellaneous messages * buffer needs to be reinitialized  just need to change buffer state  buffering watermark needs updating  just need to update setting  HAVE_DISK_STORAGE  LOGFQUEUE("audio < default : %08lX", ev->id);  end switch  Active states  End of buffering for now, let's calculate the watermark,
+                   register for a low buffer event and unboost  Fall-through  All data was buffered  Fall-through  Transfer notification to audio queue event  If doing auto skip, poll pcmbuf track notifications a bit
+                   faster to promply detect the transition  Idle states  end while  --- Buffering callbacks ---  Called when fullness is below the watermark level  Called when handles must be discarded in order to buffer new data  A handle has completed buffering and all required data is available  Limit queue traffic  The metadata handle for the last loaded track has been buffered.
+           We can ask the audio thread to load the rest of the track's data.  Strip any useless trailing tags that are left.  Fall-through  Don't care to know about these * -- Codec callbacks -- * Update elapsed time for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Update offset for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Codec has finished running  Normal automatic skip  Codec has finished seeking * --- Pcmbuf callbacks --- * Update the elapsed and offset from the information cached during the
+   PCM buffer insert  Synchronize position info to the codec's  Post message from pcmbuf that the end of the previous track has just
+ * been played  Notify of the change in special-purpose semaphore object  Safe to post directly to the queue  May pcmbuf start PCM playback when the buffer is full enough? * -- External interfaces -- * Get a copy of the id3 data for the for current track + offset + skip delta  Null path means it should be filled now  Return the mp3entry for the currently playing track  This is a peekahead  Normal case  Obtains the mp3entry for the next track from the current  This is a peekahead  Normal case  Start playback at the specified elapsed time or offset  Truncate any existing voice output so we don't have spelling
+     * etc. over the first part of the played track  Stop playback if playing  Pause playback if playing  This sends a stop message and the audio thread will dump all its
+   subsequent messages  Stop playback  Resume playback if paused  Skip the specified number of tracks forward or backward from the current  If offset has to be backed-out to stay in range, no skip is done  Accumulate net manual skip count since the audio thread last
+           processed one  Do this before posting so that the audio thread can correct us
+           when things settle down - additionally, if audio gets a message
+           and the delta is zero, the Q_AUDIO_SKIP handler (audio_on_skip)
+           handler a skip event with the correct info but doesn't skip  AUDIO_FAST_SKIP_PREVIEW  Playback only needs the final state even if more than one is
+           processed because it wasn't removed in time  No more tracks  Skip one track forward from the current  Skip one track backward from the current  Move one directory forward  Move one directory backward  Pause playback in order to start a seek that flushes the old audio  Seek to the new time in the current track  Clear all but the currently playing track then rebuffer * --- Miscellaneous public interfaces --- * Return which album art handle is current for the user in the given slot  Give the actual position a go  Find an album art slot that doesn't match the dimensions of another that
+   is already claimed - increment the use count if it is  First try to find a slot already having the size to reuse it since we
+       don't want albumart of the same size buffered multiple times  Size is new, find a free slot  Sorry, no free slot  Invalidate the albumart_slot - decrement the use count if > 0  HAVE_ALBUMART  Return file byte offset  Return total file buffer length after accounting for the talk buf  How many tracks exist on the buffer - full or partial  Return total ringbuffer space occupied - ridx to widx * -- Settings -- * Enable or disable cuesheet support and allocate/don't allocate the
+   extra associated resources  Set the audio antiskip buffer margin in SECONDS SECONDS HAVE_DISK_STORAGE  Take necessary steps to enable or disable the crossfade setting  Tell it the next setting to use  Return if size hasn't changed or this is too early to determine
+       which in the second case there's no way we could be playing
+       anything at all  HAVE_CROSSFADE  [0] is "automatic"  HAVE_PLAY_FREQ * -- Startup -- * Initialize the track buffering system  Set crossfade setting for next buffer init which should be about... **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** TODO: The audio thread really is doing multitasking of acting like a
+         consumer and producer of tracks. It may be advantageous to better
+         logically separate the two functions. I won't go that far just yet.  Internal support for voice playback  Application builds don't support direct code loading  Amount of guess-space to allow for codecs that must hunt and peck
+ * for their correct seek target, 32k seems a good size  Define LOGF_ENABLE to enable logf output in this file  Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec, O=other. A suffix of "-" indicates that the variable is
+ * read but not updated on that thread. Audio is the only user unless otherwise
+ * specified.
+ * Miscellaneous * from audio_thread.c  from audio_thread.c  from audio_thread.c  from codecs.c * Possible arrangements of the main buffer * trashed; must be reset  voice+audio OR audio-only  (A,O) * Main state control * Pre-ff-rewind mode (A,O-)  Sizeable things that only need exist during playback and not when stopped  (A,C)  Will follow this structure  These are used to store the current, next and optionally the peek-ahead
+ * mp3entry's - this guarantees that the pointer returned by audio_current/
+ * next_track will be valid for the full duration of the currently playing
+ * track  These are allocated statically  The real playing metadata must has to be protected since it contains
+       critical info for other features  These go in the scratch memory  (A,O)  Peeking functions can yield and mess us up  (A,O)* For album art support * Holds width, height of the albumart  Counter; increments if something uses it  (A,O)  HAVE_ALBUMART * Information used for tracking buffer fills * Buffer and thread state tracking  audio is stopped: nothing to do  adding tracks to the buffer  can't add any more tracks  all remaining tracks have been added  all remaining tracks are fully buffered  audio playback is ending  audio playback is done  Track info - holds information about each track in the buffer  handle for the info on buffer  In per-track allocated order:  array mirror for efficient wipe/close  Metadata handle ID  Parsed cuesheet handle ID  Album art handle IDs  Buffered codec handle ID  Main audio data handle ID  On-buffer info format; includes links  prev/next handles  TODO: perhaps cache -1/+1 delta handles if speed ever matters much
+       because those lookups are common; also could cache a few recent
+       acccesses  handle of first track in list  handle of track delta 0  handle of last track in list  track in process of loading  number of tracks in list  (A, O-)  Playlist steps from playlist position to next track to be buffered  Buffer margin A.K.A. anti-skip buffer (in seconds)  Values returned for track loading * Track change controls * What sort of skip is pending globally?  Relative to what user is intended to see:  Codec: +0, Track List: +0, Playlist: +0  no track skip  Codec: +1, Track List: +1, Playlist: +0  codec-initiated skip  Codec: +1, Track List: +1, Playlist: +1  codec-initiated skip is new playlist  Codec: xx, Track List: +0, Playlist: +0  codec-initiated end of playlist  Manual skip: Never pends  manual track skip  Manual skip: Never pends  manual directory skip  Note about TRACK_SKIP_AUTO_NEW_PLAYLIST:
+   Fixing playlist code to be able to peek into the first song of
+   the next playlist would fix any issues and this wouldn't need
+   to be a special case since pre-advancing the playlist would be
+   unneeded - it could be much more like TRACK_SKIP_AUTO and all
+   actions that require reversal during an in-progress transition
+   would work as expected  Used to indicate status for the events. Must be separate to satisfy all
+   clients so the correct metadata is read when sending the change events.  (A, O-)  Pending manual track skip offset  (A, O)  Track change notification  Number of pcmbuf posts (audio isr)  Number of times audio has read the difference * Codec status * Did the codec notify us it finished while we were paused or while still
+   in an automatic transition?
+
+   If paused, it is necessary to defer a codec-initiated skip until resuming
+   or else the track will move forward while not playing audio!
+
+   If in-progress, skips should not build-up ahead of where the WPS is when
+   really short tracks finish decoding.
+
+   If it is forgotten, it will be missed altogether and playback will just sit
+   there looking stupid and comatose until the user does something  Codec seeking ack expected?  Forward declarations  "Restart" playback (flush _all_ tracks)  Mark the audiobuffer as invalid ************************************* --- MP3Entry --- * Does the mp3entry have enough info for us to use it?  Return a pointer to an mp3entry on the buffer, as it is  Read an mp3entry from the buffer, adjusted  Lock the id3 mutex  Unlock the id3 mutex  Return one of the collection of mp3entry pointers - collect them all here  Copy an mp3entry into one of the mp3 entries  Call id3_write "safely" because peek aheads can yield, even if the fast
+   preview isn't enabled * --- Track info --- * HAVE_CODEC_BUFFERING  Invalidate all members to initial values - does not close handles or sync  don't touch ->self_hid * --- Track list --- * Clear tracks in the list, optionally preserving the current track -
+   returns 'false' if the operation was changed  Clear all tracks  Keep current only; clear before + after  Keep current and those that follow  Initialize the track list  Return number of items allocated in the list  Return true if the list is empty  Returns a pointer to the track info data on the buffer  Synchronize the buffer object with the cached track info  Return track info a given offset from the info referenced by hid and
+ * place a copy into *infop, if provided  Commit the track info to the buffer updated with the provided source info  Leaves the list unmodified if anything fails  Insert last  "In list"  Free the track buffer entry and possibly remove it from the list if it
+   was succesfully added at some point  If this one is the current track; new current track is next one,
+           if any, else, the previous  Fixup list links  No movement allowed during bufclose calls  Finally, the handle itself  Return current track plus an offset  Return current based upon what's intended that the user sees - not
+   necessarily where decoding is taking place  Advance current track by an offset, return false if result is out of
+   bounds  Return the info of the last allocation plus an offset, NULL if result is
+   out of bounds  Allocate a new struct track_info on the buffer; does not add to list  "Not in list"  Actually commit the track info to the track list  Free the track entry and possibly remove it from the list if it was
+   succesfully added at some point  Close all open handles in the range except the for the current track
+   if preserving that  Don't care now since rebuffering is imminent  Nothing worthwhile keeping  If this is the in-progress load, abort it * --- Audio buffer -- * What size is needed for the scratch buffer?  Initialize the memory area where data is stored that is only used when
+   playing audio and anything depending upon it  if allocated return what we can give  Set up the audio buffer for playback
+ * filebuflen must be pre-initialized with the maximum size 
+     * Layout audio buffer as follows:
+     * [|SCRATCH|BUFFERING|PCM]
+      If the setup of anything allocated before the file buffer is
+       changed, do check the adjustments after the buffer_alloc call
+       as it will likely be affected and need sliding over  Subtract whatever the pcm buffer says it used plus the guard
+       buffer  Make sure filebuflen is a pointer sized multiple after
+       adjustment  Scratch memory  Make sure everything adds up - yes, some info is a bit redundant but
+       aids viewing and the summation of certain variables should add up to
+       the location of others.  Buffer must not move.  codec messages  filebuflen is, at this point, the buffering.c buffer size,
+     * i.e. the audiobuf except voice, scratch mem, pcm, ...  check what buflib requests  check if buflib needs the memory really hard. if yes we give
+         * up playback for now, otherwise refuse to shrink to keep at least
+         * 256K for the buffering  TODO: Do it without stopping playback, if possible  resume if playing  There's one problem with stoping and resuming: If it happens in a too
+     * frequent fashion, the codecs lose the resume postion and playback
+     * begins from the beginning.
+     * To work around use queue_post() to effectively delay the resume in case
+     * we're called another time. However this has another problem: id3->offset
+     * gets zero since playback is stopped. Therefore, try to peek at the
+     * queue_post from the last call to get the correct offset. This also
+     * lets us conviniently remove the queue event so Q_AUDIO_PLAY is only
+     * processed once.  current id3->elapsed/offset are king  don't call audio_hard_stop() as it frees this handle  inline case Q_AUDIO_STOP (audio_hard_stop() response
+         * if we're in the audio thread  we should be free to change the buffer now  set final buffer size before calling audio_reset_buffer_noalloc()
+     * (now it's the total size, the call will subtract voice etc)  post, to make subsequent calls not break the resume position  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Set the buffer margin to begin rebuffering when 'seconds' from empty  By current setting  New setting  Write a watermark only if the audio thread already did so for
+               itself or it will fail to set the event and the watermark - if
+               it hasn't yet, it will use the new setting when it does  flash storage  Watermark is a function of the bitrate of the last track in the buffer  Bitrate has no meaning to buffering margin for atomic audio -
+               rebuffer when it's the only track left unless it's the only
+               track that fits, in which case we should avoid constant buffer
+               low events  Then set the minimum - this should not occur anyway  Actually setting zero disables the notification and we use that
+       to detect that it has been reset * -- Track change notification -- * Check the pcmbuf track changes and return write the message into the event
+   if there are any  Clear outstanding track change posts  Post a track change notification - called by audio ISR * --- Helper functions --- * Removes messages that might end up in the queue before or while processing
+   a manual track change. Responding to them would be harmful since they
+   belong to a previous track's playback period. Anything that would generate
+   the stale messages must first be put into a state where it will not do so.
+  codec messages  track change messages  Remove any pcmbuf notifications  Scrub the audio queue of the old mold  Not strictly needed, per se, ad infinitum, ra, ra  Takes actions based upon track load status codes  Send track events that use a struct track_event for data  Announce the end of playing the current track  Announce the beginning of the new track  Change the data for the next track and send the event  Bring the user current mp3entry up to date and set a new offset for the
+   buffered metadata  Wipe-out track metadata - current is optional  Called when buffering is completed on the last track handle  There's no more to load or watch for  Stop the codec decoding or waiting for its data to be ready - returns
+   'false' if the codec ended up stopped  If it was waiting for us to clear the buffer to make a rebuffer
+       happen, it should cease otherwise codec_stop could deadlock waiting
+       for the codec to go to its main loop - codec's request will now
+       force-fail  We now know it's idle and not waiting for buffered data  Wait for any in-progress fade to complete  Just loop until it's done  End the ff/rw mode  A seamless seek (not calling audio_pre_ff_rewind) skips this
+       section  Clear the buffer  Seeking-while-playing, resume PCM playback  Complete the codec seek  If a seek completed while paused, 'paused' is true.
+     * If seeking from seek mode, 'ff_rw_mode' is true.  set _after_ the call!  else it's waiting and we must repond  Get the current cuesheet pointer  Read the cuesheet from the buffer  Backend to peek/current/next track metadata interface functions -
+   fill in the mp3entry with as much information as we may obtain about
+   the track at the specified offset from the user current track -
+   returns false if no information exists with us  Already filled  Try the unbuffered id3 since we're moving forward  We didn't find the ID3 metadata, so we fill it with the little info we
+       have and return that  Try to get it from the database  By now, filename is the only source of info  Get resume rewind adjusted progress from the ID3  Get the codec into ram and initialize it - keep it if it's ready  Codec is the same base type  Close any buffered codec (we could have skipped directly to a
+               format transistion that is the same format as the current track
+               and the buffered one is no longer needed)  HAVE_CODEC_BUFFERING  New codec - first make sure the old one's gone  Codec thread will close the handle even if it fails and will load from
+       storage if hid is not valid or the buffer load fails  When codec buffering isn't supported  Check settings for whether the file should be autoresumed  result cached?  search terms left?  Skip empty search patterns  FIXME: As soon as strcspn or strchrnul are made available in
+               the core, the following can be made more efficient.  Note: At this point, len is always > 0  Full directory-name matches only.  Trailing '/' in
+                   search path OK.  cache result  HAVE_TAGCACHE  Start the codec for the current track scheduled to be decoded  Resume all manually selected tracks  Send the "buffer" event to obtain the resume position for the codec  Automatic skip - do further tests to see if we should just
+               ignore any autoresume position  Just resume unconditionally  Force-rewind it  Not "never resume" - pass resume filter?  HAVE_TAGCACHE  Rewind the required amount - if an autoresume was done, this also rewinds
+       that by the setting's amount
+
+       It would be best to have bookkeeping about whether or not the track
+       sounded or not since skipping to it or else skipping to it while paused
+       and back again will cause accumulation of silent rewinds - that's not
+       our job to track directly nor could it be in any reasonable way
+      Update the codec API with the metadata and track info  All required data is now available for the codec  Send the "buffer" event now  ifndef HAVE_TAGCACHE * --- Audio thread --- * Load and parse a cuesheet for the file - returns false if the buffer
+   is full  If error other than a full buffer, then mark it "unsupported" to
+           avoid reloading attempt  Indicate cuesheet is present (while track remains
+                       buffered)  Load any album art for the file - returns false if the buffer is full  albumart_slots may change during a yield of bufopen,
+         * but that's no problem  We can only decode jpeg for embedded AA  No embedded AA or it couldn't be loaded - try other sources  If error other than a full buffer, then mark it "unsupported"
+               to avoid reloading attempt  HAVE_ALBUMART  Load a codec for the file onto the buffer - assumes we're working from the
+   currently loading track - not called for the current track  This will not be the current track -> it cannot be the first and the
+       current track cannot be ahead of buffering -> there is a previous
+       track entry which is either current or ahead of the current  If the previous codec is the same as this one, there is no need to
+       put another copy of it on the file buffer (in other words, only
+       buffer codecs at format transitions)  else just load it (harmless)  Load the codec onto the buffer if possible  Full path to codec  HAVE_CODEC_BUFFERING  Load metadata for the next track (with bufopen). The rest of the track
+   loading will be handled by audio_finish_load_track once the metadata has
+   been actually loaded by the buffering thread.
+
+   Each track is arranged in the buffer as follows:
+        <id3|[cuesheet|][album art|][codec|]audio>
+
+   The next will not be loaded until the previous succeeds if the buffer was
+   full at the time. To put any metadata after audio would make those handles
+   unmovable.
+ There must be an info pointer if the in-progress id3 is even there  Haven't finished the metadata but the notification is
+                   anticipated to come soon  Buffer was full trying to complete the load after the
+                   metadata finished, so attempt to continue - older handles
+                   should have been cleared already  Some old, stray buffering message  List is full so stop buffering tracks - however, attempt to obtain
+           metadata as the unbuffered id3  Get track name from current playlist read position  No track - exhausted the playlist entries  Free this entry  Maintain at last index  We can end up here after the real last track signals its completion
+           and miss the transition to STATE_FINISHED esp. if dropping the last
+           songs of a playlist late in their load (2nd stage)  Successfully opened the file - get track metadata  Buffer or track list is full  Load the metadata for the first unbuffered track  Successful load initiation  Second part of the track loading: We now have the metadata available, so we
+   can load the codec, the album art and finally the audio data.
+   This is called on the audio thread after the buffering thread calls the
+   buffering_handle_finished_callback callback.  We must not be here if not!  The current track for decoding (there is always one if the list is
+       populated)  This is an error condition. Track cannot be played without valid
+           metadata; skip the track.  Try to load a cuesheet for the track  No space for cuesheet on buffer, not an error  Try to load album art for the track  No space for album art on buffer, not an error  All handles available to external routines are ready - audio and codec
+       information is private  Send only when the track handles could not all be opened ahead of
+           time for the user's current track - otherwise everything is ready
+           by the time PLAYBACK_EVENT_TRACK_CHANGE is sent  Try to buffer a codec for the track  No space for codec on buffer, not an error  This is an error condition, either no codec was found, or
+               reading the codec file failed part way through, either way,
+               skip the track  HAVE_CODEC_BUFFERING * Finally, load the audio * Adjust for resume rewind so we know what to buffer - starting the codec
+       calls it again, so we don't save it (and they shouldn't accumulate)  This format can begin buffering from any point  We can buffer later in the file, adjust the hunt-and-peck margin  No offset given or it is very minimal - begin at the first frame
+           according to the metadata  This is the current track to decode - should be started now  Buffer could be full but not properly so if this is the only
+           track!  Nothing to play if no audio handle - skip this  Load next track - error or not  Full  Start a new track load  Must reset the buffer before use if trashed or voice only - voice
+       file size shouldn't have changed so we can go straight from
+       AUDIOBUF_STATE_VOICED_ONLY to AUDIOBUF_STATE_INITIALIZED  There are no user tracks on the buffer after this therefore
+               this is the next track  Discard unwanted tracks and start refill from after the specified playlist
+   offset  Remove unwanted tracks - caller must have ensured codec isn't using
+       any  Refill at specified position (-1 starts at index offset 0)  Fill the buffer  Handle buffering events
+   (Q_AUDIO_BUFFERING)  Should be nothing left to fill  Clear old tracks and continue buffering where it left off  Remove all but the currently decoding track and redo buffering
+           after that  Already finished  Invalid  Handle starting the next track load
+   (Q_AUDIO_FILL_BUFFER)  Handle posted load track finish event
+   (Q_AUDIO_FINISH_LOAD_TRACK)  Just loaded the metadata right after the current position  Not current track  Copy cuesheet  Be sure all tagtree info is synchronized; it will be needed for the
+               track finish event - the sync will happen when finalizing a track
+               change otherwise  Playing id3 hadn't been updated yet because no valid track
+                   was yet available - treat like the first track  Called when handles other than metadata handles have finished buffering
+   (Q_AUDIO_HANDLE_FINISHED)  Right now, only audio handles should end up calling this  Really we don't know which order the handles will actually complete
+           to zero bytes remaining since another thread is doing it - be sure
+           it's the right one  This was the last track in the playlist and we now have all the
+               data we need  Called to make an outstanding track skip the current track and to send the
+   transition events  Manual skip  Track ended up rejected - push things ahead like the codec blew
+               it (because it was never started and now we're here where it
+               should have been decoding the next track by now) - next, a
+               directory change or end of playback will most likely happen  What!? Disappear? Hopeless bleak despair  Fallthrough  Invalid  Update the current cuesheet if any and enabled  The skip is technically over  Sync the next track information  Actually begin a transition and take care of the codec change - may complete
+   it now or ask pcmbuf for notification depending on the type  Even if the new track is bad, the old track must be finished off  Manual track change happens now  Stopped us  Everything needed for the codec is ready - start it  Transition to end-of-playlist state and begin wait for PCM to finish  Codec has completed decoding the track
+   (usually Q_AUDIO_CODEC_COMPLETE)  If it didn't notify us first, don't expect "seek complete" message
+       since the codec can't post it now - do things like it would have
+       done  Old-hay on the ip-skay - codec has completed decoding
+
+           Paused: We're not sounding it, so just remember that it happened
+                   and the resume will begin the transition
+
+           Skipping: There was already a skip in progress, remember it and
+                     allow no further progress until the PCM from the previous
+                     song has finished
+
+           This function will be reentered upon completing the existing
+           transition in order to do the one that was just tried (below)
+          PCM buffer must know; audio could still be filling and hasn't
+           yet reached the play watermark  Does this track have an entry allocated?  Track load is not complete - it might have stopped on a
+               full buffer without reaching the audio handle or we just
+               arrived at it early
+
+               If this type is atomic and we couldn't get the audio,
+               perhaps it would need to wrap to make the allocation and
+               handles are in the way - to maximize the liklihood it can
+               be allocated, clear all handles to reset the buffer and
+               its indexes to 0 - for packet audio, this should not be an
+               issue and a pointless full reload of all the track's
+               metadata may be avoided  Continue filling after this track  else rebuffer at this track; status applies to the track we
+               want  Play sequence is complete - directory change or other playlist
+               resequencing - the playlist must now be advanced in order to
+               continue since a peek ahead to the next track is not possible  Failed to find anything after all - do playlist switchover
+                   instead  Called when codec completes seek operation
+   (usually Q_AUDIO_CODEC_SEEK_COMPLETE)  Called when PCM track change has completed
+   (Q_AUDIO_TRACK_CHANGED)  Finish whatever is pending so that the WPS is in sync  Codec got ahead completing a short track - complete the
+           codec's skip and begin the next  Begin playback from an idle state, transition to a new playlist or
+   invalidate the buffer and resume (if playing).
+   (usually Q_AUDIO_PLAY, Q_AUDIO_REMAKE_AUDIO_BUFFER)  Mark the buffer dirty - if not playing, it will be reset next
+           time  Clear out some stuff to resume the current track where it
+               left off  This is more-or-less treated as manual track transition  Save resume information for current track  Indicate manual track change  Set after track finish event in case skip was in progress  Must already be playing  Cold playback start from a stopped state  Set audio parameters  Be sure channel is audible  Update our state  Codec's position should be available as soon as it knows it  Start fill from beginning of playlist  Officially playing  Add these now - finish event for the first id3 will most likely be sent
+       immediately  Send coldstart event  Fill the buffer  This is the currently playing track - get metadata, stat  Only if actually changing tracks...  Found nothing playable  Stop playback and enter an idle state
+   (usually Q_AUDIO_STOP)  Wait for fade-out  Stop the codec and unload it  Save resume information  - "filling" might have been set to
+       "STATE_ENDED" by caller in order to facilitate end of playlist  Close all tracks and mark them NULL  Update our state  Go idle  Pause the playback of the current track
+   (Q_AUDIO_PAUSE)  Actually do the skip that is due - resets the status flag  Not in ff/rw mode - can actually change the audio state now  Skip a certain number of tracks forwards or backwards
+   (Q_AUDIO_SKIP)  Eat the delta to keep it synced, even if not playing  Force codec to abort this track  Kill the ff/rw halt  Manual skip  If there was an auto skip in progress, there will be residual
+       advancement of the playlist and/or track list so compensation will be
+       required in order to end up in the right spot  Update the playlist current track now  Some variety of fatal error while updating playlist  Manual skip out of range (because the playlist wasn't updated
+           yet by us and so the check in audio_skip returned 'ok') - bring
+           back into range  Had to move the opposite direction to correct, which is
+                   wrong - this is the end  Adjust things by how much the playlist was manually moved  We don't know the next track thus we know we don't have it  Skip to the next/previous directory
+   (Q_AUDIO_DIR_SKIP)  Force codec to abort this track  Kill the ff/rw halt  Manual skip  Unless automatic and gapless, skips do not pend  Regardless of the return value we need to rebuffer. If it fails the old
+       playlist will resume, else the next dir will start playing.  The day the music died - finish-off whatever is playing and call it
+           quits  Enter seek mode in order to start a seek
+   (Q_AUDIO_PRE_FF_REWIND)  Seek the playback of the current track to the specified time
+   (Q_AUDIO_FF_REWIND)  The usual case  Have to back it out (fun!)  Still have the last codec used  Send event before clobbering the time if rewinding.  Need this set in case ff/rw mode + error but _after_ the codec
+           halt that will reset it  If in transition, key will have changed - sync to it  Not in list - must rebuffer at the current playlist index  Codec is stopped  Set after audio_fill_file_buffer to disable playing id3 clobber if
+           rebuffer is needed  Track must complete the loading _now_ since a codec and audio
+           handle are needed in order to do the seek  Call above should push any load sequence - no need for
+               halt_decoding_track here if no skip was pending here because
+               there would not be a codec started if no audio handle was yet
+               opened  We should have still been able to get it - skip it and move
+                   onto the next one - like it or not this track is broken  Set the codec API to the correct metadata and track info  If codec must be (re)started, reset the resume info so that
+               it doesn't execute resume procedures  We cannot do this because the playlist must be reversed by one
+           and it doesn't always return the same song when going backwards
+           across boundaries as forwards (either because of randomization
+           or inconsistency in deciding what the previous track should be),
+           therefore the whole operation would often end up as nonsense -
+           lock out seeking for a couple seconds  Sure as heck cancel seek mode too!  Won't see this  Playback ended because of an error completing a track load  Always fake it as a codec start error which will handle mode
+       cancellations and skip to the next track  Invalidates all but currently playing track
+   (Q_AUDIO_FLUSH)  Nothing to flush out  Remove all but the currently playing track from the list and
+           refill after that  Ignore return since it's about the next track, not this one  There's now a track after this one now - convert to auto skip -
+           no skip should pend right now because multiple flush messages can
+           be fired which would cause a restart in the below cases  Precisely removing what it already decoded for the next track is
+           not possible so a restart is required in order to continue the
+           currently playing track without the now invalid future track
+           playing  Nothing else is a state  Called by audio thread when playback is started * Codec and track change messages * Codec is done processing track and has gone idle  Codec is done seeking  PCM track change done * Control messages * So we can go straight from playback to recording  no more playback * Buffering messages * some buffering event  continue buffering next track  metadata is buffered  some other type is buffered * Miscellaneous messages * buffer needs to be reinitialized  just need to change buffer state  buffering watermark needs updating  just need to update setting  HAVE_DISK_STORAGE  LOGFQUEUE("audio < default : %08lX", ev->id);  end switch  Active states  End of buffering for now, let's calculate the watermark,
+                   register for a low buffer event and unboost  Fall-through  All data was buffered  Fall-through  Transfer notification to audio queue event  If doing auto skip, poll pcmbuf track notifications a bit
+                   faster to promply detect the transition  Idle states  end while  --- Buffering callbacks ---  Called when fullness is below the watermark level  Called when handles must be discarded in order to buffer new data  A handle has completed buffering and all required data is available  Limit queue traffic  The metadata handle for the last loaded track has been buffered.
+           We can ask the audio thread to load the rest of the track's data.  Strip any useless trailing tags that are left.  Fall-through  Don't care to know about these * -- Codec callbacks -- * Update elapsed time for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Update offset for next PCM insert  Save in codec's id3 where it is used at next pcm insert  Codec has finished running  Normal automatic skip  Codec has finished seeking * --- Pcmbuf callbacks --- * Update the elapsed and offset from the information cached during the
+   PCM buffer insert  Synchronize position info to the codec's  Post message from pcmbuf that the end of the previous track has just
+ * been played  Notify of the change in special-purpose semaphore object  Safe to post directly to the queue  May pcmbuf start PCM playback when the buffer is full enough? * -- External interfaces -- * Get a copy of the id3 data for the for current track + offset + skip delta  Null path means it should be filled now  Return the mp3entry for the currently playing track  This is a peekahead  Normal case  Obtains the mp3entry for the next track from the current  This is a peekahead  Normal case  Start playback at the specified elapsed time or offset  Truncate any existing voice output so we don't have spelling
+     * etc. over the first part of the played track  Stop playback if playing  Pause playback if playing  This sends a stop message and the audio thread will dump all its
+   subsequent messages  Stop playback  Resume playback if paused  Skip the specified number of tracks forward or backward from the current  If offset has to be backed-out to stay in range, no skip is done  Accumulate net manual skip count since the audio thread last
+           processed one  Do this before posting so that the audio thread can correct us
+           when things settle down - additionally, if audio gets a message
+           and the delta is zero, the Q_AUDIO_SKIP handler (audio_on_skip)
+           handler a skip event with the correct info but doesn't skip  AUDIO_FAST_SKIP_PREVIEW  Playback only needs the final state even if more than one is
+           processed because it wasn't removed in time  No more tracks  Skip one track forward from the current  Skip one track backward from the current  Move one directory forward  Move one directory backward  Pause playback in order to start a seek that flushes the old audio  Seek to the new time in the current track  Clear all but the currently playing track then rebuffer * --- Miscellaneous public interfaces --- * Return which album art handle is current for the user in the given slot  Give the actual position a go  Find an album art slot that doesn't match the dimensions of another that
+   is already claimed - increment the use count if it is  First try to find a slot already having the size to reuse it since we
+       don't want albumart of the same size buffered multiple times  Size is new, find a free slot  Sorry, no free slot  Invalidate the albumart_slot - decrement the use count if > 0  HAVE_ALBUMART  Return file byte offset  Return total file buffer length after accounting for the talk buf  How many tracks exist on the buffer - full or partial  Return total ringbuffer space occupied - ridx to widx * -- Settings -- * Enable or disable cuesheet support and allocate/don't allocate the
+   extra associated resources  Set the audio antiskip buffer margin in SECONDS SECONDS HAVE_DISK_STORAGE  Take necessary steps to enable or disable the crossfade setting  Tell it the next setting to use  Return if size hasn't changed or this is too early to determine
+       which in the second case there's no way we could be playing
+       anything at all  HAVE_CROSSFADE  [0] is "automatic"  HAVE_PLAY_FREQ * -- Startup -- * Initialize the track buffering system  Set crossfade setting for next buffer init which should be about... 

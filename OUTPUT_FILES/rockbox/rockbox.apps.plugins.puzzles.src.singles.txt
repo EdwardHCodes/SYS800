@@ -1,0 +1,481 @@
+
+ * singles.c: implementation of Hitori ('let me alone') from Nikoli.
+ *
+ * Make single-get able to fetch a specific puzzle ID from menneske.no?
+ *
+ * www.menneske.no solving methods:
+ *
+ * Done:
+ * SC: if you circle a cell, any cells in same row/col with same no --> black
+ *  -- solver_op_circle
+ * SB: if you make a cell black, any cells around it --> white
+ *  -- solver_op_blacken
+ * ST: 3 identical cells in row, centre is white and outer two black.
+ * SP: 2 identical cells with single-cell gap, middle cell is white.
+ *  -- solver_singlesep (both ST and SP)
+ * PI: if you have a pair of same number in row/col, any other
+ *      cells of same number must be black.
+ *  -- solve_doubles
+ * CC: if you have a black on edge one cell away from corner, cell
+ *       on edge diag. adjacent must be white.
+ * CE: if you have 2 black cells of triangle on edge, third cell must
+ *      be white.
+ * QM: if you have 3 black cells of diagonal square in middle, fourth
+ *      cell must be white.
+ *  -- solve_allblackbutone (CC, CE, and QM).
+ * QC: a corner with 4 identical numbers (or 2 and 2) must have the
+ *      corner cell (and cell diagonal to that) black.
+ * TC: a corner with 3 identical numbers (with the L either way)
+ *      must have the apex of L black, and other two white.
+ * DC: a corner with 2 identical numbers in domino can set a white
+ *      cell along wall.
+ *  -- solve_corners (QC, TC, DC)
+ * IP: pair with one-offset-pair force whites by offset pair
+ *  -- solve_offsetpair
+ * MC: any cells diag. adjacent to black cells that would split board
+ *      into separate white regions must be white.
+ *  -- solve_removesplits
+ *
+ * Still to do:
+ *
+ * TEP: 3 pairs of dominos parallel to side, can mark 4 white cells
+ *       alongside.
+ * DEP: 2 pairs of dominos parallel to side, can mark 2 white cells.
+ * FI: if you have two sets of double-cells packed together, singles
+ *      in that row/col must be white (qv. PI)
+ * QuM: four identical cells (or 2 and 2) in middle of grid only have
+ *       two possible solutions each.
+ * FDE: doubles one row/column away from edge can force a white cell.
+ * FDM: doubles in centre (next to bits of diag. square) can force a white cell.
+ * MP: two pairs with same number between force number to black.
+ * CnC: if circling a cell leads to impossible board, cell is black.
+ * MC: if we have two possiblilities, can we force a white circle?
+ *
+  2 * sqrt(2) of CRAD  n = w*h; o = max(w, h)  size w*h  size w*h  top, right, bottom, left  --- Game parameters and preset functions ---  structure copy  which is invalid  --- Game description string generation and unpicking ---  sth went wrong.  --- Useful game functions (completion, etc.) ---  one row ...  ... h rows, including gaps ...  ... final NL  Construct a dsf array for connected blocks; connections
+     * tracked to right and down.  right  down  if any circled numbers have identical non-circled numbers on
+     *     same row/column, error (non-circled)
+     * if any circled numbers in same column are same number, highlight them.
+     * if any rows/columns have >1 of same number, not complete.  ok, we have two numbers the same in a row.  If we have two circles in the same row around
+             * two identical numbers, they are _both_ wrong.  Otherwise, if we have a circle, any other identical
+             * numbers in that row are obviously wrong. We don't
+             * highlight this, however, since it makes the process
+             * of solving the puzzle too easy (you circle a number
+             * and it promptly tells you which numbers to blacken!  If we're the solver we need the grid all to be definitively
+     * black or definitively white (i.e. circled) otherwise the solver
+     * has found an ambiguous grid.  Mark any black squares in groups of >1 as errors.
+     * Count number of white squares.  Check attributes of white squares, row- and column-wise.  check cols from (x,0)  check rows from (0,y)  If there's more than one white region, pick the largest one to
+     * be the canonical one (arbitrarily tie-breaking towards lower
+     * array indices), and mark all the others as erroneous.  --- Solver ---  op one of BLACK or CIRCLE.  must be non-malloced.  Only add circle op if it's not already circled.  Only add black op if it's not already black.  Care here: solver_op_* may call solver_op_add which may extend the
+     * ss->n_ops.  copy this away, it may get reallocated. debug_state("State after adding black", state);debug_state("State after adding circle", state); If the grid has two identical numbers with one cell between them, the inner
+ * cell _must_ be white (and thus circled); (at least) one of the two must be
+ * black (since they're in the same column or row) and thus the middle cell is
+ * next to a black cell.  Cell two to our right?  Cell two below us?  If we have two identical numbers next to each other (in a row or column),
+ * any other identical numbers in that column must be black.  check cell to our right.  check cell below us  If a white square has all-but-one possible adjacent squares black, the
+ * one square left over must be white.  this cell already has a way out  this cell has >1 white cell around it.  If we have 4 numbers the same in a 2x2 corner, the far corner and the
+ * diagonally-adjacent square must both be black.
+ * If we have 3 numbers the same in a 2x2 corner, the apex of the L
+ * thus formed must be black.
+ * If we have 2 numbers the same in a 2x2 corner, the non-same cell
+ * one away from the corner must be white.  order is now (corner, side 1, side 2, inner)  corner and 2 sides: apex is corner.  side, side, fourth: apex is fourth.  either way here we match the non-identical side.  ditto  If you have the following situation:
+ * ...
+ * ...x A x x y A x...
+ * ...x B x x B y x...
+ * ...
+ * then both squares marked 'y' must be white. One of the left-most A or B must
+ * be white (since two side-by-side black cells are disallowed), which means
+ * that the corresponding right-most A or B must be black (since you can't
+ * have two of the same number on one line); thus, the adjacent squares
+ * to that right-most A or B must be white, which include the two marked 'y'
+ * in either case.
+ * Obviously this works in any row or column. It also works if A == B.
+ * It doesn't work for the degenerate case:
+ * ...x A A x x
+ * ...x B y x x
+ * where the square marked 'y' isn't necessarily white (consider the left-most A
+ * is black).
+ *
+ *  same column  We try adjacent to (x1,y1) and the two diag. adjacent to (x2, y2).
+     * We expect to be called twice, once each way around.  The 'dx != ax || dy != ay' removes the degenerate case,
+             * mentioned above.  We have a match; so (WLOG) the 'A' marked above are at
+                 * (x1,y1) and (x2,y2), and the 'B' are at (ax,ay) and (dx,dy).  We don't use connect_dsf here; it's too slow, and there's a quicker
+     * algorithm if all we want is the size of one region.  Having written this, this algorithm is only about 5% faster than
+     * using a dsf.  If putting a black square at (x,y) would make the white region
+     * non-contiguous, it must be circled.  For all black squares, search in squares diagonally adjacent to see if
+ * we can rule out putting a black square there (because it would make the
+ * white region non-contiguous).  This function is likely to be somewhat slow. 
+ * This function performs a solver step that isn't implicit in the rules
+ * of the game and is thus treated somewhat differently.
+ *
+ * It marks cells whose number does not exist elsewhere in its row/column
+ * with circles. As it happens the game generator here does mean that this
+ * is always correct, but it's a solving method that people should not have
+ * to rely upon (except in the hidden 'sneaky' difficulty setting) and so
+ * all grids at 'tricky' and above are checked to make sure that the grid
+ * is no easier if this solving step is performed beforehand.
+ *
+ * Calling with ss=NULL just returns the number of sneaky deductions that
+ * would have been made.
+  Clear SCRATCH flags.  Check for duplicate numbers on our row, mark (both) if so  Check for duplicate numbers on our col, mark (both) if so  Any cell with no marking has no duplicates on its row or column:
+     * set its CIRCLE.  Some solver operations we only have to perform once --
+     * they're only based on the numbers available, and not black
+     * squares or circles which may be added later.  never sets impossible  ditto  ditto  ditto  --- Game generation ---  A correctly completed Hitori board is essentially a latin square
+ * (no duplicated numbers in any row or column) with black squares
+ * added such that no black square touches another, and the white
+ * squares make a contiguous region.
+ *
+ * So we can generate it by:
+   * constructing a latin square
+   * adding black squares at random (minding the constraints)
+   * altering the numbers under the new black squares such that
+      the solver gets a headstart working out where they are.
+ 
+     * We try and solve it twice, once at our requested difficulty level
+     * (ensuring it's soluble at all) and once at the level below (if
+     * it exists), which we hope to fail: if you can also solve it at
+     * the level below then it's too easy and we have to try again.
+     *
+     * With this puzzle in particular there's an extra finesse, which is
+     * that we check that the generated puzzle isn't too easy _with
+     * an extra solver step first_, which is the 'sneaky' mode of deductions
+     * (asserting that any number which fulfils the latin-square rules
+     * on its row/column must be white). This is an artefact of the
+     * generation process and not implicit in the rules, so we don't want
+     * people to be able to use it to make the puzzle easier.
+      this is the only time the 'sneaky' flag is set.  Randomise the list of numbers to try.  Try each number in turn, first giving preference to removing
+     * latin-square characteristics (i.e. those numbers which only
+     * occur once in a row/column). The '&&' here, although intuitively
+     * wrong, results in a smaller number of 'sneaky' deductions on
+     * solvable boards.  Then try each number in turn returning the first one that's
+     * not actually unique in its row/column (see comment below)  Update column and row counts assuming this number will be placed.  First, generate the latin rectangle.
+     * The order of this, o, is max(w,h).  Add black squares at random, using bits of solver as we go (to lay
+     * white squares), until we can lay no more blacks.  solver knows this must be one or the other already.  Add a random black cell...  ... and do as well as we know how to lay down whites that are now forced.  Now we know which squares are white and which are black, we lay numbers
+     * under black squares at random, except that the number must appear in
+     * white cells at least once more in the same column or row as that [black]
+     * square. That's necessary to avoid multiple solutions, where blackening
+     * squares in the finished puzzle becomes optional. We use two arrays:
+     *
+     * rownums[ROW * o + NUM-1] is the no. of white cells containing NUM in y=ROW
+     * colnums[COL * o + NUM-1] is the no. of white cells containing NUM in x=COL
+      DIFF_ANY just returns whatever we first generated, for testing purposes.  --- Game UI and move routines ---  this wants to be a per-game option.  empty first, always.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  8mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * singles.c: implementation of Hitori ('let me alone') from Nikoli.
+ *
+ * Make single-get able to fetch a specific puzzle ID from menneske.no?
+ *
+ * www.menneske.no solving methods:
+ *
+ * Done:
+ * SC: if you circle a cell, any cells in same row/col with same no --> black
+ *  -- solver_op_circle
+ * SB: if you make a cell black, any cells around it --> white
+ *  -- solver_op_blacken
+ * ST: 3 identical cells in row, centre is white and outer two black.
+ * SP: 2 identical cells with single-cell gap, middle cell is white.
+ *  -- solver_singlesep (both ST and SP)
+ * PI: if you have a pair of same number in row/col, any other
+ *      cells of same number must be black.
+ *  -- solve_doubles
+ * CC: if you have a black on edge one cell away from corner, cell
+ *       on edge diag. adjacent must be white.
+ * CE: if you have 2 black cells of triangle on edge, third cell must
+ *      be white.
+ * QM: if you have 3 black cells of diagonal square in middle, fourth
+ *      cell must be white.
+ *  -- solve_allblackbutone (CC, CE, and QM).
+ * QC: a corner with 4 identical numbers (or 2 and 2) must have the
+ *      corner cell (and cell diagonal to that) black.
+ * TC: a corner with 3 identical numbers (with the L either way)
+ *      must have the apex of L black, and other two white.
+ * DC: a corner with 2 identical numbers in domino can set a white
+ *      cell along wall.
+ *  -- solve_corners (QC, TC, DC)
+ * IP: pair with one-offset-pair force whites by offset pair
+ *  -- solve_offsetpair
+ * MC: any cells diag. adjacent to black cells that would split board
+ *      into separate white regions must be white.
+ *  -- solve_removesplits
+ *
+ * Still to do:
+ *
+ * TEP: 3 pairs of dominos parallel to side, can mark 4 white cells
+ *       alongside.
+ * DEP: 2 pairs of dominos parallel to side, can mark 2 white cells.
+ * FI: if you have two sets of double-cells packed together, singles
+ *      in that row/col must be white (qv. PI)
+ * QuM: four identical cells (or 2 and 2) in middle of grid only have
+ *       two possible solutions each.
+ * FDE: doubles one row/column away from edge can force a white cell.
+ * FDM: doubles in centre (next to bits of diag. square) can force a white cell.
+ * MP: two pairs with same number between force number to black.
+ * CnC: if circling a cell leads to impossible board, cell is black.
+ * MC: if we have two possiblilities, can we force a white circle?
+ *
+  2 * sqrt(2) of CRAD  n = w*h; o = max(w, h)  size w*h  size w*h  top, right, bottom, left  --- Game parameters and preset functions ---  structure copy  which is invalid  --- Game description string generation and unpicking ---  sth went wrong.  --- Useful game functions (completion, etc.) ---  one row ...  ... h rows, including gaps ...  ... final NL  Construct a dsf array for connected blocks; connections
+     * tracked to right and down.  right  down  if any circled numbers have identical non-circled numbers on
+     *     same row/column, error (non-circled)
+     * if any circled numbers in same column are same number, highlight them.
+     * if any rows/columns have >1 of same number, not complete.  ok, we have two numbers the same in a row.  If we have two circles in the same row around
+             * two identical numbers, they are _both_ wrong.  Otherwise, if we have a circle, any other identical
+             * numbers in that row are obviously wrong. We don't
+             * highlight this, however, since it makes the process
+             * of solving the puzzle too easy (you circle a number
+             * and it promptly tells you which numbers to blacken!  If we're the solver we need the grid all to be definitively
+     * black or definitively white (i.e. circled) otherwise the solver
+     * has found an ambiguous grid.  Mark any black squares in groups of >1 as errors.
+     * Count number of white squares.  Check attributes of white squares, row- and column-wise.  check cols from (x,0)  check rows from (0,y)  If there's more than one white region, pick the largest one to
+     * be the canonical one (arbitrarily tie-breaking towards lower
+     * array indices), and mark all the others as erroneous.  --- Solver ---  op one of BLACK or CIRCLE.  must be non-malloced.  Only add circle op if it's not already circled.  Only add black op if it's not already black.  Care here: solver_op_* may call solver_op_add which may extend the
+     * ss->n_ops.  copy this away, it may get reallocated. debug_state("State after adding black", state);debug_state("State after adding circle", state); If the grid has two identical numbers with one cell between them, the inner
+ * cell _must_ be white (and thus circled); (at least) one of the two must be
+ * black (since they're in the same column or row) and thus the middle cell is
+ * next to a black cell.  Cell two to our right?  Cell two below us?  If we have two identical numbers next to each other (in a row or column),
+ * any other identical numbers in that column must be black.  check cell to our right.  check cell below us  If a white square has all-but-one possible adjacent squares black, the
+ * one square left over must be white.  this cell already has a way out  this cell has >1 white cell around it.  If we have 4 numbers the same in a 2x2 corner, the far corner and the
+ * diagonally-adjacent square must both be black.
+ * If we have 3 numbers the same in a 2x2 corner, the apex of the L
+ * thus formed must be black.
+ * If we have 2 numbers the same in a 2x2 corner, the non-same cell
+ * one away from the corner must be white.  order is now (corner, side 1, side 2, inner)  corner and 2 sides: apex is corner.  side, side, fourth: apex is fourth.  either way here we match the non-identical side.  ditto  If you have the following situation:
+ * ...
+ * ...x A x x y A x...
+ * ...x B x x B y x...
+ * ...
+ * then both squares marked 'y' must be white. One of the left-most A or B must
+ * be white (since two side-by-side black cells are disallowed), which means
+ * that the corresponding right-most A or B must be black (since you can't
+ * have two of the same number on one line); thus, the adjacent squares
+ * to that right-most A or B must be white, which include the two marked 'y'
+ * in either case.
+ * Obviously this works in any row or column. It also works if A == B.
+ * It doesn't work for the degenerate case:
+ * ...x A A x x
+ * ...x B y x x
+ * where the square marked 'y' isn't necessarily white (consider the left-most A
+ * is black).
+ *
+ *  same column  We try adjacent to (x1,y1) and the two diag. adjacent to (x2, y2).
+     * We expect to be called twice, once each way around.  The 'dx != ax || dy != ay' removes the degenerate case,
+             * mentioned above.  We have a match; so (WLOG) the 'A' marked above are at
+                 * (x1,y1) and (x2,y2), and the 'B' are at (ax,ay) and (dx,dy).  We don't use connect_dsf here; it's too slow, and there's a quicker
+     * algorithm if all we want is the size of one region.  Having written this, this algorithm is only about 5% faster than
+     * using a dsf.  If putting a black square at (x,y) would make the white region
+     * non-contiguous, it must be circled.  For all black squares, search in squares diagonally adjacent to see if
+ * we can rule out putting a black square there (because it would make the
+ * white region non-contiguous).  This function is likely to be somewhat slow. 
+ * This function performs a solver step that isn't implicit in the rules
+ * of the game and is thus treated somewhat differently.
+ *
+ * It marks cells whose number does not exist elsewhere in its row/column
+ * with circles. As it happens the game generator here does mean that this
+ * is always correct, but it's a solving method that people should not have
+ * to rely upon (except in the hidden 'sneaky' difficulty setting) and so
+ * all grids at 'tricky' and above are checked to make sure that the grid
+ * is no easier if this solving step is performed beforehand.
+ *
+ * Calling with ss=NULL just returns the number of sneaky deductions that
+ * would have been made.
+  Clear SCRATCH flags.  Check for duplicate numbers on our row, mark (both) if so  Check for duplicate numbers on our col, mark (both) if so  Any cell with no marking has no duplicates on its row or column:
+     * set its CIRCLE.  Some solver operations we only have to perform once --
+     * they're only based on the numbers available, and not black
+     * squares or circles which may be added later.  never sets impossible  ditto  ditto  ditto  --- Game generation ---  A correctly completed Hitori board is essentially a latin square
+ * (no duplicated numbers in any row or column) with black squares
+ * added such that no black square touches another, and the white
+ * squares make a contiguous region.
+ *
+ * So we can generate it by:
+   * constructing a latin square
+   * adding black squares at random (minding the constraints)
+   * altering the numbers under the new black squares such that
+      the solver gets a headstart working out where they are.
+ 
+     * We try and solve it twice, once at our requested difficulty level
+     * (ensuring it's soluble at all) and once at the level below (if
+     * it exists), which we hope to fail: if you can also solve it at
+     * the level below then it's too easy and we have to try again.
+     *
+     * With this puzzle in particular there's an extra finesse, which is
+     * that we check that the generated puzzle isn't too easy _with
+     * an extra solver step first_, which is the 'sneaky' mode of deductions
+     * (asserting that any number which fulfils the latin-square rules
+     * on its row/column must be white). This is an artefact of the
+     * generation process and not implicit in the rules, so we don't want
+     * people to be able to use it to make the puzzle easier.
+      this is the only time the 'sneaky' flag is set.  Randomise the list of numbers to try.  Try each number in turn, first giving preference to removing
+     * latin-square characteristics (i.e. those numbers which only
+     * occur once in a row/column). The '&&' here, although intuitively
+     * wrong, results in a smaller number of 'sneaky' deductions on
+     * solvable boards.  Then try each number in turn returning the first one that's
+     * not actually unique in its row/column (see comment below)  Update column and row counts assuming this number will be placed.  First, generate the latin rectangle.
+     * The order of this, o, is max(w,h).  Add black squares at random, using bits of solver as we go (to lay
+     * white squares), until we can lay no more blacks.  solver knows this must be one or the other already.  Add a random black cell...  ... and do as well as we know how to lay down whites that are now forced.  Now we know which squares are white and which are black, we lay numbers
+     * under black squares at random, except that the number must appear in
+     * white cells at least once more in the same column or row as that [black]
+     * square. That's necessary to avoid multiple solutions, where blackening
+     * squares in the finished puzzle becomes optional. We use two arrays:
+     *
+     * rownums[ROW * o + NUM-1] is the no. of white cells containing NUM in y=ROW
+     * colnums[COL * o + NUM-1] is the no. of white cells containing NUM in x=COL
+      DIFF_ANY just returns whatever we first generated, for testing purposes.  --- Game UI and move routines ---  this wants to be a per-game option.  empty first, always.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  8mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * singles.c: implementation of Hitori ('let me alone') from Nikoli.
+ *
+ * Make single-get able to fetch a specific puzzle ID from menneske.no?
+ *
+ * www.menneske.no solving methods:
+ *
+ * Done:
+ * SC: if you circle a cell, any cells in same row/col with same no --> black
+ *  -- solver_op_circle
+ * SB: if you make a cell black, any cells around it --> white
+ *  -- solver_op_blacken
+ * ST: 3 identical cells in row, centre is white and outer two black.
+ * SP: 2 identical cells with single-cell gap, middle cell is white.
+ *  -- solver_singlesep (both ST and SP)
+ * PI: if you have a pair of same number in row/col, any other
+ *      cells of same number must be black.
+ *  -- solve_doubles
+ * CC: if you have a black on edge one cell away from corner, cell
+ *       on edge diag. adjacent must be white.
+ * CE: if you have 2 black cells of triangle on edge, third cell must
+ *      be white.
+ * QM: if you have 3 black cells of diagonal square in middle, fourth
+ *      cell must be white.
+ *  -- solve_allblackbutone (CC, CE, and QM).
+ * QC: a corner with 4 identical numbers (or 2 and 2) must have the
+ *      corner cell (and cell diagonal to that) black.
+ * TC: a corner with 3 identical numbers (with the L either way)
+ *      must have the apex of L black, and other two white.
+ * DC: a corner with 2 identical numbers in domino can set a white
+ *      cell along wall.
+ *  -- solve_corners (QC, TC, DC)
+ * IP: pair with one-offset-pair force whites by offset pair
+ *  -- solve_offsetpair
+ * MC: any cells diag. adjacent to black cells that would split board
+ *      into separate white regions must be white.
+ *  -- solve_removesplits
+ *
+ * Still to do:
+ *
+ * TEP: 3 pairs of dominos parallel to side, can mark 4 white cells
+ *       alongside.
+ * DEP: 2 pairs of dominos parallel to side, can mark 2 white cells.
+ * FI: if you have two sets of double-cells packed together, singles
+ *      in that row/col must be white (qv. PI)
+ * QuM: four identical cells (or 2 and 2) in middle of grid only have
+ *       two possible solutions each.
+ * FDE: doubles one row/column away from edge can force a white cell.
+ * FDM: doubles in centre (next to bits of diag. square) can force a white cell.
+ * MP: two pairs with same number between force number to black.
+ * CnC: if circling a cell leads to impossible board, cell is black.
+ * MC: if we have two possiblilities, can we force a white circle?
+ *
+  2 * sqrt(2) of CRAD  n = w*h; o = max(w, h)  size w*h  size w*h  top, right, bottom, left  --- Game parameters and preset functions ---  structure copy  which is invalid  --- Game description string generation and unpicking ---  sth went wrong.  --- Useful game functions (completion, etc.) ---  one row ...  ... h rows, including gaps ...  ... final NL  Construct a dsf array for connected blocks; connections
+     * tracked to right and down.  right  down  if any circled numbers have identical non-circled numbers on
+     *     same row/column, error (non-circled)
+     * if any circled numbers in same column are same number, highlight them.
+     * if any rows/columns have >1 of same number, not complete.  ok, we have two numbers the same in a row.  If we have two circles in the same row around
+             * two identical numbers, they are _both_ wrong.  Otherwise, if we have a circle, any other identical
+             * numbers in that row are obviously wrong. We don't
+             * highlight this, however, since it makes the process
+             * of solving the puzzle too easy (you circle a number
+             * and it promptly tells you which numbers to blacken!  If we're the solver we need the grid all to be definitively
+     * black or definitively white (i.e. circled) otherwise the solver
+     * has found an ambiguous grid.  Mark any black squares in groups of >1 as errors.
+     * Count number of white squares.  Check attributes of white squares, row- and column-wise.  check cols from (x,0)  check rows from (0,y)  If there's more than one white region, pick the largest one to
+     * be the canonical one (arbitrarily tie-breaking towards lower
+     * array indices), and mark all the others as erroneous.  --- Solver ---  op one of BLACK or CIRCLE.  must be non-malloced.  Only add circle op if it's not already circled.  Only add black op if it's not already black.  Care here: solver_op_* may call solver_op_add which may extend the
+     * ss->n_ops.  copy this away, it may get reallocated. debug_state("State after adding black", state);debug_state("State after adding circle", state); If the grid has two identical numbers with one cell between them, the inner
+ * cell _must_ be white (and thus circled); (at least) one of the two must be
+ * black (since they're in the same column or row) and thus the middle cell is
+ * next to a black cell.  Cell two to our right?  Cell two below us?  If we have two identical numbers next to each other (in a row or column),
+ * any other identical numbers in that column must be black.  check cell to our right.  check cell below us  If a white square has all-but-one possible adjacent squares black, the
+ * one square left over must be white.  this cell already has a way out  this cell has >1 white cell around it.  If we have 4 numbers the same in a 2x2 corner, the far corner and the
+ * diagonally-adjacent square must both be black.
+ * If we have 3 numbers the same in a 2x2 corner, the apex of the L
+ * thus formed must be black.
+ * If we have 2 numbers the same in a 2x2 corner, the non-same cell
+ * one away from the corner must be white.  order is now (corner, side 1, side 2, inner)  corner and 2 sides: apex is corner.  side, side, fourth: apex is fourth.  either way here we match the non-identical side.  ditto  If you have the following situation:
+ * ...
+ * ...x A x x y A x...
+ * ...x B x x B y x...
+ * ...
+ * then both squares marked 'y' must be white. One of the left-most A or B must
+ * be white (since two side-by-side black cells are disallowed), which means
+ * that the corresponding right-most A or B must be black (since you can't
+ * have two of the same number on one line); thus, the adjacent squares
+ * to that right-most A or B must be white, which include the two marked 'y'
+ * in either case.
+ * Obviously this works in any row or column. It also works if A == B.
+ * It doesn't work for the degenerate case:
+ * ...x A A x x
+ * ...x B y x x
+ * where the square marked 'y' isn't necessarily white (consider the left-most A
+ * is black).
+ *
+ *  same column  We try adjacent to (x1,y1) and the two diag. adjacent to (x2, y2).
+     * We expect to be called twice, once each way around.  The 'dx != ax || dy != ay' removes the degenerate case,
+             * mentioned above.  We have a match; so (WLOG) the 'A' marked above are at
+                 * (x1,y1) and (x2,y2), and the 'B' are at (ax,ay) and (dx,dy).  We don't use connect_dsf here; it's too slow, and there's a quicker
+     * algorithm if all we want is the size of one region.  Having written this, this algorithm is only about 5% faster than
+     * using a dsf.  If putting a black square at (x,y) would make the white region
+     * non-contiguous, it must be circled.  For all black squares, search in squares diagonally adjacent to see if
+ * we can rule out putting a black square there (because it would make the
+ * white region non-contiguous).  This function is likely to be somewhat slow. 
+ * This function performs a solver step that isn't implicit in the rules
+ * of the game and is thus treated somewhat differently.
+ *
+ * It marks cells whose number does not exist elsewhere in its row/column
+ * with circles. As it happens the game generator here does mean that this
+ * is always correct, but it's a solving method that people should not have
+ * to rely upon (except in the hidden 'sneaky' difficulty setting) and so
+ * all grids at 'tricky' and above are checked to make sure that the grid
+ * is no easier if this solving step is performed beforehand.
+ *
+ * Calling with ss=NULL just returns the number of sneaky deductions that
+ * would have been made.
+  Clear SCRATCH flags.  Check for duplicate numbers on our row, mark (both) if so  Check for duplicate numbers on our col, mark (both) if so  Any cell with no marking has no duplicates on its row or column:
+     * set its CIRCLE.  Some solver operations we only have to perform once --
+     * they're only based on the numbers available, and not black
+     * squares or circles which may be added later.  never sets impossible  ditto  ditto  ditto  --- Game generation ---  A correctly completed Hitori board is essentially a latin square
+ * (no duplicated numbers in any row or column) with black squares
+ * added such that no black square touches another, and the white
+ * squares make a contiguous region.
+ *
+ * So we can generate it by:
+   * constructing a latin square
+   * adding black squares at random (minding the constraints)
+   * altering the numbers under the new black squares such that
+      the solver gets a headstart working out where they are.
+ 
+     * We try and solve it twice, once at our requested difficulty level
+     * (ensuring it's soluble at all) and once at the level below (if
+     * it exists), which we hope to fail: if you can also solve it at
+     * the level below then it's too easy and we have to try again.
+     *
+     * With this puzzle in particular there's an extra finesse, which is
+     * that we check that the generated puzzle isn't too easy _with
+     * an extra solver step first_, which is the 'sneaky' mode of deductions
+     * (asserting that any number which fulfils the latin-square rules
+     * on its row/column must be white). This is an artefact of the
+     * generation process and not implicit in the rules, so we don't want
+     * people to be able to use it to make the puzzle easier.
+      this is the only time the 'sneaky' flag is set.  Randomise the list of numbers to try.  Try each number in turn, first giving preference to removing
+     * latin-square characteristics (i.e. those numbers which only
+     * occur once in a row/column). The '&&' here, although intuitively
+     * wrong, results in a smaller number of 'sneaky' deductions on
+     * solvable boards.  Then try each number in turn returning the first one that's
+     * not actually unique in its row/column (see comment below)  Update column and row counts assuming this number will be placed.  First, generate the latin rectangle.
+     * The order of this, o, is max(w,h).  Add black squares at random, using bits of solver as we go (to lay
+     * white squares), until we can lay no more blacks.  solver knows this must be one or the other already.  Add a random black cell...  ... and do as well as we know how to lay down whites that are now forced.  Now we know which squares are white and which are black, we lay numbers
+     * under black squares at random, except that the number must appear in
+     * white cells at least once more in the same column or row as that [black]
+     * square. That's necessary to avoid multiple solutions, where blackening
+     * squares in the finished puzzle becomes optional. We use two arrays:
+     *
+     * rownums[ROW * o + NUM-1] is the no. of white cells containing NUM in y=ROW
+     * colnums[COL * o + NUM-1] is the no. of white cells containing NUM in x=COL
+      DIFF_ANY just returns whatever we first generated, for testing purposes.  --- Game UI and move routines ---  this wants to be a per-game option.  empty first, always.  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  8mm squares by default.  Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

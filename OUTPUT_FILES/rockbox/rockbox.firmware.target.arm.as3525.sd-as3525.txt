@@ -1,0 +1,106 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Driver for the ARM PL180 SD/MMC controller inside AS3525 SoC  for HAVE_MULTIDRIVE & AMS_OF_SIZE  SD controller  DMA controller  DMA request lines #define LOGF_ENABLE#define VERIFY_WRITE 1 command flags  ARM PL180 registers  non AHB interface  volumes  embedded SD card  SD slot if present  maximum timeouts recommended in the SD Specification v2.00  MCI_DATA_TIMER register data timeout in card bus clock periods  100 ms  250 ms  for compatibility  ticks  align on cache line size  force action on first call in sd_init()  nothing to do  buttonlight AMSes need a bit of special handling for the buttonlight
+         * here due to the dual mapping of GPIOD and XPD  XPD is SD-MCI interface (b3:2 = 01)  If SD card present Boost cpu for voltage  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  XPD is general purpose IO (b3:2 = 00)  defined(HAVE_MULTIDRIVE) || defined(HAVE_HOTSWAP)  AMS v1 have two different drive interfaces MCI_SD(XPD) and GGU_IDE  interface enable  interface disable  ndef BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  send SD_APP_CMD before each try  Clear old status flags  Load command argument or clear if none  Construct MCI_COMMAND & enable CPSM b0:5 b6  b7  b8   | MCI_COMMAND_INTERRUPT  b9   | MCI_COMMAND_PENDING Only used with stream data transfer b10 Enables CPSM  Wait while cmd completes then disable CPSM   Handle command responses  CMD expects response  Always prepare short response  timeout or crc failure  Response passed CRC check  response[0] has already been read  CMD sent, no response required  MCI_CLOCK = MCLK / 2x(ClkDiv[bits 7:0]+1)  MCLK    MCLK/2  MCLK/4  IDENT   MCLCK on and set to 400kHz ident frequency   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle  -- all card functions switch back to default  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA   End of Card Identification Mode   ***********************************  The internal SDs are v1  Try to switch V2 cards to HS timings, non HS seem to ignore this   CMD7 w/rca: Select card to put it in TRAN state  CMD6 0xf indicates no influence, [3:0],0x1 - HS Access need to wait at least 8 clock periods   go back to STBY state so we can read csd   CMD7 w/rca=0:  Deselect card to put it in STBY state   HAVE_MULTIDRIVE   CMD9 send CSD  Boost MCICLK to operating speed  MCICLK = IDE_CLK/2 = 25 MHz   MCICLK = PCLK/2 = 31MHz(HS) or PCLK/4 = 15.5 Mhz (STD) SD supports powersave   CMD7 w/rca: Select card to put it in TRAN state  FIXME : it seems that reading fails on some models   Switch to to 4 bit widebus mode   ACMD42   ACMD6   Now that card is widebus make controller aware 
+     * enable bank switching
+     * without issuing this command, we only have access to 1/4 of the blocks
+     * of the first bank (0x1E9E00 blocks, which is the size reported in the
+     * CSD register)
+       CMD7 w/rca = 0: Unselect card to put it in STBY state  CMD9 send CSD again, so we got the correct number of blocks  The OF is stored in the first blocks   CMD7 w/rca: Select card to put it in TRAN state  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt   OF Setting   Pl180 clocks get turned on at start of card init  enable interface  clock source = PLLA  bits 3:2 = 01, xpd is SD interface  init mutex  HAVE_HOTSWAP  enable bank switching  we don't use the uncached buffer here, because we need the
+         * physical memory address for DMA transfers  enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state   XXX: why is it signed ?  skip SanDisk OF  direct transfer, indirect is always uncached  128 * 512 = 2^16, and doesn't fit in the 16 bits of DATA_LENGTH
+         * register, so we have to transfer maximum 127 sectors at a time.  sectors  Only switch banks for internal storage  Switch bank if needed  Do not cross a bank boundary in a single transfer loop  Set bank_start to the correct unit (blocks or bytes)  not SDHC Small delay for writes prevents data crc failures at lower freqs enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state for writes 
+         * If the write aborted early due to a tx underrun, disable the
+         * dma channel here, otherwise there are still 4 words in the fifo
+         * and the retried write will get corrupted.
+          reset errors counter  error  write failed, no point in verifying  try the write again in the hope to repair the damage  CONFIG_STORAGE_MULTI  must be on to read regs  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP  never let a timer wrap confuse us **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Driver for the ARM PL180 SD/MMC controller inside AS3525 SoC  for HAVE_MULTIDRIVE & AMS_OF_SIZE  SD controller  DMA controller  DMA request lines #define LOGF_ENABLE#define VERIFY_WRITE 1 command flags  ARM PL180 registers  non AHB interface  volumes  embedded SD card  SD slot if present  maximum timeouts recommended in the SD Specification v2.00  MCI_DATA_TIMER register data timeout in card bus clock periods  100 ms  250 ms  for compatibility  ticks  align on cache line size  force action on first call in sd_init()  nothing to do  buttonlight AMSes need a bit of special handling for the buttonlight
+         * here due to the dual mapping of GPIOD and XPD  XPD is SD-MCI interface (b3:2 = 01)  If SD card present Boost cpu for voltage  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  XPD is general purpose IO (b3:2 = 00)  defined(HAVE_MULTIDRIVE) || defined(HAVE_HOTSWAP)  AMS v1 have two different drive interfaces MCI_SD(XPD) and GGU_IDE  interface enable  interface disable  ndef BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  send SD_APP_CMD before each try  Clear old status flags  Load command argument or clear if none  Construct MCI_COMMAND & enable CPSM b0:5 b6  b7  b8   | MCI_COMMAND_INTERRUPT  b9   | MCI_COMMAND_PENDING Only used with stream data transfer b10 Enables CPSM  Wait while cmd completes then disable CPSM   Handle command responses  CMD expects response  Always prepare short response  timeout or crc failure  Response passed CRC check  response[0] has already been read  CMD sent, no response required  MCI_CLOCK = MCLK / 2x(ClkDiv[bits 7:0]+1)  MCLK    MCLK/2  MCLK/4  IDENT   MCLCK on and set to 400kHz ident frequency   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle  -- all card functions switch back to default  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA   End of Card Identification Mode   ***********************************  The internal SDs are v1  Try to switch V2 cards to HS timings, non HS seem to ignore this   CMD7 w/rca: Select card to put it in TRAN state  CMD6 0xf indicates no influence, [3:0],0x1 - HS Access need to wait at least 8 clock periods   go back to STBY state so we can read csd   CMD7 w/rca=0:  Deselect card to put it in STBY state   HAVE_MULTIDRIVE   CMD9 send CSD  Boost MCICLK to operating speed  MCICLK = IDE_CLK/2 = 25 MHz   MCICLK = PCLK/2 = 31MHz(HS) or PCLK/4 = 15.5 Mhz (STD) SD supports powersave   CMD7 w/rca: Select card to put it in TRAN state  FIXME : it seems that reading fails on some models   Switch to to 4 bit widebus mode   ACMD42   ACMD6   Now that card is widebus make controller aware 
+     * enable bank switching
+     * without issuing this command, we only have access to 1/4 of the blocks
+     * of the first bank (0x1E9E00 blocks, which is the size reported in the
+     * CSD register)
+       CMD7 w/rca = 0: Unselect card to put it in STBY state  CMD9 send CSD again, so we got the correct number of blocks  The OF is stored in the first blocks   CMD7 w/rca: Select card to put it in TRAN state  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt   OF Setting   Pl180 clocks get turned on at start of card init  enable interface  clock source = PLLA  bits 3:2 = 01, xpd is SD interface  init mutex  HAVE_HOTSWAP  enable bank switching  we don't use the uncached buffer here, because we need the
+         * physical memory address for DMA transfers  enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state   XXX: why is it signed ?  skip SanDisk OF  direct transfer, indirect is always uncached  128 * 512 = 2^16, and doesn't fit in the 16 bits of DATA_LENGTH
+         * register, so we have to transfer maximum 127 sectors at a time.  sectors  Only switch banks for internal storage  Switch bank if needed  Do not cross a bank boundary in a single transfer loop  Set bank_start to the correct unit (blocks or bytes)  not SDHC Small delay for writes prevents data crc failures at lower freqs enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state for writes 
+         * If the write aborted early due to a tx underrun, disable the
+         * dma channel here, otherwise there are still 4 words in the fifo
+         * and the retried write will get corrupted.
+          reset errors counter  error  write failed, no point in verifying  try the write again in the hope to repair the damage  CONFIG_STORAGE_MULTI  must be on to read regs  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP  never let a timer wrap confuse us **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Daniel Ankers
+ * Copyright © 2008-2009 Rafaël Carré
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Driver for the ARM PL180 SD/MMC controller inside AS3525 SoC  for HAVE_MULTIDRIVE & AMS_OF_SIZE  SD controller  DMA controller  DMA request lines #define LOGF_ENABLE#define VERIFY_WRITE 1 command flags  ARM PL180 registers  non AHB interface  volumes  embedded SD card  SD slot if present  maximum timeouts recommended in the SD Specification v2.00  MCI_DATA_TIMER register data timeout in card bus clock periods  100 ms  250 ms  for compatibility  ticks  align on cache line size  force action on first call in sd_init()  nothing to do  buttonlight AMSes need a bit of special handling for the buttonlight
+         * here due to the dual mapping of GPIOD and XPD  XPD is SD-MCI interface (b3:2 = 01)  If SD card present Boost cpu for voltage  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  defined(HAVE_HOTSWAP) && defined (HAVE_ADJUSTABLE_CPU_VOLTAGE)  XPD is general purpose IO (b3:2 = 00)  defined(HAVE_MULTIDRIVE) || defined(HAVE_HOTSWAP)  AMS v1 have two different drive interfaces MCI_SD(XPD) and GGU_IDE  interface enable  interface disable  ndef BOOTLOADER  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  acknowledge interrupt  HAVE_HOTSWAP  send SD_APP_CMD before each try  Clear old status flags  Load command argument or clear if none  Construct MCI_COMMAND & enable CPSM b0:5 b6  b7  b8   | MCI_COMMAND_INTERRUPT  b9   | MCI_COMMAND_PENDING Only used with stream data transfer b10 Enables CPSM  Wait while cmd completes then disable CPSM   Handle command responses  CMD expects response  Always prepare short response  timeout or crc failure  Response passed CRC check  response[0] has already been read  CMD sent, no response required  MCI_CLOCK = MCLK / 2x(ClkDiv[bits 7:0]+1)  MCLK    MCLK/2  MCLK/4  IDENT   MCLCK on and set to 400kHz ident frequency   100 - 400kHz clock required for Identification Mode    Start of Card Identification Mode *********************************** CMD0 Go Idle  -- all card functions switch back to default  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+      Non v2 cards will not respond to this command timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA   End of Card Identification Mode   ***********************************  The internal SDs are v1  Try to switch V2 cards to HS timings, non HS seem to ignore this   CMD7 w/rca: Select card to put it in TRAN state  CMD6 0xf indicates no influence, [3:0],0x1 - HS Access need to wait at least 8 clock periods   go back to STBY state so we can read csd   CMD7 w/rca=0:  Deselect card to put it in STBY state   HAVE_MULTIDRIVE   CMD9 send CSD  Boost MCICLK to operating speed  MCICLK = IDE_CLK/2 = 25 MHz   MCICLK = PCLK/2 = 31MHz(HS) or PCLK/4 = 15.5 Mhz (STD) SD supports powersave   CMD7 w/rca: Select card to put it in TRAN state  FIXME : it seems that reading fails on some models   Switch to to 4 bit widebus mode   ACMD42   ACMD6   Now that card is widebus make controller aware 
+     * enable bank switching
+     * without issuing this command, we only have access to 1/4 of the blocks
+     * of the first bank (0x1E9E00 blocks, which is the size reported in the
+     * CSD register)
+       CMD7 w/rca = 0: Unselect card to put it in STBY state  CMD9 send CSD again, so we got the correct number of blocks  The OF is stored in the first blocks   CMD7 w/rca: Select card to put it in TRAN state  clear previous irq  enable edge detecting  detect both raising and falling edges  enable the card detect interrupt   OF Setting   Pl180 clocks get turned on at start of card init  enable interface  clock source = PLLA  bits 3:2 = 01, xpd is SD interface  init mutex  HAVE_HOTSWAP  enable bank switching  we don't use the uncached buffer here, because we need the
+         * physical memory address for DMA transfers  enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state   XXX: why is it signed ?  skip SanDisk OF  direct transfer, indirect is always uncached  128 * 512 = 2^16, and doesn't fit in the 16 bits of DATA_LENGTH
+         * register, so we have to transfer maximum 127 sectors at a time.  sectors  Only switch banks for internal storage  Switch bank if needed  Do not cross a bank boundary in a single transfer loop  Set bank_start to the correct unit (blocks or bytes)  not SDHC Small delay for writes prevents data crc failures at lower freqs enable  transfer direction  DMA  2^9 = 512  Wakeup signal from NAND/MCIO isr on MCI_DATA_ERROR | MCI_DATA_END   Wait for FIFO to empty, card may still be in PRG state for writes 
+         * If the write aborted early due to a tx underrun, disable the
+         * dma channel here, otherwise there are still 4 words in the fifo
+         * and the retried write will get corrupted.
+          reset errors counter  error  write failed, no point in verifying  try the write again in the hope to repair the damage  CONFIG_STORAGE_MULTI  must be on to read regs  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  HAVE_HOTSWAP  never let a timer wrap confuse us 

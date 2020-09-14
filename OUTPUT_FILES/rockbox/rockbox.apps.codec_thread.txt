@@ -1,0 +1,142 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec
+ * - = reads only
+ *
+ * Unless otherwise noted, the extern variables are located
+ * in playback.c.
+  Q_LOAD_CODEC parameter data  audio handle id (specify < 0 to use afmt)  codec specification (AFMT_*) * --- Main state control --- * Codec type (C,A-)  Private interfaces to main playback control  from codecs.c  Codec thread  For modifying thread priority later  Workaround stack overflow in opus codec on highmem devices (see FS#13060).  Fixed 2019-8-14 (see FS#13131) !defined(CPU_COLDFIRE) && (MEMORYSIZE >= 8) && defined(IRAMSIZE) && IRAMSIZE > (32 * 1024) Messages are only ever sent one at a time to the codec from the audio
+   thread. This is important for correct operation unless playback is
+   stopped.  static routines  Poll the state of the codec queue. Returns < 0 if the message is urgent
+   and any state should exit, > 0 if it's a run message (and it was
+   scrubbed), 0 if message was ignored.  Seek, pause or stop? Just peek and return if so. Codec
+       must handle the command after returing. Inserts will not
+       be allowed until it complies.  This is in error in this context unless it's "go, go, go!"  Ignore it  Does the audio format type equal CODEC_TYPE_ENCODER? ************************************* --- Miscellaneous external functions --- * Can choose decoder or encoder if one available  !HAVE_RECORDING  Always decoder  HAVE_RECORDING  Borrow the codec thread and return the ID  Set id before telling thread to call something; it may be
+     * needed before this function returns.  Codec thread will signal just before entering callback * --- codec API callbacks --- * Arbitrary min request  It may be awhile before space is available but we want
+               "instant" response to any message  No input remains and DSP purged  helper function, not a callback  copy up-to size bytes into ptr and return the actual size copied  Nothing requested OR nothing left  Update read and other position pointers  Return the actual amount of data copied to the buffer  Clear DSP  Sync position  Post notification to audio thread  Wait for urgent or go message  As you were  Process the message - return requested action and data (if any should
+       be expected)  Find out what it is  Already running  Stay here and wait  Remove message  Wait for next (no remove)  Audio wants codec to seek  Must only return 0 in main loop  Stream finish request (soft stop)?  ev.data is pointer to size  HAVE_RECORDING  Discontinuity  Leave in queue  This is in error in this context.  Actually remove it * --- CODEC THREAD --- * Handle Q_CODEC_LOAD  Save a local copy so we can let the audio thread go ASAP  Must have unloaded it first  Do this now because codec may set some things up at load time  First try buffer load  Either not a valid handle or the buffer method failed  Types must agree  Failed - get rid of it  Handle Q_CODEC_RUN  This will be either the initial buffered offset or where it left off
+           if it remained buffered and we're skipping back to it and it is best
+           to have ci.curpos in sync with the handle's read position - it's the
+           codec's responsibility to ensure it has the correct positions -
+           playback is sorta dumb and only has a vague idea about what to
+           buffer based upon what metadata has to say  Pin the codec's audio data in place  Codec is done with it - let it move  Notify audio that we're done for better or worse - advise of the
+           status  Handle Q_CODEC_SEEK  Post it up one level  Have to run it again  Handle Q_CODEC_UNLOAD  Tell codec to clean up  Handle Q_CODEC_DO_CALLBACK  Codec thread function * --- Miscellaneous external interfaces -- * Initialize playback's codec interface  Init API  Init threading  Obtain codec thread's current priority  Set the codec thread's priority and return the old value  HAVE_PRIORITY_SCHEDULING * --- Functions for audio thread use --- * Load a decoder or encoder and set the format type  Begin decoding the current file  Instruct the codec to seek to the specified time (should be properly
+   paused or stopped first to avoid possible buffering deadlock)  Pause the codec and make it wait for further instructions inside the
+   command callback  Stop codec if running - codec stays resident if loaded  Wait until it's in the main loop  Tells codec to take final encoding step and then exit -
+   Returns minimum buffer size required or 0 if complete  Sync to keep size in scope and get response  Replied with 0 size  else thread running in the main loop  HAVE_RECORDING  Call the codec's exit routine and close all references  Return the afmt type of the loaded codec - sticks until calling
+   codec_unload unless initial load failed **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec
+ * - = reads only
+ *
+ * Unless otherwise noted, the extern variables are located
+ * in playback.c.
+  Q_LOAD_CODEC parameter data  audio handle id (specify < 0 to use afmt)  codec specification (AFMT_*) * --- Main state control --- * Codec type (C,A-)  Private interfaces to main playback control  from codecs.c  Codec thread  For modifying thread priority later  Workaround stack overflow in opus codec on highmem devices (see FS#13060).  Fixed 2019-8-14 (see FS#13131) !defined(CPU_COLDFIRE) && (MEMORYSIZE >= 8) && defined(IRAMSIZE) && IRAMSIZE > (32 * 1024) Messages are only ever sent one at a time to the codec from the audio
+   thread. This is important for correct operation unless playback is
+   stopped.  static routines  Poll the state of the codec queue. Returns < 0 if the message is urgent
+   and any state should exit, > 0 if it's a run message (and it was
+   scrubbed), 0 if message was ignored.  Seek, pause or stop? Just peek and return if so. Codec
+       must handle the command after returing. Inserts will not
+       be allowed until it complies.  This is in error in this context unless it's "go, go, go!"  Ignore it  Does the audio format type equal CODEC_TYPE_ENCODER? ************************************* --- Miscellaneous external functions --- * Can choose decoder or encoder if one available  !HAVE_RECORDING  Always decoder  HAVE_RECORDING  Borrow the codec thread and return the ID  Set id before telling thread to call something; it may be
+     * needed before this function returns.  Codec thread will signal just before entering callback * --- codec API callbacks --- * Arbitrary min request  It may be awhile before space is available but we want
+               "instant" response to any message  No input remains and DSP purged  helper function, not a callback  copy up-to size bytes into ptr and return the actual size copied  Nothing requested OR nothing left  Update read and other position pointers  Return the actual amount of data copied to the buffer  Clear DSP  Sync position  Post notification to audio thread  Wait for urgent or go message  As you were  Process the message - return requested action and data (if any should
+       be expected)  Find out what it is  Already running  Stay here and wait  Remove message  Wait for next (no remove)  Audio wants codec to seek  Must only return 0 in main loop  Stream finish request (soft stop)?  ev.data is pointer to size  HAVE_RECORDING  Discontinuity  Leave in queue  This is in error in this context.  Actually remove it * --- CODEC THREAD --- * Handle Q_CODEC_LOAD  Save a local copy so we can let the audio thread go ASAP  Must have unloaded it first  Do this now because codec may set some things up at load time  First try buffer load  Either not a valid handle or the buffer method failed  Types must agree  Failed - get rid of it  Handle Q_CODEC_RUN  This will be either the initial buffered offset or where it left off
+           if it remained buffered and we're skipping back to it and it is best
+           to have ci.curpos in sync with the handle's read position - it's the
+           codec's responsibility to ensure it has the correct positions -
+           playback is sorta dumb and only has a vague idea about what to
+           buffer based upon what metadata has to say  Pin the codec's audio data in place  Codec is done with it - let it move  Notify audio that we're done for better or worse - advise of the
+           status  Handle Q_CODEC_SEEK  Post it up one level  Have to run it again  Handle Q_CODEC_UNLOAD  Tell codec to clean up  Handle Q_CODEC_DO_CALLBACK  Codec thread function * --- Miscellaneous external interfaces -- * Initialize playback's codec interface  Init API  Init threading  Obtain codec thread's current priority  Set the codec thread's priority and return the old value  HAVE_PRIORITY_SCHEDULING * --- Functions for audio thread use --- * Load a decoder or encoder and set the format type  Begin decoding the current file  Instruct the codec to seek to the specified time (should be properly
+   paused or stopped first to avoid possible buffering deadlock)  Pause the codec and make it wait for further instructions inside the
+   command callback  Stop codec if running - codec stays resident if loaded  Wait until it's in the main loop  Tells codec to take final encoding step and then exit -
+   Returns minimum buffer size required or 0 if complete  Sync to keep size in scope and get response  Replied with 0 size  else thread running in the main loop  HAVE_RECORDING  Call the codec's exit routine and close all references  Return the afmt type of the loaded codec - sticks until calling
+   codec_unload unless initial load failed **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005-2007 Miika Pekkarinen
+ * Copyright (C) 2007-2008 Nicolas Pennequin
+ * Copyright (C) 2011      Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PLAYBACK_LOGQUEUES_SYS_TIMEOUT Variables are commented with the threads that use them:
+ * A=audio, C=codec
+ * - = reads only
+ *
+ * Unless otherwise noted, the extern variables are located
+ * in playback.c.
+  Q_LOAD_CODEC parameter data  audio handle id (specify < 0 to use afmt)  codec specification (AFMT_*) * --- Main state control --- * Codec type (C,A-)  Private interfaces to main playback control  from codecs.c  Codec thread  For modifying thread priority later  Workaround stack overflow in opus codec on highmem devices (see FS#13060).  Fixed 2019-8-14 (see FS#13131) !defined(CPU_COLDFIRE) && (MEMORYSIZE >= 8) && defined(IRAMSIZE) && IRAMSIZE > (32 * 1024) Messages are only ever sent one at a time to the codec from the audio
+   thread. This is important for correct operation unless playback is
+   stopped.  static routines  Poll the state of the codec queue. Returns < 0 if the message is urgent
+   and any state should exit, > 0 if it's a run message (and it was
+   scrubbed), 0 if message was ignored.  Seek, pause or stop? Just peek and return if so. Codec
+       must handle the command after returing. Inserts will not
+       be allowed until it complies.  This is in error in this context unless it's "go, go, go!"  Ignore it  Does the audio format type equal CODEC_TYPE_ENCODER? ************************************* --- Miscellaneous external functions --- * Can choose decoder or encoder if one available  !HAVE_RECORDING  Always decoder  HAVE_RECORDING  Borrow the codec thread and return the ID  Set id before telling thread to call something; it may be
+     * needed before this function returns.  Codec thread will signal just before entering callback * --- codec API callbacks --- * Arbitrary min request  It may be awhile before space is available but we want
+               "instant" response to any message  No input remains and DSP purged  helper function, not a callback  copy up-to size bytes into ptr and return the actual size copied  Nothing requested OR nothing left  Update read and other position pointers  Return the actual amount of data copied to the buffer  Clear DSP  Sync position  Post notification to audio thread  Wait for urgent or go message  As you were  Process the message - return requested action and data (if any should
+       be expected)  Find out what it is  Already running  Stay here and wait  Remove message  Wait for next (no remove)  Audio wants codec to seek  Must only return 0 in main loop  Stream finish request (soft stop)?  ev.data is pointer to size  HAVE_RECORDING  Discontinuity  Leave in queue  This is in error in this context.  Actually remove it * --- CODEC THREAD --- * Handle Q_CODEC_LOAD  Save a local copy so we can let the audio thread go ASAP  Must have unloaded it first  Do this now because codec may set some things up at load time  First try buffer load  Either not a valid handle or the buffer method failed  Types must agree  Failed - get rid of it  Handle Q_CODEC_RUN  This will be either the initial buffered offset or where it left off
+           if it remained buffered and we're skipping back to it and it is best
+           to have ci.curpos in sync with the handle's read position - it's the
+           codec's responsibility to ensure it has the correct positions -
+           playback is sorta dumb and only has a vague idea about what to
+           buffer based upon what metadata has to say  Pin the codec's audio data in place  Codec is done with it - let it move  Notify audio that we're done for better or worse - advise of the
+           status  Handle Q_CODEC_SEEK  Post it up one level  Have to run it again  Handle Q_CODEC_UNLOAD  Tell codec to clean up  Handle Q_CODEC_DO_CALLBACK  Codec thread function * --- Miscellaneous external interfaces -- * Initialize playback's codec interface  Init API  Init threading  Obtain codec thread's current priority  Set the codec thread's priority and return the old value  HAVE_PRIORITY_SCHEDULING * --- Functions for audio thread use --- * Load a decoder or encoder and set the format type  Begin decoding the current file  Instruct the codec to seek to the specified time (should be properly
+   paused or stopped first to avoid possible buffering deadlock)  Pause the codec and make it wait for further instructions inside the
+   command callback  Stop codec if running - codec stays resident if loaded  Wait until it's in the main loop  Tells codec to take final encoding step and then exit -
+   Returns minimum buffer size required or 0 if complete  Sync to keep size in scope and get response  Replied with 0 size  else thread running in the main loop  HAVE_RECORDING  Call the codec's exit routine and close all references  Return the afmt type of the loaded codec - sticks until calling
+   codec_unload unless initial load failed 

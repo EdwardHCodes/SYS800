@@ -1,0 +1,1117 @@
+
+ * slant.c: Puzzle from nikoli.co.jp involving drawing a diagonal
+ * line through each square of a grid.
+ 
+ * In this puzzle you have a grid of squares, each of which must
+ * contain a diagonal line; you also have clue numbers placed at
+ * _points_ of that grid, which means there's a (w+1) x (h+1) array
+ * of possible clue positions.
+ * 
+ * I'm therefore going to adopt a rigid convention throughout this
+ * source file of using w and h for the dimensions of the grid of
+ * squares, and W and H for the dimensions of the grid of points.
+ * Thus, W == w+1 and H == h+1 always.
+ * 
+ * Clue arrays will be W*H `signed char's, and the clue at each
+ * point will be a number from 0 to 4, or -1 if there's no clue.
+ * 
+ * Solution arrays will be W*H `signed char's, and the number at
+ * each point will be +1 for a forward slash (/), -1 for a
+ * backslash (\), and 0 for unknown.
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  used to suppress completion flash  structure copy 
+     * (At least at the time of writing this comment) The grid
+     * generator is actually capable of handling even zero grid
+     * dimensions without crashing. Puzzles with a zero-area grid
+     * are a bit boring, though, because they're already solved :-)
+     * And puzzles with a dimension of 1 can't be made Hard, which
+     * means the simplest thing is to forbid them altogether.
+     
+ * Scratch space for solver.
+ 
+     * Disjoint set forest which tracks the connected sets of
+     * points.
+     
+     * Counts the number of possible exits from each connected set
+     * of points. (That is, the number of possible _simultaneous_
+     * exits: an unconnected point labelled 2 has an exit count of
+     * 2 even if all four possible edges are still under
+     * consideration.)
+     
+     * Tracks whether each connected set of points includes a
+     * border point.
+     
+     * Another disjoint set forest. This one tracks _squares_ which
+     * are known to slant in the same direction.
+     
+     * Stores slash values which we know for an equivalence class.
+     * When we fill in a square, we set slashval[canonify(x)] to
+     * the same value as soln[x], so that we can then spot other
+     * squares equivalent to it and fill them in immediately via
+     * their known equivalence.
+     
+     * Stores possible v-shapes. This array is w by h in size, but
+     * not every bit of every entry is meaningful. The bits mean:
+     * 
+     *  - bit 0 for a square means that that square and the one to
+     *    its right might form a v-shape between them
+     *  - bit 1 for a square means that that square and the one to
+     *    its right might form a ^-shape between them
+     *  - bit 2 for a square means that that square and the one
+     *    below it might form a >-shape between them
+     *  - bit 3 for a square means that that square and the one
+     *    below it might form a <-shape between them
+     * 
+     * Any starting 1 or 3 clue rules out four bits in this array
+     * immediately; a 2 clue propagates any ruled-out bit past it
+     * (if the two squares on one side of a 2 cannot be a v-shape,
+     * then neither can the two on the other side be the same
+     * v-shape); we can rule out further bits during play using
+     * partially filled 2 clues; whenever a pair of squares is
+     * known not to be _either_ kind of v-shape, we can mark them
+     * as equivalent.
+     
+     * Useful to have this information automatically passed to
+     * solver subroutines. (This pointer is not dynamically
+     * allocated by new_scratch and free_scratch.)
+     
+ * Wrapper on dsf_merge() which updates the `exits' and `border'
+ * arrays.
+  initialise to placate optimiser 
+	 * We have used one possible exit from each of the two
+	 * classes. Thus, the viable exit count of the new class is
+	 * the sum of the old exit counts minus two.
+	 
+ * Called when we have just blocked one way out of a particular
+ * point. If that point is a non-clue point (thus has a variable
+ * number of exits), we have therefore decreased its potential exit
+ * count, so we must decrement the exit count for the group as a
+ * whole.
+ , H = h+1  do nothing 
+ * Solver. Returns 0 for impossibility, 1 for success, 2 for
+ * ambiguity or failure to converge.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Establish a disjoint set forest for tracking which squares
+     * are known to slant in the same direction.
+     
+     * Clear the slashval array.
+     
+     * Set up the vbitmap array. Initially all types of v are possible.
+     
+     * Initialise the `exits' and `border' arrays. These are used
+     * to do second-order loop avoidance: the dual of the no loops
+     * constraint is that every point must be somehow connected to
+     * the border of the grid (otherwise there would be a solid
+     * loop around it which prevented this).
+     * 
+     * I define a `dead end' to be a connected group of points
+     * which contains no border point, and which can form at most
+     * one new connection outside itself. Then I forbid placing an
+     * edge so that it connects together two dead-end groups, since
+     * this would yield a non-border-connected isolated subgraph
+     * with no further scope to extend it.
+     
+     * Repeatedly try to deduce something until we can't.
+     
+	 * Any clue point with the number of remaining lines equal
+	 * to zero or to the number of remaining undecided
+	 * neighbouring squares can be filled in completely.
+	 
+		 * We have a clue point. Start by listing its
+		 * neighbouring squares, in order around the point,
+		 * together with the type of slash that would be
+		 * required in that square to connect to the point.
+		 
+		 * Count up the number of undecided neighbours, and
+		 * also the number of lines already present.
+		 *
+		 * If we're not on DIFF_EASY, then in this loop we
+		 * also track whether we've seen two adjacent empty
+		 * squares belonging to the same equivalence class
+		 * (meaning they have the same type of slash). If
+		 * so, we count them jointly as one line.
+		  undecided 
+				 * We've found an equivalent pair.
+				 * Mark it. This also inhibits any
+				 * further equivalence tracking
+				 * around this square, since we can
+				 * only handle one pair (and in
+				 * particular we want to avoid
+				 * being misled by two overlapping
+				 * equivalence pairs).
+				  count one line  and lose two undecideds  here's a line 
+		 * Check the counts.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+		     * If we have precisely two undecided squares
+		     * and precisely one line to place between
+		     * them, _and_ those squares are adjacent, then
+		     * we can mark them as equivalent to one
+		     * another.
+		     * 
+		     * This even applies if meq >= 0: if we have a
+		     * 2 clue point and two of its neighbours are
+		     * already marked equivalent, we can indeed
+		     * mark the other two as equivalent.
+		     * 
+		     * We don't bother with this on DIFF_EASY,
+		     * since we wouldn't have used the results
+		     * anyway.
+		      found a pair 
+			 * neighbours[last] and neighbours[i] are
+			 * the pair. Mark them equivalent.
+			 
+	 * Failing that, we now apply the second condition, which
+	 * is that no square may be filled in such a way as to form
+	 * a loop. Also in this loop (since it's over squares
+	 * rather than points), we check slashval to see if we've
+	 * already filled in another square in the same equivalence
+	 * class.
+	 * 
+	 * The slashval check is disabled on DIFF_EASY, as is dead
+	 * end avoidance. Only _immediate_ loop avoidance remains.
+	  got this one already 
+		 * Try to rule out connectivity between (x,y) and
+		 * (x+1,y+1); if successful, we will deduce that we
+		 * must have a forward slash.
+		 
+		 * Now do the same between (x+1,y) and (x,y+1), to
+		 * see if we are required to have a backslash.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+         * Now see what we can do with the vbitmap array. All
+         * vbitmap deductions are disabled at Easy level.
+         
+                 * Any line already placed in a square must rule
+                 * out any type of v which contradicts it.
+                 
+                 * If both types of v are ruled out for a pair of
+                 * adjacent squares, mark them as equivalent.
+                 
+                 * The remaining work in this loop only works
+                 * around non-edge clue points.
+                 
+                 * x,y marks a clue point not on the grid edge. See
+                 * if this clue point allows us to rule out any v
+                 * shapes.
+                 
+                     * A 1 clue can never have any v shape pointing
+                     * at it.
+                     
+                     * A 3 clue can never have any v shape pointing
+                     * away from it.
+                     
+                     * If a 2 clue has any kind of v ruled out on
+                     * one side of it, the same v is ruled out on
+                     * the other side.
+                     
+     * Solver can make no more progress. See if the grid is full.
+      failed to converge  success 
+ * Filled-grid generator.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Prepare a list of the squares in the grid, and fill them in
+     * in a random order.
+     
+     * Fill in each one in turn.
+     
+	 * It isn't possible to get into a situation where we
+	 * aren't allowed to place _either_ type of slash in a
+	 * square. Thus, filled-grid generation never has to
+	 * backtrack.
+	 * 
+	 * Proof (thanks to Gareth Taylor):
+	 * 
+	 * If it were possible, it would have to be because there
+	 * was an existing path (not using this square) between the
+	 * top-left and bottom-right corners of this square, and
+	 * another between the other two. These two paths would
+	 * have to cross at some point.
+	 * 
+	 * Obviously they can't cross in the middle of a square, so
+	 * they must cross by sharing a point in common. But this
+	 * isn't possible either: if you chessboard-colour all the
+	 * points on the grid, you find that any continuous
+	 * diagonal path is entirely composed of points of the same
+	 * colour. And one of our two hypothetical paths is between
+	 * two black points, and the other is between two white
+	 * points - therefore they can have no point in common. []
+	 
+	 * Create the filled grid.
+	 
+	 * Fill in the complete set of clues.
+	 
+	 * With all clue points filled in, all puzzles are easy: we can
+	 * simply process the clue points in lexicographic order, and
+	 * at each clue point we will always have at most one square
+	 * undecided, which we can then fill in uniquely.
+	 
+	 * Remove as many clues as possible while retaining solubility.
+	 *
+	 * In DIFF_HARD mode, we prioritise the removal of obvious
+	 * starting points (4s, 0s, border 2s and corner 1s), on
+	 * the grounds that having as few of these as possible
+	 * seems like a good thing. In particular, we can often get
+	 * away without _any_ completely obvious starting points,
+	 * which is even better.
+	 
+		 * Identify which pass we should process this point
+		 * in. If it's an obvious start point, _or_ we're
+		 * in DIFF_EASY, then it goes in pass 0; otherwise
+		 * pass 1.
+		  put it back 
+	 * And finally, verify that the grid is of _at least_ the
+	 * requested difficulty, by running the solver one level
+	 * down and verifying that it can't manage it.
+	 
+     * Now we have the clue set as it will be presented to the
+     * user. Encode it in a game desc.
+     
+     * Encode the solution as an aux_info.
+     
+ * Utility function to return the current degree of a vertex. If
+ * `anti' is set, it returns the number of filled-in edges
+ * surrounding the point which _don't_ connect to it; thus 4 minus
+ * its anti-degree is the maximum degree it could have if all the
+ * empty spaces around it were filled in.
+ * 
+ * (Yes, _4_ minus its anti-degree even if it's a border vertex.)
+ * 
+ * If ret > 0, *sx and *sy are set to the coordinates of one of the
+ * squares that contributed to it.
+ 
+     * Detect and error-highlight loops in the grid.
+     
+     * Now go through and check the degree of each clue vertex, and
+     * mark it with ERR_VERTEX if it cannot be fulfilled.
+     
+             * Check to see if there are too many connections to
+             * this vertex _or_ too many non-connections. Either is
+             * grounds for marking the vertex as erroneous.
+             
+     * Now our actual victory condition is that (a) none of the
+     * above code marked anything as erroneous, and (b) every
+     * square has an edge in it.
+     
+	 * If we already have the solution, save ourselves some
+	 * time.
+	 
+     * Construct a move string which turns the current state into
+     * the solved state.
+     
+     * There are h+H rows of w+W columns.
+     
+ * Bit fields in the `grid' and `todraw' elements of the drawstate.
+ 
+	 * This is an utterly awful hack which I should really sort out
+	 * by means of a proper configuration mechanism. One Slant
+	 * player has observed that they prefer the mouse buttons to
+	 * function exactly the opposite way round, so here's a
+	 * mechanism for environment-based configuration. I cache the
+	 * result in a global variable - yuck! - to avoid repeated
+	 * lookups.
+	 
+             * Left-clicking cycles blank -> \ -> / -> blank.
+             
+             * Right-clicking cycles blank -> / -> \ -> blank.
+             
+     * We never clear the `completed' flag, but we must always
+     * re-run the completion check because it also highlights
+     * errors in the grid.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros  CURSOR colour is a background highlight. , H = h+1 
+     * Draw the grid lines.
+     
+     * Draw the slash.
+     
+     * Draw dots on the grid corners that appear if a slash is in a
+     * neighbouring cell.
+     
+     * And finally the clues at the corners.
+     
+     * Loop over the grid and work out where all the slashes are.
+     * We need to do this because a slash in one square affects the
+     * drawing of the next one along.
+     
+     * Now go through and draw the grid squares.
+     
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Solution.
+     
+		 * To prevent nasty line-ending artefacts at
+		 * corners, I'll do something slightly cunning
+		 * here.
+		 
+     * Clues.
+      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 
+ * slant.c: Puzzle from nikoli.co.jp involving drawing a diagonal
+ * line through each square of a grid.
+ 
+ * In this puzzle you have a grid of squares, each of which must
+ * contain a diagonal line; you also have clue numbers placed at
+ * _points_ of that grid, which means there's a (w+1) x (h+1) array
+ * of possible clue positions.
+ * 
+ * I'm therefore going to adopt a rigid convention throughout this
+ * source file of using w and h for the dimensions of the grid of
+ * squares, and W and H for the dimensions of the grid of points.
+ * Thus, W == w+1 and H == h+1 always.
+ * 
+ * Clue arrays will be W*H `signed char's, and the clue at each
+ * point will be a number from 0 to 4, or -1 if there's no clue.
+ * 
+ * Solution arrays will be W*H `signed char's, and the number at
+ * each point will be +1 for a forward slash (/), -1 for a
+ * backslash (\), and 0 for unknown.
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  used to suppress completion flash  structure copy 
+     * (At least at the time of writing this comment) The grid
+     * generator is actually capable of handling even zero grid
+     * dimensions without crashing. Puzzles with a zero-area grid
+     * are a bit boring, though, because they're already solved :-)
+     * And puzzles with a dimension of 1 can't be made Hard, which
+     * means the simplest thing is to forbid them altogether.
+     
+ * Scratch space for solver.
+ 
+     * Disjoint set forest which tracks the connected sets of
+     * points.
+     
+     * Counts the number of possible exits from each connected set
+     * of points. (That is, the number of possible _simultaneous_
+     * exits: an unconnected point labelled 2 has an exit count of
+     * 2 even if all four possible edges are still under
+     * consideration.)
+     
+     * Tracks whether each connected set of points includes a
+     * border point.
+     
+     * Another disjoint set forest. This one tracks _squares_ which
+     * are known to slant in the same direction.
+     
+     * Stores slash values which we know for an equivalence class.
+     * When we fill in a square, we set slashval[canonify(x)] to
+     * the same value as soln[x], so that we can then spot other
+     * squares equivalent to it and fill them in immediately via
+     * their known equivalence.
+     
+     * Stores possible v-shapes. This array is w by h in size, but
+     * not every bit of every entry is meaningful. The bits mean:
+     * 
+     *  - bit 0 for a square means that that square and the one to
+     *    its right might form a v-shape between them
+     *  - bit 1 for a square means that that square and the one to
+     *    its right might form a ^-shape between them
+     *  - bit 2 for a square means that that square and the one
+     *    below it might form a >-shape between them
+     *  - bit 3 for a square means that that square and the one
+     *    below it might form a <-shape between them
+     * 
+     * Any starting 1 or 3 clue rules out four bits in this array
+     * immediately; a 2 clue propagates any ruled-out bit past it
+     * (if the two squares on one side of a 2 cannot be a v-shape,
+     * then neither can the two on the other side be the same
+     * v-shape); we can rule out further bits during play using
+     * partially filled 2 clues; whenever a pair of squares is
+     * known not to be _either_ kind of v-shape, we can mark them
+     * as equivalent.
+     
+     * Useful to have this information automatically passed to
+     * solver subroutines. (This pointer is not dynamically
+     * allocated by new_scratch and free_scratch.)
+     
+ * Wrapper on dsf_merge() which updates the `exits' and `border'
+ * arrays.
+  initialise to placate optimiser 
+	 * We have used one possible exit from each of the two
+	 * classes. Thus, the viable exit count of the new class is
+	 * the sum of the old exit counts minus two.
+	 
+ * Called when we have just blocked one way out of a particular
+ * point. If that point is a non-clue point (thus has a variable
+ * number of exits), we have therefore decreased its potential exit
+ * count, so we must decrement the exit count for the group as a
+ * whole.
+ , H = h+1  do nothing 
+ * Solver. Returns 0 for impossibility, 1 for success, 2 for
+ * ambiguity or failure to converge.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Establish a disjoint set forest for tracking which squares
+     * are known to slant in the same direction.
+     
+     * Clear the slashval array.
+     
+     * Set up the vbitmap array. Initially all types of v are possible.
+     
+     * Initialise the `exits' and `border' arrays. These are used
+     * to do second-order loop avoidance: the dual of the no loops
+     * constraint is that every point must be somehow connected to
+     * the border of the grid (otherwise there would be a solid
+     * loop around it which prevented this).
+     * 
+     * I define a `dead end' to be a connected group of points
+     * which contains no border point, and which can form at most
+     * one new connection outside itself. Then I forbid placing an
+     * edge so that it connects together two dead-end groups, since
+     * this would yield a non-border-connected isolated subgraph
+     * with no further scope to extend it.
+     
+     * Repeatedly try to deduce something until we can't.
+     
+	 * Any clue point with the number of remaining lines equal
+	 * to zero or to the number of remaining undecided
+	 * neighbouring squares can be filled in completely.
+	 
+		 * We have a clue point. Start by listing its
+		 * neighbouring squares, in order around the point,
+		 * together with the type of slash that would be
+		 * required in that square to connect to the point.
+		 
+		 * Count up the number of undecided neighbours, and
+		 * also the number of lines already present.
+		 *
+		 * If we're not on DIFF_EASY, then in this loop we
+		 * also track whether we've seen two adjacent empty
+		 * squares belonging to the same equivalence class
+		 * (meaning they have the same type of slash). If
+		 * so, we count them jointly as one line.
+		  undecided 
+				 * We've found an equivalent pair.
+				 * Mark it. This also inhibits any
+				 * further equivalence tracking
+				 * around this square, since we can
+				 * only handle one pair (and in
+				 * particular we want to avoid
+				 * being misled by two overlapping
+				 * equivalence pairs).
+				  count one line  and lose two undecideds  here's a line 
+		 * Check the counts.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+		     * If we have precisely two undecided squares
+		     * and precisely one line to place between
+		     * them, _and_ those squares are adjacent, then
+		     * we can mark them as equivalent to one
+		     * another.
+		     * 
+		     * This even applies if meq >= 0: if we have a
+		     * 2 clue point and two of its neighbours are
+		     * already marked equivalent, we can indeed
+		     * mark the other two as equivalent.
+		     * 
+		     * We don't bother with this on DIFF_EASY,
+		     * since we wouldn't have used the results
+		     * anyway.
+		      found a pair 
+			 * neighbours[last] and neighbours[i] are
+			 * the pair. Mark them equivalent.
+			 
+	 * Failing that, we now apply the second condition, which
+	 * is that no square may be filled in such a way as to form
+	 * a loop. Also in this loop (since it's over squares
+	 * rather than points), we check slashval to see if we've
+	 * already filled in another square in the same equivalence
+	 * class.
+	 * 
+	 * The slashval check is disabled on DIFF_EASY, as is dead
+	 * end avoidance. Only _immediate_ loop avoidance remains.
+	  got this one already 
+		 * Try to rule out connectivity between (x,y) and
+		 * (x+1,y+1); if successful, we will deduce that we
+		 * must have a forward slash.
+		 
+		 * Now do the same between (x+1,y) and (x,y+1), to
+		 * see if we are required to have a backslash.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+         * Now see what we can do with the vbitmap array. All
+         * vbitmap deductions are disabled at Easy level.
+         
+                 * Any line already placed in a square must rule
+                 * out any type of v which contradicts it.
+                 
+                 * If both types of v are ruled out for a pair of
+                 * adjacent squares, mark them as equivalent.
+                 
+                 * The remaining work in this loop only works
+                 * around non-edge clue points.
+                 
+                 * x,y marks a clue point not on the grid edge. See
+                 * if this clue point allows us to rule out any v
+                 * shapes.
+                 
+                     * A 1 clue can never have any v shape pointing
+                     * at it.
+                     
+                     * A 3 clue can never have any v shape pointing
+                     * away from it.
+                     
+                     * If a 2 clue has any kind of v ruled out on
+                     * one side of it, the same v is ruled out on
+                     * the other side.
+                     
+     * Solver can make no more progress. See if the grid is full.
+      failed to converge  success 
+ * Filled-grid generator.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Prepare a list of the squares in the grid, and fill them in
+     * in a random order.
+     
+     * Fill in each one in turn.
+     
+	 * It isn't possible to get into a situation where we
+	 * aren't allowed to place _either_ type of slash in a
+	 * square. Thus, filled-grid generation never has to
+	 * backtrack.
+	 * 
+	 * Proof (thanks to Gareth Taylor):
+	 * 
+	 * If it were possible, it would have to be because there
+	 * was an existing path (not using this square) between the
+	 * top-left and bottom-right corners of this square, and
+	 * another between the other two. These two paths would
+	 * have to cross at some point.
+	 * 
+	 * Obviously they can't cross in the middle of a square, so
+	 * they must cross by sharing a point in common. But this
+	 * isn't possible either: if you chessboard-colour all the
+	 * points on the grid, you find that any continuous
+	 * diagonal path is entirely composed of points of the same
+	 * colour. And one of our two hypothetical paths is between
+	 * two black points, and the other is between two white
+	 * points - therefore they can have no point in common. []
+	 
+	 * Create the filled grid.
+	 
+	 * Fill in the complete set of clues.
+	 
+	 * With all clue points filled in, all puzzles are easy: we can
+	 * simply process the clue points in lexicographic order, and
+	 * at each clue point we will always have at most one square
+	 * undecided, which we can then fill in uniquely.
+	 
+	 * Remove as many clues as possible while retaining solubility.
+	 *
+	 * In DIFF_HARD mode, we prioritise the removal of obvious
+	 * starting points (4s, 0s, border 2s and corner 1s), on
+	 * the grounds that having as few of these as possible
+	 * seems like a good thing. In particular, we can often get
+	 * away without _any_ completely obvious starting points,
+	 * which is even better.
+	 
+		 * Identify which pass we should process this point
+		 * in. If it's an obvious start point, _or_ we're
+		 * in DIFF_EASY, then it goes in pass 0; otherwise
+		 * pass 1.
+		  put it back 
+	 * And finally, verify that the grid is of _at least_ the
+	 * requested difficulty, by running the solver one level
+	 * down and verifying that it can't manage it.
+	 
+     * Now we have the clue set as it will be presented to the
+     * user. Encode it in a game desc.
+     
+     * Encode the solution as an aux_info.
+     
+ * Utility function to return the current degree of a vertex. If
+ * `anti' is set, it returns the number of filled-in edges
+ * surrounding the point which _don't_ connect to it; thus 4 minus
+ * its anti-degree is the maximum degree it could have if all the
+ * empty spaces around it were filled in.
+ * 
+ * (Yes, _4_ minus its anti-degree even if it's a border vertex.)
+ * 
+ * If ret > 0, *sx and *sy are set to the coordinates of one of the
+ * squares that contributed to it.
+ 
+     * Detect and error-highlight loops in the grid.
+     
+     * Now go through and check the degree of each clue vertex, and
+     * mark it with ERR_VERTEX if it cannot be fulfilled.
+     
+             * Check to see if there are too many connections to
+             * this vertex _or_ too many non-connections. Either is
+             * grounds for marking the vertex as erroneous.
+             
+     * Now our actual victory condition is that (a) none of the
+     * above code marked anything as erroneous, and (b) every
+     * square has an edge in it.
+     
+	 * If we already have the solution, save ourselves some
+	 * time.
+	 
+     * Construct a move string which turns the current state into
+     * the solved state.
+     
+     * There are h+H rows of w+W columns.
+     
+ * Bit fields in the `grid' and `todraw' elements of the drawstate.
+ 
+	 * This is an utterly awful hack which I should really sort out
+	 * by means of a proper configuration mechanism. One Slant
+	 * player has observed that they prefer the mouse buttons to
+	 * function exactly the opposite way round, so here's a
+	 * mechanism for environment-based configuration. I cache the
+	 * result in a global variable - yuck! - to avoid repeated
+	 * lookups.
+	 
+             * Left-clicking cycles blank -> \ -> / -> blank.
+             
+             * Right-clicking cycles blank -> / -> \ -> blank.
+             
+     * We never clear the `completed' flag, but we must always
+     * re-run the completion check because it also highlights
+     * errors in the grid.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros  CURSOR colour is a background highlight. , H = h+1 
+     * Draw the grid lines.
+     
+     * Draw the slash.
+     
+     * Draw dots on the grid corners that appear if a slash is in a
+     * neighbouring cell.
+     
+     * And finally the clues at the corners.
+     
+     * Loop over the grid and work out where all the slashes are.
+     * We need to do this because a slash in one square affects the
+     * drawing of the next one along.
+     
+     * Now go through and draw the grid squares.
+     
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Solution.
+     
+		 * To prevent nasty line-ending artefacts at
+		 * corners, I'll do something slightly cunning
+		 * here.
+		 
+     * Clues.
+      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 
+ * slant.c: Puzzle from nikoli.co.jp involving drawing a diagonal
+ * line through each square of a grid.
+ 
+ * In this puzzle you have a grid of squares, each of which must
+ * contain a diagonal line; you also have clue numbers placed at
+ * _points_ of that grid, which means there's a (w+1) x (h+1) array
+ * of possible clue positions.
+ * 
+ * I'm therefore going to adopt a rigid convention throughout this
+ * source file of using w and h for the dimensions of the grid of
+ * squares, and W and H for the dimensions of the grid of points.
+ * Thus, W == w+1 and H == h+1 always.
+ * 
+ * Clue arrays will be W*H `signed char's, and the clue at each
+ * point will be a number from 0 to 4, or -1 if there's no clue.
+ * 
+ * Solution arrays will be W*H `signed char's, and the number at
+ * each point will be +1 for a forward slash (/), -1 for a
+ * backslash (\), and 0 for unknown.
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  used to suppress completion flash  structure copy 
+     * (At least at the time of writing this comment) The grid
+     * generator is actually capable of handling even zero grid
+     * dimensions without crashing. Puzzles with a zero-area grid
+     * are a bit boring, though, because they're already solved :-)
+     * And puzzles with a dimension of 1 can't be made Hard, which
+     * means the simplest thing is to forbid them altogether.
+     
+ * Scratch space for solver.
+ 
+     * Disjoint set forest which tracks the connected sets of
+     * points.
+     
+     * Counts the number of possible exits from each connected set
+     * of points. (That is, the number of possible _simultaneous_
+     * exits: an unconnected point labelled 2 has an exit count of
+     * 2 even if all four possible edges are still under
+     * consideration.)
+     
+     * Tracks whether each connected set of points includes a
+     * border point.
+     
+     * Another disjoint set forest. This one tracks _squares_ which
+     * are known to slant in the same direction.
+     
+     * Stores slash values which we know for an equivalence class.
+     * When we fill in a square, we set slashval[canonify(x)] to
+     * the same value as soln[x], so that we can then spot other
+     * squares equivalent to it and fill them in immediately via
+     * their known equivalence.
+     
+     * Stores possible v-shapes. This array is w by h in size, but
+     * not every bit of every entry is meaningful. The bits mean:
+     * 
+     *  - bit 0 for a square means that that square and the one to
+     *    its right might form a v-shape between them
+     *  - bit 1 for a square means that that square and the one to
+     *    its right might form a ^-shape between them
+     *  - bit 2 for a square means that that square and the one
+     *    below it might form a >-shape between them
+     *  - bit 3 for a square means that that square and the one
+     *    below it might form a <-shape between them
+     * 
+     * Any starting 1 or 3 clue rules out four bits in this array
+     * immediately; a 2 clue propagates any ruled-out bit past it
+     * (if the two squares on one side of a 2 cannot be a v-shape,
+     * then neither can the two on the other side be the same
+     * v-shape); we can rule out further bits during play using
+     * partially filled 2 clues; whenever a pair of squares is
+     * known not to be _either_ kind of v-shape, we can mark them
+     * as equivalent.
+     
+     * Useful to have this information automatically passed to
+     * solver subroutines. (This pointer is not dynamically
+     * allocated by new_scratch and free_scratch.)
+     
+ * Wrapper on dsf_merge() which updates the `exits' and `border'
+ * arrays.
+  initialise to placate optimiser 
+	 * We have used one possible exit from each of the two
+	 * classes. Thus, the viable exit count of the new class is
+	 * the sum of the old exit counts minus two.
+	 
+ * Called when we have just blocked one way out of a particular
+ * point. If that point is a non-clue point (thus has a variable
+ * number of exits), we have therefore decreased its potential exit
+ * count, so we must decrement the exit count for the group as a
+ * whole.
+ , H = h+1  do nothing 
+ * Solver. Returns 0 for impossibility, 1 for success, 2 for
+ * ambiguity or failure to converge.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Establish a disjoint set forest for tracking which squares
+     * are known to slant in the same direction.
+     
+     * Clear the slashval array.
+     
+     * Set up the vbitmap array. Initially all types of v are possible.
+     
+     * Initialise the `exits' and `border' arrays. These are used
+     * to do second-order loop avoidance: the dual of the no loops
+     * constraint is that every point must be somehow connected to
+     * the border of the grid (otherwise there would be a solid
+     * loop around it which prevented this).
+     * 
+     * I define a `dead end' to be a connected group of points
+     * which contains no border point, and which can form at most
+     * one new connection outside itself. Then I forbid placing an
+     * edge so that it connects together two dead-end groups, since
+     * this would yield a non-border-connected isolated subgraph
+     * with no further scope to extend it.
+     
+     * Repeatedly try to deduce something until we can't.
+     
+	 * Any clue point with the number of remaining lines equal
+	 * to zero or to the number of remaining undecided
+	 * neighbouring squares can be filled in completely.
+	 
+		 * We have a clue point. Start by listing its
+		 * neighbouring squares, in order around the point,
+		 * together with the type of slash that would be
+		 * required in that square to connect to the point.
+		 
+		 * Count up the number of undecided neighbours, and
+		 * also the number of lines already present.
+		 *
+		 * If we're not on DIFF_EASY, then in this loop we
+		 * also track whether we've seen two adjacent empty
+		 * squares belonging to the same equivalence class
+		 * (meaning they have the same type of slash). If
+		 * so, we count them jointly as one line.
+		  undecided 
+				 * We've found an equivalent pair.
+				 * Mark it. This also inhibits any
+				 * further equivalence tracking
+				 * around this square, since we can
+				 * only handle one pair (and in
+				 * particular we want to avoid
+				 * being misled by two overlapping
+				 * equivalence pairs).
+				  count one line  and lose two undecideds  here's a line 
+		 * Check the counts.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+		     * If we have precisely two undecided squares
+		     * and precisely one line to place between
+		     * them, _and_ those squares are adjacent, then
+		     * we can mark them as equivalent to one
+		     * another.
+		     * 
+		     * This even applies if meq >= 0: if we have a
+		     * 2 clue point and two of its neighbours are
+		     * already marked equivalent, we can indeed
+		     * mark the other two as equivalent.
+		     * 
+		     * We don't bother with this on DIFF_EASY,
+		     * since we wouldn't have used the results
+		     * anyway.
+		      found a pair 
+			 * neighbours[last] and neighbours[i] are
+			 * the pair. Mark them equivalent.
+			 
+	 * Failing that, we now apply the second condition, which
+	 * is that no square may be filled in such a way as to form
+	 * a loop. Also in this loop (since it's over squares
+	 * rather than points), we check slashval to see if we've
+	 * already filled in another square in the same equivalence
+	 * class.
+	 * 
+	 * The slashval check is disabled on DIFF_EASY, as is dead
+	 * end avoidance. Only _immediate_ loop avoidance remains.
+	  got this one already 
+		 * Try to rule out connectivity between (x,y) and
+		 * (x+1,y+1); if successful, we will deduce that we
+		 * must have a forward slash.
+		 
+		 * Now do the same between (x+1,y) and (x,y+1), to
+		 * see if we are required to have a backslash.
+		 
+		     * No consistent value for this at all!
+		      impossible 
+         * Now see what we can do with the vbitmap array. All
+         * vbitmap deductions are disabled at Easy level.
+         
+                 * Any line already placed in a square must rule
+                 * out any type of v which contradicts it.
+                 
+                 * If both types of v are ruled out for a pair of
+                 * adjacent squares, mark them as equivalent.
+                 
+                 * The remaining work in this loop only works
+                 * around non-edge clue points.
+                 
+                 * x,y marks a clue point not on the grid edge. See
+                 * if this clue point allows us to rule out any v
+                 * shapes.
+                 
+                     * A 1 clue can never have any v shape pointing
+                     * at it.
+                     
+                     * A 3 clue can never have any v shape pointing
+                     * away from it.
+                     
+                     * If a 2 clue has any kind of v ruled out on
+                     * one side of it, the same v is ruled out on
+                     * the other side.
+                     
+     * Solver can make no more progress. See if the grid is full.
+      failed to converge  success 
+ * Filled-grid generator.
+ 
+     * Clear the output.
+     
+     * Establish a disjoint set forest for tracking connectedness
+     * between grid points.
+     
+     * Prepare a list of the squares in the grid, and fill them in
+     * in a random order.
+     
+     * Fill in each one in turn.
+     
+	 * It isn't possible to get into a situation where we
+	 * aren't allowed to place _either_ type of slash in a
+	 * square. Thus, filled-grid generation never has to
+	 * backtrack.
+	 * 
+	 * Proof (thanks to Gareth Taylor):
+	 * 
+	 * If it were possible, it would have to be because there
+	 * was an existing path (not using this square) between the
+	 * top-left and bottom-right corners of this square, and
+	 * another between the other two. These two paths would
+	 * have to cross at some point.
+	 * 
+	 * Obviously they can't cross in the middle of a square, so
+	 * they must cross by sharing a point in common. But this
+	 * isn't possible either: if you chessboard-colour all the
+	 * points on the grid, you find that any continuous
+	 * diagonal path is entirely composed of points of the same
+	 * colour. And one of our two hypothetical paths is between
+	 * two black points, and the other is between two white
+	 * points - therefore they can have no point in common. []
+	 
+	 * Create the filled grid.
+	 
+	 * Fill in the complete set of clues.
+	 
+	 * With all clue points filled in, all puzzles are easy: we can
+	 * simply process the clue points in lexicographic order, and
+	 * at each clue point we will always have at most one square
+	 * undecided, which we can then fill in uniquely.
+	 
+	 * Remove as many clues as possible while retaining solubility.
+	 *
+	 * In DIFF_HARD mode, we prioritise the removal of obvious
+	 * starting points (4s, 0s, border 2s and corner 1s), on
+	 * the grounds that having as few of these as possible
+	 * seems like a good thing. In particular, we can often get
+	 * away without _any_ completely obvious starting points,
+	 * which is even better.
+	 
+		 * Identify which pass we should process this point
+		 * in. If it's an obvious start point, _or_ we're
+		 * in DIFF_EASY, then it goes in pass 0; otherwise
+		 * pass 1.
+		  put it back 
+	 * And finally, verify that the grid is of _at least_ the
+	 * requested difficulty, by running the solver one level
+	 * down and verifying that it can't manage it.
+	 
+     * Now we have the clue set as it will be presented to the
+     * user. Encode it in a game desc.
+     
+     * Encode the solution as an aux_info.
+     
+ * Utility function to return the current degree of a vertex. If
+ * `anti' is set, it returns the number of filled-in edges
+ * surrounding the point which _don't_ connect to it; thus 4 minus
+ * its anti-degree is the maximum degree it could have if all the
+ * empty spaces around it were filled in.
+ * 
+ * (Yes, _4_ minus its anti-degree even if it's a border vertex.)
+ * 
+ * If ret > 0, *sx and *sy are set to the coordinates of one of the
+ * squares that contributed to it.
+ 
+     * Detect and error-highlight loops in the grid.
+     
+     * Now go through and check the degree of each clue vertex, and
+     * mark it with ERR_VERTEX if it cannot be fulfilled.
+     
+             * Check to see if there are too many connections to
+             * this vertex _or_ too many non-connections. Either is
+             * grounds for marking the vertex as erroneous.
+             
+     * Now our actual victory condition is that (a) none of the
+     * above code marked anything as erroneous, and (b) every
+     * square has an edge in it.
+     
+	 * If we already have the solution, save ourselves some
+	 * time.
+	 
+     * Construct a move string which turns the current state into
+     * the solved state.
+     
+     * There are h+H rows of w+W columns.
+     
+ * Bit fields in the `grid' and `todraw' elements of the drawstate.
+ 
+	 * This is an utterly awful hack which I should really sort out
+	 * by means of a proper configuration mechanism. One Slant
+	 * player has observed that they prefer the mouse buttons to
+	 * function exactly the opposite way round, so here's a
+	 * mechanism for environment-based configuration. I cache the
+	 * result in a global variable - yuck! - to avoid repeated
+	 * lookups.
+	 
+             * Left-clicking cycles blank -> \ -> / -> blank.
+             
+             * Right-clicking cycles blank -> / -> \ -> blank.
+             
+     * We never clear the `completed' flag, but we must always
+     * re-run the completion check because it also highlights
+     * errors in the grid.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  fool the macros  CURSOR colour is a background highlight. , H = h+1 
+     * Draw the grid lines.
+     
+     * Draw the slash.
+     
+     * Draw dots on the grid corners that appear if a slash is in a
+     * neighbouring cell.
+     
+     * And finally the clues at the corners.
+     
+     * Loop over the grid and work out where all the slashes are.
+     * We need to do this because a slash in one square affects the
+     * drawing of the next one along.
+     
+     * Now go through and draw the grid squares.
+     
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Solution.
+     
+		 * To prevent nasty line-ending artefacts at
+		 * corners, I'll do something slightly cunning
+		 * here.
+		 
+     * Clues.
+      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 

@@ -1,0 +1,370 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ *   Copyright (C) 2009 by Karl Kurbjun 
+ *      based on work by Shirour: 
+ *          http://www.mrobe.org/forum/viewtopic.php?f=6&t=2176
+ *   $Id$
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Notes about firmware:
+ *  These notes are based on the work and observations of Shirour on the M:Robe
+ *  forums.
+ *
+ *  The firmware for the M:Robe has basic encryption on it.  The data is XORed
+ *  and scrambled. The mr500_save_data function provides an implemenation of the
+ *  encryption/decryption.
+ *
+ *  When a firmware update is done the "{#4F494D4346575550#}" folder is stored
+ *  in the system folder on the player.  The "{#4F494D4346575550#}" should only
+ *  contain the encrypted N5002-BD.BIN file.  At the end of a firmware update
+ *  the "{#4F494D4346575550#}" folder and it's contents are removed from the
+ *  player.
+ *
+ *  An interesting note is that the name "{#4F494D4346575550#}" is actually the
+ *  Hex representation of the magic text found at the beginning of the firmware
+ *  image "OIMCFWUP".
+  These two arrays are used for descrambling or scrambling the data  mr500_patch_file: This function modifies the specified file with the patches
+ *  struct.
+ * 
+ *  Parameters:
+ *      filename:       text filename
+ *      patches:        pointer to structure array of patches
+ *      num_patches:    number of patches to apply (applied in reverse order)
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only.  seek to patch offset  Make sure patch is written in little endian format  Write the patch value to the file  Close the file and check for errors  mr500_save_header: This function saves the Olympus header to the firmware 
+ *  image. The values stored in the header are explained above.  Note that this 
+ *  will truncate a file.  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to be saved
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Temporary header used for storing the header in little endian.  Open the file write only and truncate it.  If it doesn't exist create.  Header is stored at offset 0 (Not really needed)  Convert header to Little Endian  Write the header to the file  Close the file and check for errors  mr500_read_header: This function reads the Olympus header and converts it to 
+ *  the host endian format. The values stored in the header are explained above. 
+ *  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to store header read from file
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Header is stored at offset 0 (Not really needed)  Read in the header  Convert header to system endian  Close the file and check for errors  mr500_save_crc: This function saves the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' must be calculated on the decrytped image.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to store the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only  Seek to offset and check for errors  Convert 'CRC' to little endian from system native endian  Write the 'CRC' and check for errors  Close the file and check for errors  mr500_read_crc: This function reads the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' is calculated on the decrytped values.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to read the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Read in the 'CRC'  Convert the 'CRC' from little endian to system native format  Close the file and check for errors  mr500_calculate_crc: This function calculates the 'CRC' of the Olympus 
+ *  firmware image.  Note that the 'CRC' must be calculated on decrytped values.  
+ *  It is stored in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to calculate
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Initialize the crc_value to make sure this starts at 0  Run this loop till the entire sum is created  Read an integer at a time  Keep summing the values  Close the file and check for errors  mr500_save_data: This function encypts or decrypts the Olympus firmware 
+ *      image based on the dictionary passed to it.
+ * 
+ *  Parameters:
+ *      source_filename: text filename where data is read from
+ *      dest_filename: text filename where data is written to
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to modify
+ *      dictionary: pointer to dictionary used for scrambling
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  read_count stores the number of bytes actually read  read_request stores the number of bytes to be requested  These two buffers are used for reading data and scrambling or
+     *  descrambling
+      Open input read only, output write only  If there was an error loading the files set ret appropriately  Input file: Seek to offset and check for errors  Output file: Seek to offset and check for errors  Run this loop till size is 0  Choose the amount of data to read - normally in 16 byte chunks, but
+         *  when the end of the file is near may be less.
+          Read in the data  If there was an error set the flag and break  XOR all of the bits to de/encrypt them  Handle byte scrambling  write the data: If there was an error set the flag and break  Close the files and check for errors  mr500_init: This function initializes the encryption array
+ * 
+ *  Parameters:
+ *      None
+ *
+ *  Returns:
+ *      Returns 0
+  Initialize the encryption array **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ *   Copyright (C) 2009 by Karl Kurbjun 
+ *      based on work by Shirour: 
+ *          http://www.mrobe.org/forum/viewtopic.php?f=6&t=2176
+ *   $Id$
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Notes about firmware:
+ *  These notes are based on the work and observations of Shirour on the M:Robe
+ *  forums.
+ *
+ *  The firmware for the M:Robe has basic encryption on it.  The data is XORed
+ *  and scrambled. The mr500_save_data function provides an implemenation of the
+ *  encryption/decryption.
+ *
+ *  When a firmware update is done the "{#4F494D4346575550#}" folder is stored
+ *  in the system folder on the player.  The "{#4F494D4346575550#}" should only
+ *  contain the encrypted N5002-BD.BIN file.  At the end of a firmware update
+ *  the "{#4F494D4346575550#}" folder and it's contents are removed from the
+ *  player.
+ *
+ *  An interesting note is that the name "{#4F494D4346575550#}" is actually the
+ *  Hex representation of the magic text found at the beginning of the firmware
+ *  image "OIMCFWUP".
+  These two arrays are used for descrambling or scrambling the data  mr500_patch_file: This function modifies the specified file with the patches
+ *  struct.
+ * 
+ *  Parameters:
+ *      filename:       text filename
+ *      patches:        pointer to structure array of patches
+ *      num_patches:    number of patches to apply (applied in reverse order)
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only.  seek to patch offset  Make sure patch is written in little endian format  Write the patch value to the file  Close the file and check for errors  mr500_save_header: This function saves the Olympus header to the firmware 
+ *  image. The values stored in the header are explained above.  Note that this 
+ *  will truncate a file.  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to be saved
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Temporary header used for storing the header in little endian.  Open the file write only and truncate it.  If it doesn't exist create.  Header is stored at offset 0 (Not really needed)  Convert header to Little Endian  Write the header to the file  Close the file and check for errors  mr500_read_header: This function reads the Olympus header and converts it to 
+ *  the host endian format. The values stored in the header are explained above. 
+ *  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to store header read from file
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Header is stored at offset 0 (Not really needed)  Read in the header  Convert header to system endian  Close the file and check for errors  mr500_save_crc: This function saves the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' must be calculated on the decrytped image.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to store the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only  Seek to offset and check for errors  Convert 'CRC' to little endian from system native endian  Write the 'CRC' and check for errors  Close the file and check for errors  mr500_read_crc: This function reads the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' is calculated on the decrytped values.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to read the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Read in the 'CRC'  Convert the 'CRC' from little endian to system native format  Close the file and check for errors  mr500_calculate_crc: This function calculates the 'CRC' of the Olympus 
+ *  firmware image.  Note that the 'CRC' must be calculated on decrytped values.  
+ *  It is stored in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to calculate
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Initialize the crc_value to make sure this starts at 0  Run this loop till the entire sum is created  Read an integer at a time  Keep summing the values  Close the file and check for errors  mr500_save_data: This function encypts or decrypts the Olympus firmware 
+ *      image based on the dictionary passed to it.
+ * 
+ *  Parameters:
+ *      source_filename: text filename where data is read from
+ *      dest_filename: text filename where data is written to
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to modify
+ *      dictionary: pointer to dictionary used for scrambling
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  read_count stores the number of bytes actually read  read_request stores the number of bytes to be requested  These two buffers are used for reading data and scrambling or
+     *  descrambling
+      Open input read only, output write only  If there was an error loading the files set ret appropriately  Input file: Seek to offset and check for errors  Output file: Seek to offset and check for errors  Run this loop till size is 0  Choose the amount of data to read - normally in 16 byte chunks, but
+         *  when the end of the file is near may be less.
+          Read in the data  If there was an error set the flag and break  XOR all of the bits to de/encrypt them  Handle byte scrambling  write the data: If there was an error set the flag and break  Close the files and check for errors  mr500_init: This function initializes the encryption array
+ * 
+ *  Parameters:
+ *      None
+ *
+ *  Returns:
+ *      Returns 0
+  Initialize the encryption array **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ *   Copyright (C) 2009 by Karl Kurbjun 
+ *      based on work by Shirour: 
+ *          http://www.mrobe.org/forum/viewtopic.php?f=6&t=2176
+ *   $Id$
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Notes about firmware:
+ *  These notes are based on the work and observations of Shirour on the M:Robe
+ *  forums.
+ *
+ *  The firmware for the M:Robe has basic encryption on it.  The data is XORed
+ *  and scrambled. The mr500_save_data function provides an implemenation of the
+ *  encryption/decryption.
+ *
+ *  When a firmware update is done the "{#4F494D4346575550#}" folder is stored
+ *  in the system folder on the player.  The "{#4F494D4346575550#}" should only
+ *  contain the encrypted N5002-BD.BIN file.  At the end of a firmware update
+ *  the "{#4F494D4346575550#}" folder and it's contents are removed from the
+ *  player.
+ *
+ *  An interesting note is that the name "{#4F494D4346575550#}" is actually the
+ *  Hex representation of the magic text found at the beginning of the firmware
+ *  image "OIMCFWUP".
+  These two arrays are used for descrambling or scrambling the data  mr500_patch_file: This function modifies the specified file with the patches
+ *  struct.
+ * 
+ *  Parameters:
+ *      filename:       text filename
+ *      patches:        pointer to structure array of patches
+ *      num_patches:    number of patches to apply (applied in reverse order)
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only.  seek to patch offset  Make sure patch is written in little endian format  Write the patch value to the file  Close the file and check for errors  mr500_save_header: This function saves the Olympus header to the firmware 
+ *  image. The values stored in the header are explained above.  Note that this 
+ *  will truncate a file.  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to be saved
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Temporary header used for storing the header in little endian.  Open the file write only and truncate it.  If it doesn't exist create.  Header is stored at offset 0 (Not really needed)  Convert header to Little Endian  Write the header to the file  Close the file and check for errors  mr500_read_header: This function reads the Olympus header and converts it to 
+ *  the host endian format. The values stored in the header are explained above. 
+ *  The header is stored in little endian format.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      header: pointer to header structure to store header read from file
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Header is stored at offset 0 (Not really needed)  Read in the header  Convert header to system endian  Close the file and check for errors  mr500_save_crc: This function saves the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' must be calculated on the decrytped image.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to store the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file write only  Seek to offset and check for errors  Convert 'CRC' to little endian from system native endian  Write the 'CRC' and check for errors  Close the file and check for errors  mr500_read_crc: This function reads the 'CRC' of the Olympus firmware image.  
+ *  Note that the 'CRC' is calculated on the decrytped values.  It is stored
+ *  in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to read the 'CRC' (header size + data size)
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Read in the 'CRC'  Convert the 'CRC' from little endian to system native format  Close the file and check for errors  mr500_calculate_crc: This function calculates the 'CRC' of the Olympus 
+ *  firmware image.  Note that the 'CRC' must be calculated on decrytped values.  
+ *  It is stored in little endian.
+ * 
+ *  Parameters:
+ *      filename: text filename
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to calculate
+ *      crc_value: pointer to crc value to save
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  Open the file read only  Seek to offset and check for errors  Initialize the crc_value to make sure this starts at 0  Run this loop till the entire sum is created  Read an integer at a time  Keep summing the values  Close the file and check for errors  mr500_save_data: This function encypts or decrypts the Olympus firmware 
+ *      image based on the dictionary passed to it.
+ * 
+ *  Parameters:
+ *      source_filename: text filename where data is read from
+ *      dest_filename: text filename where data is written to
+ *      offset: Offset to the start of the data (header size)
+ *      length: Length of data to modify
+ *      dictionary: pointer to dictionary used for scrambling
+ *
+ *  Returns:
+ *      Returns 0 if there was no error, -1 if there was an error
+  read_count stores the number of bytes actually read  read_request stores the number of bytes to be requested  These two buffers are used for reading data and scrambling or
+     *  descrambling
+      Open input read only, output write only  If there was an error loading the files set ret appropriately  Input file: Seek to offset and check for errors  Output file: Seek to offset and check for errors  Run this loop till size is 0  Choose the amount of data to read - normally in 16 byte chunks, but
+         *  when the end of the file is near may be less.
+          Read in the data  If there was an error set the flag and break  XOR all of the bits to de/encrypt them  Handle byte scrambling  write the data: If there was an error set the flag and break  Close the files and check for errors  mr500_init: This function initializes the encryption array
+ * 
+ *  Parameters:
+ *      None
+ *
+ *  Returns:
+ *      Returns 0
+  Initialize the encryption array 

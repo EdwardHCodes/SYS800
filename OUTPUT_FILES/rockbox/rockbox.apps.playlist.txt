@@ -1,0 +1,913 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by wavey@wavey.org
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Dynamic playlist design (based on design originally proposed by ricII)
+
+    There are two files associated with a dynamic playlist:
+    1. Playlist file : This file contains the initial songs in the playlist.
+                       The file is created by the user and stored on the hard
+                       drive.  NOTE: If we are playing the contents of a
+                       directory, there will be no playlist file.
+    2. Control file :  This file is automatically created when a playlist is
+                       started and contains all the commands done to it.
+    
+    The first non-comment line in a control file must begin with
+    "P:VERSION:DIR:FILE" where VERSION is the playlist control file version,
+    DIR is the directory where the playlist is located and FILE is the
+    playlist filename.  For dirplay, FILE will be empty.  An empty playlist
+    will have both entries as null.
+
+    Control file commands:
+        a. Add track (A:<position>:<last position>:<path to track>)
+            - Insert a track at the specified position in the current
+              playlist.  Last position is used to specify where last insertion
+              occurred.
+        b. Queue track (Q:<position>:<last position>:<path to track>)
+            - Queue a track at the specified position in the current
+              playlist.  Queued tracks differ from added tracks in that they
+              are deleted from the playlist as soon as they are played and
+              they are not saved to disk as part of the playlist.
+        c. Delete track (D:<position>)
+            - Delete track from specified position in the current playlist.
+        d. Shuffle playlist (S:<seed>:<index>)
+            - Shuffle entire playlist with specified seed.  The index
+              identifies the first index in the newly shuffled playlist
+              (needed for repeat mode).
+        e. Unshuffle playlist (U:<index>)
+            - Unshuffle entire playlist.  The index identifies the first index
+              in the newly unshuffled playlist.
+        f. Reset last insert position (R)
+            - Needed so that insertions work properly after resume
+
+  Resume:
+      The only resume info that needs to be saved is the current index in the
+      playlist and the position in the track.  When resuming, all the commands
+      in the control file will be reapplied so that the playlist indices are
+      exactly the same as before shutdown.  To avoid unnecessary disk
+      accesses, the shuffle mode settings are also saved in settings and only
+      flushed to disk when required.
+  To borrow a temp buffer to rewrite a .m3u8 file 
+    Each playlist index has a flag associated with it which identifies what
+    type of track it is.  These flags are stored in the 4 high order bits of
+    the index.
+    
+    NOTE: This limits the playlist file size to a max of 256M.
+
+    Bits 31-30:
+        00 = Playlist track
+        01 = Track was prepended into playlist
+        10 = Track was inserted into playlist
+        11 = Track was appended into playlist
+    Bit 29:
+        0 = Added track
+        1 = Queued track
+    Bit 28:
+        0 = Track entry is valid
+        1 = Track does not exist on disk and should be skipped
+  just initialize the destination  HAVE_DIRCACHE  Check if the filename suggests M3U or M3U8 format.  Default to M3U8 unless explicitly told otherwise.  Convert a filename in an M3U playlist to UTF-8. 
+ *
+ * buf     - the filename to convert; can contain more than one line from the
+ *           playlist.
+ * buf_len - amount of buf that is used.
+ * buf_max - total size of buf.
+ * temp    - temporary conversion buffer, at least buf_max bytes.
+ * 
+ * Returns the length of the converted filename.
+  Locate EOL.  Work back killing white space.  Convert char by char, so as to not overflow temp (iso_decode should
+     * preferably handle this). No more than 4 bytes should be generated for
+     * each input char.
+     
+ * remove any files and indices associated with the playlist
+  If there is an already open playlist, close it.  start with fresh playlist control file when starting new
+           playlist 
+ * Initialize a new playlist for viewing/editing/playing.  dir is the
+ * directory where the playlist is located and file is the filename.
+  !current cannot be in_ram  empty playlist 
+ * create control file for playlist
+ 
+ * validate the control file.  This may include creating/initializing it if
+ * necessary;
+ 
+ * recreate the control file based on current playlist entries
+  cannot call update_control() because of mutex  save the position in file where name is written 
+ * store directory and name of playlist file
+  If the dir does not end in trailing slash, we use a separator.
+       Otherwise we don't. 
+ * calculate track offsets within a playlist file
+  get emergency buffer so we don't fail horribly  failure  Override any earlier indication.  Terminate on EOF  Are we on a new line?  Store a new entry 
+ * Utility function to create a new playlist, fill it with the next or
+ * previous directory, shuffle it if needed, and start playback.
+ * If play_last is true and direction zero or negative, start playing
+ * the last file in the directory, otherwise start playing the first.
+  return the error encountered  we've overwritten the dircache when getting the next/previous dir,
+       so the tree browser context will need to be reloaded 
+ * Removes all tracks, from the playlist, leaving the presently playing
+ * track queued.
+ 
+ * Add track to playlist at specified position. There are seven special
+ * positions that can be specified:
+ *  PLAYLIST_PREPEND              - Add track at beginning of playlist
+ *  PLAYLIST_INSERT               - Add track after current song.  NOTE: If
+ *                                  there are already inserted tracks then track
+ *                                  is added to the end of the insertion list
+ *  PLAYLIST_INSERT_FIRST         - Add track immediately after current song, no
+ *                                  matter what other tracks have been inserted
+ *  PLAYLIST_INSERT_LAST          - Add track to end of playlist
+ *  PLAYLIST_INSERT_SHUFFLED      - Add track at some random point between the
+ *                                  current playing track and end of playlist
+ *  PLAYLIST_INSERT_LAST_SHUFFLED - Add tracks in random order to the end of
+ *                                  the playlist.
+ *  PLAYLIST_REPLACE              - Erase current playlist, Cue the current track
+ *                                  and inster this track at the end.
+  if there are already inserted tracks then add track to end of
+               insertion list else add after current playing track  shift indices so that track can be added  update stored indices if needed 
+ * Callback for playlist_directory_tracksearch to insert track into
+ * playlist.
+  Make sure tracks are inserted in correct order if user requests
+       INSERT_FIRST 
+ * remove track at specified position
+  shift indices now that track has been removed  update stored indices if needed 
+ * randomly rearrange the array of indices for the playlist.  If start_current
+ * is true then update the index to the new index of the current playing track
+  seed 0 is used to identify sorted playlist for resume purposes  seed with the given seed  randomise entire indices list  the rand is from 0 to RAND_MAX, so adjust to our value range  now swap the values at the 'count' and 'candidate' positions  indices have been moved so last insert position is no longer valid 
+ * Sort the array of indices for the playlist. If start_current is true then
+ * set the index to the new index of the current song.
+ * Also while going to unshuffled mode set the first_index to 0.
+ * We need to re-check the song names from disk because qsort can't
+     * sort two arrays at once :/
+     * FIXME: Please implement a better way to do this.  indices have been moved so last insert position is no longer valid  Calculate how many steps we have to really step when skipping entries
+ * marked as bad.
+  Boundary check  Check if we found a bad entry.  Are all entries bad?  Marks the index of the track to be skipped that is "steps" away from
+ * current playing track.
+  need to account for already skipped tracks 
+ * returns the index of the track that is "steps" away from current playing
+ * track.
+  Treat repeat shuffle just like repeat off.  At end of playlist,
+               play will be resumed in playlist_next()  second time around so skip the queued files  No luck if the whole playlist was bad. 
+ * Search for the seek track and set appropriate indices.  Used after shuffle
+ * to make sure the current index is still pointing to correct track.
+  Set the index to the current song 
+ * used to sort track indices.  Sort order is as follows:
+ * 1. Prepended tracks (in prepend order)
+ * 2. Playlist/directory tracks (in playlist order)
+ * 3. Inserted/Appended tracks (in insert order)
+ *
+ * Thread to update filename pointers to dircache on background
+ * without affecting playlist load up performance.  This thread also flushes
+ * any pending control commands when the disk spins up.
+  Start the background scanning after either the disk spindown
+               timeout or 5s, whichever is less  Check if previously loaded pointers are intact.  Process only pointers that are superficially stale.  Load the filename from playlist file.  Obtain the dircache file entry cookie.  And be on background so user doesn't notice any delays. 
+ * gets pathname for track at seek index
+  HAVE_DIRCACHE  playlist file may end without a new line - terminate buffer  Use dir_buf as a temporary buffer. Note that dir_buf must
+                     * be as large as tmp_buf.
+                      ignore error on usb plug 
+ * search through all the directories (starting with the current) to find
+ * one that has tracks to play
+  constrain results to directories below user's start directory  strip any trailing slash from base directory  start from root directory  process random folder advance  give up looking for a directory after we've had four
+                   times as many tries as there are directories.  is the current dir within our base dir and has music?  if the current file is within our base dir, use its dir instead  use the tree browser dircache to load files  set up sorting/direction  user abort  we've already descended to the base dir with nothing found,
+               check whether that contains music  there's no music files in the base directory,
+                       treat as a fatal error  move down to parent directory.  current directory name is
+                   stored as the starting point for the search in parent  restore dirfilter 
+ * Checks if there are any music files in the dir or any of its
+ * subdirectories.  May be called recursively.
+  we now need to reload our current directory 
+ * Returns absolute path of track
+  Look for the end of the string  Now work back killing white space  Replace backslashes with forward slashes  Drive letters have no meaning here; handle DOS style drive letter
+     * and parse greedily so that:
+     *
+     * 1) "c:/foo" is fully qualified, use directory volume only
+     * 2) "c:foo" is relative to current directory on C, use directory path
+     *
+     * Assume any volume on the beginning of the directory path is actually
+     * the volume on which it resides. This may not be the case if the dir
+     * param contains a path such as "/<1>/foo/../../<0>/bar", which refers
+     * to "/<0>/bar" (aka "/bar" at this time). *fingers crossed*
+     *
+     * If any stripped drive spec was absolute, prepend the playlist
+     * directory's volume spec, or root if none. Relative paths remain
+     * relative and the playlist's directory fully qualifies them. Absolute
+     * UNIX-style paths remain unaltered.
+      empty if no volspec on dir  only volume is root  buffer too small 
+ * Display splash message showing progress of playlist/directory insertion or
+ * save.
+ 
+ * Display buffer full message
+ 
+ * Flush any cached control commands to disk.  Called when playlist is being
+ * modified.  Returns 0 on success and -1 on failure.
+  save the position in file where name is written 
+ * Update control data with new command.  Depending on the command, it may be
+ * cached or flushed to disk.
+  only flush when needed 
+ * sync control file to disk
+ 
+ * Rotate indices such that first_index is index 0
+ 
+ * Need no movement protection since all 3 allocations are not passed to
+ * other functions which can yield().
+  HAVE_DIRCACHE 
+ * Initialize playlist entries at startup
+  HAVE_DIRCACHE 
+ * Clean playlist at shutdown
+ 
+ * Create new playlist
+  dummy ops with no callbacks, needed because by
+         * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  load the playlist file  should not happen 
+ * Restore the playlist state based on control file commands.  Called to
+ * resume playback after shutdown.
+  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  read a small amount first to get the header  So a splash while we are loading.  Are we on a new line?  save last_newline in case we need to load more data  str1=version str2=dir str3=file  NOTE: add_indices_to_playlist() overwrites the
+                               audiobuf so we need to reload control file
+                               data  load the rest of the data  str1=position str2=last_position str3=file  seek position is based on str3's position in
+                           buffer  str1=position  str1=seed str2=first_index  Always sort list before shuffling  str1=first_index  to ignore any extra newlines  first non-comment line must always specify playlist  playlist can only be specified once  all control file strings are separated with a colon.
+                   Replace the colon with 0 to get proper strings that can be
+                   used by commands above  allow last string to contain colons  no newline at end of control file  We didn't end on a newline or we exited loop prematurely.
+               Either way, re-read the remainder.  still looking for header  Terminate on EOF 
+ * Add track to in_ram playlist.  Used when playing directories.
+  shuffle newly created playlist using random seed.  store the seek position before the shuffle  returns the crc32 of the filename of the track at the specified index  resume a playlist track with the given crc_32 of the track name.  If we got here the file wasnt found, so start from the beginning  start playing current playlist at specified index/offset  Returns false if 'steps' is out of bounds, else true  always allow folder navigation  get trackname of track that is "steps" away from current playing track.
+   NULL is used to identify end of playlist  Just testing - don't care about the file name  remove bogus dirs from beginning of path
+           (workaround for buggy playlist creation tools)  Even though this is an invalid file, we still need to pass a
+               file name to the caller because NULL is used to indicate end
+               of playlist 
+ * Update indices as track has changed
+  We need to delete all the queued songs  one less track  end of playlist... or is it  Repeat shuffle mode.  Re-shuffle playlist and resume play  check to see if we've gone beyond the last inserted track  reset last inserted track  try playing next or previous folder  not to mess up real playlists  Get resume info for current playing song.  If return value is -1 then
+   settings shouldn't be saved.  Update resume info for current playing song.  Returns -1 on error.  Returns index of current playing track for display purposes.  This value
+   should not be used for resume purposes as it doesn't represent the actual
+   index into the playlist  first_index should always be index 0 for display purposes  returns number of tracks in current playlist  set playlist->last_shuffle_start to playlist->amount for
+   PLAYLIST_INSERT_LAST_SHUFFLED command purposes
+ * Create a new playlist  If playlist is not NULL then we're loading a
+ * playlist off disk for viewing/editing.  The index_buffer is used to store
+ * playlist indices (required for and only used if !current playlist).  The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices.
+  Initialize playlist structure  Use random name for control file  load the playlist file 
+ * Set the specified playlist as the current.
+ * NOTE: You will get undefined behaviour if something is already playing so
+ *       remember to stop before calling this.  Also, this call will
+ *       effectively close your playlist, making it unusable.
+ 
+ * Close files and delete control file for non-current playlist.
+ 
+ * Insert track into playlist at specified position (or one of the special
+ * positions).  Returns position where track was inserted or -1 if error.
+  Check if we want manually sync later. For example when adding
+     * bunch of files from tagcache, syncing after every file wouldn't be
+     * a good thing to do. 
+ * Insert all tracks from specified directory into playlist.
+ 
+ * Insert all tracks from specified playlist into dynamic playlist.
+  we need the directory name for formatting purposes  user abort  Use trackname as a temporay buffer. Note that trackname must
+                 * be as large as temp_buf.
+                  we need to format so that relative paths are correctly
+               handled  Make sure tracks are inserted in correct order if user
+               requests INSERT_FIRST  let the other threads work 
+ * Delete track at specified index.  If index is PLAYLIST_DELETE_CURRENT then
+ * we want to delete the current playing track.
+ 
+ * Move track at index to new_index.  Tracks between the two are shifted
+ * appropriately.  Returns 0 on success and -1 on failure.
+  display index of the currently playing track  display index of the track we're moving  display index of the position we're moving to  Moving the current track  Get display index of the currently playing track  Get display index of the position we're moving to  Get display index of the track we're trying to move  Check if moving will displace the current track.
+                       Displace happens when moving from after current to
+                       before, but also when moving from before to before
+                       due to the removal from the original position  We want to insert the track at the position that was specified by
+       new_index.  This may be different then new_index because of the
+       shifting that will occur after the delete.
+       We calculate this before we do the remove as it depends on the
+       size of the playlist before the track removal  Delete track from original position  First index  Append  Calculate index of desired position  Moved the current track  make the index point to the currently playing track  shuffle currently playing playlist  sort currently playing playlist  returns true if playlist has been modified  returns index of first track in playlist  returns shuffle seed of playlist  returns number of tracks in playlist (includes queued/inserted tracks)  returns full path of playlist (minus extension)  Remove extension  returns the playlist filename  return size of buffer needed for playlist to initialize num_indices entries  Fills info structure with information about track at specified index.
+   Returns 0 on success and -1 on failure  save the current dynamic playlist to specified file. The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices
+ * (slow if not used).  without temp_buffer, or when it's depleted, and we overwrite the current
+     * playlist then the newly saved playlist has to be reparsed. With
+     * sufficient temp_buffer the indicies be remembered and added without
+     * reparsing  use current working directory as base for pathname  Use temporary pathname and overwrite/rename later  can ignore volatile here, because core_get_data() is called later  some applications require a BOM to read the file properly  user abort  Don't save queued files  when our temp buffer is depleted we have to fall
+             * back to reparsing the playlist (slow)  remove "_temp"  Replace the current playlist with the new one and update
+                   indices  we need to recreate control because inserted tracks are
+                   now part of the playlist and shuffle has been invalidated 
+ * Search specified directory for tracks and notify via callback.  May be
+ * called recursively.
+  use the tree browser dircache to load files  we've overwritten the dircache so tree browser will need to be
+       reloaded  user abort  recursively add directories  we now need to reload our current directory  let the other threads work  restore dirfilter **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by wavey@wavey.org
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Dynamic playlist design (based on design originally proposed by ricII)
+
+    There are two files associated with a dynamic playlist:
+    1. Playlist file : This file contains the initial songs in the playlist.
+                       The file is created by the user and stored on the hard
+                       drive.  NOTE: If we are playing the contents of a
+                       directory, there will be no playlist file.
+    2. Control file :  This file is automatically created when a playlist is
+                       started and contains all the commands done to it.
+    
+    The first non-comment line in a control file must begin with
+    "P:VERSION:DIR:FILE" where VERSION is the playlist control file version,
+    DIR is the directory where the playlist is located and FILE is the
+    playlist filename.  For dirplay, FILE will be empty.  An empty playlist
+    will have both entries as null.
+
+    Control file commands:
+        a. Add track (A:<position>:<last position>:<path to track>)
+            - Insert a track at the specified position in the current
+              playlist.  Last position is used to specify where last insertion
+              occurred.
+        b. Queue track (Q:<position>:<last position>:<path to track>)
+            - Queue a track at the specified position in the current
+              playlist.  Queued tracks differ from added tracks in that they
+              are deleted from the playlist as soon as they are played and
+              they are not saved to disk as part of the playlist.
+        c. Delete track (D:<position>)
+            - Delete track from specified position in the current playlist.
+        d. Shuffle playlist (S:<seed>:<index>)
+            - Shuffle entire playlist with specified seed.  The index
+              identifies the first index in the newly shuffled playlist
+              (needed for repeat mode).
+        e. Unshuffle playlist (U:<index>)
+            - Unshuffle entire playlist.  The index identifies the first index
+              in the newly unshuffled playlist.
+        f. Reset last insert position (R)
+            - Needed so that insertions work properly after resume
+
+  Resume:
+      The only resume info that needs to be saved is the current index in the
+      playlist and the position in the track.  When resuming, all the commands
+      in the control file will be reapplied so that the playlist indices are
+      exactly the same as before shutdown.  To avoid unnecessary disk
+      accesses, the shuffle mode settings are also saved in settings and only
+      flushed to disk when required.
+  To borrow a temp buffer to rewrite a .m3u8 file 
+    Each playlist index has a flag associated with it which identifies what
+    type of track it is.  These flags are stored in the 4 high order bits of
+    the index.
+    
+    NOTE: This limits the playlist file size to a max of 256M.
+
+    Bits 31-30:
+        00 = Playlist track
+        01 = Track was prepended into playlist
+        10 = Track was inserted into playlist
+        11 = Track was appended into playlist
+    Bit 29:
+        0 = Added track
+        1 = Queued track
+    Bit 28:
+        0 = Track entry is valid
+        1 = Track does not exist on disk and should be skipped
+  just initialize the destination  HAVE_DIRCACHE  Check if the filename suggests M3U or M3U8 format.  Default to M3U8 unless explicitly told otherwise.  Convert a filename in an M3U playlist to UTF-8. 
+ *
+ * buf     - the filename to convert; can contain more than one line from the
+ *           playlist.
+ * buf_len - amount of buf that is used.
+ * buf_max - total size of buf.
+ * temp    - temporary conversion buffer, at least buf_max bytes.
+ * 
+ * Returns the length of the converted filename.
+  Locate EOL.  Work back killing white space.  Convert char by char, so as to not overflow temp (iso_decode should
+     * preferably handle this). No more than 4 bytes should be generated for
+     * each input char.
+     
+ * remove any files and indices associated with the playlist
+  If there is an already open playlist, close it.  start with fresh playlist control file when starting new
+           playlist 
+ * Initialize a new playlist for viewing/editing/playing.  dir is the
+ * directory where the playlist is located and file is the filename.
+  !current cannot be in_ram  empty playlist 
+ * create control file for playlist
+ 
+ * validate the control file.  This may include creating/initializing it if
+ * necessary;
+ 
+ * recreate the control file based on current playlist entries
+  cannot call update_control() because of mutex  save the position in file where name is written 
+ * store directory and name of playlist file
+  If the dir does not end in trailing slash, we use a separator.
+       Otherwise we don't. 
+ * calculate track offsets within a playlist file
+  get emergency buffer so we don't fail horribly  failure  Override any earlier indication.  Terminate on EOF  Are we on a new line?  Store a new entry 
+ * Utility function to create a new playlist, fill it with the next or
+ * previous directory, shuffle it if needed, and start playback.
+ * If play_last is true and direction zero or negative, start playing
+ * the last file in the directory, otherwise start playing the first.
+  return the error encountered  we've overwritten the dircache when getting the next/previous dir,
+       so the tree browser context will need to be reloaded 
+ * Removes all tracks, from the playlist, leaving the presently playing
+ * track queued.
+ 
+ * Add track to playlist at specified position. There are seven special
+ * positions that can be specified:
+ *  PLAYLIST_PREPEND              - Add track at beginning of playlist
+ *  PLAYLIST_INSERT               - Add track after current song.  NOTE: If
+ *                                  there are already inserted tracks then track
+ *                                  is added to the end of the insertion list
+ *  PLAYLIST_INSERT_FIRST         - Add track immediately after current song, no
+ *                                  matter what other tracks have been inserted
+ *  PLAYLIST_INSERT_LAST          - Add track to end of playlist
+ *  PLAYLIST_INSERT_SHUFFLED      - Add track at some random point between the
+ *                                  current playing track and end of playlist
+ *  PLAYLIST_INSERT_LAST_SHUFFLED - Add tracks in random order to the end of
+ *                                  the playlist.
+ *  PLAYLIST_REPLACE              - Erase current playlist, Cue the current track
+ *                                  and inster this track at the end.
+  if there are already inserted tracks then add track to end of
+               insertion list else add after current playing track  shift indices so that track can be added  update stored indices if needed 
+ * Callback for playlist_directory_tracksearch to insert track into
+ * playlist.
+  Make sure tracks are inserted in correct order if user requests
+       INSERT_FIRST 
+ * remove track at specified position
+  shift indices now that track has been removed  update stored indices if needed 
+ * randomly rearrange the array of indices for the playlist.  If start_current
+ * is true then update the index to the new index of the current playing track
+  seed 0 is used to identify sorted playlist for resume purposes  seed with the given seed  randomise entire indices list  the rand is from 0 to RAND_MAX, so adjust to our value range  now swap the values at the 'count' and 'candidate' positions  indices have been moved so last insert position is no longer valid 
+ * Sort the array of indices for the playlist. If start_current is true then
+ * set the index to the new index of the current song.
+ * Also while going to unshuffled mode set the first_index to 0.
+ * We need to re-check the song names from disk because qsort can't
+     * sort two arrays at once :/
+     * FIXME: Please implement a better way to do this.  indices have been moved so last insert position is no longer valid  Calculate how many steps we have to really step when skipping entries
+ * marked as bad.
+  Boundary check  Check if we found a bad entry.  Are all entries bad?  Marks the index of the track to be skipped that is "steps" away from
+ * current playing track.
+  need to account for already skipped tracks 
+ * returns the index of the track that is "steps" away from current playing
+ * track.
+  Treat repeat shuffle just like repeat off.  At end of playlist,
+               play will be resumed in playlist_next()  second time around so skip the queued files  No luck if the whole playlist was bad. 
+ * Search for the seek track and set appropriate indices.  Used after shuffle
+ * to make sure the current index is still pointing to correct track.
+  Set the index to the current song 
+ * used to sort track indices.  Sort order is as follows:
+ * 1. Prepended tracks (in prepend order)
+ * 2. Playlist/directory tracks (in playlist order)
+ * 3. Inserted/Appended tracks (in insert order)
+ *
+ * Thread to update filename pointers to dircache on background
+ * without affecting playlist load up performance.  This thread also flushes
+ * any pending control commands when the disk spins up.
+  Start the background scanning after either the disk spindown
+               timeout or 5s, whichever is less  Check if previously loaded pointers are intact.  Process only pointers that are superficially stale.  Load the filename from playlist file.  Obtain the dircache file entry cookie.  And be on background so user doesn't notice any delays. 
+ * gets pathname for track at seek index
+  HAVE_DIRCACHE  playlist file may end without a new line - terminate buffer  Use dir_buf as a temporary buffer. Note that dir_buf must
+                     * be as large as tmp_buf.
+                      ignore error on usb plug 
+ * search through all the directories (starting with the current) to find
+ * one that has tracks to play
+  constrain results to directories below user's start directory  strip any trailing slash from base directory  start from root directory  process random folder advance  give up looking for a directory after we've had four
+                   times as many tries as there are directories.  is the current dir within our base dir and has music?  if the current file is within our base dir, use its dir instead  use the tree browser dircache to load files  set up sorting/direction  user abort  we've already descended to the base dir with nothing found,
+               check whether that contains music  there's no music files in the base directory,
+                       treat as a fatal error  move down to parent directory.  current directory name is
+                   stored as the starting point for the search in parent  restore dirfilter 
+ * Checks if there are any music files in the dir or any of its
+ * subdirectories.  May be called recursively.
+  we now need to reload our current directory 
+ * Returns absolute path of track
+  Look for the end of the string  Now work back killing white space  Replace backslashes with forward slashes  Drive letters have no meaning here; handle DOS style drive letter
+     * and parse greedily so that:
+     *
+     * 1) "c:/foo" is fully qualified, use directory volume only
+     * 2) "c:foo" is relative to current directory on C, use directory path
+     *
+     * Assume any volume on the beginning of the directory path is actually
+     * the volume on which it resides. This may not be the case if the dir
+     * param contains a path such as "/<1>/foo/../../<0>/bar", which refers
+     * to "/<0>/bar" (aka "/bar" at this time). *fingers crossed*
+     *
+     * If any stripped drive spec was absolute, prepend the playlist
+     * directory's volume spec, or root if none. Relative paths remain
+     * relative and the playlist's directory fully qualifies them. Absolute
+     * UNIX-style paths remain unaltered.
+      empty if no volspec on dir  only volume is root  buffer too small 
+ * Display splash message showing progress of playlist/directory insertion or
+ * save.
+ 
+ * Display buffer full message
+ 
+ * Flush any cached control commands to disk.  Called when playlist is being
+ * modified.  Returns 0 on success and -1 on failure.
+  save the position in file where name is written 
+ * Update control data with new command.  Depending on the command, it may be
+ * cached or flushed to disk.
+  only flush when needed 
+ * sync control file to disk
+ 
+ * Rotate indices such that first_index is index 0
+ 
+ * Need no movement protection since all 3 allocations are not passed to
+ * other functions which can yield().
+  HAVE_DIRCACHE 
+ * Initialize playlist entries at startup
+  HAVE_DIRCACHE 
+ * Clean playlist at shutdown
+ 
+ * Create new playlist
+  dummy ops with no callbacks, needed because by
+         * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  load the playlist file  should not happen 
+ * Restore the playlist state based on control file commands.  Called to
+ * resume playback after shutdown.
+  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  read a small amount first to get the header  So a splash while we are loading.  Are we on a new line?  save last_newline in case we need to load more data  str1=version str2=dir str3=file  NOTE: add_indices_to_playlist() overwrites the
+                               audiobuf so we need to reload control file
+                               data  load the rest of the data  str1=position str2=last_position str3=file  seek position is based on str3's position in
+                           buffer  str1=position  str1=seed str2=first_index  Always sort list before shuffling  str1=first_index  to ignore any extra newlines  first non-comment line must always specify playlist  playlist can only be specified once  all control file strings are separated with a colon.
+                   Replace the colon with 0 to get proper strings that can be
+                   used by commands above  allow last string to contain colons  no newline at end of control file  We didn't end on a newline or we exited loop prematurely.
+               Either way, re-read the remainder.  still looking for header  Terminate on EOF 
+ * Add track to in_ram playlist.  Used when playing directories.
+  shuffle newly created playlist using random seed.  store the seek position before the shuffle  returns the crc32 of the filename of the track at the specified index  resume a playlist track with the given crc_32 of the track name.  If we got here the file wasnt found, so start from the beginning  start playing current playlist at specified index/offset  Returns false if 'steps' is out of bounds, else true  always allow folder navigation  get trackname of track that is "steps" away from current playing track.
+   NULL is used to identify end of playlist  Just testing - don't care about the file name  remove bogus dirs from beginning of path
+           (workaround for buggy playlist creation tools)  Even though this is an invalid file, we still need to pass a
+               file name to the caller because NULL is used to indicate end
+               of playlist 
+ * Update indices as track has changed
+  We need to delete all the queued songs  one less track  end of playlist... or is it  Repeat shuffle mode.  Re-shuffle playlist and resume play  check to see if we've gone beyond the last inserted track  reset last inserted track  try playing next or previous folder  not to mess up real playlists  Get resume info for current playing song.  If return value is -1 then
+   settings shouldn't be saved.  Update resume info for current playing song.  Returns -1 on error.  Returns index of current playing track for display purposes.  This value
+   should not be used for resume purposes as it doesn't represent the actual
+   index into the playlist  first_index should always be index 0 for display purposes  returns number of tracks in current playlist  set playlist->last_shuffle_start to playlist->amount for
+   PLAYLIST_INSERT_LAST_SHUFFLED command purposes
+ * Create a new playlist  If playlist is not NULL then we're loading a
+ * playlist off disk for viewing/editing.  The index_buffer is used to store
+ * playlist indices (required for and only used if !current playlist).  The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices.
+  Initialize playlist structure  Use random name for control file  load the playlist file 
+ * Set the specified playlist as the current.
+ * NOTE: You will get undefined behaviour if something is already playing so
+ *       remember to stop before calling this.  Also, this call will
+ *       effectively close your playlist, making it unusable.
+ 
+ * Close files and delete control file for non-current playlist.
+ 
+ * Insert track into playlist at specified position (or one of the special
+ * positions).  Returns position where track was inserted or -1 if error.
+  Check if we want manually sync later. For example when adding
+     * bunch of files from tagcache, syncing after every file wouldn't be
+     * a good thing to do. 
+ * Insert all tracks from specified directory into playlist.
+ 
+ * Insert all tracks from specified playlist into dynamic playlist.
+  we need the directory name for formatting purposes  user abort  Use trackname as a temporay buffer. Note that trackname must
+                 * be as large as temp_buf.
+                  we need to format so that relative paths are correctly
+               handled  Make sure tracks are inserted in correct order if user
+               requests INSERT_FIRST  let the other threads work 
+ * Delete track at specified index.  If index is PLAYLIST_DELETE_CURRENT then
+ * we want to delete the current playing track.
+ 
+ * Move track at index to new_index.  Tracks between the two are shifted
+ * appropriately.  Returns 0 on success and -1 on failure.
+  display index of the currently playing track  display index of the track we're moving  display index of the position we're moving to  Moving the current track  Get display index of the currently playing track  Get display index of the position we're moving to  Get display index of the track we're trying to move  Check if moving will displace the current track.
+                       Displace happens when moving from after current to
+                       before, but also when moving from before to before
+                       due to the removal from the original position  We want to insert the track at the position that was specified by
+       new_index.  This may be different then new_index because of the
+       shifting that will occur after the delete.
+       We calculate this before we do the remove as it depends on the
+       size of the playlist before the track removal  Delete track from original position  First index  Append  Calculate index of desired position  Moved the current track  make the index point to the currently playing track  shuffle currently playing playlist  sort currently playing playlist  returns true if playlist has been modified  returns index of first track in playlist  returns shuffle seed of playlist  returns number of tracks in playlist (includes queued/inserted tracks)  returns full path of playlist (minus extension)  Remove extension  returns the playlist filename  return size of buffer needed for playlist to initialize num_indices entries  Fills info structure with information about track at specified index.
+   Returns 0 on success and -1 on failure  save the current dynamic playlist to specified file. The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices
+ * (slow if not used).  without temp_buffer, or when it's depleted, and we overwrite the current
+     * playlist then the newly saved playlist has to be reparsed. With
+     * sufficient temp_buffer the indicies be remembered and added without
+     * reparsing  use current working directory as base for pathname  Use temporary pathname and overwrite/rename later  can ignore volatile here, because core_get_data() is called later  some applications require a BOM to read the file properly  user abort  Don't save queued files  when our temp buffer is depleted we have to fall
+             * back to reparsing the playlist (slow)  remove "_temp"  Replace the current playlist with the new one and update
+                   indices  we need to recreate control because inserted tracks are
+                   now part of the playlist and shuffle has been invalidated 
+ * Search specified directory for tracks and notify via callback.  May be
+ * called recursively.
+  use the tree browser dircache to load files  we've overwritten the dircache so tree browser will need to be
+       reloaded  user abort  recursively add directories  we now need to reload our current directory  let the other threads work  restore dirfilter **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by wavey@wavey.org
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Dynamic playlist design (based on design originally proposed by ricII)
+
+    There are two files associated with a dynamic playlist:
+    1. Playlist file : This file contains the initial songs in the playlist.
+                       The file is created by the user and stored on the hard
+                       drive.  NOTE: If we are playing the contents of a
+                       directory, there will be no playlist file.
+    2. Control file :  This file is automatically created when a playlist is
+                       started and contains all the commands done to it.
+    
+    The first non-comment line in a control file must begin with
+    "P:VERSION:DIR:FILE" where VERSION is the playlist control file version,
+    DIR is the directory where the playlist is located and FILE is the
+    playlist filename.  For dirplay, FILE will be empty.  An empty playlist
+    will have both entries as null.
+
+    Control file commands:
+        a. Add track (A:<position>:<last position>:<path to track>)
+            - Insert a track at the specified position in the current
+              playlist.  Last position is used to specify where last insertion
+              occurred.
+        b. Queue track (Q:<position>:<last position>:<path to track>)
+            - Queue a track at the specified position in the current
+              playlist.  Queued tracks differ from added tracks in that they
+              are deleted from the playlist as soon as they are played and
+              they are not saved to disk as part of the playlist.
+        c. Delete track (D:<position>)
+            - Delete track from specified position in the current playlist.
+        d. Shuffle playlist (S:<seed>:<index>)
+            - Shuffle entire playlist with specified seed.  The index
+              identifies the first index in the newly shuffled playlist
+              (needed for repeat mode).
+        e. Unshuffle playlist (U:<index>)
+            - Unshuffle entire playlist.  The index identifies the first index
+              in the newly unshuffled playlist.
+        f. Reset last insert position (R)
+            - Needed so that insertions work properly after resume
+
+  Resume:
+      The only resume info that needs to be saved is the current index in the
+      playlist and the position in the track.  When resuming, all the commands
+      in the control file will be reapplied so that the playlist indices are
+      exactly the same as before shutdown.  To avoid unnecessary disk
+      accesses, the shuffle mode settings are also saved in settings and only
+      flushed to disk when required.
+  To borrow a temp buffer to rewrite a .m3u8 file 
+    Each playlist index has a flag associated with it which identifies what
+    type of track it is.  These flags are stored in the 4 high order bits of
+    the index.
+    
+    NOTE: This limits the playlist file size to a max of 256M.
+
+    Bits 31-30:
+        00 = Playlist track
+        01 = Track was prepended into playlist
+        10 = Track was inserted into playlist
+        11 = Track was appended into playlist
+    Bit 29:
+        0 = Added track
+        1 = Queued track
+    Bit 28:
+        0 = Track entry is valid
+        1 = Track does not exist on disk and should be skipped
+  just initialize the destination  HAVE_DIRCACHE  Check if the filename suggests M3U or M3U8 format.  Default to M3U8 unless explicitly told otherwise.  Convert a filename in an M3U playlist to UTF-8. 
+ *
+ * buf     - the filename to convert; can contain more than one line from the
+ *           playlist.
+ * buf_len - amount of buf that is used.
+ * buf_max - total size of buf.
+ * temp    - temporary conversion buffer, at least buf_max bytes.
+ * 
+ * Returns the length of the converted filename.
+  Locate EOL.  Work back killing white space.  Convert char by char, so as to not overflow temp (iso_decode should
+     * preferably handle this). No more than 4 bytes should be generated for
+     * each input char.
+     
+ * remove any files and indices associated with the playlist
+  If there is an already open playlist, close it.  start with fresh playlist control file when starting new
+           playlist 
+ * Initialize a new playlist for viewing/editing/playing.  dir is the
+ * directory where the playlist is located and file is the filename.
+  !current cannot be in_ram  empty playlist 
+ * create control file for playlist
+ 
+ * validate the control file.  This may include creating/initializing it if
+ * necessary;
+ 
+ * recreate the control file based on current playlist entries
+  cannot call update_control() because of mutex  save the position in file where name is written 
+ * store directory and name of playlist file
+  If the dir does not end in trailing slash, we use a separator.
+       Otherwise we don't. 
+ * calculate track offsets within a playlist file
+  get emergency buffer so we don't fail horribly  failure  Override any earlier indication.  Terminate on EOF  Are we on a new line?  Store a new entry 
+ * Utility function to create a new playlist, fill it with the next or
+ * previous directory, shuffle it if needed, and start playback.
+ * If play_last is true and direction zero or negative, start playing
+ * the last file in the directory, otherwise start playing the first.
+  return the error encountered  we've overwritten the dircache when getting the next/previous dir,
+       so the tree browser context will need to be reloaded 
+ * Removes all tracks, from the playlist, leaving the presently playing
+ * track queued.
+ 
+ * Add track to playlist at specified position. There are seven special
+ * positions that can be specified:
+ *  PLAYLIST_PREPEND              - Add track at beginning of playlist
+ *  PLAYLIST_INSERT               - Add track after current song.  NOTE: If
+ *                                  there are already inserted tracks then track
+ *                                  is added to the end of the insertion list
+ *  PLAYLIST_INSERT_FIRST         - Add track immediately after current song, no
+ *                                  matter what other tracks have been inserted
+ *  PLAYLIST_INSERT_LAST          - Add track to end of playlist
+ *  PLAYLIST_INSERT_SHUFFLED      - Add track at some random point between the
+ *                                  current playing track and end of playlist
+ *  PLAYLIST_INSERT_LAST_SHUFFLED - Add tracks in random order to the end of
+ *                                  the playlist.
+ *  PLAYLIST_REPLACE              - Erase current playlist, Cue the current track
+ *                                  and inster this track at the end.
+  if there are already inserted tracks then add track to end of
+               insertion list else add after current playing track  shift indices so that track can be added  update stored indices if needed 
+ * Callback for playlist_directory_tracksearch to insert track into
+ * playlist.
+  Make sure tracks are inserted in correct order if user requests
+       INSERT_FIRST 
+ * remove track at specified position
+  shift indices now that track has been removed  update stored indices if needed 
+ * randomly rearrange the array of indices for the playlist.  If start_current
+ * is true then update the index to the new index of the current playing track
+  seed 0 is used to identify sorted playlist for resume purposes  seed with the given seed  randomise entire indices list  the rand is from 0 to RAND_MAX, so adjust to our value range  now swap the values at the 'count' and 'candidate' positions  indices have been moved so last insert position is no longer valid 
+ * Sort the array of indices for the playlist. If start_current is true then
+ * set the index to the new index of the current song.
+ * Also while going to unshuffled mode set the first_index to 0.
+ * We need to re-check the song names from disk because qsort can't
+     * sort two arrays at once :/
+     * FIXME: Please implement a better way to do this.  indices have been moved so last insert position is no longer valid  Calculate how many steps we have to really step when skipping entries
+ * marked as bad.
+  Boundary check  Check if we found a bad entry.  Are all entries bad?  Marks the index of the track to be skipped that is "steps" away from
+ * current playing track.
+  need to account for already skipped tracks 
+ * returns the index of the track that is "steps" away from current playing
+ * track.
+  Treat repeat shuffle just like repeat off.  At end of playlist,
+               play will be resumed in playlist_next()  second time around so skip the queued files  No luck if the whole playlist was bad. 
+ * Search for the seek track and set appropriate indices.  Used after shuffle
+ * to make sure the current index is still pointing to correct track.
+  Set the index to the current song 
+ * used to sort track indices.  Sort order is as follows:
+ * 1. Prepended tracks (in prepend order)
+ * 2. Playlist/directory tracks (in playlist order)
+ * 3. Inserted/Appended tracks (in insert order)
+ *
+ * Thread to update filename pointers to dircache on background
+ * without affecting playlist load up performance.  This thread also flushes
+ * any pending control commands when the disk spins up.
+  Start the background scanning after either the disk spindown
+               timeout or 5s, whichever is less  Check if previously loaded pointers are intact.  Process only pointers that are superficially stale.  Load the filename from playlist file.  Obtain the dircache file entry cookie.  And be on background so user doesn't notice any delays. 
+ * gets pathname for track at seek index
+  HAVE_DIRCACHE  playlist file may end without a new line - terminate buffer  Use dir_buf as a temporary buffer. Note that dir_buf must
+                     * be as large as tmp_buf.
+                      ignore error on usb plug 
+ * search through all the directories (starting with the current) to find
+ * one that has tracks to play
+  constrain results to directories below user's start directory  strip any trailing slash from base directory  start from root directory  process random folder advance  give up looking for a directory after we've had four
+                   times as many tries as there are directories.  is the current dir within our base dir and has music?  if the current file is within our base dir, use its dir instead  use the tree browser dircache to load files  set up sorting/direction  user abort  we've already descended to the base dir with nothing found,
+               check whether that contains music  there's no music files in the base directory,
+                       treat as a fatal error  move down to parent directory.  current directory name is
+                   stored as the starting point for the search in parent  restore dirfilter 
+ * Checks if there are any music files in the dir or any of its
+ * subdirectories.  May be called recursively.
+  we now need to reload our current directory 
+ * Returns absolute path of track
+  Look for the end of the string  Now work back killing white space  Replace backslashes with forward slashes  Drive letters have no meaning here; handle DOS style drive letter
+     * and parse greedily so that:
+     *
+     * 1) "c:/foo" is fully qualified, use directory volume only
+     * 2) "c:foo" is relative to current directory on C, use directory path
+     *
+     * Assume any volume on the beginning of the directory path is actually
+     * the volume on which it resides. This may not be the case if the dir
+     * param contains a path such as "/<1>/foo/../../<0>/bar", which refers
+     * to "/<0>/bar" (aka "/bar" at this time). *fingers crossed*
+     *
+     * If any stripped drive spec was absolute, prepend the playlist
+     * directory's volume spec, or root if none. Relative paths remain
+     * relative and the playlist's directory fully qualifies them. Absolute
+     * UNIX-style paths remain unaltered.
+      empty if no volspec on dir  only volume is root  buffer too small 
+ * Display splash message showing progress of playlist/directory insertion or
+ * save.
+ 
+ * Display buffer full message
+ 
+ * Flush any cached control commands to disk.  Called when playlist is being
+ * modified.  Returns 0 on success and -1 on failure.
+  save the position in file where name is written 
+ * Update control data with new command.  Depending on the command, it may be
+ * cached or flushed to disk.
+  only flush when needed 
+ * sync control file to disk
+ 
+ * Rotate indices such that first_index is index 0
+ 
+ * Need no movement protection since all 3 allocations are not passed to
+ * other functions which can yield().
+  HAVE_DIRCACHE 
+ * Initialize playlist entries at startup
+  HAVE_DIRCACHE 
+ * Clean playlist at shutdown
+ 
+ * Create new playlist
+  dummy ops with no callbacks, needed because by
+         * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  load the playlist file  should not happen 
+ * Restore the playlist state based on control file commands.  Called to
+ * resume playback after shutdown.
+  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided  use mp3 buffer for maximum load speed  read a small amount first to get the header  So a splash while we are loading.  Are we on a new line?  save last_newline in case we need to load more data  str1=version str2=dir str3=file  NOTE: add_indices_to_playlist() overwrites the
+                               audiobuf so we need to reload control file
+                               data  load the rest of the data  str1=position str2=last_position str3=file  seek position is based on str3's position in
+                           buffer  str1=position  str1=seed str2=first_index  Always sort list before shuffling  str1=first_index  to ignore any extra newlines  first non-comment line must always specify playlist  playlist can only be specified once  all control file strings are separated with a colon.
+                   Replace the colon with 0 to get proper strings that can be
+                   used by commands above  allow last string to contain colons  no newline at end of control file  We didn't end on a newline or we exited loop prematurely.
+               Either way, re-read the remainder.  still looking for header  Terminate on EOF 
+ * Add track to in_ram playlist.  Used when playing directories.
+  shuffle newly created playlist using random seed.  store the seek position before the shuffle  returns the crc32 of the filename of the track at the specified index  resume a playlist track with the given crc_32 of the track name.  If we got here the file wasnt found, so start from the beginning  start playing current playlist at specified index/offset  Returns false if 'steps' is out of bounds, else true  always allow folder navigation  get trackname of track that is "steps" away from current playing track.
+   NULL is used to identify end of playlist  Just testing - don't care about the file name  remove bogus dirs from beginning of path
+           (workaround for buggy playlist creation tools)  Even though this is an invalid file, we still need to pass a
+               file name to the caller because NULL is used to indicate end
+               of playlist 
+ * Update indices as track has changed
+  We need to delete all the queued songs  one less track  end of playlist... or is it  Repeat shuffle mode.  Re-shuffle playlist and resume play  check to see if we've gone beyond the last inserted track  reset last inserted track  try playing next or previous folder  not to mess up real playlists  Get resume info for current playing song.  If return value is -1 then
+   settings shouldn't be saved.  Update resume info for current playing song.  Returns -1 on error.  Returns index of current playing track for display purposes.  This value
+   should not be used for resume purposes as it doesn't represent the actual
+   index into the playlist  first_index should always be index 0 for display purposes  returns number of tracks in current playlist  set playlist->last_shuffle_start to playlist->amount for
+   PLAYLIST_INSERT_LAST_SHUFFLED command purposes
+ * Create a new playlist  If playlist is not NULL then we're loading a
+ * playlist off disk for viewing/editing.  The index_buffer is used to store
+ * playlist indices (required for and only used if !current playlist).  The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices.
+  Initialize playlist structure  Use random name for control file  load the playlist file 
+ * Set the specified playlist as the current.
+ * NOTE: You will get undefined behaviour if something is already playing so
+ *       remember to stop before calling this.  Also, this call will
+ *       effectively close your playlist, making it unusable.
+ 
+ * Close files and delete control file for non-current playlist.
+ 
+ * Insert track into playlist at specified position (or one of the special
+ * positions).  Returns position where track was inserted or -1 if error.
+  Check if we want manually sync later. For example when adding
+     * bunch of files from tagcache, syncing after every file wouldn't be
+     * a good thing to do. 
+ * Insert all tracks from specified directory into playlist.
+ 
+ * Insert all tracks from specified playlist into dynamic playlist.
+  we need the directory name for formatting purposes  user abort  Use trackname as a temporay buffer. Note that trackname must
+                 * be as large as temp_buf.
+                  we need to format so that relative paths are correctly
+               handled  Make sure tracks are inserted in correct order if user
+               requests INSERT_FIRST  let the other threads work 
+ * Delete track at specified index.  If index is PLAYLIST_DELETE_CURRENT then
+ * we want to delete the current playing track.
+ 
+ * Move track at index to new_index.  Tracks between the two are shifted
+ * appropriately.  Returns 0 on success and -1 on failure.
+  display index of the currently playing track  display index of the track we're moving  display index of the position we're moving to  Moving the current track  Get display index of the currently playing track  Get display index of the position we're moving to  Get display index of the track we're trying to move  Check if moving will displace the current track.
+                       Displace happens when moving from after current to
+                       before, but also when moving from before to before
+                       due to the removal from the original position  We want to insert the track at the position that was specified by
+       new_index.  This may be different then new_index because of the
+       shifting that will occur after the delete.
+       We calculate this before we do the remove as it depends on the
+       size of the playlist before the track removal  Delete track from original position  First index  Append  Calculate index of desired position  Moved the current track  make the index point to the currently playing track  shuffle currently playing playlist  sort currently playing playlist  returns true if playlist has been modified  returns index of first track in playlist  returns shuffle seed of playlist  returns number of tracks in playlist (includes queued/inserted tracks)  returns full path of playlist (minus extension)  Remove extension  returns the playlist filename  return size of buffer needed for playlist to initialize num_indices entries  Fills info structure with information about track at specified index.
+   Returns 0 on success and -1 on failure  save the current dynamic playlist to specified file. The
+ * temp_buffer (if not NULL) is used as a scratchpad when loading indices
+ * (slow if not used).  without temp_buffer, or when it's depleted, and we overwrite the current
+     * playlist then the newly saved playlist has to be reparsed. With
+     * sufficient temp_buffer the indicies be remembered and added without
+     * reparsing  use current working directory as base for pathname  Use temporary pathname and overwrite/rename later  can ignore volatile here, because core_get_data() is called later  some applications require a BOM to read the file properly  user abort  Don't save queued files  when our temp buffer is depleted we have to fall
+             * back to reparsing the playlist (slow)  remove "_temp"  Replace the current playlist with the new one and update
+                   indices  we need to recreate control because inserted tracks are
+                   now part of the playlist and shuffle has been invalidated 
+ * Search specified directory for tracks and notify via callback.  May be
+ * called recursively.
+  use the tree browser dircache to load files  we've overwritten the dircache so tree browser will need to be
+       reloaded  user abort  recursively add directories  we now need to reload our current directory  let the other threads work  restore dirfilter 

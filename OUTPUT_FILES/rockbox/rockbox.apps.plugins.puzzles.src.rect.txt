@@ -1,0 +1,1426 @@
+
+ * rect.c: Puzzle from nikoli.co.jp. You have a square grid with
+ * numbers in some squares; you must divide the square grid up into
+ * variously sized rectangles, such that every rectangle contains
+ * exactly one numbered square and the area of each rectangle is
+ * equal to the number contained in it.
+ 
+ * TODO:
+ * 
+ *  - Improve singleton removal.
+ *     + It would be nice to limit the size of the generated
+ *       rectangles in accordance with existing constraints such as
+ *       the maximum rectangle size and the one about not
+ *       generating a rectangle the full width or height of the
+ *       grid.
+ *     + This could be achieved by making a less random choice
+ *       about which of the available options to use.
+ *     + Alternatively, we could create our rectangle and then
+ *       split it up.
+  contains the numbers  (w+1) x h  w x (h+1)  structure copy  ----------------------------------------------------------------------
+ * Solver for Rectangles games.
+ * 
+ * This solver is souped up beyond the needs of actually _solving_
+ * a puzzle. It is also designed to cope with uncertainty about
+ * where the numbers have been placed. This is because I run it on
+ * my generated grids _before_ placing the numbers, and have it
+ * tell me where I need to place the numbers to ensure a unique
+ * solution.
+ 
+     * Decrement each entry in the overlaps array to reflect the
+     * removal of this rectangle placement.
+     
+     * Remove the placement from the list of positions for that
+     * rectangle, by interchanging it with the one on the end.
+     
+     * Remove the entry from the rectbyplace array.
+     
+     * Remove the placement from the list of candidates for that
+     * number, by interchanging it with the one on the end.
+     
+ * Returns 0 for failure to solve due to inconsistency; 1 for
+ * success; 2 for failure to complete a solution due to either
+ * ambiguity or it being too difficult.
+ 
+     * Start by setting up a list of candidate positions for each
+     * rectangle.
+     
+         * For each rectangle, begin by finding the bounding
+         * rectangle of its candidate number placements.
+         
+         * Now loop over all possible rectangle placements
+         * overlapping a point within that bounding rectangle;
+         * ensure each one actually contains a candidate number
+         * placement, and add it to the list.
+         
+                     * See if we can find a candidate number
+                     * placement within this rectangle.
+                     
+                         * Add this to the list of candidate
+                         * placements for this rectangle.
+                         
+     * Next, construct a multidimensional array tracking how many
+     * candidate positions for each rectangle overlap each square.
+     * 
+     * Indexing of this array is by the formula
+     * 
+     *   overlaps[(rectindex * h + y) * w + x]
+     * 
+     * A positive or zero value indicates what it sounds as if it
+     * should; -1 indicates that this square _cannot_ be part of
+     * this rectangle; and -2 indicates that it _definitely_ is
+     * (which is distinct from 1, because one might very well know
+     * that _if_ square S is part of rectangle R then it must be
+     * because R is placed in a certain position without knowing
+     * that it definitely _is_).
+     
+     * Also we want an array covering the grid once, to make it
+     * easy to figure out which squares are candidate number
+     * placements for which rectangles. (The existence of this
+     * single array assumes that no square starts off as a
+     * candidate number placement for more than one rectangle. This
+     * assumption is justified, because this solver is _either_
+     * used to solve real problems - in which case there is a
+     * single placement for every number - _or_ used to decide on
+     * number placements for a new puzzle, in which case each
+     * number's placements are confined to the intended position of
+     * the rectangle containing that number.)
+     
+     * Now run the actual deduction loop.
+     
+         * Housekeeping. Look for rectangles whose number has only
+         * one candidate position left, and mark that square as
+         * known if it isn't already.
+          inconsistency 
+         * Now look at the intersection of all possible placements
+         * for each rectangle, and mark all squares in that
+         * intersection as known for that rectangle if they aren't
+         * already.
+          inconsistency 
+         * Rectangle-focused deduction. Look at each rectangle in
+         * turn and try to rule out some of its candidate
+         * placements.
+         
+                             * This placement overlaps a square
+                             * which is _known_ to be part of
+                             * another rectangle. Therefore we must
+                             * rule it out.
+                             
+                             * This placement overlaps one of the
+                             * candidate number placements for some
+                             * rectangle. Count it.
+                             
+                     * If we haven't ruled this placement out
+                     * already, see if it overlaps _all_ of the
+                     * candidate number placements for any
+                     * rectangle. If so, we can rule it out.
+                     
+                     * Failing that, see if it overlaps at least
+                     * one of the candidate number placements for
+                     * itself! (This might not be the case if one
+                     * of those number placements has been removed
+                     * recently.).
+                      don't skip over next placement 
+         * Square-focused deduction. Look at each square not marked
+         * as known, and see if there are any which can only be
+         * part of a single rectangle.
+          Known squares are marked as <0 everywhere, so we only need
+                 * to check the overlaps entry for rect 0.  known already 
+                     * Now we can rule out all placements for
+                     * rectangle `index' which _don't_ contain
+                     * square x,y.
+                      this one is OK  don't skip over next placement 
+         * If we've managed to deduce anything by normal means,
+         * loop round again and see if there's more to be done.
+         * Only if normal deduction has completely failed us should
+         * we now move on to narrowing down the possible number
+         * placements.
+         
+         * Now we have done everything we can with the current set
+         * of number placements. So we need to winnow the number
+         * placements so as to narrow down the possibilities. We do
+         * this by searching for a candidate placement (of _any_
+         * rectangle) which overlaps a candidate placement of the
+         * number for some other rectangle.
+         
+                                 * Add this to the list of
+                                 * winnowing possibilities.
+                                 
+                 * Now choose one of these unwanted rectangle
+                 * placements, and eliminate it.
+                 
+                 * We rule out placement j of rectangle i by means
+                 * of removing all of rectangle k's candidate
+                 * number placements which do _not_ overlap it.
+                 * This will ensure that it is eliminated during
+                 * the next pass of rectangle-focused deduction.
+                  don't skip the next one  inconsistency  remaining uncertainty 
+             * Place the rectangle in its only possible position.
+             
+     * Free up all allocated storage.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+ * This function does one of two things. If passed r==NULL, it
+ * counts the number of possible rectangles which cover the given
+ * square, and returns it in *n. If passed r!=NULL then it _reads_
+ * *n to find an index, counts the possible rectangles until it
+ * reaches the nth, and writes it into r.
+ * 
+ * `scratch' is expected to point to an array of 2 * params->w
+ * ints, used internally as scratch space (and passed in like this
+ * to avoid re-allocating and re-freeing it every time round a
+ * tight loop).
+ 
+     * Maximum rectangle area is 1/6 of total grid size, unless
+     * this means we can't place any rectangles at all in which
+     * case we set it to 2 at minimum.
+     
+     * Scan the grid to find the limits of the region within which
+     * any rectangle containing this point must fall. This will
+     * save us trawling the inside of every rectangle later on to
+     * see if it contains any used squares.
+     
+     * Now scan again to work out the largest rectangles we can fit
+     * in the grid, so that we can terminate the following loops
+     * early once we get down to not having much space left in the
+     * grid.
+      no rectangles can start here 
+     * Rectangles which go right the way across the grid are
+     * boring, although they can't be helped in the case of
+     * extremely small grids. (Also they might be generated later
+     * on by the singleton-removal process; we can't help that.)
+     
+                     * Check this rectangle against the region we
+                     * defined above.
+                     
+     * Find the top left of the rectangle.
+      1x1 singleton here 
+     * Find the width and height of the rectangle.
+      structure copy 
+         * Set up the smaller width and height which we will use to
+         * generate the base grid.
+         
+         * Place rectangles until we can't any more. We do this by
+         * finding a square we haven't yet covered, and randomly
+         * choosing a rectangle to cover it.
+         
+             * Now see how many rectangles fit around this one.
+             
+                 * There are no possible rectangles covering this
+                 * square, meaning it must be a singleton. Mark it
+                 * -2 so we know not to keep trying.
+                 
+                 * Pick one at random.
+                 
+                 * Place it.
+                 
+         * Deal with singleton spaces remaining in the grid, one by
+         * one.
+         *
+         * We do this by making a local change to the layout. There are
+         * several possibilities:
+         *
+         *     +-----+-----+    Here, we can remove the singleton by
+         *     |     |     |    extending the 1x2 rectangle below it
+         *     +--+--+-----+    into a 1x3.
+         *     |  |  |     |
+         *     |  +--+     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     +--+--+-----+
+         *
+         *     +--+--+--+       Here, that trick doesn't work: there's no
+         *     |     |  |       1 x n rectangle with the singleton at one
+         *     |     |  |       end. Instead, we extend a 1 x n rectangle
+         *     |     |  |       _out_ from the singleton, shaving a layer
+         *     +--+--+  |       off the end of another rectangle. So if we
+         *     |  |  |  |       extended up, we'd make our singleton part
+         *     |  +--+--+       of a 1x3 and generate a 1x2 where the 2x2
+         *     |  |     |       used to be; or we could extend right into
+         *     +--+-----+       a 2x1, turning the 1x3 into a 1x2.
+         *
+         *     +-----+--+       Here, we can't even do _that_, since any
+         *     |     |  |       direction we choose to extend the singleton
+         *     +--+--+  |       will produce a new singleton as a result of
+         *     |  |  |  |       truncating one of the size-2 rectangles.
+         *     |  +--+--+       Fortunately, this case can _only_ occur when
+         *     |  |     |       a singleton is surrounded by four size-2s
+         *     +--+-----+       in this fashion; so instead we can simply
+         *                      replace the whole section with a single 3x3.
+         
+                     * Check in which directions we can feasibly extend
+                     * the singleton. We can extend in a particular
+                     * direction iff either:
+                     *
+                     *  - the rectangle on that side of the singleton
+                     *    is not 2x1, and we are at one end of the edge
+                     *    of it we are touching
+                     *
+                     *  - it is 2x1 but we are on its short side.
+                     *
+                     * FIXME: we could plausibly choose between these
+                     * based on the sizes of the rectangles they would
+                     * create?
+                      right  up  left  down  right  up  left  down  should never happen 
+                         * Sanity-check that there really is a 3x3
+                         * rectangle surrounding this singleton and it
+                         * contains absolutely everything we could
+                         * possibly need.
+                         
+                         * FIXME: If the maximum rectangle area for
+                         * this grid is less than 9, we ought to
+                         * subdivide the 3x3 in some fashion. There are
+                         * five other possibilities:
+                         *
+                         *  - a 6 and a 3
+                         *  - a 4, a 3 and a 2
+                         *  - three 3s
+                         *  - a 3 and three 2s (two different arrangements).
+                         
+         * We have now constructed a grid of the size specified in
+         * params2. Now we extend it into a grid of the size specified
+         * in params. We do this in two passes: we extend it vertically
+         * until it's the right height, then we transpose it, then
+         * extend it vertically again (getting it effectively the right
+         * width), then finally transpose again.
+         
+             * Set up the new grid.
+             
+             * Decide which horizontal edges are going to get expanded,
+             * and by how much.
+             
+             * Perform the expansion. The way this works is that we
+             * alternately:
+             *
+             *  - copy a row from grid into grid2
+             *
+             *  - invent some number of additional rows in grid2 where
+             *    there was previously only a horizontal line between
+             *    rows in grid, and make random decisions about where
+             *    among these to place each rectangle edge that ran
+             *    along this line.
+             
+                 * Copy a single line from row y of grid into row y2 of
+                 * grid2.
+                  rect starts on this line  we're at the very top, or...  this rect isn't already started 
+                 * If that was the last line, terminate the loop early.
+                 
+                 * Invent some number of additional lines. First walk
+                 * along this line working out where to put all the
+                 * edges that coincide with it.
+                 
+                         * This is a horizontal edge, so it needs
+                         * placing.
+                         
+                             * Here we have the chance to make a new
+                             * decision.
+                             
+                             * Here we just reuse the previous value of
+                             * yx.
+                             
+                     * Invent a single row. For each square in the row,
+                     * we copy the grid entry from the square above it,
+                     * unless we're starting the new rectangle here.
+                     
+             * Transpose.
+             
+         * Run the solver to narrow down the possible number
+         * placements.
+          Count the rectangles.  Now set up each number's candidate position list.  allow any number placement at all 
+                 * Now place the numbers according to the solver's
+                 * recommendations.
+                 
+             * Clean up.
+             
+             * If we've succeeded, then terminate the loop.
+             
+         * Give up and go round again.
+         
+     * Store the solution in aux.
+     
+                 * If there's a number in the very top left or
+                 * bottom right, there's no point putting an
+                 * unnecessary _ before or after it.
+                  do nothing 
+		 * Find a rectangle starting at this point.
+		 
+		 * We know what the dimensions of the rectangle
+		 * should be if it's there at all. Find out if we
+		 * really have a valid rectangle.
+		  Check the horizontal edges.  Check the vertical edges. 
+		 * If this is not a valid rectangle with no other
+		 * edges inside it, we just mark this square as not
+		 * complete and proceed to the next square.
+		 
+		 * We have a rectangle. Now see what its area is,
+		 * and how many numbers are in it.
+		  two numbers 
+		 * Now fill in the whole rectangle based on the
+		 * value of `valid'.
+		  do nothing 
+     * Attempt the in-built solver.
+      Set up each number's (very short) candidate position list. 
+     * Clean up.
+     
+     * First determine the number of spaces required to display a
+     * number. We'll use at least two, because one looks a bit
+     * silly.
+     
+     * Now we know the exact total size of the grid we're going to
+     * produce: it's got 2*h+1 rows, each containing w lots of col,
+     * w+1 boundary characters and a trailing newline.
+     
+		 * Display a number.
+		 
+		 * Display a horizontal edge or nothing.
+		 
+		 * Display a vertical edge or nothing.
+		 
+		 * Display a corner, or a vertical edge, or a
+		 * horizontal edge, or nothing.
+		 
+     * These coordinates are 2 times the obvious grid coordinates.
+     * Hence, the top left of the grid is (0,0), the grid point to
+     * the right of that is (2,0), the one _below that_ is (2,2)
+     * and so on. This is so that we can specify a drag start point
+     * on an edge (one odd coordinate) or in the middle of a square
+     * (two odd coordinates) rather than always at a corner.
+     * 
+     * -1,-1 means no drag is in progress.
+     
+     * This flag is set as soon as a dragging action moves the
+     * mouse pointer away from its starting point, so that even if
+     * the pointer _returns_ to its starting point the action is
+     * treated as a small drag rather than a click.
+      This flag is set if we're doing an erase operation (i.e.
+     * removing edges in the centre of the rectangle without altering
+     * the outlines).
+     
+     * These are the co-ordinates of the top-left and bottom-right squares
+     * in the drag box, respectively, or -1 otherwise.
+     
+     * These are the coordinates of a cursor, whether it's visible, and
+     * whether it was used to start a drag.
+     
+     * Find the nearest square-centre.
+     
+     * And find the nearest grid vertex.
+     
+     * We allocate clicks in parts of the grid square to either
+     * corners, edges or square centres, as follows:
+     * 
+     *   +--+--------+--+
+     *   |  |        |  |
+     *   +--+        +--+
+     *   |   `.    ,'   |
+     *   |     +--+     |
+     *   |     |  |     |
+     *   |     +--+     |
+     *   |   ,'    `.   |
+     *   +--+        +--+
+     *   |  |        |  |
+     *   +--+--------+--+
+     * 
+     * (Not to scale!)
+     * 
+     * In other words: we measure the square distance (i.e.
+     * max(dx,dy)) from the click to the nearest corner, and if
+     * it's within CORNER_TOLERANCE then we return a corner click.
+     * We measure the square distance from the click to the nearest
+     * centre, and if that's within CENTRE_TOLERANCE we return a
+     * centre click. Failing that, we find which of the two edge
+     * centres is nearer to the click and return that edge.
+     
+     * Check for corner click.
+     
+         * Check for centre click.
+         
+             * Failing both of those, see which edge we're closer to.
+             * Conveniently, this is simply done by testing the relative
+             * magnitude of dx and dy (which are currently distances from
+             * the square centre).
+              Vertical edge: x-coord of corner,
+                 * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+                 * y-coord of corner. 
+ * Returns true if it has made any change to the grid.
+ 
+     * Draw horizontal edges of rectangles.
+     
+     * Draw vertical edges of rectangles.
+      cancel keyboard dragging  We assert we should have had a LEFT_BUTTON first. 
+             * If a mouse drag is in progress, ignore attempts to
+             * start a keyboard one.
+              cancel keyboard dragging  rounds down  rounds up  rounds down  rounds up  a move has been made  can't parse move string 
+     * We've made a real change to the grid. Check to see
+     * if the game has been completed.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+     * Draw edges.
+     
+     * Draw corners.
+      cast to prevent 2<<14 sign-extending on promotion to long 
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid. We have to make the grid lines particularly thin,
+     * because users will be drawing lines _along_ them and we want
+     * those lines to be visible.
+     
+     * Solution.
+     
+     * Clues.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * rect.c: Puzzle from nikoli.co.jp. You have a square grid with
+ * numbers in some squares; you must divide the square grid up into
+ * variously sized rectangles, such that every rectangle contains
+ * exactly one numbered square and the area of each rectangle is
+ * equal to the number contained in it.
+ 
+ * TODO:
+ * 
+ *  - Improve singleton removal.
+ *     + It would be nice to limit the size of the generated
+ *       rectangles in accordance with existing constraints such as
+ *       the maximum rectangle size and the one about not
+ *       generating a rectangle the full width or height of the
+ *       grid.
+ *     + This could be achieved by making a less random choice
+ *       about which of the available options to use.
+ *     + Alternatively, we could create our rectangle and then
+ *       split it up.
+  contains the numbers  (w+1) x h  w x (h+1)  structure copy  ----------------------------------------------------------------------
+ * Solver for Rectangles games.
+ * 
+ * This solver is souped up beyond the needs of actually _solving_
+ * a puzzle. It is also designed to cope with uncertainty about
+ * where the numbers have been placed. This is because I run it on
+ * my generated grids _before_ placing the numbers, and have it
+ * tell me where I need to place the numbers to ensure a unique
+ * solution.
+ 
+     * Decrement each entry in the overlaps array to reflect the
+     * removal of this rectangle placement.
+     
+     * Remove the placement from the list of positions for that
+     * rectangle, by interchanging it with the one on the end.
+     
+     * Remove the entry from the rectbyplace array.
+     
+     * Remove the placement from the list of candidates for that
+     * number, by interchanging it with the one on the end.
+     
+ * Returns 0 for failure to solve due to inconsistency; 1 for
+ * success; 2 for failure to complete a solution due to either
+ * ambiguity or it being too difficult.
+ 
+     * Start by setting up a list of candidate positions for each
+     * rectangle.
+     
+         * For each rectangle, begin by finding the bounding
+         * rectangle of its candidate number placements.
+         
+         * Now loop over all possible rectangle placements
+         * overlapping a point within that bounding rectangle;
+         * ensure each one actually contains a candidate number
+         * placement, and add it to the list.
+         
+                     * See if we can find a candidate number
+                     * placement within this rectangle.
+                     
+                         * Add this to the list of candidate
+                         * placements for this rectangle.
+                         
+     * Next, construct a multidimensional array tracking how many
+     * candidate positions for each rectangle overlap each square.
+     * 
+     * Indexing of this array is by the formula
+     * 
+     *   overlaps[(rectindex * h + y) * w + x]
+     * 
+     * A positive or zero value indicates what it sounds as if it
+     * should; -1 indicates that this square _cannot_ be part of
+     * this rectangle; and -2 indicates that it _definitely_ is
+     * (which is distinct from 1, because one might very well know
+     * that _if_ square S is part of rectangle R then it must be
+     * because R is placed in a certain position without knowing
+     * that it definitely _is_).
+     
+     * Also we want an array covering the grid once, to make it
+     * easy to figure out which squares are candidate number
+     * placements for which rectangles. (The existence of this
+     * single array assumes that no square starts off as a
+     * candidate number placement for more than one rectangle. This
+     * assumption is justified, because this solver is _either_
+     * used to solve real problems - in which case there is a
+     * single placement for every number - _or_ used to decide on
+     * number placements for a new puzzle, in which case each
+     * number's placements are confined to the intended position of
+     * the rectangle containing that number.)
+     
+     * Now run the actual deduction loop.
+     
+         * Housekeeping. Look for rectangles whose number has only
+         * one candidate position left, and mark that square as
+         * known if it isn't already.
+          inconsistency 
+         * Now look at the intersection of all possible placements
+         * for each rectangle, and mark all squares in that
+         * intersection as known for that rectangle if they aren't
+         * already.
+          inconsistency 
+         * Rectangle-focused deduction. Look at each rectangle in
+         * turn and try to rule out some of its candidate
+         * placements.
+         
+                             * This placement overlaps a square
+                             * which is _known_ to be part of
+                             * another rectangle. Therefore we must
+                             * rule it out.
+                             
+                             * This placement overlaps one of the
+                             * candidate number placements for some
+                             * rectangle. Count it.
+                             
+                     * If we haven't ruled this placement out
+                     * already, see if it overlaps _all_ of the
+                     * candidate number placements for any
+                     * rectangle. If so, we can rule it out.
+                     
+                     * Failing that, see if it overlaps at least
+                     * one of the candidate number placements for
+                     * itself! (This might not be the case if one
+                     * of those number placements has been removed
+                     * recently.).
+                      don't skip over next placement 
+         * Square-focused deduction. Look at each square not marked
+         * as known, and see if there are any which can only be
+         * part of a single rectangle.
+          Known squares are marked as <0 everywhere, so we only need
+                 * to check the overlaps entry for rect 0.  known already 
+                     * Now we can rule out all placements for
+                     * rectangle `index' which _don't_ contain
+                     * square x,y.
+                      this one is OK  don't skip over next placement 
+         * If we've managed to deduce anything by normal means,
+         * loop round again and see if there's more to be done.
+         * Only if normal deduction has completely failed us should
+         * we now move on to narrowing down the possible number
+         * placements.
+         
+         * Now we have done everything we can with the current set
+         * of number placements. So we need to winnow the number
+         * placements so as to narrow down the possibilities. We do
+         * this by searching for a candidate placement (of _any_
+         * rectangle) which overlaps a candidate placement of the
+         * number for some other rectangle.
+         
+                                 * Add this to the list of
+                                 * winnowing possibilities.
+                                 
+                 * Now choose one of these unwanted rectangle
+                 * placements, and eliminate it.
+                 
+                 * We rule out placement j of rectangle i by means
+                 * of removing all of rectangle k's candidate
+                 * number placements which do _not_ overlap it.
+                 * This will ensure that it is eliminated during
+                 * the next pass of rectangle-focused deduction.
+                  don't skip the next one  inconsistency  remaining uncertainty 
+             * Place the rectangle in its only possible position.
+             
+     * Free up all allocated storage.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+ * This function does one of two things. If passed r==NULL, it
+ * counts the number of possible rectangles which cover the given
+ * square, and returns it in *n. If passed r!=NULL then it _reads_
+ * *n to find an index, counts the possible rectangles until it
+ * reaches the nth, and writes it into r.
+ * 
+ * `scratch' is expected to point to an array of 2 * params->w
+ * ints, used internally as scratch space (and passed in like this
+ * to avoid re-allocating and re-freeing it every time round a
+ * tight loop).
+ 
+     * Maximum rectangle area is 1/6 of total grid size, unless
+     * this means we can't place any rectangles at all in which
+     * case we set it to 2 at minimum.
+     
+     * Scan the grid to find the limits of the region within which
+     * any rectangle containing this point must fall. This will
+     * save us trawling the inside of every rectangle later on to
+     * see if it contains any used squares.
+     
+     * Now scan again to work out the largest rectangles we can fit
+     * in the grid, so that we can terminate the following loops
+     * early once we get down to not having much space left in the
+     * grid.
+      no rectangles can start here 
+     * Rectangles which go right the way across the grid are
+     * boring, although they can't be helped in the case of
+     * extremely small grids. (Also they might be generated later
+     * on by the singleton-removal process; we can't help that.)
+     
+                     * Check this rectangle against the region we
+                     * defined above.
+                     
+     * Find the top left of the rectangle.
+      1x1 singleton here 
+     * Find the width and height of the rectangle.
+      structure copy 
+         * Set up the smaller width and height which we will use to
+         * generate the base grid.
+         
+         * Place rectangles until we can't any more. We do this by
+         * finding a square we haven't yet covered, and randomly
+         * choosing a rectangle to cover it.
+         
+             * Now see how many rectangles fit around this one.
+             
+                 * There are no possible rectangles covering this
+                 * square, meaning it must be a singleton. Mark it
+                 * -2 so we know not to keep trying.
+                 
+                 * Pick one at random.
+                 
+                 * Place it.
+                 
+         * Deal with singleton spaces remaining in the grid, one by
+         * one.
+         *
+         * We do this by making a local change to the layout. There are
+         * several possibilities:
+         *
+         *     +-----+-----+    Here, we can remove the singleton by
+         *     |     |     |    extending the 1x2 rectangle below it
+         *     +--+--+-----+    into a 1x3.
+         *     |  |  |     |
+         *     |  +--+     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     +--+--+-----+
+         *
+         *     +--+--+--+       Here, that trick doesn't work: there's no
+         *     |     |  |       1 x n rectangle with the singleton at one
+         *     |     |  |       end. Instead, we extend a 1 x n rectangle
+         *     |     |  |       _out_ from the singleton, shaving a layer
+         *     +--+--+  |       off the end of another rectangle. So if we
+         *     |  |  |  |       extended up, we'd make our singleton part
+         *     |  +--+--+       of a 1x3 and generate a 1x2 where the 2x2
+         *     |  |     |       used to be; or we could extend right into
+         *     +--+-----+       a 2x1, turning the 1x3 into a 1x2.
+         *
+         *     +-----+--+       Here, we can't even do _that_, since any
+         *     |     |  |       direction we choose to extend the singleton
+         *     +--+--+  |       will produce a new singleton as a result of
+         *     |  |  |  |       truncating one of the size-2 rectangles.
+         *     |  +--+--+       Fortunately, this case can _only_ occur when
+         *     |  |     |       a singleton is surrounded by four size-2s
+         *     +--+-----+       in this fashion; so instead we can simply
+         *                      replace the whole section with a single 3x3.
+         
+                     * Check in which directions we can feasibly extend
+                     * the singleton. We can extend in a particular
+                     * direction iff either:
+                     *
+                     *  - the rectangle on that side of the singleton
+                     *    is not 2x1, and we are at one end of the edge
+                     *    of it we are touching
+                     *
+                     *  - it is 2x1 but we are on its short side.
+                     *
+                     * FIXME: we could plausibly choose between these
+                     * based on the sizes of the rectangles they would
+                     * create?
+                      right  up  left  down  right  up  left  down  should never happen 
+                         * Sanity-check that there really is a 3x3
+                         * rectangle surrounding this singleton and it
+                         * contains absolutely everything we could
+                         * possibly need.
+                         
+                         * FIXME: If the maximum rectangle area for
+                         * this grid is less than 9, we ought to
+                         * subdivide the 3x3 in some fashion. There are
+                         * five other possibilities:
+                         *
+                         *  - a 6 and a 3
+                         *  - a 4, a 3 and a 2
+                         *  - three 3s
+                         *  - a 3 and three 2s (two different arrangements).
+                         
+         * We have now constructed a grid of the size specified in
+         * params2. Now we extend it into a grid of the size specified
+         * in params. We do this in two passes: we extend it vertically
+         * until it's the right height, then we transpose it, then
+         * extend it vertically again (getting it effectively the right
+         * width), then finally transpose again.
+         
+             * Set up the new grid.
+             
+             * Decide which horizontal edges are going to get expanded,
+             * and by how much.
+             
+             * Perform the expansion. The way this works is that we
+             * alternately:
+             *
+             *  - copy a row from grid into grid2
+             *
+             *  - invent some number of additional rows in grid2 where
+             *    there was previously only a horizontal line between
+             *    rows in grid, and make random decisions about where
+             *    among these to place each rectangle edge that ran
+             *    along this line.
+             
+                 * Copy a single line from row y of grid into row y2 of
+                 * grid2.
+                  rect starts on this line  we're at the very top, or...  this rect isn't already started 
+                 * If that was the last line, terminate the loop early.
+                 
+                 * Invent some number of additional lines. First walk
+                 * along this line working out where to put all the
+                 * edges that coincide with it.
+                 
+                         * This is a horizontal edge, so it needs
+                         * placing.
+                         
+                             * Here we have the chance to make a new
+                             * decision.
+                             
+                             * Here we just reuse the previous value of
+                             * yx.
+                             
+                     * Invent a single row. For each square in the row,
+                     * we copy the grid entry from the square above it,
+                     * unless we're starting the new rectangle here.
+                     
+             * Transpose.
+             
+         * Run the solver to narrow down the possible number
+         * placements.
+          Count the rectangles.  Now set up each number's candidate position list.  allow any number placement at all 
+                 * Now place the numbers according to the solver's
+                 * recommendations.
+                 
+             * Clean up.
+             
+             * If we've succeeded, then terminate the loop.
+             
+         * Give up and go round again.
+         
+     * Store the solution in aux.
+     
+                 * If there's a number in the very top left or
+                 * bottom right, there's no point putting an
+                 * unnecessary _ before or after it.
+                  do nothing 
+		 * Find a rectangle starting at this point.
+		 
+		 * We know what the dimensions of the rectangle
+		 * should be if it's there at all. Find out if we
+		 * really have a valid rectangle.
+		  Check the horizontal edges.  Check the vertical edges. 
+		 * If this is not a valid rectangle with no other
+		 * edges inside it, we just mark this square as not
+		 * complete and proceed to the next square.
+		 
+		 * We have a rectangle. Now see what its area is,
+		 * and how many numbers are in it.
+		  two numbers 
+		 * Now fill in the whole rectangle based on the
+		 * value of `valid'.
+		  do nothing 
+     * Attempt the in-built solver.
+      Set up each number's (very short) candidate position list. 
+     * Clean up.
+     
+     * First determine the number of spaces required to display a
+     * number. We'll use at least two, because one looks a bit
+     * silly.
+     
+     * Now we know the exact total size of the grid we're going to
+     * produce: it's got 2*h+1 rows, each containing w lots of col,
+     * w+1 boundary characters and a trailing newline.
+     
+		 * Display a number.
+		 
+		 * Display a horizontal edge or nothing.
+		 
+		 * Display a vertical edge or nothing.
+		 
+		 * Display a corner, or a vertical edge, or a
+		 * horizontal edge, or nothing.
+		 
+     * These coordinates are 2 times the obvious grid coordinates.
+     * Hence, the top left of the grid is (0,0), the grid point to
+     * the right of that is (2,0), the one _below that_ is (2,2)
+     * and so on. This is so that we can specify a drag start point
+     * on an edge (one odd coordinate) or in the middle of a square
+     * (two odd coordinates) rather than always at a corner.
+     * 
+     * -1,-1 means no drag is in progress.
+     
+     * This flag is set as soon as a dragging action moves the
+     * mouse pointer away from its starting point, so that even if
+     * the pointer _returns_ to its starting point the action is
+     * treated as a small drag rather than a click.
+      This flag is set if we're doing an erase operation (i.e.
+     * removing edges in the centre of the rectangle without altering
+     * the outlines).
+     
+     * These are the co-ordinates of the top-left and bottom-right squares
+     * in the drag box, respectively, or -1 otherwise.
+     
+     * These are the coordinates of a cursor, whether it's visible, and
+     * whether it was used to start a drag.
+     
+     * Find the nearest square-centre.
+     
+     * And find the nearest grid vertex.
+     
+     * We allocate clicks in parts of the grid square to either
+     * corners, edges or square centres, as follows:
+     * 
+     *   +--+--------+--+
+     *   |  |        |  |
+     *   +--+        +--+
+     *   |   `.    ,'   |
+     *   |     +--+     |
+     *   |     |  |     |
+     *   |     +--+     |
+     *   |   ,'    `.   |
+     *   +--+        +--+
+     *   |  |        |  |
+     *   +--+--------+--+
+     * 
+     * (Not to scale!)
+     * 
+     * In other words: we measure the square distance (i.e.
+     * max(dx,dy)) from the click to the nearest corner, and if
+     * it's within CORNER_TOLERANCE then we return a corner click.
+     * We measure the square distance from the click to the nearest
+     * centre, and if that's within CENTRE_TOLERANCE we return a
+     * centre click. Failing that, we find which of the two edge
+     * centres is nearer to the click and return that edge.
+     
+     * Check for corner click.
+     
+         * Check for centre click.
+         
+             * Failing both of those, see which edge we're closer to.
+             * Conveniently, this is simply done by testing the relative
+             * magnitude of dx and dy (which are currently distances from
+             * the square centre).
+              Vertical edge: x-coord of corner,
+                 * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+                 * y-coord of corner. 
+ * Returns true if it has made any change to the grid.
+ 
+     * Draw horizontal edges of rectangles.
+     
+     * Draw vertical edges of rectangles.
+      cancel keyboard dragging  We assert we should have had a LEFT_BUTTON first. 
+             * If a mouse drag is in progress, ignore attempts to
+             * start a keyboard one.
+              cancel keyboard dragging  rounds down  rounds up  rounds down  rounds up  a move has been made  can't parse move string 
+     * We've made a real change to the grid. Check to see
+     * if the game has been completed.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+     * Draw edges.
+     
+     * Draw corners.
+      cast to prevent 2<<14 sign-extending on promotion to long 
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid. We have to make the grid lines particularly thin,
+     * because users will be drawing lines _along_ them and we want
+     * those lines to be visible.
+     
+     * Solution.
+     
+     * Clues.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * rect.c: Puzzle from nikoli.co.jp. You have a square grid with
+ * numbers in some squares; you must divide the square grid up into
+ * variously sized rectangles, such that every rectangle contains
+ * exactly one numbered square and the area of each rectangle is
+ * equal to the number contained in it.
+ 
+ * TODO:
+ * 
+ *  - Improve singleton removal.
+ *     + It would be nice to limit the size of the generated
+ *       rectangles in accordance with existing constraints such as
+ *       the maximum rectangle size and the one about not
+ *       generating a rectangle the full width or height of the
+ *       grid.
+ *     + This could be achieved by making a less random choice
+ *       about which of the available options to use.
+ *     + Alternatively, we could create our rectangle and then
+ *       split it up.
+  contains the numbers  (w+1) x h  w x (h+1)  structure copy  ----------------------------------------------------------------------
+ * Solver for Rectangles games.
+ * 
+ * This solver is souped up beyond the needs of actually _solving_
+ * a puzzle. It is also designed to cope with uncertainty about
+ * where the numbers have been placed. This is because I run it on
+ * my generated grids _before_ placing the numbers, and have it
+ * tell me where I need to place the numbers to ensure a unique
+ * solution.
+ 
+     * Decrement each entry in the overlaps array to reflect the
+     * removal of this rectangle placement.
+     
+     * Remove the placement from the list of positions for that
+     * rectangle, by interchanging it with the one on the end.
+     
+     * Remove the entry from the rectbyplace array.
+     
+     * Remove the placement from the list of candidates for that
+     * number, by interchanging it with the one on the end.
+     
+ * Returns 0 for failure to solve due to inconsistency; 1 for
+ * success; 2 for failure to complete a solution due to either
+ * ambiguity or it being too difficult.
+ 
+     * Start by setting up a list of candidate positions for each
+     * rectangle.
+     
+         * For each rectangle, begin by finding the bounding
+         * rectangle of its candidate number placements.
+         
+         * Now loop over all possible rectangle placements
+         * overlapping a point within that bounding rectangle;
+         * ensure each one actually contains a candidate number
+         * placement, and add it to the list.
+         
+                     * See if we can find a candidate number
+                     * placement within this rectangle.
+                     
+                         * Add this to the list of candidate
+                         * placements for this rectangle.
+                         
+     * Next, construct a multidimensional array tracking how many
+     * candidate positions for each rectangle overlap each square.
+     * 
+     * Indexing of this array is by the formula
+     * 
+     *   overlaps[(rectindex * h + y) * w + x]
+     * 
+     * A positive or zero value indicates what it sounds as if it
+     * should; -1 indicates that this square _cannot_ be part of
+     * this rectangle; and -2 indicates that it _definitely_ is
+     * (which is distinct from 1, because one might very well know
+     * that _if_ square S is part of rectangle R then it must be
+     * because R is placed in a certain position without knowing
+     * that it definitely _is_).
+     
+     * Also we want an array covering the grid once, to make it
+     * easy to figure out which squares are candidate number
+     * placements for which rectangles. (The existence of this
+     * single array assumes that no square starts off as a
+     * candidate number placement for more than one rectangle. This
+     * assumption is justified, because this solver is _either_
+     * used to solve real problems - in which case there is a
+     * single placement for every number - _or_ used to decide on
+     * number placements for a new puzzle, in which case each
+     * number's placements are confined to the intended position of
+     * the rectangle containing that number.)
+     
+     * Now run the actual deduction loop.
+     
+         * Housekeeping. Look for rectangles whose number has only
+         * one candidate position left, and mark that square as
+         * known if it isn't already.
+          inconsistency 
+         * Now look at the intersection of all possible placements
+         * for each rectangle, and mark all squares in that
+         * intersection as known for that rectangle if they aren't
+         * already.
+          inconsistency 
+         * Rectangle-focused deduction. Look at each rectangle in
+         * turn and try to rule out some of its candidate
+         * placements.
+         
+                             * This placement overlaps a square
+                             * which is _known_ to be part of
+                             * another rectangle. Therefore we must
+                             * rule it out.
+                             
+                             * This placement overlaps one of the
+                             * candidate number placements for some
+                             * rectangle. Count it.
+                             
+                     * If we haven't ruled this placement out
+                     * already, see if it overlaps _all_ of the
+                     * candidate number placements for any
+                     * rectangle. If so, we can rule it out.
+                     
+                     * Failing that, see if it overlaps at least
+                     * one of the candidate number placements for
+                     * itself! (This might not be the case if one
+                     * of those number placements has been removed
+                     * recently.).
+                      don't skip over next placement 
+         * Square-focused deduction. Look at each square not marked
+         * as known, and see if there are any which can only be
+         * part of a single rectangle.
+          Known squares are marked as <0 everywhere, so we only need
+                 * to check the overlaps entry for rect 0.  known already 
+                     * Now we can rule out all placements for
+                     * rectangle `index' which _don't_ contain
+                     * square x,y.
+                      this one is OK  don't skip over next placement 
+         * If we've managed to deduce anything by normal means,
+         * loop round again and see if there's more to be done.
+         * Only if normal deduction has completely failed us should
+         * we now move on to narrowing down the possible number
+         * placements.
+         
+         * Now we have done everything we can with the current set
+         * of number placements. So we need to winnow the number
+         * placements so as to narrow down the possibilities. We do
+         * this by searching for a candidate placement (of _any_
+         * rectangle) which overlaps a candidate placement of the
+         * number for some other rectangle.
+         
+                                 * Add this to the list of
+                                 * winnowing possibilities.
+                                 
+                 * Now choose one of these unwanted rectangle
+                 * placements, and eliminate it.
+                 
+                 * We rule out placement j of rectangle i by means
+                 * of removing all of rectangle k's candidate
+                 * number placements which do _not_ overlap it.
+                 * This will ensure that it is eliminated during
+                 * the next pass of rectangle-focused deduction.
+                  don't skip the next one  inconsistency  remaining uncertainty 
+             * Place the rectangle in its only possible position.
+             
+     * Free up all allocated storage.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+ * This function does one of two things. If passed r==NULL, it
+ * counts the number of possible rectangles which cover the given
+ * square, and returns it in *n. If passed r!=NULL then it _reads_
+ * *n to find an index, counts the possible rectangles until it
+ * reaches the nth, and writes it into r.
+ * 
+ * `scratch' is expected to point to an array of 2 * params->w
+ * ints, used internally as scratch space (and passed in like this
+ * to avoid re-allocating and re-freeing it every time round a
+ * tight loop).
+ 
+     * Maximum rectangle area is 1/6 of total grid size, unless
+     * this means we can't place any rectangles at all in which
+     * case we set it to 2 at minimum.
+     
+     * Scan the grid to find the limits of the region within which
+     * any rectangle containing this point must fall. This will
+     * save us trawling the inside of every rectangle later on to
+     * see if it contains any used squares.
+     
+     * Now scan again to work out the largest rectangles we can fit
+     * in the grid, so that we can terminate the following loops
+     * early once we get down to not having much space left in the
+     * grid.
+      no rectangles can start here 
+     * Rectangles which go right the way across the grid are
+     * boring, although they can't be helped in the case of
+     * extremely small grids. (Also they might be generated later
+     * on by the singleton-removal process; we can't help that.)
+     
+                     * Check this rectangle against the region we
+                     * defined above.
+                     
+     * Find the top left of the rectangle.
+      1x1 singleton here 
+     * Find the width and height of the rectangle.
+      structure copy 
+         * Set up the smaller width and height which we will use to
+         * generate the base grid.
+         
+         * Place rectangles until we can't any more. We do this by
+         * finding a square we haven't yet covered, and randomly
+         * choosing a rectangle to cover it.
+         
+             * Now see how many rectangles fit around this one.
+             
+                 * There are no possible rectangles covering this
+                 * square, meaning it must be a singleton. Mark it
+                 * -2 so we know not to keep trying.
+                 
+                 * Pick one at random.
+                 
+                 * Place it.
+                 
+         * Deal with singleton spaces remaining in the grid, one by
+         * one.
+         *
+         * We do this by making a local change to the layout. There are
+         * several possibilities:
+         *
+         *     +-----+-----+    Here, we can remove the singleton by
+         *     |     |     |    extending the 1x2 rectangle below it
+         *     +--+--+-----+    into a 1x3.
+         *     |  |  |     |
+         *     |  +--+     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     |  |  |     |
+         *     +--+--+-----+
+         *
+         *     +--+--+--+       Here, that trick doesn't work: there's no
+         *     |     |  |       1 x n rectangle with the singleton at one
+         *     |     |  |       end. Instead, we extend a 1 x n rectangle
+         *     |     |  |       _out_ from the singleton, shaving a layer
+         *     +--+--+  |       off the end of another rectangle. So if we
+         *     |  |  |  |       extended up, we'd make our singleton part
+         *     |  +--+--+       of a 1x3 and generate a 1x2 where the 2x2
+         *     |  |     |       used to be; or we could extend right into
+         *     +--+-----+       a 2x1, turning the 1x3 into a 1x2.
+         *
+         *     +-----+--+       Here, we can't even do _that_, since any
+         *     |     |  |       direction we choose to extend the singleton
+         *     +--+--+  |       will produce a new singleton as a result of
+         *     |  |  |  |       truncating one of the size-2 rectangles.
+         *     |  +--+--+       Fortunately, this case can _only_ occur when
+         *     |  |     |       a singleton is surrounded by four size-2s
+         *     +--+-----+       in this fashion; so instead we can simply
+         *                      replace the whole section with a single 3x3.
+         
+                     * Check in which directions we can feasibly extend
+                     * the singleton. We can extend in a particular
+                     * direction iff either:
+                     *
+                     *  - the rectangle on that side of the singleton
+                     *    is not 2x1, and we are at one end of the edge
+                     *    of it we are touching
+                     *
+                     *  - it is 2x1 but we are on its short side.
+                     *
+                     * FIXME: we could plausibly choose between these
+                     * based on the sizes of the rectangles they would
+                     * create?
+                      right  up  left  down  right  up  left  down  should never happen 
+                         * Sanity-check that there really is a 3x3
+                         * rectangle surrounding this singleton and it
+                         * contains absolutely everything we could
+                         * possibly need.
+                         
+                         * FIXME: If the maximum rectangle area for
+                         * this grid is less than 9, we ought to
+                         * subdivide the 3x3 in some fashion. There are
+                         * five other possibilities:
+                         *
+                         *  - a 6 and a 3
+                         *  - a 4, a 3 and a 2
+                         *  - three 3s
+                         *  - a 3 and three 2s (two different arrangements).
+                         
+         * We have now constructed a grid of the size specified in
+         * params2. Now we extend it into a grid of the size specified
+         * in params. We do this in two passes: we extend it vertically
+         * until it's the right height, then we transpose it, then
+         * extend it vertically again (getting it effectively the right
+         * width), then finally transpose again.
+         
+             * Set up the new grid.
+             
+             * Decide which horizontal edges are going to get expanded,
+             * and by how much.
+             
+             * Perform the expansion. The way this works is that we
+             * alternately:
+             *
+             *  - copy a row from grid into grid2
+             *
+             *  - invent some number of additional rows in grid2 where
+             *    there was previously only a horizontal line between
+             *    rows in grid, and make random decisions about where
+             *    among these to place each rectangle edge that ran
+             *    along this line.
+             
+                 * Copy a single line from row y of grid into row y2 of
+                 * grid2.
+                  rect starts on this line  we're at the very top, or...  this rect isn't already started 
+                 * If that was the last line, terminate the loop early.
+                 
+                 * Invent some number of additional lines. First walk
+                 * along this line working out where to put all the
+                 * edges that coincide with it.
+                 
+                         * This is a horizontal edge, so it needs
+                         * placing.
+                         
+                             * Here we have the chance to make a new
+                             * decision.
+                             
+                             * Here we just reuse the previous value of
+                             * yx.
+                             
+                     * Invent a single row. For each square in the row,
+                     * we copy the grid entry from the square above it,
+                     * unless we're starting the new rectangle here.
+                     
+             * Transpose.
+             
+         * Run the solver to narrow down the possible number
+         * placements.
+          Count the rectangles.  Now set up each number's candidate position list.  allow any number placement at all 
+                 * Now place the numbers according to the solver's
+                 * recommendations.
+                 
+             * Clean up.
+             
+             * If we've succeeded, then terminate the loop.
+             
+         * Give up and go round again.
+         
+     * Store the solution in aux.
+     
+                 * If there's a number in the very top left or
+                 * bottom right, there's no point putting an
+                 * unnecessary _ before or after it.
+                  do nothing 
+		 * Find a rectangle starting at this point.
+		 
+		 * We know what the dimensions of the rectangle
+		 * should be if it's there at all. Find out if we
+		 * really have a valid rectangle.
+		  Check the horizontal edges.  Check the vertical edges. 
+		 * If this is not a valid rectangle with no other
+		 * edges inside it, we just mark this square as not
+		 * complete and proceed to the next square.
+		 
+		 * We have a rectangle. Now see what its area is,
+		 * and how many numbers are in it.
+		  two numbers 
+		 * Now fill in the whole rectangle based on the
+		 * value of `valid'.
+		  do nothing 
+     * Attempt the in-built solver.
+      Set up each number's (very short) candidate position list. 
+     * Clean up.
+     
+     * First determine the number of spaces required to display a
+     * number. We'll use at least two, because one looks a bit
+     * silly.
+     
+     * Now we know the exact total size of the grid we're going to
+     * produce: it's got 2*h+1 rows, each containing w lots of col,
+     * w+1 boundary characters and a trailing newline.
+     
+		 * Display a number.
+		 
+		 * Display a horizontal edge or nothing.
+		 
+		 * Display a vertical edge or nothing.
+		 
+		 * Display a corner, or a vertical edge, or a
+		 * horizontal edge, or nothing.
+		 
+     * These coordinates are 2 times the obvious grid coordinates.
+     * Hence, the top left of the grid is (0,0), the grid point to
+     * the right of that is (2,0), the one _below that_ is (2,2)
+     * and so on. This is so that we can specify a drag start point
+     * on an edge (one odd coordinate) or in the middle of a square
+     * (two odd coordinates) rather than always at a corner.
+     * 
+     * -1,-1 means no drag is in progress.
+     
+     * This flag is set as soon as a dragging action moves the
+     * mouse pointer away from its starting point, so that even if
+     * the pointer _returns_ to its starting point the action is
+     * treated as a small drag rather than a click.
+      This flag is set if we're doing an erase operation (i.e.
+     * removing edges in the centre of the rectangle without altering
+     * the outlines).
+     
+     * These are the co-ordinates of the top-left and bottom-right squares
+     * in the drag box, respectively, or -1 otherwise.
+     
+     * These are the coordinates of a cursor, whether it's visible, and
+     * whether it was used to start a drag.
+     
+     * Find the nearest square-centre.
+     
+     * And find the nearest grid vertex.
+     
+     * We allocate clicks in parts of the grid square to either
+     * corners, edges or square centres, as follows:
+     * 
+     *   +--+--------+--+
+     *   |  |        |  |
+     *   +--+        +--+
+     *   |   `.    ,'   |
+     *   |     +--+     |
+     *   |     |  |     |
+     *   |     +--+     |
+     *   |   ,'    `.   |
+     *   +--+        +--+
+     *   |  |        |  |
+     *   +--+--------+--+
+     * 
+     * (Not to scale!)
+     * 
+     * In other words: we measure the square distance (i.e.
+     * max(dx,dy)) from the click to the nearest corner, and if
+     * it's within CORNER_TOLERANCE then we return a corner click.
+     * We measure the square distance from the click to the nearest
+     * centre, and if that's within CENTRE_TOLERANCE we return a
+     * centre click. Failing that, we find which of the two edge
+     * centres is nearer to the click and return that edge.
+     
+     * Check for corner click.
+     
+         * Check for centre click.
+         
+             * Failing both of those, see which edge we're closer to.
+             * Conveniently, this is simply done by testing the relative
+             * magnitude of dx and dy (which are currently distances from
+             * the square centre).
+              Vertical edge: x-coord of corner,
+                 * y-coord of square centre.  Horizontal edge: x-coord of square centre,
+                 * y-coord of corner. 
+ * Returns true if it has made any change to the grid.
+ 
+     * Draw horizontal edges of rectangles.
+     
+     * Draw vertical edges of rectangles.
+      cancel keyboard dragging  We assert we should have had a LEFT_BUTTON first. 
+             * If a mouse drag is in progress, ignore attempts to
+             * start a keyboard one.
+              cancel keyboard dragging  rounds down  rounds up  rounds down  rounds up  a move has been made  can't parse move string 
+     * We've made a real change to the grid. Check to see
+     * if the game has been completed.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet 
+     * Draw edges.
+     
+     * Draw corners.
+      cast to prevent 2<<14 sign-extending on promotion to long 
+     * I'll use 5mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid. We have to make the grid lines particularly thin,
+     * because users will be drawing lines _along_ them and we want
+     * those lines to be visible.
+     
+     * Solution.
+     
+     * Clues.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

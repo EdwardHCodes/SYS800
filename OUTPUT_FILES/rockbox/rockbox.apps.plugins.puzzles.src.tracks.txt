@@ -1,0 +1,526 @@
+
+ * Implementation of 'Train Tracks', a puzzle from the Times on Saturday.
+ *
+ * "Lay tracks to enable the train to travel from village A to village B.
+ * The numbers indicate how many sections of rail go in each row and
+ * column. There are only straight rails and curved rails. The track
+ * cannot cross itself."
+ *
+ * Puzzles:
+ * #9     8x8:d9s5c6zgAa,1,4,1,4,4,3,S3,5,2,2,4,S5,3,3,5,1
+ * #112   8x8:w6x5mAa,1,3,1,4,6,4,S4,3,3,4,5,2,4,2,S5,1
+ * #113   8x8:gCx5xAf,1,S4,2,5,4,6,2,3,4,2,5,2,S4,4,5,1
+ * #114   8x8:p5fAzkAb,1,6,3,3,3,S6,2,3,5,4,S3,3,5,1,5,1
+ * #115   8x8:zi9d5tAb,1,3,4,5,3,S4,2,4,2,6,2,3,6,S3,3,1
+ * #942   8x8:n5iCfAzAe,2,2,S5,5,3,5,4,5,4,5,2,S5,3,4,5,3
+  --- Game parameters --- 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  structure copy 
+     * Generating anything under 4x4 runs into trouble of one kind
+     * or another.
+      --- Game state ---  flag usage copied from pearl  square grid flags  a track passes through this square (--> 2 edges)  no track passes through this square  U/D/L/R flags for edge track indicators  U/D/L/R flags for edge no-track indicators  edge grid flags  a track passes through this edge  no track passes through this edge  sz w+h  stations: TODO think about multiple lines
+                         (for bigger grids)?  size w*h  size w+h  Return the four directions in which a particular edge flag is set, around a square.  Count the number of a particular edge flag around a grid square.  Return the two flags (E_TRACK and/or E_NOTRACK) set on a specific
+ * edge of a square.  Sets flag (E_TRACK or E_NOTRACK) on a given edge of a square.  Clears flag (E_TRACK or E_NOTRACK) on a given edge of a square.  structure copy  off the bottom of the board: we've finished the path.  off the board: can't move here  already tracks here: can't move  no possible directions left.  pick a random entry point, lay its left edge  nowhere else to go, restart  double-check we got to the right place  Clue-setting algorithm:
+
+ - first lay clues randomly until it's soluble
+ - then remove clues randomly if removing them doesn't affect solubility
+
+ - We start with two clues, one at each path entrance.
+
+ More details:
+ - start with an array of all square i positions
+ - if the grid is already soluble by a level easier than we've requested,
+    go back and make a new grid
+ - if the grid is already soluble by our requested difficulty level, skip
+    the clue-laying step
+ - count the number of flags the solver managed to place, remember this.
+
+ - to lay clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - copy the solved board, strip it
+     - take the next position, add a clue there on the copy
+     - try and solve the copy
+     - if it's soluble by a level easier than we've requested, continue (on
+        to next clue position: putting a clue here makes it too easy)
+     - if it's soluble by our difficulty level, we're done:
+       - put the clue flag into the solved board
+       - go to strip-clues.
+     - if the solver didn't manage to place any more flags, continue (on to next
+        clue position: putting a clue here didn't help he solver)
+     - otherwise put the clue flag in the original board, and go on to the next
+        clue position
+   - if we get here and we've not solved it yet, we never will (did we really
+      fill _all_ the clues in?!). Go back and make a new grid.
+
+ - to strip clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - if the solved grid doesn't have a clue here, skip
+     - copy the solved board, remove this clue, strip it
+     - try and solve the copy
+     - assert that it is not soluble by a level easier than we've requested
+       - (because this should never happen)
+     - if this is (still) soluble by our difficulty level:
+       - remove this clue from the solved board, it's redundant (with the other
+          clues)
+
+  - that should be it.
+ Add/remove a clue before stripping, if required  All squares that are not clue squares have square track info erased, and some edge flags..  only erase an edge flag if neither side of the edge is S_CLUE.  Work out how many flags the solver managed to set (either TRACK
+       or NOTRACK) and return this as a progress measure, to check whether
+       a partially-solved board gets any further than a previous partially-
+       solved board.  Check that this state won't show 'phantom moves' at the start of the
+     * game: squares which have multiple edge flags set but no clue flag
+     * cause a piece of track to appear that isn't on a clue square.  found one!  set up the shuffly-position grid for later, used for adding clues:
+     * we only bother adding clues where any edges are set.  First, check whether the puzzle is already either too easy, or just right  already too easy, even without adding clues.  already soluble without any extra clues.  First, lay clues until we're soluble.  pick a random position  already a clue here (entrance location?)  no point putting a clue here, we could solve both edges
+                         with the previous set of clues  set a clue in that position (on a copy of the board) and test solubility  adding a clue here would add phantom track  adding a clue here makes it too easy  we're now soluble (and we weren't before): add this clue, and then
+               start stripping clues  We've made more progress solving: add this clue, then.  If we got here we didn't ever manage to make the puzzle soluble
+       (without making it too easily soluble, that is): give up.  Now, strip redundant clues (i.e. those without which the puzzle is still
+       soluble)  pick a random position  no clue here to strip  don't strip clues at entrance/exit  removing a clue here would add phantom track  still soluble without this clue. 
+     * 4x4 Tricky cannot be generated, so fall back to Easy.
+      structure copy  --- lay the random path  --- Update the clue numbers based on the tracks we have generated.  too boring  disallow 1 clue at entry point  disallow consecutive 1 clues.  (disallow 1 clue at exit point)  --- Add clues to make a soluble puzzle  couldn't make it soluble, or too easy  --- Generate the game desc based on the generated grid.  If a square is NOTRACK, all four edges must be.  If 3 or more edges around a square are NOTRACK, the square is.  If any edge around a square is TRACK, the square is.  If a square is TRACK and 2 edges are NOTRACK,
+               the other two edges must be TRACK.  If a square is TRACK and 2 edges are TRACK, the other two
+               must be NOTRACK.  everything that's not S_TRACK must be S_NOTRACK.  everything that's not S_NOTRACK must be S_TRACK.  For rows or columns which only have one more square to put a track in, we
+       know the only way a new track section could be there would be to run
+       perpendicular to the track (otherwise we'd need at least two free squares).
+       So, if there is nowhere we can run perpendicular to the track (e.g. because
+       we're on an edge) we know the extra track section much be on one end of an
+       existing section.  We have a match: anything that's more than 1 away from this square
+       cannot now contain a track.  this cell has 2 definite edges  this cell has a loose end (single flag set parallel
+                    to the direction of this row/column)  mark loose ends  we could lay perpendicular across this cell  skip non-loose ends  next to other loose end, could join up  ditto  set as NOTRACK the edge parallel to the row/column that's
+                       not already set.  skip non-loose ends 
+     * We're given a neighbouring pair of squares p,P, with 'dir'
+     * being the direction from the former to the latter. We aim to
+     * spot situations in which, if p is a track square, then P must
+     * also be one (because p doesn't have enough free exits to avoid
+     * using the one that goes towards P).
+     *
+     * Then, if the target number of track squares on their shared
+     * row/column says that there's only one track square left to
+     * place, it can't be p, because P would have to be one too,
+     * violating the clue. So in that situation we can mark p as
+     * unfilled. Conversely, if there's only one _non_-track square
+     * left to place, it can't be P, so we can mark P as filled.
+      no need: we already know something about these squares  square p need not connect to P, even if it is filled  OK, now we know that if p is filled, P must be filled too.  But at most one of them can be filled, so it can't be p.  Alternatively, at least one of them _must_ be filled, so P
+         * must be.  disable the harder version of the deduction  disable the harder version of the deduction  We mustn't join the start to the end if:
+               - there are other bits of track that aren't attached to either end
+               - the clues are not fully satisfied yet
+              TODO eventually we should pull this out into a solver struct and keep it
+       updated as we connect squares. For now we recreate it every time we try
+       this particular solver step.  Work out the connectedness of the current loop set.  connection to the right...  connection down...  NB no need to check up and left because they'll have been checked
+               by the other side.  Now look at all adjacent squares that are both S_TRACK: if connecting
+       any of them would complete a loop (i.e. they're both the same dsf class
+       already) then that edge must be NOTRACK.  (only) clue squares can have outer edges set. 
+     * Imagine a graph on the squares of the grid, with an edge
+     * connecting neighbouring squares only if it's not yet known
+     * whether there's a track between them.
+     *
+     * This function is called if the edge between x,y and X,Y is a
+     * bridge in that graph: that is, it's not part of any loop in the
+     * graph, or equivalently, removing it would increase the number
+     * of connected components in the graph.
+     *
+     * In that situation, we can fill in the edge by a parity
+     * argument. Construct a closed loop of edges in the grid, all of
+     * whose states are known except this one. The track starts and
+     * ends outside this loop, so it must cross the boundary of the
+     * loop an even number of times. So if we count up how many times
+     * the track is known to cross the edges of our loop, then we can
+     * fill in the last edge in whichever way makes that number even.
+     *
+     * In fact, there's not even any need to go to the effort of
+     * constructing a _single_ closed loop. The simplest thing is to
+     * delete the bridge edge from the graph, find a connected
+     * component of the reduced graph whose boundary includes that
+     * edge, and take every edge separating that component from
+     * another. This may not lead to _exactly one_ cycle - the
+     * component could be non-simply connected and have a hole in the
+     * middle - but that doesn't matter, because the same parity
+     * constraint applies just as well with more than one disjoint
+     * loop.
+      We expect to have been called with X,Y either to the
+             * right of x,y or below it, not the other way round. If
+             * that were not true, the tests in this loop to exclude
+             * the bridge edge would have to be twice as annoying.  isolate lowest set bit  Set all the outer border edges as no-track.  Can't use do ... while (0) because we need a 'continue' in this macro  top line: column clues  second line: top edge  grid rows: one line of squares, one line of edges.  grid square line  edges line  next line: bottom edge  final line: bottom clue  A cell is 'complete', for the purposes of marking the game as
+     * finished, if it has two edges marked as TRACK. But it only has
+     * to have one edge marked as TRACK, or be filled in as trackful
+     * without any specific edges known, to count towards checking
+     * row/column clue errors.  no loop allowed  We have a continuous path between the entrance and the exit: any
+               other path must be in error.  If we _don't_ have such a path, then certainly the game
+             * can't be in a winning state. So even if we're not
+             * highlighting any _errors_, we certainly shouldn't
+             * return true.  Code borrowed from Pearl.  drag start and end grid coords  pixel position of initial click  grid position of keyboard cursor; uses half-size grid  true iff cursor is shown  R/U/L/D shift, for drag-in-progress flags  cursor in square (centre, or on edge)  R/U/L/D shift, for no-track edge flags  R/U/L/D shift, for cursor-on-edge , h = state->shared->h, sz = state->shared->sz  if we're going to _set_ NOTRACK (i.e. the flag is currently unset),
+         make sure the edge is not already set to TRACK. The adjacent squares
+         could be set to TRACK, because we don't know which edges the general
+         square setting refers to.  if we're going to _set_ TRACK, make sure neither adjacent square nor
+             the edge itself is already set to NOTRACK.  if we're going to _set_ TRACK, make sure neither adjacent square has
+             2 track flags already.   If we're setting S_NOTRACK, we cannot have either S_TRACK or any E_TRACK.  If we're setting S_TRACK, we cannot have any S_NOTRACK (we could have
+          E_NOTRACK, though, because one or two wouldn't rule out a track)  actually either x1 == x2, or y1 == y2, but it's easier just to code
+       the nested loop.  nothing to do, clearing and already clear  nothing to do, setting and already set  --- mouse operations ---  can't drag from off grid  We might still have been dragging (and just done a one-
+             * square drag): cancel drag, so undo doesn't make it like
+             * a drag-in-progress.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              Closest to top/bottom edge.  Closest to left/right edge.  --- cursor/keyboard operations ---  disallow cursor on square corners: centres and edges only  click on square corner does nothing (shouldn't get here)  helps to debug the solver  this is breaking the bank on GTK, which vsprintf's into a fixed-size buffer
+     * which is 4096 bytes long. vsnprintf needs a feature-test macro to use, faff. debug(("move: %s\n", move)); set track, clear track; set notrack, clear notrack  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  ensure a quarter-circle has a whole #segs  same number of bits: no special colour.  Clip to the grid square.  Clear the square so that it's got an appropriately-sized border
+     * in COL_GRID and a central area in the right background colour.  More outlines for clue squares.  Draw tracks themselves  Draw no-track marks, if present, in square and on edges. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+          left border  upper border  The Times uses 7mm squares  Ick: fake up `ds->tilesize' for macro expansion purposes  Grid, then border (second so it is on top)  clue numbers, and loop ends  clue tracks / solution  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * Implementation of 'Train Tracks', a puzzle from the Times on Saturday.
+ *
+ * "Lay tracks to enable the train to travel from village A to village B.
+ * The numbers indicate how many sections of rail go in each row and
+ * column. There are only straight rails and curved rails. The track
+ * cannot cross itself."
+ *
+ * Puzzles:
+ * #9     8x8:d9s5c6zgAa,1,4,1,4,4,3,S3,5,2,2,4,S5,3,3,5,1
+ * #112   8x8:w6x5mAa,1,3,1,4,6,4,S4,3,3,4,5,2,4,2,S5,1
+ * #113   8x8:gCx5xAf,1,S4,2,5,4,6,2,3,4,2,5,2,S4,4,5,1
+ * #114   8x8:p5fAzkAb,1,6,3,3,3,S6,2,3,5,4,S3,3,5,1,5,1
+ * #115   8x8:zi9d5tAb,1,3,4,5,3,S4,2,4,2,6,2,3,6,S3,3,1
+ * #942   8x8:n5iCfAzAe,2,2,S5,5,3,5,4,5,4,5,2,S5,3,4,5,3
+  --- Game parameters --- 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  structure copy 
+     * Generating anything under 4x4 runs into trouble of one kind
+     * or another.
+      --- Game state ---  flag usage copied from pearl  square grid flags  a track passes through this square (--> 2 edges)  no track passes through this square  U/D/L/R flags for edge track indicators  U/D/L/R flags for edge no-track indicators  edge grid flags  a track passes through this edge  no track passes through this edge  sz w+h  stations: TODO think about multiple lines
+                         (for bigger grids)?  size w*h  size w+h  Return the four directions in which a particular edge flag is set, around a square.  Count the number of a particular edge flag around a grid square.  Return the two flags (E_TRACK and/or E_NOTRACK) set on a specific
+ * edge of a square.  Sets flag (E_TRACK or E_NOTRACK) on a given edge of a square.  Clears flag (E_TRACK or E_NOTRACK) on a given edge of a square.  structure copy  off the bottom of the board: we've finished the path.  off the board: can't move here  already tracks here: can't move  no possible directions left.  pick a random entry point, lay its left edge  nowhere else to go, restart  double-check we got to the right place  Clue-setting algorithm:
+
+ - first lay clues randomly until it's soluble
+ - then remove clues randomly if removing them doesn't affect solubility
+
+ - We start with two clues, one at each path entrance.
+
+ More details:
+ - start with an array of all square i positions
+ - if the grid is already soluble by a level easier than we've requested,
+    go back and make a new grid
+ - if the grid is already soluble by our requested difficulty level, skip
+    the clue-laying step
+ - count the number of flags the solver managed to place, remember this.
+
+ - to lay clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - copy the solved board, strip it
+     - take the next position, add a clue there on the copy
+     - try and solve the copy
+     - if it's soluble by a level easier than we've requested, continue (on
+        to next clue position: putting a clue here makes it too easy)
+     - if it's soluble by our difficulty level, we're done:
+       - put the clue flag into the solved board
+       - go to strip-clues.
+     - if the solver didn't manage to place any more flags, continue (on to next
+        clue position: putting a clue here didn't help he solver)
+     - otherwise put the clue flag in the original board, and go on to the next
+        clue position
+   - if we get here and we've not solved it yet, we never will (did we really
+      fill _all_ the clues in?!). Go back and make a new grid.
+
+ - to strip clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - if the solved grid doesn't have a clue here, skip
+     - copy the solved board, remove this clue, strip it
+     - try and solve the copy
+     - assert that it is not soluble by a level easier than we've requested
+       - (because this should never happen)
+     - if this is (still) soluble by our difficulty level:
+       - remove this clue from the solved board, it's redundant (with the other
+          clues)
+
+  - that should be it.
+ Add/remove a clue before stripping, if required  All squares that are not clue squares have square track info erased, and some edge flags..  only erase an edge flag if neither side of the edge is S_CLUE.  Work out how many flags the solver managed to set (either TRACK
+       or NOTRACK) and return this as a progress measure, to check whether
+       a partially-solved board gets any further than a previous partially-
+       solved board.  Check that this state won't show 'phantom moves' at the start of the
+     * game: squares which have multiple edge flags set but no clue flag
+     * cause a piece of track to appear that isn't on a clue square.  found one!  set up the shuffly-position grid for later, used for adding clues:
+     * we only bother adding clues where any edges are set.  First, check whether the puzzle is already either too easy, or just right  already too easy, even without adding clues.  already soluble without any extra clues.  First, lay clues until we're soluble.  pick a random position  already a clue here (entrance location?)  no point putting a clue here, we could solve both edges
+                         with the previous set of clues  set a clue in that position (on a copy of the board) and test solubility  adding a clue here would add phantom track  adding a clue here makes it too easy  we're now soluble (and we weren't before): add this clue, and then
+               start stripping clues  We've made more progress solving: add this clue, then.  If we got here we didn't ever manage to make the puzzle soluble
+       (without making it too easily soluble, that is): give up.  Now, strip redundant clues (i.e. those without which the puzzle is still
+       soluble)  pick a random position  no clue here to strip  don't strip clues at entrance/exit  removing a clue here would add phantom track  still soluble without this clue. 
+     * 4x4 Tricky cannot be generated, so fall back to Easy.
+      structure copy  --- lay the random path  --- Update the clue numbers based on the tracks we have generated.  too boring  disallow 1 clue at entry point  disallow consecutive 1 clues.  (disallow 1 clue at exit point)  --- Add clues to make a soluble puzzle  couldn't make it soluble, or too easy  --- Generate the game desc based on the generated grid.  If a square is NOTRACK, all four edges must be.  If 3 or more edges around a square are NOTRACK, the square is.  If any edge around a square is TRACK, the square is.  If a square is TRACK and 2 edges are NOTRACK,
+               the other two edges must be TRACK.  If a square is TRACK and 2 edges are TRACK, the other two
+               must be NOTRACK.  everything that's not S_TRACK must be S_NOTRACK.  everything that's not S_NOTRACK must be S_TRACK.  For rows or columns which only have one more square to put a track in, we
+       know the only way a new track section could be there would be to run
+       perpendicular to the track (otherwise we'd need at least two free squares).
+       So, if there is nowhere we can run perpendicular to the track (e.g. because
+       we're on an edge) we know the extra track section much be on one end of an
+       existing section.  We have a match: anything that's more than 1 away from this square
+       cannot now contain a track.  this cell has 2 definite edges  this cell has a loose end (single flag set parallel
+                    to the direction of this row/column)  mark loose ends  we could lay perpendicular across this cell  skip non-loose ends  next to other loose end, could join up  ditto  set as NOTRACK the edge parallel to the row/column that's
+                       not already set.  skip non-loose ends 
+     * We're given a neighbouring pair of squares p,P, with 'dir'
+     * being the direction from the former to the latter. We aim to
+     * spot situations in which, if p is a track square, then P must
+     * also be one (because p doesn't have enough free exits to avoid
+     * using the one that goes towards P).
+     *
+     * Then, if the target number of track squares on their shared
+     * row/column says that there's only one track square left to
+     * place, it can't be p, because P would have to be one too,
+     * violating the clue. So in that situation we can mark p as
+     * unfilled. Conversely, if there's only one _non_-track square
+     * left to place, it can't be P, so we can mark P as filled.
+      no need: we already know something about these squares  square p need not connect to P, even if it is filled  OK, now we know that if p is filled, P must be filled too.  But at most one of them can be filled, so it can't be p.  Alternatively, at least one of them _must_ be filled, so P
+         * must be.  disable the harder version of the deduction  disable the harder version of the deduction  We mustn't join the start to the end if:
+               - there are other bits of track that aren't attached to either end
+               - the clues are not fully satisfied yet
+              TODO eventually we should pull this out into a solver struct and keep it
+       updated as we connect squares. For now we recreate it every time we try
+       this particular solver step.  Work out the connectedness of the current loop set.  connection to the right...  connection down...  NB no need to check up and left because they'll have been checked
+               by the other side.  Now look at all adjacent squares that are both S_TRACK: if connecting
+       any of them would complete a loop (i.e. they're both the same dsf class
+       already) then that edge must be NOTRACK.  (only) clue squares can have outer edges set. 
+     * Imagine a graph on the squares of the grid, with an edge
+     * connecting neighbouring squares only if it's not yet known
+     * whether there's a track between them.
+     *
+     * This function is called if the edge between x,y and X,Y is a
+     * bridge in that graph: that is, it's not part of any loop in the
+     * graph, or equivalently, removing it would increase the number
+     * of connected components in the graph.
+     *
+     * In that situation, we can fill in the edge by a parity
+     * argument. Construct a closed loop of edges in the grid, all of
+     * whose states are known except this one. The track starts and
+     * ends outside this loop, so it must cross the boundary of the
+     * loop an even number of times. So if we count up how many times
+     * the track is known to cross the edges of our loop, then we can
+     * fill in the last edge in whichever way makes that number even.
+     *
+     * In fact, there's not even any need to go to the effort of
+     * constructing a _single_ closed loop. The simplest thing is to
+     * delete the bridge edge from the graph, find a connected
+     * component of the reduced graph whose boundary includes that
+     * edge, and take every edge separating that component from
+     * another. This may not lead to _exactly one_ cycle - the
+     * component could be non-simply connected and have a hole in the
+     * middle - but that doesn't matter, because the same parity
+     * constraint applies just as well with more than one disjoint
+     * loop.
+      We expect to have been called with X,Y either to the
+             * right of x,y or below it, not the other way round. If
+             * that were not true, the tests in this loop to exclude
+             * the bridge edge would have to be twice as annoying.  isolate lowest set bit  Set all the outer border edges as no-track.  Can't use do ... while (0) because we need a 'continue' in this macro  top line: column clues  second line: top edge  grid rows: one line of squares, one line of edges.  grid square line  edges line  next line: bottom edge  final line: bottom clue  A cell is 'complete', for the purposes of marking the game as
+     * finished, if it has two edges marked as TRACK. But it only has
+     * to have one edge marked as TRACK, or be filled in as trackful
+     * without any specific edges known, to count towards checking
+     * row/column clue errors.  no loop allowed  We have a continuous path between the entrance and the exit: any
+               other path must be in error.  If we _don't_ have such a path, then certainly the game
+             * can't be in a winning state. So even if we're not
+             * highlighting any _errors_, we certainly shouldn't
+             * return true.  Code borrowed from Pearl.  drag start and end grid coords  pixel position of initial click  grid position of keyboard cursor; uses half-size grid  true iff cursor is shown  R/U/L/D shift, for drag-in-progress flags  cursor in square (centre, or on edge)  R/U/L/D shift, for no-track edge flags  R/U/L/D shift, for cursor-on-edge , h = state->shared->h, sz = state->shared->sz  if we're going to _set_ NOTRACK (i.e. the flag is currently unset),
+         make sure the edge is not already set to TRACK. The adjacent squares
+         could be set to TRACK, because we don't know which edges the general
+         square setting refers to.  if we're going to _set_ TRACK, make sure neither adjacent square nor
+             the edge itself is already set to NOTRACK.  if we're going to _set_ TRACK, make sure neither adjacent square has
+             2 track flags already.   If we're setting S_NOTRACK, we cannot have either S_TRACK or any E_TRACK.  If we're setting S_TRACK, we cannot have any S_NOTRACK (we could have
+          E_NOTRACK, though, because one or two wouldn't rule out a track)  actually either x1 == x2, or y1 == y2, but it's easier just to code
+       the nested loop.  nothing to do, clearing and already clear  nothing to do, setting and already set  --- mouse operations ---  can't drag from off grid  We might still have been dragging (and just done a one-
+             * square drag): cancel drag, so undo doesn't make it like
+             * a drag-in-progress.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              Closest to top/bottom edge.  Closest to left/right edge.  --- cursor/keyboard operations ---  disallow cursor on square corners: centres and edges only  click on square corner does nothing (shouldn't get here)  helps to debug the solver  this is breaking the bank on GTK, which vsprintf's into a fixed-size buffer
+     * which is 4096 bytes long. vsnprintf needs a feature-test macro to use, faff. debug(("move: %s\n", move)); set track, clear track; set notrack, clear notrack  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  ensure a quarter-circle has a whole #segs  same number of bits: no special colour.  Clip to the grid square.  Clear the square so that it's got an appropriately-sized border
+     * in COL_GRID and a central area in the right background colour.  More outlines for clue squares.  Draw tracks themselves  Draw no-track marks, if present, in square and on edges. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+          left border  upper border  The Times uses 7mm squares  Ick: fake up `ds->tilesize' for macro expansion purposes  Grid, then border (second so it is on top)  clue numbers, and loop ends  clue tracks / solution  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * Implementation of 'Train Tracks', a puzzle from the Times on Saturday.
+ *
+ * "Lay tracks to enable the train to travel from village A to village B.
+ * The numbers indicate how many sections of rail go in each row and
+ * column. There are only straight rails and curved rails. The track
+ * cannot cross itself."
+ *
+ * Puzzles:
+ * #9     8x8:d9s5c6zgAa,1,4,1,4,4,3,S3,5,2,2,4,S5,3,3,5,1
+ * #112   8x8:w6x5mAa,1,3,1,4,6,4,S4,3,3,4,5,2,4,2,S5,1
+ * #113   8x8:gCx5xAf,1,S4,2,5,4,6,2,3,4,2,5,2,S4,4,5,1
+ * #114   8x8:p5fAzkAb,1,6,3,3,3,S6,2,3,5,4,S3,3,5,1,5,1
+ * #115   8x8:zi9d5tAb,1,3,4,5,3,S4,2,4,2,6,2,3,6,S3,3,1
+ * #942   8x8:n5iCfAzAe,2,2,S5,5,3,5,4,5,4,5,2,S5,3,4,5,3
+  --- Game parameters --- 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  structure copy 
+     * Generating anything under 4x4 runs into trouble of one kind
+     * or another.
+      --- Game state ---  flag usage copied from pearl  square grid flags  a track passes through this square (--> 2 edges)  no track passes through this square  U/D/L/R flags for edge track indicators  U/D/L/R flags for edge no-track indicators  edge grid flags  a track passes through this edge  no track passes through this edge  sz w+h  stations: TODO think about multiple lines
+                         (for bigger grids)?  size w*h  size w+h  Return the four directions in which a particular edge flag is set, around a square.  Count the number of a particular edge flag around a grid square.  Return the two flags (E_TRACK and/or E_NOTRACK) set on a specific
+ * edge of a square.  Sets flag (E_TRACK or E_NOTRACK) on a given edge of a square.  Clears flag (E_TRACK or E_NOTRACK) on a given edge of a square.  structure copy  off the bottom of the board: we've finished the path.  off the board: can't move here  already tracks here: can't move  no possible directions left.  pick a random entry point, lay its left edge  nowhere else to go, restart  double-check we got to the right place  Clue-setting algorithm:
+
+ - first lay clues randomly until it's soluble
+ - then remove clues randomly if removing them doesn't affect solubility
+
+ - We start with two clues, one at each path entrance.
+
+ More details:
+ - start with an array of all square i positions
+ - if the grid is already soluble by a level easier than we've requested,
+    go back and make a new grid
+ - if the grid is already soluble by our requested difficulty level, skip
+    the clue-laying step
+ - count the number of flags the solver managed to place, remember this.
+
+ - to lay clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - copy the solved board, strip it
+     - take the next position, add a clue there on the copy
+     - try and solve the copy
+     - if it's soluble by a level easier than we've requested, continue (on
+        to next clue position: putting a clue here makes it too easy)
+     - if it's soluble by our difficulty level, we're done:
+       - put the clue flag into the solved board
+       - go to strip-clues.
+     - if the solver didn't manage to place any more flags, continue (on to next
+        clue position: putting a clue here didn't help he solver)
+     - otherwise put the clue flag in the original board, and go on to the next
+        clue position
+   - if we get here and we've not solved it yet, we never will (did we really
+      fill _all_ the clues in?!). Go back and make a new grid.
+
+ - to strip clues:
+   - shuffle the i positions
+   - for each possible clue position:
+     - if the solved grid doesn't have a clue here, skip
+     - copy the solved board, remove this clue, strip it
+     - try and solve the copy
+     - assert that it is not soluble by a level easier than we've requested
+       - (because this should never happen)
+     - if this is (still) soluble by our difficulty level:
+       - remove this clue from the solved board, it's redundant (with the other
+          clues)
+
+  - that should be it.
+ Add/remove a clue before stripping, if required  All squares that are not clue squares have square track info erased, and some edge flags..  only erase an edge flag if neither side of the edge is S_CLUE.  Work out how many flags the solver managed to set (either TRACK
+       or NOTRACK) and return this as a progress measure, to check whether
+       a partially-solved board gets any further than a previous partially-
+       solved board.  Check that this state won't show 'phantom moves' at the start of the
+     * game: squares which have multiple edge flags set but no clue flag
+     * cause a piece of track to appear that isn't on a clue square.  found one!  set up the shuffly-position grid for later, used for adding clues:
+     * we only bother adding clues where any edges are set.  First, check whether the puzzle is already either too easy, or just right  already too easy, even without adding clues.  already soluble without any extra clues.  First, lay clues until we're soluble.  pick a random position  already a clue here (entrance location?)  no point putting a clue here, we could solve both edges
+                         with the previous set of clues  set a clue in that position (on a copy of the board) and test solubility  adding a clue here would add phantom track  adding a clue here makes it too easy  we're now soluble (and we weren't before): add this clue, and then
+               start stripping clues  We've made more progress solving: add this clue, then.  If we got here we didn't ever manage to make the puzzle soluble
+       (without making it too easily soluble, that is): give up.  Now, strip redundant clues (i.e. those without which the puzzle is still
+       soluble)  pick a random position  no clue here to strip  don't strip clues at entrance/exit  removing a clue here would add phantom track  still soluble without this clue. 
+     * 4x4 Tricky cannot be generated, so fall back to Easy.
+      structure copy  --- lay the random path  --- Update the clue numbers based on the tracks we have generated.  too boring  disallow 1 clue at entry point  disallow consecutive 1 clues.  (disallow 1 clue at exit point)  --- Add clues to make a soluble puzzle  couldn't make it soluble, or too easy  --- Generate the game desc based on the generated grid.  If a square is NOTRACK, all four edges must be.  If 3 or more edges around a square are NOTRACK, the square is.  If any edge around a square is TRACK, the square is.  If a square is TRACK and 2 edges are NOTRACK,
+               the other two edges must be TRACK.  If a square is TRACK and 2 edges are TRACK, the other two
+               must be NOTRACK.  everything that's not S_TRACK must be S_NOTRACK.  everything that's not S_NOTRACK must be S_TRACK.  For rows or columns which only have one more square to put a track in, we
+       know the only way a new track section could be there would be to run
+       perpendicular to the track (otherwise we'd need at least two free squares).
+       So, if there is nowhere we can run perpendicular to the track (e.g. because
+       we're on an edge) we know the extra track section much be on one end of an
+       existing section.  We have a match: anything that's more than 1 away from this square
+       cannot now contain a track.  this cell has 2 definite edges  this cell has a loose end (single flag set parallel
+                    to the direction of this row/column)  mark loose ends  we could lay perpendicular across this cell  skip non-loose ends  next to other loose end, could join up  ditto  set as NOTRACK the edge parallel to the row/column that's
+                       not already set.  skip non-loose ends 
+     * We're given a neighbouring pair of squares p,P, with 'dir'
+     * being the direction from the former to the latter. We aim to
+     * spot situations in which, if p is a track square, then P must
+     * also be one (because p doesn't have enough free exits to avoid
+     * using the one that goes towards P).
+     *
+     * Then, if the target number of track squares on their shared
+     * row/column says that there's only one track square left to
+     * place, it can't be p, because P would have to be one too,
+     * violating the clue. So in that situation we can mark p as
+     * unfilled. Conversely, if there's only one _non_-track square
+     * left to place, it can't be P, so we can mark P as filled.
+      no need: we already know something about these squares  square p need not connect to P, even if it is filled  OK, now we know that if p is filled, P must be filled too.  But at most one of them can be filled, so it can't be p.  Alternatively, at least one of them _must_ be filled, so P
+         * must be.  disable the harder version of the deduction  disable the harder version of the deduction  We mustn't join the start to the end if:
+               - there are other bits of track that aren't attached to either end
+               - the clues are not fully satisfied yet
+              TODO eventually we should pull this out into a solver struct and keep it
+       updated as we connect squares. For now we recreate it every time we try
+       this particular solver step.  Work out the connectedness of the current loop set.  connection to the right...  connection down...  NB no need to check up and left because they'll have been checked
+               by the other side.  Now look at all adjacent squares that are both S_TRACK: if connecting
+       any of them would complete a loop (i.e. they're both the same dsf class
+       already) then that edge must be NOTRACK.  (only) clue squares can have outer edges set. 
+     * Imagine a graph on the squares of the grid, with an edge
+     * connecting neighbouring squares only if it's not yet known
+     * whether there's a track between them.
+     *
+     * This function is called if the edge between x,y and X,Y is a
+     * bridge in that graph: that is, it's not part of any loop in the
+     * graph, or equivalently, removing it would increase the number
+     * of connected components in the graph.
+     *
+     * In that situation, we can fill in the edge by a parity
+     * argument. Construct a closed loop of edges in the grid, all of
+     * whose states are known except this one. The track starts and
+     * ends outside this loop, so it must cross the boundary of the
+     * loop an even number of times. So if we count up how many times
+     * the track is known to cross the edges of our loop, then we can
+     * fill in the last edge in whichever way makes that number even.
+     *
+     * In fact, there's not even any need to go to the effort of
+     * constructing a _single_ closed loop. The simplest thing is to
+     * delete the bridge edge from the graph, find a connected
+     * component of the reduced graph whose boundary includes that
+     * edge, and take every edge separating that component from
+     * another. This may not lead to _exactly one_ cycle - the
+     * component could be non-simply connected and have a hole in the
+     * middle - but that doesn't matter, because the same parity
+     * constraint applies just as well with more than one disjoint
+     * loop.
+      We expect to have been called with X,Y either to the
+             * right of x,y or below it, not the other way round. If
+             * that were not true, the tests in this loop to exclude
+             * the bridge edge would have to be twice as annoying.  isolate lowest set bit  Set all the outer border edges as no-track.  Can't use do ... while (0) because we need a 'continue' in this macro  top line: column clues  second line: top edge  grid rows: one line of squares, one line of edges.  grid square line  edges line  next line: bottom edge  final line: bottom clue  A cell is 'complete', for the purposes of marking the game as
+     * finished, if it has two edges marked as TRACK. But it only has
+     * to have one edge marked as TRACK, or be filled in as trackful
+     * without any specific edges known, to count towards checking
+     * row/column clue errors.  no loop allowed  We have a continuous path between the entrance and the exit: any
+               other path must be in error.  If we _don't_ have such a path, then certainly the game
+             * can't be in a winning state. So even if we're not
+             * highlighting any _errors_, we certainly shouldn't
+             * return true.  Code borrowed from Pearl.  drag start and end grid coords  pixel position of initial click  grid position of keyboard cursor; uses half-size grid  true iff cursor is shown  R/U/L/D shift, for drag-in-progress flags  cursor in square (centre, or on edge)  R/U/L/D shift, for no-track edge flags  R/U/L/D shift, for cursor-on-edge , h = state->shared->h, sz = state->shared->sz  if we're going to _set_ NOTRACK (i.e. the flag is currently unset),
+         make sure the edge is not already set to TRACK. The adjacent squares
+         could be set to TRACK, because we don't know which edges the general
+         square setting refers to.  if we're going to _set_ TRACK, make sure neither adjacent square nor
+             the edge itself is already set to NOTRACK.  if we're going to _set_ TRACK, make sure neither adjacent square has
+             2 track flags already.   If we're setting S_NOTRACK, we cannot have either S_TRACK or any E_TRACK.  If we're setting S_TRACK, we cannot have any S_NOTRACK (we could have
+          E_NOTRACK, though, because one or two wouldn't rule out a track)  actually either x1 == x2, or y1 == y2, but it's easier just to code
+       the nested loop.  nothing to do, clearing and already clear  nothing to do, setting and already set  --- mouse operations ---  can't drag from off grid  We might still have been dragging (and just done a one-
+             * square drag): cancel drag, so undo doesn't make it like
+             * a drag-in-progress.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              Closest to top/bottom edge.  Closest to left/right edge.  --- cursor/keyboard operations ---  disallow cursor on square corners: centres and edges only  click on square corner does nothing (shouldn't get here)  helps to debug the solver  this is breaking the bank on GTK, which vsprintf's into a fixed-size buffer
+     * which is 4096 bytes long. vsnprintf needs a feature-test macro to use, faff. debug(("move: %s\n", move)); set track, clear track; set notrack, clear notrack  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  ensure a quarter-circle has a whole #segs  same number of bits: no special colour.  Clip to the grid square.  Clear the square so that it's got an appropriately-sized border
+     * in COL_GRID and a central area in the right background colour.  More outlines for clue squares.  Draw tracks themselves  Draw no-track marks, if present, in square and on edges. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+          left border  upper border  The Times uses 7mm squares  Ick: fake up `ds->tilesize' for macro expansion purposes  Grid, then border (second so it is on top)  clue numbers, and loop ends  clue tracks / solution  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

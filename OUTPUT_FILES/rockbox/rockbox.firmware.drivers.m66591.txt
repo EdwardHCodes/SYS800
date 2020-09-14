@@ -1,0 +1,376 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Karl Kurbjun
+ * Portions Copyright (C) 2007 by Catalin Patulea
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE******************************************************************************
+ *  These are the driver specific defines.
+ ***************************************************************************** This define is primarily intended for testing, using HISPEED all the time
+ *  should be acceptable since the device should down-train if the host does not
+ *  support HISPEED.
+  Right now sending blocks till the full transfer has completed. The driver
+ *  will work without USB_TRAN_BLOCK set, but it is more than 50% slower.  
+ *  The driver is more "Proper" without USB_TRAN_BLOCK defined so if you start
+ *  having freezeups or trouble using USB undefine this option.
+ ******************************************************************************
+ * The following functions are all helpers which should not be called directly
+ *  from the USB stack.  They should only be called by eachother, or the USB
+ *  stack visible functions.
+ ***************************************************************************** endpoint direction  user buffer to store data  how match data will fit  actual data count  is there data to transfer?  has the pipe been requested for use?  This function is used to return the control address for each pipe  ACLR  Force de-assertion  SQCLR  This function sets the pipe/endpoint handshake  This function chooses the pipe desired and waits the required time before
+ *  warites/reads are valid  Wait for the Pipe to be valid; This returns the maximum buffer size of each pipe.  On this device the size
+ *  is fixed.
+  This function returns the maximum packet size for each endpoint/pipe.  The
+ *  max packet size is dependent on whether the device is running High or Full
+ *  speed.
+  Device is running Highspeed  DCP max packet size is configurable  Device is running Full speed  DCP max packet size is configurable  This is a helper function that is only called from the interupt handler.  It
+ *  copies the control packet information from the PHY and notifies the stack.
+  copy setup data from packet  acknowledge packet recieved (clear valid)  This is a helper function, it is used to notife the stack that a transfer is
+ *  done.
+  This is the main transmit routine that is typically called from the interrupt
+ *  handler (the queue function calls it in some situations)
+  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     * need to be masked out.
+      Used as a loop counter  Used in transfers to determine the amount to send/receive  This is used as the internal buffer pointer  Choose the pipe that data is being transfered on  Check to see if the endpoint is ready and give it some time to become
+     *  ready.  If it runs out of time exit out as an error.
+      Write to FIFO  Calculate the position in the buffer, all transfers should be 2-byte
+         *  aligned till the last packet or short packet.
+          Check if the buffer is alligned  Start sending data in 16-bit words (fast)  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  The buffer is mis-aligned - data needs to be organized first. 
+             *  This is slower than the above method.
+              Start sending data in 16-bit words  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  These are mis-aligned accesses so the data nees to be
+                 *  arranged.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  If the transfer is complete set up interrupts to notify when FIFO is
+         *  EMPTY, disable READY and let the handler know that there is nothing
+         *  left to transfer on this pipe.
+          Enable Empty flag  Disable ready flag  Nothing left to transfer  There is still data to transfer, make sure READY is enabled  Set BVAL if length is not a multiple of the maximum packet size  Read data from FIFO  Read the number of bytes that the PHY received  The number of bytes to actually read is either what's left of the
+         *  amount requested, or the amount that the PHY received.  Choose the
+         *  smaller of the two.
+          If the length is zero, just clear the buffer as specified in the
+         *  datasheet.  Otherwise read in the data (in 16-bit pieces  Set the BCLR bit  Set the position in the buffer  Read in the data (buffer size should be even).  The PHY cannot
+             *  switch from 16-bit mode to 8-bit mode on an OUT buffer.
+              If the length was odd subtract 1 from the count  If the requested size of data was received, or the data received was
+         *  less than the maximum packet size end the transfer.
+          If the host tries to send anything else the FIFO is not ready/
+             *  enabled yet (NAK).
+              Tell the interrupt handler that transfer is complete.  Disable ready  Let the stack know that the transfer is complete  This function is used to start transfers.  It is a helper function for the 
+ *  usb_drv_send_nonblocking, usb_drv_send, and usb_drv_receive functions.
+ *
+ * The functionality for wait needs to be added.  Currently the driver is 
+ *  always used in a blocking mode(USB_TRAN_BLOCK) so it is not required.
+  Disable IRQs  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     *  need to be masked out.
+      Initialize the enpoint status registers used for the transfer  Pick the pipe that communications are happening on  All transfers start with a BUF handshake  This USB PHY takes care of control completion packets by setting the
+     *  CCPL bit in EP0 (endpoint 0, or DCP).  If the control state is "write no
+     *  data tranfer" then we just need to set the CCPL bit (hopefully) 
+     *  regardless of what the stack said to send.
+      Set CCPL  This is the standard case for transmitting data  If the pipe is not ready don't try and send right away; instead 
+             *  just set the READY interrupt so that the handler can initiate
+             *  the transfer.
+              When receiving data, just enable the ready interrupt, the PHY
+             *  will trigger it and then the reads can start.
+              Re-enable IRQs ******************************************************************************
+ * This is the interrupt handler for this driver.  It should be called from the
+ *  target interrupt handler routine (eg. GPIO3 on M:Robe 500).
+ ***************************************************************************** VBUS (connected) interrupt  If device is not clocked, interrupt flag must be set manually  Resume interrupt: This is not used. Extra logic needs to be added similar
+    *  to the VBUS interrupt incase the PHY clock is not running.
+     Device state transition interrupt: Not used, but useful for debugging  Control transfer stage interrupt  If data is not valid stop  Set CCPL  FIFO EMPTY interrupt: when this happens the transfer should be complete.
+     *  When the interrupt occurs notify the stack.
+      Clear the empty flag  Notify the stack  FIFO NOT READY interrupt: This is not used, but included incase the
+     *  interrupt is endabled.
+      FIFO READY interrupt: This just initiates transfers if they are needed  Was this endpoint ready and waiting  Clear the ready flag  It was ready and waiting so start a transfer  Make sure that the INTStatus register is completely cleared.  Restore the pipe state before the interrupt occured ******************************************************************************
+ *  The following functions are all called by and visible to the USB stack.
+ ***************************************************************************** The M55691 handles this automatically, nothing to do  This function sets the standard test modes, it is not required, but might as
+ *  well implement it since the hardware supports it
+  This sets the test bits and assumes that mode is from 0 to 0x04  Request an unused endpoint  Enable double buffer mode (only used for ep 1 and 2)  Bulk endpoints must be between 1 and 4 inclusive  If this reached 5 the endpoints were all busy  If this reached USB_NUM_ENDPOINTS the endpoints were all busy  Not a supported type  Enable pipe (15)  Setup the flags  Used by stack to tell the helper functions that the pipe is not in use  Periodically called to check if a cable was plugged into the device  This is where the driver stuff starts  Drive Current: 3.3V setting  External 48 MHz clock  Enable VBUS interrupt  fully enable driver  Reset Endpoint states  Issue a h/w reset  USB Attach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 77  Run Hi-Speed  Run Full-Speed  Enable oscillation buffer XCKE  Enable reference clock, PLL RCKE  Enable internal clock supply SCKE  Disable PIPE ready interrupts  Disable PIPE not-ready interrupts  Disable PIPE empyt/size error interrupts  Enable all interrupts except NOT READY, RESUME, and VBUS  Enable continuous transfer mode on the DCP  Set the threshold that the PHY will automatically transmit from EP0  Set the Max packet size to 64  Attach notification to PC (D+ pull-up)  USB Detach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 78.
+      Detach notification to PC (disable D+ pull-up)  Software reset  Disable internal clock supply  Disable PLL  Disable internal reference clock  Disable oscillation buffer, reenable USB operation  This function begins a transmit (on an IN endpoint), it should not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a transmit (on an IN endpoint), it does not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a receive (on an OUT endpoint), it should not block
+ *  so the actual receive is done in the interrupt handler.
+  This function checks the reset handshake speed status 
+ *  (Fullspeed or Highspeed)
+  Handshook at Full-Speed  Handshook at Hi-Speed  Error, handshake may not be complete  This function checks if the endpoint is stalled (error).  I am not sure what
+ *  the "in" variable is intended for.
+  This function stalls/unstalls the endpoint.  Stalls only happen on error so
+ *  if the endpoint is functioning properly this should not be called.  I am
+ *  not sure what the "in" variable is intended for.
+  Stall the pipe (host needs to intervene/error)  Setting this to a NAK, not sure if it is appropriate  !!!!!!!!!!This function is likely incomplete!!!!!!!!!!!!!! **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Karl Kurbjun
+ * Portions Copyright (C) 2007 by Catalin Patulea
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE******************************************************************************
+ *  These are the driver specific defines.
+ ***************************************************************************** This define is primarily intended for testing, using HISPEED all the time
+ *  should be acceptable since the device should down-train if the host does not
+ *  support HISPEED.
+  Right now sending blocks till the full transfer has completed. The driver
+ *  will work without USB_TRAN_BLOCK set, but it is more than 50% slower.  
+ *  The driver is more "Proper" without USB_TRAN_BLOCK defined so if you start
+ *  having freezeups or trouble using USB undefine this option.
+ ******************************************************************************
+ * The following functions are all helpers which should not be called directly
+ *  from the USB stack.  They should only be called by eachother, or the USB
+ *  stack visible functions.
+ ***************************************************************************** endpoint direction  user buffer to store data  how match data will fit  actual data count  is there data to transfer?  has the pipe been requested for use?  This function is used to return the control address for each pipe  ACLR  Force de-assertion  SQCLR  This function sets the pipe/endpoint handshake  This function chooses the pipe desired and waits the required time before
+ *  warites/reads are valid  Wait for the Pipe to be valid; This returns the maximum buffer size of each pipe.  On this device the size
+ *  is fixed.
+  This function returns the maximum packet size for each endpoint/pipe.  The
+ *  max packet size is dependent on whether the device is running High or Full
+ *  speed.
+  Device is running Highspeed  DCP max packet size is configurable  Device is running Full speed  DCP max packet size is configurable  This is a helper function that is only called from the interupt handler.  It
+ *  copies the control packet information from the PHY and notifies the stack.
+  copy setup data from packet  acknowledge packet recieved (clear valid)  This is a helper function, it is used to notife the stack that a transfer is
+ *  done.
+  This is the main transmit routine that is typically called from the interrupt
+ *  handler (the queue function calls it in some situations)
+  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     * need to be masked out.
+      Used as a loop counter  Used in transfers to determine the amount to send/receive  This is used as the internal buffer pointer  Choose the pipe that data is being transfered on  Check to see if the endpoint is ready and give it some time to become
+     *  ready.  If it runs out of time exit out as an error.
+      Write to FIFO  Calculate the position in the buffer, all transfers should be 2-byte
+         *  aligned till the last packet or short packet.
+          Check if the buffer is alligned  Start sending data in 16-bit words (fast)  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  The buffer is mis-aligned - data needs to be organized first. 
+             *  This is slower than the above method.
+              Start sending data in 16-bit words  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  These are mis-aligned accesses so the data nees to be
+                 *  arranged.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  If the transfer is complete set up interrupts to notify when FIFO is
+         *  EMPTY, disable READY and let the handler know that there is nothing
+         *  left to transfer on this pipe.
+          Enable Empty flag  Disable ready flag  Nothing left to transfer  There is still data to transfer, make sure READY is enabled  Set BVAL if length is not a multiple of the maximum packet size  Read data from FIFO  Read the number of bytes that the PHY received  The number of bytes to actually read is either what's left of the
+         *  amount requested, or the amount that the PHY received.  Choose the
+         *  smaller of the two.
+          If the length is zero, just clear the buffer as specified in the
+         *  datasheet.  Otherwise read in the data (in 16-bit pieces  Set the BCLR bit  Set the position in the buffer  Read in the data (buffer size should be even).  The PHY cannot
+             *  switch from 16-bit mode to 8-bit mode on an OUT buffer.
+              If the length was odd subtract 1 from the count  If the requested size of data was received, or the data received was
+         *  less than the maximum packet size end the transfer.
+          If the host tries to send anything else the FIFO is not ready/
+             *  enabled yet (NAK).
+              Tell the interrupt handler that transfer is complete.  Disable ready  Let the stack know that the transfer is complete  This function is used to start transfers.  It is a helper function for the 
+ *  usb_drv_send_nonblocking, usb_drv_send, and usb_drv_receive functions.
+ *
+ * The functionality for wait needs to be added.  Currently the driver is 
+ *  always used in a blocking mode(USB_TRAN_BLOCK) so it is not required.
+  Disable IRQs  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     *  need to be masked out.
+      Initialize the enpoint status registers used for the transfer  Pick the pipe that communications are happening on  All transfers start with a BUF handshake  This USB PHY takes care of control completion packets by setting the
+     *  CCPL bit in EP0 (endpoint 0, or DCP).  If the control state is "write no
+     *  data tranfer" then we just need to set the CCPL bit (hopefully) 
+     *  regardless of what the stack said to send.
+      Set CCPL  This is the standard case for transmitting data  If the pipe is not ready don't try and send right away; instead 
+             *  just set the READY interrupt so that the handler can initiate
+             *  the transfer.
+              When receiving data, just enable the ready interrupt, the PHY
+             *  will trigger it and then the reads can start.
+              Re-enable IRQs ******************************************************************************
+ * This is the interrupt handler for this driver.  It should be called from the
+ *  target interrupt handler routine (eg. GPIO3 on M:Robe 500).
+ ***************************************************************************** VBUS (connected) interrupt  If device is not clocked, interrupt flag must be set manually  Resume interrupt: This is not used. Extra logic needs to be added similar
+    *  to the VBUS interrupt incase the PHY clock is not running.
+     Device state transition interrupt: Not used, but useful for debugging  Control transfer stage interrupt  If data is not valid stop  Set CCPL  FIFO EMPTY interrupt: when this happens the transfer should be complete.
+     *  When the interrupt occurs notify the stack.
+      Clear the empty flag  Notify the stack  FIFO NOT READY interrupt: This is not used, but included incase the
+     *  interrupt is endabled.
+      FIFO READY interrupt: This just initiates transfers if they are needed  Was this endpoint ready and waiting  Clear the ready flag  It was ready and waiting so start a transfer  Make sure that the INTStatus register is completely cleared.  Restore the pipe state before the interrupt occured ******************************************************************************
+ *  The following functions are all called by and visible to the USB stack.
+ ***************************************************************************** The M55691 handles this automatically, nothing to do  This function sets the standard test modes, it is not required, but might as
+ *  well implement it since the hardware supports it
+  This sets the test bits and assumes that mode is from 0 to 0x04  Request an unused endpoint  Enable double buffer mode (only used for ep 1 and 2)  Bulk endpoints must be between 1 and 4 inclusive  If this reached 5 the endpoints were all busy  If this reached USB_NUM_ENDPOINTS the endpoints were all busy  Not a supported type  Enable pipe (15)  Setup the flags  Used by stack to tell the helper functions that the pipe is not in use  Periodically called to check if a cable was plugged into the device  This is where the driver stuff starts  Drive Current: 3.3V setting  External 48 MHz clock  Enable VBUS interrupt  fully enable driver  Reset Endpoint states  Issue a h/w reset  USB Attach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 77  Run Hi-Speed  Run Full-Speed  Enable oscillation buffer XCKE  Enable reference clock, PLL RCKE  Enable internal clock supply SCKE  Disable PIPE ready interrupts  Disable PIPE not-ready interrupts  Disable PIPE empyt/size error interrupts  Enable all interrupts except NOT READY, RESUME, and VBUS  Enable continuous transfer mode on the DCP  Set the threshold that the PHY will automatically transmit from EP0  Set the Max packet size to 64  Attach notification to PC (D+ pull-up)  USB Detach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 78.
+      Detach notification to PC (disable D+ pull-up)  Software reset  Disable internal clock supply  Disable PLL  Disable internal reference clock  Disable oscillation buffer, reenable USB operation  This function begins a transmit (on an IN endpoint), it should not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a transmit (on an IN endpoint), it does not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a receive (on an OUT endpoint), it should not block
+ *  so the actual receive is done in the interrupt handler.
+  This function checks the reset handshake speed status 
+ *  (Fullspeed or Highspeed)
+  Handshook at Full-Speed  Handshook at Hi-Speed  Error, handshake may not be complete  This function checks if the endpoint is stalled (error).  I am not sure what
+ *  the "in" variable is intended for.
+  This function stalls/unstalls the endpoint.  Stalls only happen on error so
+ *  if the endpoint is functioning properly this should not be called.  I am
+ *  not sure what the "in" variable is intended for.
+  Stall the pipe (host needs to intervene/error)  Setting this to a NAK, not sure if it is appropriate  !!!!!!!!!!This function is likely incomplete!!!!!!!!!!!!!! **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Karl Kurbjun
+ * Portions Copyright (C) 2007 by Catalin Patulea
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE******************************************************************************
+ *  These are the driver specific defines.
+ ***************************************************************************** This define is primarily intended for testing, using HISPEED all the time
+ *  should be acceptable since the device should down-train if the host does not
+ *  support HISPEED.
+  Right now sending blocks till the full transfer has completed. The driver
+ *  will work without USB_TRAN_BLOCK set, but it is more than 50% slower.  
+ *  The driver is more "Proper" without USB_TRAN_BLOCK defined so if you start
+ *  having freezeups or trouble using USB undefine this option.
+ ******************************************************************************
+ * The following functions are all helpers which should not be called directly
+ *  from the USB stack.  They should only be called by eachother, or the USB
+ *  stack visible functions.
+ ***************************************************************************** endpoint direction  user buffer to store data  how match data will fit  actual data count  is there data to transfer?  has the pipe been requested for use?  This function is used to return the control address for each pipe  ACLR  Force de-assertion  SQCLR  This function sets the pipe/endpoint handshake  This function chooses the pipe desired and waits the required time before
+ *  warites/reads are valid  Wait for the Pipe to be valid; This returns the maximum buffer size of each pipe.  On this device the size
+ *  is fixed.
+  This function returns the maximum packet size for each endpoint/pipe.  The
+ *  max packet size is dependent on whether the device is running High or Full
+ *  speed.
+  Device is running Highspeed  DCP max packet size is configurable  Device is running Full speed  DCP max packet size is configurable  This is a helper function that is only called from the interupt handler.  It
+ *  copies the control packet information from the PHY and notifies the stack.
+  copy setup data from packet  acknowledge packet recieved (clear valid)  This is a helper function, it is used to notife the stack that a transfer is
+ *  done.
+  This is the main transmit routine that is typically called from the interrupt
+ *  handler (the queue function calls it in some situations)
+  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     * need to be masked out.
+      Used as a loop counter  Used in transfers to determine the amount to send/receive  This is used as the internal buffer pointer  Choose the pipe that data is being transfered on  Check to see if the endpoint is ready and give it some time to become
+     *  ready.  If it runs out of time exit out as an error.
+      Write to FIFO  Calculate the position in the buffer, all transfers should be 2-byte
+         *  aligned till the last packet or short packet.
+          Check if the buffer is alligned  Start sending data in 16-bit words (fast)  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  The buffer is mis-aligned - data needs to be organized first. 
+             *  This is slower than the above method.
+              Start sending data in 16-bit words  This wait is dangerous in the event that something happens 
+                 *  to the PHY pipe where it never becomes ready again, should 
+                 *  probably add a timeout, and ideally completely remove.
+                  These are mis-aligned accesses so the data nees to be
+                 *  arranged.
+                  If the length is odd, send the last byte after setting the byte 
+             *  width of the FIFO.
+              Unset MBW (8-bit transfer)  If the transfer is complete set up interrupts to notify when FIFO is
+         *  EMPTY, disable READY and let the handler know that there is nothing
+         *  left to transfer on this pipe.
+          Enable Empty flag  Disable ready flag  Nothing left to transfer  There is still data to transfer, make sure READY is enabled  Set BVAL if length is not a multiple of the maximum packet size  Read data from FIFO  Read the number of bytes that the PHY received  The number of bytes to actually read is either what's left of the
+         *  amount requested, or the amount that the PHY received.  Choose the
+         *  smaller of the two.
+          If the length is zero, just clear the buffer as specified in the
+         *  datasheet.  Otherwise read in the data (in 16-bit pieces  Set the BCLR bit  Set the position in the buffer  Read in the data (buffer size should be even).  The PHY cannot
+             *  switch from 16-bit mode to 8-bit mode on an OUT buffer.
+              If the length was odd subtract 1 from the count  If the requested size of data was received, or the data received was
+         *  less than the maximum packet size end the transfer.
+          If the host tries to send anything else the FIFO is not ready/
+             *  enabled yet (NAK).
+              Tell the interrupt handler that transfer is complete.  Disable ready  Let the stack know that the transfer is complete  This function is used to start transfers.  It is a helper function for the 
+ *  usb_drv_send_nonblocking, usb_drv_send, and usb_drv_receive functions.
+ *
+ * The functionality for wait needs to be added.  Currently the driver is 
+ *  always used in a blocking mode(USB_TRAN_BLOCK) so it is not required.
+  Disable IRQs  Only the lower 15 bits of the endpoint correlate to the pipe number.
+     *  For example pipe 2 will corelate to endpoint 0x82, so the upper bits
+     *  need to be masked out.
+      Initialize the enpoint status registers used for the transfer  Pick the pipe that communications are happening on  All transfers start with a BUF handshake  This USB PHY takes care of control completion packets by setting the
+     *  CCPL bit in EP0 (endpoint 0, or DCP).  If the control state is "write no
+     *  data tranfer" then we just need to set the CCPL bit (hopefully) 
+     *  regardless of what the stack said to send.
+      Set CCPL  This is the standard case for transmitting data  If the pipe is not ready don't try and send right away; instead 
+             *  just set the READY interrupt so that the handler can initiate
+             *  the transfer.
+              When receiving data, just enable the ready interrupt, the PHY
+             *  will trigger it and then the reads can start.
+              Re-enable IRQs ******************************************************************************
+ * This is the interrupt handler for this driver.  It should be called from the
+ *  target interrupt handler routine (eg. GPIO3 on M:Robe 500).
+ ***************************************************************************** VBUS (connected) interrupt  If device is not clocked, interrupt flag must be set manually  Resume interrupt: This is not used. Extra logic needs to be added similar
+    *  to the VBUS interrupt incase the PHY clock is not running.
+     Device state transition interrupt: Not used, but useful for debugging  Control transfer stage interrupt  If data is not valid stop  Set CCPL  FIFO EMPTY interrupt: when this happens the transfer should be complete.
+     *  When the interrupt occurs notify the stack.
+      Clear the empty flag  Notify the stack  FIFO NOT READY interrupt: This is not used, but included incase the
+     *  interrupt is endabled.
+      FIFO READY interrupt: This just initiates transfers if they are needed  Was this endpoint ready and waiting  Clear the ready flag  It was ready and waiting so start a transfer  Make sure that the INTStatus register is completely cleared.  Restore the pipe state before the interrupt occured ******************************************************************************
+ *  The following functions are all called by and visible to the USB stack.
+ ***************************************************************************** The M55691 handles this automatically, nothing to do  This function sets the standard test modes, it is not required, but might as
+ *  well implement it since the hardware supports it
+  This sets the test bits and assumes that mode is from 0 to 0x04  Request an unused endpoint  Enable double buffer mode (only used for ep 1 and 2)  Bulk endpoints must be between 1 and 4 inclusive  If this reached 5 the endpoints were all busy  If this reached USB_NUM_ENDPOINTS the endpoints were all busy  Not a supported type  Enable pipe (15)  Setup the flags  Used by stack to tell the helper functions that the pipe is not in use  Periodically called to check if a cable was plugged into the device  This is where the driver stuff starts  Drive Current: 3.3V setting  External 48 MHz clock  Enable VBUS interrupt  fully enable driver  Reset Endpoint states  Issue a h/w reset  USB Attach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 77  Run Hi-Speed  Run Full-Speed  Enable oscillation buffer XCKE  Enable reference clock, PLL RCKE  Enable internal clock supply SCKE  Disable PIPE ready interrupts  Disable PIPE not-ready interrupts  Disable PIPE empyt/size error interrupts  Enable all interrupts except NOT READY, RESUME, and VBUS  Enable continuous transfer mode on the DCP  Set the threshold that the PHY will automatically transmit from EP0  Set the Max packet size to 64  Attach notification to PC (D+ pull-up)  USB Detach Process: This follows the flow diagram in the M66591GP 
+     *  Reference Manual Rev 1.00, p. 78.
+      Detach notification to PC (disable D+ pull-up)  Software reset  Disable internal clock supply  Disable PLL  Disable internal reference clock  Disable oscillation buffer, reenable USB operation  This function begins a transmit (on an IN endpoint), it should not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a transmit (on an IN endpoint), it does not block
+ *  so the actual transmit is done in the interrupt handler.
+  This function begins a receive (on an OUT endpoint), it should not block
+ *  so the actual receive is done in the interrupt handler.
+  This function checks the reset handshake speed status 
+ *  (Fullspeed or Highspeed)
+  Handshook at Full-Speed  Handshook at Hi-Speed  Error, handshake may not be complete  This function checks if the endpoint is stalled (error).  I am not sure what
+ *  the "in" variable is intended for.
+  This function stalls/unstalls the endpoint.  Stalls only happen on error so
+ *  if the endpoint is functioning properly this should not be called.  I am
+ *  not sure what the "in" variable is intended for.
+  Stall the pipe (host needs to intervene/error)  Setting this to a NAK, not sure if it is appropriate  !!!!!!!!!!This function is likely incomplete!!!!!!!!!!!!!! 

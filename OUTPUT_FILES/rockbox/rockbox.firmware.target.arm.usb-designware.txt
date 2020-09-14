@@ -1,0 +1,283 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009-2014 by Michael Sparmann
+ * Copyright © 2010 Amaury Pouly
+ * Copyright (C) 2014 by Marcin Bukat
+ * Copyright (C) 2016 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE The ARM940T uses a subset of the ARMv4 functions, not
+ * supporting clean/invalidate cache entries using MVA.
+  Internal EP state/info  available EPs mask  For SHARED_FIFO mode this is the number of periodic Tx FIFOs
+   (usually 1), otherwise it is the number of dedicated Tx FIFOs
+   (not counting NPTX FIFO that is always dedicated for IN0).  Calculate number of packets (if size == 0 an empty packet will be sent)  Read one packet/token from Rx FIFO  Discard data  Get fifo space for NPTXFIFO or PTXFIFO  !USB_DW_SHARED_FIFO  We push whole packets to read consistent info on DIEPTSIZ
+               (i.e. when FIFO size is not maxpktsize multiplo).  !USB_DW_SHARED_FIFO  USB_DW_ARCH_SLAVE  Rx queue must be emptied before flushing Rx FIFO  Wait for any DMA activity to stop  Wait 3 PHY cycles  These are the conditions that must be met so that the application can
+ * disable an endpoint avoiding race conditions:
+ *
+ * 1) The endpoint must be enabled when EPDIS is written, otherwise the
+ *    core will never raise EPDISD interrupt (thus EPDIS remains enabled).
+ *
+ * 2) - Periodic (SHARED_FIFO) or dedicated (!SHARED_FIFO) IN endpoints:
+ *      IN NAK must be effective, to ensure that the core is not going
+ *      to disable the EP just before EPDIS is written.
+ *    - Non-periodic (SHARED_FIFO) IN endpoints: use usb_dw_nptx_unqueue().
+ *    - OUT endpoints: GONAK must be effective, this also ensures that the
+ *      core is not going to disable the EP.
+  The application cannot disable OUT0  Wait for global IN NAK effective  Pull Rx queue until GLOBALOUTNAK token is received.  Wait for IN NAK effective avoiding race conditions, if the
+         * endpoint is disabled by the core (or it was already disabled)
+         * then INEPNE is never raised.
+          Wait for global IN NAK effective  Wait for any DMA activity to stop.  Disable EPs  Disable  Adjust  Do not re-enable the EP we are going to unqueue  Mark EP to be re-enabled later  Flush NPTXFIFO  Re-enable EPs  USB_DW_SHARED_FIFO  We are shutting down an endpoint that might still have IN
+             * packets in the FIFO. Disable the endpoint, wait for things
+             * to settle, and flush the relevant FIFO.
+              Wait for IN NAK effective to avoid race conditions
+                   while shutting down the endpoint.  Disable the EP we are going to flush  Flush it all the way down!  We are waiting for an OUT packet on this endpoint, which
+             * might arrive any moment. Assert a global output NAK to
+             * avoid race conditions while shutting down the endpoint.
+             * Global output NAK also flushes the Rx FIFO.
+              At this point the endpoint is disabled, SNAK it (in case it is not
+     * already done), it is needed for Tx shared FIFOs (to not to raise
+     * unwanted EPMIS interrupts) and recomended for dedicated FIFOs.
+      Clear all channel interrupts to avoid to process
+       pending tokens for the flushed EP. 
+         * If the hardware has dedicated fifos, we must give each
+         * IN EP a unique tx-fifo even if it is non-periodic.
+          no available fifos  ok  Initial state for all endpoints, setting OUT EPs as not busy
+     * will discard all pending data (if any) on the flush stage.
+     
+     * Workaround for spurious -EPROTO when receiving bulk data on Nano2G.
+     *
+     * The Rx FIFO and Rx queue are currupted by the received (corrupted)
+     * data, must be flushed, otherwise the core can not set GONAK effective.
+      Flush and initialize EPs, includes disabling USBAEP on all EPs
+     * except EP0 (USB HW core keeps EP0 active on all configurations).
+      Set up data source  Enable the endpoint  Enable interrupts to start pushing data into the FIFO  OUT0  words  SNAK the disabled EP, otherwise IN tokens for this
+               EP could raise unwanted EPMIS interrupts. Useful for
+               usbserial when there is no data to send.  See usb-s5l8701.c  empty queue  Get the EP on the top of the queue, 0 < idx < number of available
+       IN endpoints  The maximum EP mismatch counter is configured, so we verify all NPTX
+       queue entries, 4 bits per entry, first entry at DTKQNR1[11:8]  The EP is disabled, unqueued, and reconfigured to re-reenable it
+           later when a token is received, (or it will be cancelled by
+           timeout if it was a blocking request).  Be sure the status is clear  Must disable NAK to allow to get ITTXFE interrupts for this EP  USB_DW_SHARED_FIFO  Handle one packet at a time, the IRQ will re-trigger if there's
+       something left.  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all periodic endpoints for anything to be transmitted  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all non-periodic endpoints for anything to be transmitted  USB_DW_ARCH_SLAVE  USB_DW_SHARED_FIFO  IN  Clear XFRC here, if this is a 'multi-transfer' request then
+               a new transfer is going to be launched, this ensures it will
+               not miss a single interrupt.  OUT  Clear interrupt after the current EP0 packet is handled  Nothing to do?  periodic or dedicated  HWCFG registers are not checked to detect the PHY, if an option
+       is not supported then the related bits should be Read-Only.  Configure FIFOs, sizes are 32-bit words, we will need at least
+       one periodic or dedicated Tx FIFO (really the periodic Tx FIFO
+       is not needed if !USB_ENABLE_HID).  Disable IRQ during setup  Enable OTG clocks  Enable PHY clocks  Configure PHY type (must be done before reset) 
+     * Turnaround time (in PHY clocks) = 4*AHB clocks + 1*PHY clock,
+     * worst cases are:
+     *  16-bit UTMI+: PHY=30MHz, AHB=30Mhz -> 5
+     *  8-bit UTMI+:  PHY=60MHz, AHB=30MHz -> 9
+      Reset the whole USB core  Configure FIFOs 
+     * According to p428 of the design guide, we need to ensure that
+     * fifos are flushed before continuing.
+      Configure the core  Set EP mismatch counter to the maximum  Set up interrupts  Unmask all available endpoints  Soft disconnect  Soft reconnect  Soft disconnect  Stop Phy clock  Disable IRQs  Disable clocks 
+ * API functions
+  Cancel transfers on configured EPs usb_dw_flush_endpoint(ep, dir); Ignored intentionally, because the controller requires us to set the
+       new address before sending the response for some reason. So we'll
+       already set it when the control request arrives, before passing that
+       into the USB core, which will then call this dummy function.  Ignore this for now  OUT0 is always launched waiting for SETUP packet,
+           it is CNAKed to receive app data **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009-2014 by Michael Sparmann
+ * Copyright © 2010 Amaury Pouly
+ * Copyright (C) 2014 by Marcin Bukat
+ * Copyright (C) 2016 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE The ARM940T uses a subset of the ARMv4 functions, not
+ * supporting clean/invalidate cache entries using MVA.
+  Internal EP state/info  available EPs mask  For SHARED_FIFO mode this is the number of periodic Tx FIFOs
+   (usually 1), otherwise it is the number of dedicated Tx FIFOs
+   (not counting NPTX FIFO that is always dedicated for IN0).  Calculate number of packets (if size == 0 an empty packet will be sent)  Read one packet/token from Rx FIFO  Discard data  Get fifo space for NPTXFIFO or PTXFIFO  !USB_DW_SHARED_FIFO  We push whole packets to read consistent info on DIEPTSIZ
+               (i.e. when FIFO size is not maxpktsize multiplo).  !USB_DW_SHARED_FIFO  USB_DW_ARCH_SLAVE  Rx queue must be emptied before flushing Rx FIFO  Wait for any DMA activity to stop  Wait 3 PHY cycles  These are the conditions that must be met so that the application can
+ * disable an endpoint avoiding race conditions:
+ *
+ * 1) The endpoint must be enabled when EPDIS is written, otherwise the
+ *    core will never raise EPDISD interrupt (thus EPDIS remains enabled).
+ *
+ * 2) - Periodic (SHARED_FIFO) or dedicated (!SHARED_FIFO) IN endpoints:
+ *      IN NAK must be effective, to ensure that the core is not going
+ *      to disable the EP just before EPDIS is written.
+ *    - Non-periodic (SHARED_FIFO) IN endpoints: use usb_dw_nptx_unqueue().
+ *    - OUT endpoints: GONAK must be effective, this also ensures that the
+ *      core is not going to disable the EP.
+  The application cannot disable OUT0  Wait for global IN NAK effective  Pull Rx queue until GLOBALOUTNAK token is received.  Wait for IN NAK effective avoiding race conditions, if the
+         * endpoint is disabled by the core (or it was already disabled)
+         * then INEPNE is never raised.
+          Wait for global IN NAK effective  Wait for any DMA activity to stop.  Disable EPs  Disable  Adjust  Do not re-enable the EP we are going to unqueue  Mark EP to be re-enabled later  Flush NPTXFIFO  Re-enable EPs  USB_DW_SHARED_FIFO  We are shutting down an endpoint that might still have IN
+             * packets in the FIFO. Disable the endpoint, wait for things
+             * to settle, and flush the relevant FIFO.
+              Wait for IN NAK effective to avoid race conditions
+                   while shutting down the endpoint.  Disable the EP we are going to flush  Flush it all the way down!  We are waiting for an OUT packet on this endpoint, which
+             * might arrive any moment. Assert a global output NAK to
+             * avoid race conditions while shutting down the endpoint.
+             * Global output NAK also flushes the Rx FIFO.
+              At this point the endpoint is disabled, SNAK it (in case it is not
+     * already done), it is needed for Tx shared FIFOs (to not to raise
+     * unwanted EPMIS interrupts) and recomended for dedicated FIFOs.
+      Clear all channel interrupts to avoid to process
+       pending tokens for the flushed EP. 
+         * If the hardware has dedicated fifos, we must give each
+         * IN EP a unique tx-fifo even if it is non-periodic.
+          no available fifos  ok  Initial state for all endpoints, setting OUT EPs as not busy
+     * will discard all pending data (if any) on the flush stage.
+     
+     * Workaround for spurious -EPROTO when receiving bulk data on Nano2G.
+     *
+     * The Rx FIFO and Rx queue are currupted by the received (corrupted)
+     * data, must be flushed, otherwise the core can not set GONAK effective.
+      Flush and initialize EPs, includes disabling USBAEP on all EPs
+     * except EP0 (USB HW core keeps EP0 active on all configurations).
+      Set up data source  Enable the endpoint  Enable interrupts to start pushing data into the FIFO  OUT0  words  SNAK the disabled EP, otherwise IN tokens for this
+               EP could raise unwanted EPMIS interrupts. Useful for
+               usbserial when there is no data to send.  See usb-s5l8701.c  empty queue  Get the EP on the top of the queue, 0 < idx < number of available
+       IN endpoints  The maximum EP mismatch counter is configured, so we verify all NPTX
+       queue entries, 4 bits per entry, first entry at DTKQNR1[11:8]  The EP is disabled, unqueued, and reconfigured to re-reenable it
+           later when a token is received, (or it will be cancelled by
+           timeout if it was a blocking request).  Be sure the status is clear  Must disable NAK to allow to get ITTXFE interrupts for this EP  USB_DW_SHARED_FIFO  Handle one packet at a time, the IRQ will re-trigger if there's
+       something left.  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all periodic endpoints for anything to be transmitted  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all non-periodic endpoints for anything to be transmitted  USB_DW_ARCH_SLAVE  USB_DW_SHARED_FIFO  IN  Clear XFRC here, if this is a 'multi-transfer' request then
+               a new transfer is going to be launched, this ensures it will
+               not miss a single interrupt.  OUT  Clear interrupt after the current EP0 packet is handled  Nothing to do?  periodic or dedicated  HWCFG registers are not checked to detect the PHY, if an option
+       is not supported then the related bits should be Read-Only.  Configure FIFOs, sizes are 32-bit words, we will need at least
+       one periodic or dedicated Tx FIFO (really the periodic Tx FIFO
+       is not needed if !USB_ENABLE_HID).  Disable IRQ during setup  Enable OTG clocks  Enable PHY clocks  Configure PHY type (must be done before reset) 
+     * Turnaround time (in PHY clocks) = 4*AHB clocks + 1*PHY clock,
+     * worst cases are:
+     *  16-bit UTMI+: PHY=30MHz, AHB=30Mhz -> 5
+     *  8-bit UTMI+:  PHY=60MHz, AHB=30MHz -> 9
+      Reset the whole USB core  Configure FIFOs 
+     * According to p428 of the design guide, we need to ensure that
+     * fifos are flushed before continuing.
+      Configure the core  Set EP mismatch counter to the maximum  Set up interrupts  Unmask all available endpoints  Soft disconnect  Soft reconnect  Soft disconnect  Stop Phy clock  Disable IRQs  Disable clocks 
+ * API functions
+  Cancel transfers on configured EPs usb_dw_flush_endpoint(ep, dir); Ignored intentionally, because the controller requires us to set the
+       new address before sending the response for some reason. So we'll
+       already set it when the control request arrives, before passing that
+       into the USB core, which will then call this dummy function.  Ignore this for now  OUT0 is always launched waiting for SETUP packet,
+           it is CNAKed to receive app data **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009-2014 by Michael Sparmann
+ * Copyright © 2010 Amaury Pouly
+ * Copyright (C) 2014 by Marcin Bukat
+ * Copyright (C) 2016 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE The ARM940T uses a subset of the ARMv4 functions, not
+ * supporting clean/invalidate cache entries using MVA.
+  Internal EP state/info  available EPs mask  For SHARED_FIFO mode this is the number of periodic Tx FIFOs
+   (usually 1), otherwise it is the number of dedicated Tx FIFOs
+   (not counting NPTX FIFO that is always dedicated for IN0).  Calculate number of packets (if size == 0 an empty packet will be sent)  Read one packet/token from Rx FIFO  Discard data  Get fifo space for NPTXFIFO or PTXFIFO  !USB_DW_SHARED_FIFO  We push whole packets to read consistent info on DIEPTSIZ
+               (i.e. when FIFO size is not maxpktsize multiplo).  !USB_DW_SHARED_FIFO  USB_DW_ARCH_SLAVE  Rx queue must be emptied before flushing Rx FIFO  Wait for any DMA activity to stop  Wait 3 PHY cycles  These are the conditions that must be met so that the application can
+ * disable an endpoint avoiding race conditions:
+ *
+ * 1) The endpoint must be enabled when EPDIS is written, otherwise the
+ *    core will never raise EPDISD interrupt (thus EPDIS remains enabled).
+ *
+ * 2) - Periodic (SHARED_FIFO) or dedicated (!SHARED_FIFO) IN endpoints:
+ *      IN NAK must be effective, to ensure that the core is not going
+ *      to disable the EP just before EPDIS is written.
+ *    - Non-periodic (SHARED_FIFO) IN endpoints: use usb_dw_nptx_unqueue().
+ *    - OUT endpoints: GONAK must be effective, this also ensures that the
+ *      core is not going to disable the EP.
+  The application cannot disable OUT0  Wait for global IN NAK effective  Pull Rx queue until GLOBALOUTNAK token is received.  Wait for IN NAK effective avoiding race conditions, if the
+         * endpoint is disabled by the core (or it was already disabled)
+         * then INEPNE is never raised.
+          Wait for global IN NAK effective  Wait for any DMA activity to stop.  Disable EPs  Disable  Adjust  Do not re-enable the EP we are going to unqueue  Mark EP to be re-enabled later  Flush NPTXFIFO  Re-enable EPs  USB_DW_SHARED_FIFO  We are shutting down an endpoint that might still have IN
+             * packets in the FIFO. Disable the endpoint, wait for things
+             * to settle, and flush the relevant FIFO.
+              Wait for IN NAK effective to avoid race conditions
+                   while shutting down the endpoint.  Disable the EP we are going to flush  Flush it all the way down!  We are waiting for an OUT packet on this endpoint, which
+             * might arrive any moment. Assert a global output NAK to
+             * avoid race conditions while shutting down the endpoint.
+             * Global output NAK also flushes the Rx FIFO.
+              At this point the endpoint is disabled, SNAK it (in case it is not
+     * already done), it is needed for Tx shared FIFOs (to not to raise
+     * unwanted EPMIS interrupts) and recomended for dedicated FIFOs.
+      Clear all channel interrupts to avoid to process
+       pending tokens for the flushed EP. 
+         * If the hardware has dedicated fifos, we must give each
+         * IN EP a unique tx-fifo even if it is non-periodic.
+          no available fifos  ok  Initial state for all endpoints, setting OUT EPs as not busy
+     * will discard all pending data (if any) on the flush stage.
+     
+     * Workaround for spurious -EPROTO when receiving bulk data on Nano2G.
+     *
+     * The Rx FIFO and Rx queue are currupted by the received (corrupted)
+     * data, must be flushed, otherwise the core can not set GONAK effective.
+      Flush and initialize EPs, includes disabling USBAEP on all EPs
+     * except EP0 (USB HW core keeps EP0 active on all configurations).
+      Set up data source  Enable the endpoint  Enable interrupts to start pushing data into the FIFO  OUT0  words  SNAK the disabled EP, otherwise IN tokens for this
+               EP could raise unwanted EPMIS interrupts. Useful for
+               usbserial when there is no data to send.  See usb-s5l8701.c  empty queue  Get the EP on the top of the queue, 0 < idx < number of available
+       IN endpoints  The maximum EP mismatch counter is configured, so we verify all NPTX
+       queue entries, 4 bits per entry, first entry at DTKQNR1[11:8]  The EP is disabled, unqueued, and reconfigured to re-reenable it
+           later when a token is received, (or it will be cancelled by
+           timeout if it was a blocking request).  Be sure the status is clear  Must disable NAK to allow to get ITTXFE interrupts for this EP  USB_DW_SHARED_FIFO  Handle one packet at a time, the IRQ will re-trigger if there's
+       something left.  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all periodic endpoints for anything to be transmitted  First disable the IRQ, it will be re-enabled later if there
+           is anything left to be done.  Check all non-periodic endpoints for anything to be transmitted  USB_DW_ARCH_SLAVE  USB_DW_SHARED_FIFO  IN  Clear XFRC here, if this is a 'multi-transfer' request then
+               a new transfer is going to be launched, this ensures it will
+               not miss a single interrupt.  OUT  Clear interrupt after the current EP0 packet is handled  Nothing to do?  periodic or dedicated  HWCFG registers are not checked to detect the PHY, if an option
+       is not supported then the related bits should be Read-Only.  Configure FIFOs, sizes are 32-bit words, we will need at least
+       one periodic or dedicated Tx FIFO (really the periodic Tx FIFO
+       is not needed if !USB_ENABLE_HID).  Disable IRQ during setup  Enable OTG clocks  Enable PHY clocks  Configure PHY type (must be done before reset) 
+     * Turnaround time (in PHY clocks) = 4*AHB clocks + 1*PHY clock,
+     * worst cases are:
+     *  16-bit UTMI+: PHY=30MHz, AHB=30Mhz -> 5
+     *  8-bit UTMI+:  PHY=60MHz, AHB=30MHz -> 9
+      Reset the whole USB core  Configure FIFOs 
+     * According to p428 of the design guide, we need to ensure that
+     * fifos are flushed before continuing.
+      Configure the core  Set EP mismatch counter to the maximum  Set up interrupts  Unmask all available endpoints  Soft disconnect  Soft reconnect  Soft disconnect  Stop Phy clock  Disable IRQs  Disable clocks 
+ * API functions
+  Cancel transfers on configured EPs usb_dw_flush_endpoint(ep, dir); Ignored intentionally, because the controller requires us to set the
+       new address before sending the response for some reason. So we'll
+       already set it when the control request arrives, before passing that
+       into the USB core, which will then call this dummy function.  Ignore this for now  OUT0 is always launched waiting for SETUP packet,
+           it is CNAKed to receive app data 

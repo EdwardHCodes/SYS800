@@ -1,0 +1,196 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************    Shine is an MP3 encoder    Copyright (C) 1999-2000  Gabriel Bouvigne    This library is free software; you can redistribute it and/or    modify it under the terms of the GNU Library General Public    License as published by the Free Software Foundation; either    version 2 of the License, or (at your option) any later version.    This library is distributed in the hope that it will be useful,    but WITHOUT ANY WARRANTY; without even the implied warranty of    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU    Library General Public License for more details. 0=(MPEG2 - 22.05,24,16kHz) 1=(MPEG1 - 44.1,48,32kHz)  0=stereo, 1=jstereo, 2=dual, 3=mono   Side information  number of 0-1-quadruples   current bitpos for writing  max. index                   pointer to array[len][len]   pointer to array[len][len]   max. index                    number of linbits             max number stored in linbits  sqrt(2) * 512  for memcpy and 32-bit access  6656 Bytes  9216 Bytes  2304 Bytes   576 Bytes  1152 Bytes    88 Bytes  1448 Bytes    22 Bytes  2-entry circular buffer to pass subband data between threads  18432 bytes is way too much for IRAM and it must be in coherent RAM     4 Bytes     4 Bytes  MP3_ENC_COP  table0  hleng0  table1  hleng1  Apparently not used  Apparently not used  Apparently not used   0 bands   1 bands   2 bands   3 bands   4 bands   5 bands   6 bands   7 bands   8 bands   9 bands  10 bands  11 bands  12 bands  13 bands  14 bands  15 bands  16 bands  17 bands  18 bands  19 bands  20 bands  21 bands  22 bands  Not ICONST: Appropriate table copied to scalefac  Table B.2.b: 22.05 kHz  Table B.2.c: 24 kHz  Table B.2.a: 16 kHz  Table B.8.b: 44.1 kHz  Table B.8.c: 48 kHz  Table B.8.a: 32 kHz   int2idx[i] = sqrt(i*sqrt(i));  MPEG 2  MPEG 1  MPEG 2  MPEG 1  MPEG 2 Stereo  MPEG 1 Stereo  MPEG 1&2 Mono  Initialize the circular buffer pointers  Switch the buffers used by CPU and COP  MP3_ENC_COP  data fit in one uint32_t 
+     * MPEG header layout:
+     * AAAAAAAA AAABBCCD EEEEFFGH IIJJKLMM
+     * A (31-21) = frame sync
+     * B (20-19) = MPEG type
+     * C (18-17) = MPEG layer
+     * D (16)    = protection bit
+     * E (15-12) = bitrate index
+     * F (11-10) = samplerate index
+     * G (9)     = padding bit
+     * H (8)     = private bit
+     * I (7-6)   = channel mode
+     * J (5-4)   = mode extension (jstereo only)
+     * K (3)     = copyright bit
+     * L (2)     = original
+     * M (1-0)   = emphasis
+      frame sync (AAAAAAAAA AAA)  mp3 type (upper):  1 (BB)   mp3 layer:        01 (CC)   mp3 crc:           1 (D)    mp3 org:           1 (L)    no emphasis (bits 0-1)  MPEG1  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  MPEG2  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  Implements the pseudocode of page 98 of the IS  ESC-table is used  No ESC-words  Note the discussion of huffmancodebits() on pages 28 and 29 of the IS,
+   as well as the definitions of the side information on pages 26 and 27.  store scale_facs (part1) store scale_facs (part2) Huffman code tables leed to padding ones *********************************************************************** Function: Count the number of bits necessary to code the subregion.   *********************************************************************** this is table1  ESC-table is used  avoid overflow in packed additions: 78*13 < 1024 *************************************************************************  Choose the Huffman table that will encode ix[begin..end] with            the fewest bits.                                                         Note: This code contains knowledge about the sizes and characteristic    of the Huffman tables as defined in the IS (Table B.7), and will not     work with any arbitrary tables.                                        ************************************************************************* tables without linbits  indx: 0  1  2  3  4  5  6  7  8  9 10 11 12  13 14  15   len: 0, 2, 3, 3, 0, 4, 4, 6, 6, 6, 8, 8, 8, 16, 0, 16  tables with linbits *********************************************************************** Function: Calculation of rzero, count1, address3                       (Partitions ix into big values, quadruples and zeros).                *********************************************************************** !!!! short *ix; !!!!! ***********************************************************************   Function: Quantization of the vector xr ( -> ix)                    *********************************************************************** check for possible 'out of range' values  all values fit the table size  check each index wether it fits the table *********************************************************************** subdivides the bigvalue region which will use separate Huffman tables *********************************************************************** no bigvalue region  Calculate scale factor band index ***************************************************************** Count the number of bits necessary to code the bigvalues region ***************************************************************** Select huffman code tables for bigvalues regions  region0  region1  region2  rzero,count1,address3   bigvalues sfb division  bit count ********************************************************************** The code selects the best quantStep for a particular set of scalefacs********************************************************************** distribute reserved bits to remaining granules  unused bits of the reservoir can be used for remaining granules  end: distribute the reserved bits to one or two granules  mp3 format allows max 12bits for granule length  returns sum_j=0^31 a[j]*cos(PI*j*(k+1/2)/32), 0<=k<32  A0  A1  A2  A3  A0  A1  A2  A3  A0  A1  A2  A3  Generic CPU  x1[-572] .... x1[448] = 1022  18*4*16*32  A0  A1  A2  A3  x1[-286] .... x1[224] = 511  18*2*16*32  A0  A1  A2  A3  CPU  36864=4*18*16*32  Compensate for inversion in the analysis filter  1,2, 5,6, 9,10, 13,14, 17  0=stereo, 3=mono  Figure average number of 'bytes' per frame  calc average of first 256 frequency values  if max of current band is smaller than average, increase precision  last band keeps untouched (not scaled)  !MP3_ENC_COP  MP3_ENC_COP  Encode one mp3 frame  leave space for mp3 header  Padding for this frame  reserved for scale_facs Perform imdct of 18 previous + 18 current subband samples  for integer precision do this loop again (if neccessary)   9216=4*32*9*8  7200=4*18*100  Perform aliasing reduction butterfly  negative  positive  calc new shift for higher integer precision  bit and noise allocation  write the frame to the bitstream  finish this chunk by adding sideinfo header data  Process the PCM data in the encoder's input buffer  MP3_ENC_COP  shift out old samples  Get the last encoded frame  convert frame to big endian  ROCKBOX_LITTLE_ENDIAN ======== Codec section ======== CRC code lovingly ripped from:
+ * github.com/CFR-maniac/lame/blob/master/libmp3lame/VbrTag.c  Lookup table for fast CRC computation
+ * See 'crc_update_lookup'
+ * Uses the polynomial x^16+x^15+x^2+1  fast CRC-16 computation - uses table crc16_lookup 8 Calculate position of 'Info' header  Write very basic 'Info' header with delay, padding and a bit of
+ * miscellaneous info.  By default the MP3 frame header for the info frame is the same as
+       unpadded audio frames  The default frame size too small so find the smallest one that
+           may accomodate it by increasing the bit rate for this empty
+           MP3 frame  Shouldn't really happen but...  Info offset won't change  'Info' header (CBR 'Xing')  flags = 0; Info contains no other sections and is 8 bytes  Just mark the LAMEness to indicate header presence; we're not
+       actually _the_ LAME so 'rbshn' is the version we give  Fill-in some info about us
+     * reference: http://gabriel.mp3-tech.org/mp3infotag.html
+      Revision + VBR method:
+     * [7:4] = Revision (0 ??)
+     * [3:0] = VBR method (CBR)
+      If first frame since encoder reset is long gone (not unlikely in
+       prerecording), then the delay is long passed and no trimming done
+       at the start  Delay and padding:
+     * [23:12] = delay
+     * [11: 0] = padding
+      Misc:
+     * [7:6] = source frequency
+     * [  5] = unwise settings (of course not :)
+     * [4:2] = stereo mode (mono or stereo)
+     * [1:0] = noise shaping (who knows, 0)
+      > 48000  Stereo  Header is layed-down; keep running CRC of audio data  No header possible/none yet written  Update audio CRC and header CRC  Won't fail this since it could still be useable if some decoder
+       plays loose with the CRC info (like Rockbox :)  Get 'Info' header  'Info' header = 8 bytes  Fill-in audio data CRC16  On error, fixing data CRC would require scanning file since it
+       has probably dropped something we tried to write and the likely
+       reason is that the disk filled; just leave it 0 in that case.  Fill-in header CRC16  Update file  Divide encoding duties between CPU and COP -
+   CPU does the windowing and COP does the remainder of the encoding  Needs one extra loop to drain sb_data_buf  !MP3_ENC_COP  No encoder delay  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  Fill subband data buffer before getting frame from COP  MP3_ENC_COP  this is the codec entry point  integer mode  this is called for each file to process  Encoder thread stack goes on our stack - leave 4k for us
+       Will be optimized away when single-threaded  MT only  Needs to do stream finishing steps to flush-out all samples  < 0 = indeterminate  main encoding loop  Reply with required space  First, get PCM data; when available, obtain output buffer  Encoding audio  Flushing encoder  else Draining remaining buffered data  MT only  MT only  while  MT only  this is called by recording system  Return the actual configuration **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************    Shine is an MP3 encoder    Copyright (C) 1999-2000  Gabriel Bouvigne    This library is free software; you can redistribute it and/or    modify it under the terms of the GNU Library General Public    License as published by the Free Software Foundation; either    version 2 of the License, or (at your option) any later version.    This library is distributed in the hope that it will be useful,    but WITHOUT ANY WARRANTY; without even the implied warranty of    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU    Library General Public License for more details. 0=(MPEG2 - 22.05,24,16kHz) 1=(MPEG1 - 44.1,48,32kHz)  0=stereo, 1=jstereo, 2=dual, 3=mono   Side information  number of 0-1-quadruples   current bitpos for writing  max. index                   pointer to array[len][len]   pointer to array[len][len]   max. index                    number of linbits             max number stored in linbits  sqrt(2) * 512  for memcpy and 32-bit access  6656 Bytes  9216 Bytes  2304 Bytes   576 Bytes  1152 Bytes    88 Bytes  1448 Bytes    22 Bytes  2-entry circular buffer to pass subband data between threads  18432 bytes is way too much for IRAM and it must be in coherent RAM     4 Bytes     4 Bytes  MP3_ENC_COP  table0  hleng0  table1  hleng1  Apparently not used  Apparently not used  Apparently not used   0 bands   1 bands   2 bands   3 bands   4 bands   5 bands   6 bands   7 bands   8 bands   9 bands  10 bands  11 bands  12 bands  13 bands  14 bands  15 bands  16 bands  17 bands  18 bands  19 bands  20 bands  21 bands  22 bands  Not ICONST: Appropriate table copied to scalefac  Table B.2.b: 22.05 kHz  Table B.2.c: 24 kHz  Table B.2.a: 16 kHz  Table B.8.b: 44.1 kHz  Table B.8.c: 48 kHz  Table B.8.a: 32 kHz   int2idx[i] = sqrt(i*sqrt(i));  MPEG 2  MPEG 1  MPEG 2  MPEG 1  MPEG 2 Stereo  MPEG 1 Stereo  MPEG 1&2 Mono  Initialize the circular buffer pointers  Switch the buffers used by CPU and COP  MP3_ENC_COP  data fit in one uint32_t 
+     * MPEG header layout:
+     * AAAAAAAA AAABBCCD EEEEFFGH IIJJKLMM
+     * A (31-21) = frame sync
+     * B (20-19) = MPEG type
+     * C (18-17) = MPEG layer
+     * D (16)    = protection bit
+     * E (15-12) = bitrate index
+     * F (11-10) = samplerate index
+     * G (9)     = padding bit
+     * H (8)     = private bit
+     * I (7-6)   = channel mode
+     * J (5-4)   = mode extension (jstereo only)
+     * K (3)     = copyright bit
+     * L (2)     = original
+     * M (1-0)   = emphasis
+      frame sync (AAAAAAAAA AAA)  mp3 type (upper):  1 (BB)   mp3 layer:        01 (CC)   mp3 crc:           1 (D)    mp3 org:           1 (L)    no emphasis (bits 0-1)  MPEG1  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  MPEG2  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  Implements the pseudocode of page 98 of the IS  ESC-table is used  No ESC-words  Note the discussion of huffmancodebits() on pages 28 and 29 of the IS,
+   as well as the definitions of the side information on pages 26 and 27.  store scale_facs (part1) store scale_facs (part2) Huffman code tables leed to padding ones *********************************************************************** Function: Count the number of bits necessary to code the subregion.   *********************************************************************** this is table1  ESC-table is used  avoid overflow in packed additions: 78*13 < 1024 *************************************************************************  Choose the Huffman table that will encode ix[begin..end] with            the fewest bits.                                                         Note: This code contains knowledge about the sizes and characteristic    of the Huffman tables as defined in the IS (Table B.7), and will not     work with any arbitrary tables.                                        ************************************************************************* tables without linbits  indx: 0  1  2  3  4  5  6  7  8  9 10 11 12  13 14  15   len: 0, 2, 3, 3, 0, 4, 4, 6, 6, 6, 8, 8, 8, 16, 0, 16  tables with linbits *********************************************************************** Function: Calculation of rzero, count1, address3                       (Partitions ix into big values, quadruples and zeros).                *********************************************************************** !!!! short *ix; !!!!! ***********************************************************************   Function: Quantization of the vector xr ( -> ix)                    *********************************************************************** check for possible 'out of range' values  all values fit the table size  check each index wether it fits the table *********************************************************************** subdivides the bigvalue region which will use separate Huffman tables *********************************************************************** no bigvalue region  Calculate scale factor band index ***************************************************************** Count the number of bits necessary to code the bigvalues region ***************************************************************** Select huffman code tables for bigvalues regions  region0  region1  region2  rzero,count1,address3   bigvalues sfb division  bit count ********************************************************************** The code selects the best quantStep for a particular set of scalefacs********************************************************************** distribute reserved bits to remaining granules  unused bits of the reservoir can be used for remaining granules  end: distribute the reserved bits to one or two granules  mp3 format allows max 12bits for granule length  returns sum_j=0^31 a[j]*cos(PI*j*(k+1/2)/32), 0<=k<32  A0  A1  A2  A3  A0  A1  A2  A3  A0  A1  A2  A3  Generic CPU  x1[-572] .... x1[448] = 1022  18*4*16*32  A0  A1  A2  A3  x1[-286] .... x1[224] = 511  18*2*16*32  A0  A1  A2  A3  CPU  36864=4*18*16*32  Compensate for inversion in the analysis filter  1,2, 5,6, 9,10, 13,14, 17  0=stereo, 3=mono  Figure average number of 'bytes' per frame  calc average of first 256 frequency values  if max of current band is smaller than average, increase precision  last band keeps untouched (not scaled)  !MP3_ENC_COP  MP3_ENC_COP  Encode one mp3 frame  leave space for mp3 header  Padding for this frame  reserved for scale_facs Perform imdct of 18 previous + 18 current subband samples  for integer precision do this loop again (if neccessary)   9216=4*32*9*8  7200=4*18*100  Perform aliasing reduction butterfly  negative  positive  calc new shift for higher integer precision  bit and noise allocation  write the frame to the bitstream  finish this chunk by adding sideinfo header data  Process the PCM data in the encoder's input buffer  MP3_ENC_COP  shift out old samples  Get the last encoded frame  convert frame to big endian  ROCKBOX_LITTLE_ENDIAN ======== Codec section ======== CRC code lovingly ripped from:
+ * github.com/CFR-maniac/lame/blob/master/libmp3lame/VbrTag.c  Lookup table for fast CRC computation
+ * See 'crc_update_lookup'
+ * Uses the polynomial x^16+x^15+x^2+1  fast CRC-16 computation - uses table crc16_lookup 8 Calculate position of 'Info' header  Write very basic 'Info' header with delay, padding and a bit of
+ * miscellaneous info.  By default the MP3 frame header for the info frame is the same as
+       unpadded audio frames  The default frame size too small so find the smallest one that
+           may accomodate it by increasing the bit rate for this empty
+           MP3 frame  Shouldn't really happen but...  Info offset won't change  'Info' header (CBR 'Xing')  flags = 0; Info contains no other sections and is 8 bytes  Just mark the LAMEness to indicate header presence; we're not
+       actually _the_ LAME so 'rbshn' is the version we give  Fill-in some info about us
+     * reference: http://gabriel.mp3-tech.org/mp3infotag.html
+      Revision + VBR method:
+     * [7:4] = Revision (0 ??)
+     * [3:0] = VBR method (CBR)
+      If first frame since encoder reset is long gone (not unlikely in
+       prerecording), then the delay is long passed and no trimming done
+       at the start  Delay and padding:
+     * [23:12] = delay
+     * [11: 0] = padding
+      Misc:
+     * [7:6] = source frequency
+     * [  5] = unwise settings (of course not :)
+     * [4:2] = stereo mode (mono or stereo)
+     * [1:0] = noise shaping (who knows, 0)
+      > 48000  Stereo  Header is layed-down; keep running CRC of audio data  No header possible/none yet written  Update audio CRC and header CRC  Won't fail this since it could still be useable if some decoder
+       plays loose with the CRC info (like Rockbox :)  Get 'Info' header  'Info' header = 8 bytes  Fill-in audio data CRC16  On error, fixing data CRC would require scanning file since it
+       has probably dropped something we tried to write and the likely
+       reason is that the disk filled; just leave it 0 in that case.  Fill-in header CRC16  Update file  Divide encoding duties between CPU and COP -
+   CPU does the windowing and COP does the remainder of the encoding  Needs one extra loop to drain sb_data_buf  !MP3_ENC_COP  No encoder delay  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  Fill subband data buffer before getting frame from COP  MP3_ENC_COP  this is the codec entry point  integer mode  this is called for each file to process  Encoder thread stack goes on our stack - leave 4k for us
+       Will be optimized away when single-threaded  MT only  Needs to do stream finishing steps to flush-out all samples  < 0 = indeterminate  main encoding loop  Reply with required space  First, get PCM data; when available, obtain output buffer  Encoding audio  Flushing encoder  else Draining remaining buffered data  MT only  MT only  while  MT only  this is called by recording system  Return the actual configuration **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************    Shine is an MP3 encoder    Copyright (C) 1999-2000  Gabriel Bouvigne    This library is free software; you can redistribute it and/or    modify it under the terms of the GNU Library General Public    License as published by the Free Software Foundation; either    version 2 of the License, or (at your option) any later version.    This library is distributed in the hope that it will be useful,    but WITHOUT ANY WARRANTY; without even the implied warranty of    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU    Library General Public License for more details. 0=(MPEG2 - 22.05,24,16kHz) 1=(MPEG1 - 44.1,48,32kHz)  0=stereo, 1=jstereo, 2=dual, 3=mono   Side information  number of 0-1-quadruples   current bitpos for writing  max. index                   pointer to array[len][len]   pointer to array[len][len]   max. index                    number of linbits             max number stored in linbits  sqrt(2) * 512  for memcpy and 32-bit access  6656 Bytes  9216 Bytes  2304 Bytes   576 Bytes  1152 Bytes    88 Bytes  1448 Bytes    22 Bytes  2-entry circular buffer to pass subband data between threads  18432 bytes is way too much for IRAM and it must be in coherent RAM     4 Bytes     4 Bytes  MP3_ENC_COP  table0  hleng0  table1  hleng1  Apparently not used  Apparently not used  Apparently not used   0 bands   1 bands   2 bands   3 bands   4 bands   5 bands   6 bands   7 bands   8 bands   9 bands  10 bands  11 bands  12 bands  13 bands  14 bands  15 bands  16 bands  17 bands  18 bands  19 bands  20 bands  21 bands  22 bands  Not ICONST: Appropriate table copied to scalefac  Table B.2.b: 22.05 kHz  Table B.2.c: 24 kHz  Table B.2.a: 16 kHz  Table B.8.b: 44.1 kHz  Table B.8.c: 48 kHz  Table B.8.a: 32 kHz   int2idx[i] = sqrt(i*sqrt(i));  MPEG 2  MPEG 1  MPEG 2  MPEG 1  MPEG 2 Stereo  MPEG 1 Stereo  MPEG 1&2 Mono  Initialize the circular buffer pointers  Switch the buffers used by CPU and COP  MP3_ENC_COP  data fit in one uint32_t 
+     * MPEG header layout:
+     * AAAAAAAA AAABBCCD EEEEFFGH IIJJKLMM
+     * A (31-21) = frame sync
+     * B (20-19) = MPEG type
+     * C (18-17) = MPEG layer
+     * D (16)    = protection bit
+     * E (15-12) = bitrate index
+     * F (11-10) = samplerate index
+     * G (9)     = padding bit
+     * H (8)     = private bit
+     * I (7-6)   = channel mode
+     * J (5-4)   = mode extension (jstereo only)
+     * K (3)     = copyright bit
+     * L (2)     = original
+     * M (1-0)   = emphasis
+      frame sync (AAAAAAAAA AAA)  mp3 type (upper):  1 (BB)   mp3 layer:        01 (CC)   mp3 crc:           1 (D)    mp3 org:           1 (L)    no emphasis (bits 0-1)  MPEG1  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  MPEG2  add scale_facs array size  set scale_facs compr type  set scale_facs to 1bit  Implements the pseudocode of page 98 of the IS  ESC-table is used  No ESC-words  Note the discussion of huffmancodebits() on pages 28 and 29 of the IS,
+   as well as the definitions of the side information on pages 26 and 27.  store scale_facs (part1) store scale_facs (part2) Huffman code tables leed to padding ones *********************************************************************** Function: Count the number of bits necessary to code the subregion.   *********************************************************************** this is table1  ESC-table is used  avoid overflow in packed additions: 78*13 < 1024 *************************************************************************  Choose the Huffman table that will encode ix[begin..end] with            the fewest bits.                                                         Note: This code contains knowledge about the sizes and characteristic    of the Huffman tables as defined in the IS (Table B.7), and will not     work with any arbitrary tables.                                        ************************************************************************* tables without linbits  indx: 0  1  2  3  4  5  6  7  8  9 10 11 12  13 14  15   len: 0, 2, 3, 3, 0, 4, 4, 6, 6, 6, 8, 8, 8, 16, 0, 16  tables with linbits *********************************************************************** Function: Calculation of rzero, count1, address3                       (Partitions ix into big values, quadruples and zeros).                *********************************************************************** !!!! short *ix; !!!!! ***********************************************************************   Function: Quantization of the vector xr ( -> ix)                    *********************************************************************** check for possible 'out of range' values  all values fit the table size  check each index wether it fits the table *********************************************************************** subdivides the bigvalue region which will use separate Huffman tables *********************************************************************** no bigvalue region  Calculate scale factor band index ***************************************************************** Count the number of bits necessary to code the bigvalues region ***************************************************************** Select huffman code tables for bigvalues regions  region0  region1  region2  rzero,count1,address3   bigvalues sfb division  bit count ********************************************************************** The code selects the best quantStep for a particular set of scalefacs********************************************************************** distribute reserved bits to remaining granules  unused bits of the reservoir can be used for remaining granules  end: distribute the reserved bits to one or two granules  mp3 format allows max 12bits for granule length  returns sum_j=0^31 a[j]*cos(PI*j*(k+1/2)/32), 0<=k<32  A0  A1  A2  A3  A0  A1  A2  A3  A0  A1  A2  A3  Generic CPU  x1[-572] .... x1[448] = 1022  18*4*16*32  A0  A1  A2  A3  x1[-286] .... x1[224] = 511  18*2*16*32  A0  A1  A2  A3  CPU  36864=4*18*16*32  Compensate for inversion in the analysis filter  1,2, 5,6, 9,10, 13,14, 17  0=stereo, 3=mono  Figure average number of 'bytes' per frame  calc average of first 256 frequency values  if max of current band is smaller than average, increase precision  last band keeps untouched (not scaled)  !MP3_ENC_COP  MP3_ENC_COP  Encode one mp3 frame  leave space for mp3 header  Padding for this frame  reserved for scale_facs Perform imdct of 18 previous + 18 current subband samples  for integer precision do this loop again (if neccessary)   9216=4*32*9*8  7200=4*18*100  Perform aliasing reduction butterfly  negative  positive  calc new shift for higher integer precision  bit and noise allocation  write the frame to the bitstream  finish this chunk by adding sideinfo header data  Process the PCM data in the encoder's input buffer  MP3_ENC_COP  shift out old samples  Get the last encoded frame  convert frame to big endian  ROCKBOX_LITTLE_ENDIAN ======== Codec section ======== CRC code lovingly ripped from:
+ * github.com/CFR-maniac/lame/blob/master/libmp3lame/VbrTag.c  Lookup table for fast CRC computation
+ * See 'crc_update_lookup'
+ * Uses the polynomial x^16+x^15+x^2+1  fast CRC-16 computation - uses table crc16_lookup 8 Calculate position of 'Info' header  Write very basic 'Info' header with delay, padding and a bit of
+ * miscellaneous info.  By default the MP3 frame header for the info frame is the same as
+       unpadded audio frames  The default frame size too small so find the smallest one that
+           may accomodate it by increasing the bit rate for this empty
+           MP3 frame  Shouldn't really happen but...  Info offset won't change  'Info' header (CBR 'Xing')  flags = 0; Info contains no other sections and is 8 bytes  Just mark the LAMEness to indicate header presence; we're not
+       actually _the_ LAME so 'rbshn' is the version we give  Fill-in some info about us
+     * reference: http://gabriel.mp3-tech.org/mp3infotag.html
+      Revision + VBR method:
+     * [7:4] = Revision (0 ??)
+     * [3:0] = VBR method (CBR)
+      If first frame since encoder reset is long gone (not unlikely in
+       prerecording), then the delay is long passed and no trimming done
+       at the start  Delay and padding:
+     * [23:12] = delay
+     * [11: 0] = padding
+      Misc:
+     * [7:6] = source frequency
+     * [  5] = unwise settings (of course not :)
+     * [4:2] = stereo mode (mono or stereo)
+     * [1:0] = noise shaping (who knows, 0)
+      > 48000  Stereo  Header is layed-down; keep running CRC of audio data  No header possible/none yet written  Update audio CRC and header CRC  Won't fail this since it could still be useable if some decoder
+       plays loose with the CRC info (like Rockbox :)  Get 'Info' header  'Info' header = 8 bytes  Fill-in audio data CRC16  On error, fixing data CRC would require scanning file since it
+       has probably dropped something we tried to write and the likely
+       reason is that the disk filled; just leave it 0 in that case.  Fill-in header CRC16  Update file  Divide encoding duties between CPU and COP -
+   CPU does the windowing and COP does the remainder of the encoding  Needs one extra loop to drain sb_data_buf  !MP3_ENC_COP  No encoder delay  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  MP3_ENC_COP  Fill subband data buffer before getting frame from COP  MP3_ENC_COP  this is the codec entry point  integer mode  this is called for each file to process  Encoder thread stack goes on our stack - leave 4k for us
+       Will be optimized away when single-threaded  MT only  Needs to do stream finishing steps to flush-out all samples  < 0 = indeterminate  main encoding loop  Reply with required space  First, get PCM data; when available, obtain output buffer  Encoding audio  Flushing encoder  else Draining remaining buffered data  MT only  MT only  while  MT only  this is called by recording system  Return the actual configuration 

@@ -1,0 +1,676 @@
+
+ * netslide.c: cross between Net and Sixteen, courtesy of Richard
+ * Boulton.
+  Direction and other bitfields  Corner flags go in the barriers array  Get tile at given coordinate  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  position (row or col number, starting at 0) of last move.  direction of last move: +1 or -1  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  Shuffle limit is part of the limited parameters, because we have to
+     * provide the target move count.  ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Now shuffle the grid.
+     * FIXME - this simply does a set of random moves to shuffle the pieces,
+     * although we make a token effort to avoid boring cases by avoiding moves
+     * that directly undo the previous one, or that repeat so often as to
+     * turn into fewer moves.
+     *
+     * A better way would be to number all the pieces, generate a placement
+     * for all the numbers as for "sixteen", observing parity constraints if
+     * neccessary, and then place the pieces according to their numbering.
+     * BUT - I'm not sure if this will work, since we disallow movement of
+     * the middle row and column.
+      incremented conditionally  Choose a direction: 0,1,2,3 = up, right, down, left.  avoid centre  undoes last move  makes fewer moves  avoid centre  undoes last move  makes fewer moves  if we got here, the move was accepted 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+     * Set up the barrier corner flags, for drawing barriers
+     * prettily when they meet.
+      ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ *
+ * squares in the moving_row and moving_col are always inactive - this
+ * is so that "current" doesn't appear to jump across moving lines.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  ----------------------------------------------------------------------
+ * Process a move.
+  we might have to do this more than once to skip missing arrows  'click' when cursor is invisible just makes cursor visible.  reverse direction if right hand button is pressed  can't parse move string 
+     * See if the game has been completed.
+      break out of two loops at once  ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  not decided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Flashing tiles are a grey in between those two.
+     
+     * When we draw a single tile, we must draw everything up to
+     * and including the borders around the tile. This means that
+     * if the neighbouring tiles have connections to those borders,
+     * we must draw those connections on the borders themselves.
+     *
+     * This would be terribly fiddly if we ever had to draw a tile
+     * while its neighbour was in mid-rotate, because we'd have to
+     * arrange to _know_ that the neighbour was being rotated and
+     * hence had an anomalous effect on the redraw of this tile.
+     * Fortunately, the drawing algorithm avoids ever calling us in
+     * this circumstance: we're either drawing lots of straight
+     * tiles at game start or after a move is complete, or we're
+     * repeatedly drawing only the rotating tile. So no problem.
+     
+     * So. First blank the tile out completely: draw a big
+     * rectangle in border colour, and a smaller rectangle in
+     * background colour to fill it in.
+     
+     * Draw the wires.
+     
+     * Draw the box in the middle. We do this in blue if the tile
+     * is an unpowered endpoint, in cyan if the tile is a powered
+     * endpoint, in black if the tile is the centrepiece, and
+     * otherwise not at all.
+     
+     * Draw the points on the border if other tiles are connected
+     * to us.
+     
+             * If we are fully connected to the other tile, we must
+             * draw right across the tile border. (We can use our
+             * own ACTIVE state to determine what colour to do this
+             * in: if we are fully connected to the other tile then
+             * the two ACTIVE states will be the same.)
+             
+             * The other tile extends into our border, but isn't
+             * actually connected to us. Just draw a single black
+             * dot.
+             
+     * Draw barrier corners, and then barriers.
+      top of arrow  right corner  right concave  bottom right  bottom left  left concave  left corner  'no cursur here  LH column.  RH column  Top row  Bottom row 
+     * Clear the screen and draw the exterior barrier lines if this
+     * is our first call.
+     
+         * Arrows for making moves.
+          Cursor has changed; redraw two (prev and curr) arrows.  Check if this is an undo.  If so, we will need to run any animation
+     * backwards.
+     
+         * We're animating a slide, of row/column number
+         * state->last_move_pos, in direction
+         * state->last_move_dir
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Draw any tile which differs from the way it was last drawn.
+     
+             * In a completion flash, we adjust the FLASHING bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Update the status bar.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * netslide.c: cross between Net and Sixteen, courtesy of Richard
+ * Boulton.
+  Direction and other bitfields  Corner flags go in the barriers array  Get tile at given coordinate  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  position (row or col number, starting at 0) of last move.  direction of last move: +1 or -1  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  Shuffle limit is part of the limited parameters, because we have to
+     * provide the target move count.  ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Now shuffle the grid.
+     * FIXME - this simply does a set of random moves to shuffle the pieces,
+     * although we make a token effort to avoid boring cases by avoiding moves
+     * that directly undo the previous one, or that repeat so often as to
+     * turn into fewer moves.
+     *
+     * A better way would be to number all the pieces, generate a placement
+     * for all the numbers as for "sixteen", observing parity constraints if
+     * neccessary, and then place the pieces according to their numbering.
+     * BUT - I'm not sure if this will work, since we disallow movement of
+     * the middle row and column.
+      incremented conditionally  Choose a direction: 0,1,2,3 = up, right, down, left.  avoid centre  undoes last move  makes fewer moves  avoid centre  undoes last move  makes fewer moves  if we got here, the move was accepted 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+     * Set up the barrier corner flags, for drawing barriers
+     * prettily when they meet.
+      ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ *
+ * squares in the moving_row and moving_col are always inactive - this
+ * is so that "current" doesn't appear to jump across moving lines.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  ----------------------------------------------------------------------
+ * Process a move.
+  we might have to do this more than once to skip missing arrows  'click' when cursor is invisible just makes cursor visible.  reverse direction if right hand button is pressed  can't parse move string 
+     * See if the game has been completed.
+      break out of two loops at once  ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  not decided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Flashing tiles are a grey in between those two.
+     
+     * When we draw a single tile, we must draw everything up to
+     * and including the borders around the tile. This means that
+     * if the neighbouring tiles have connections to those borders,
+     * we must draw those connections on the borders themselves.
+     *
+     * This would be terribly fiddly if we ever had to draw a tile
+     * while its neighbour was in mid-rotate, because we'd have to
+     * arrange to _know_ that the neighbour was being rotated and
+     * hence had an anomalous effect on the redraw of this tile.
+     * Fortunately, the drawing algorithm avoids ever calling us in
+     * this circumstance: we're either drawing lots of straight
+     * tiles at game start or after a move is complete, or we're
+     * repeatedly drawing only the rotating tile. So no problem.
+     
+     * So. First blank the tile out completely: draw a big
+     * rectangle in border colour, and a smaller rectangle in
+     * background colour to fill it in.
+     
+     * Draw the wires.
+     
+     * Draw the box in the middle. We do this in blue if the tile
+     * is an unpowered endpoint, in cyan if the tile is a powered
+     * endpoint, in black if the tile is the centrepiece, and
+     * otherwise not at all.
+     
+     * Draw the points on the border if other tiles are connected
+     * to us.
+     
+             * If we are fully connected to the other tile, we must
+             * draw right across the tile border. (We can use our
+             * own ACTIVE state to determine what colour to do this
+             * in: if we are fully connected to the other tile then
+             * the two ACTIVE states will be the same.)
+             
+             * The other tile extends into our border, but isn't
+             * actually connected to us. Just draw a single black
+             * dot.
+             
+     * Draw barrier corners, and then barriers.
+      top of arrow  right corner  right concave  bottom right  bottom left  left concave  left corner  'no cursur here  LH column.  RH column  Top row  Bottom row 
+     * Clear the screen and draw the exterior barrier lines if this
+     * is our first call.
+     
+         * Arrows for making moves.
+          Cursor has changed; redraw two (prev and curr) arrows.  Check if this is an undo.  If so, we will need to run any animation
+     * backwards.
+     
+         * We're animating a slide, of row/column number
+         * state->last_move_pos, in direction
+         * state->last_move_dir
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Draw any tile which differs from the way it was last drawn.
+     
+             * In a completion flash, we adjust the FLASHING bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Update the status bar.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * netslide.c: cross between Net and Sixteen, courtesy of Richard
+ * Boulton.
+  Direction and other bitfields  Corner flags go in the barriers array  Get tile at given coordinate  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  position (row or col number, starting at 0) of last move.  direction of last move: +1 or -1  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  Shuffle limit is part of the limited parameters, because we have to
+     * provide the target move count.  ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+         * String format is exactly the same as a solve move, so we
+         * can just dupstr this in solve_game().
+         
+     * Now shuffle the grid.
+     * FIXME - this simply does a set of random moves to shuffle the pieces,
+     * although we make a token effort to avoid boring cases by avoiding moves
+     * that directly undo the previous one, or that repeat so often as to
+     * turn into fewer moves.
+     *
+     * A better way would be to number all the pieces, generate a placement
+     * for all the numbers as for "sixteen", observing parity constraints if
+     * neccessary, and then place the pieces according to their numbering.
+     * BUT - I'm not sure if this will work, since we disallow movement of
+     * the middle row and column.
+      incremented conditionally  Choose a direction: 0,1,2,3 = up, right, down, left.  avoid centre  undoes last move  makes fewer moves  avoid centre  undoes last move  makes fewer moves  if we got here, the move was accepted 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+     * Set up the barrier corner flags, for drawing barriers
+     * prettily when they meet.
+      ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ *
+ * squares in the moving_row and moving_col are always inactive - this
+ * is so that "current" doesn't appear to jump across moving lines.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  ----------------------------------------------------------------------
+ * Process a move.
+  we might have to do this more than once to skip missing arrows  'click' when cursor is invisible just makes cursor visible.  reverse direction if right hand button is pressed  can't parse move string 
+     * See if the game has been completed.
+      break out of two loops at once  ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  not decided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Flashing tiles are a grey in between those two.
+     
+     * When we draw a single tile, we must draw everything up to
+     * and including the borders around the tile. This means that
+     * if the neighbouring tiles have connections to those borders,
+     * we must draw those connections on the borders themselves.
+     *
+     * This would be terribly fiddly if we ever had to draw a tile
+     * while its neighbour was in mid-rotate, because we'd have to
+     * arrange to _know_ that the neighbour was being rotated and
+     * hence had an anomalous effect on the redraw of this tile.
+     * Fortunately, the drawing algorithm avoids ever calling us in
+     * this circumstance: we're either drawing lots of straight
+     * tiles at game start or after a move is complete, or we're
+     * repeatedly drawing only the rotating tile. So no problem.
+     
+     * So. First blank the tile out completely: draw a big
+     * rectangle in border colour, and a smaller rectangle in
+     * background colour to fill it in.
+     
+     * Draw the wires.
+     
+     * Draw the box in the middle. We do this in blue if the tile
+     * is an unpowered endpoint, in cyan if the tile is a powered
+     * endpoint, in black if the tile is the centrepiece, and
+     * otherwise not at all.
+     
+     * Draw the points on the border if other tiles are connected
+     * to us.
+     
+             * If we are fully connected to the other tile, we must
+             * draw right across the tile border. (We can use our
+             * own ACTIVE state to determine what colour to do this
+             * in: if we are fully connected to the other tile then
+             * the two ACTIVE states will be the same.)
+             
+             * The other tile extends into our border, but isn't
+             * actually connected to us. Just draw a single black
+             * dot.
+             
+     * Draw barrier corners, and then barriers.
+      top of arrow  right corner  right concave  bottom right  bottom left  left concave  left corner  'no cursur here  LH column.  RH column  Top row  Bottom row 
+     * Clear the screen and draw the exterior barrier lines if this
+     * is our first call.
+     
+         * Arrows for making moves.
+          Cursor has changed; redraw two (prev and curr) arrows.  Check if this is an undo.  If so, we will need to run any animation
+     * backwards.
+     
+         * We're animating a slide, of row/column number
+         * state->last_move_pos, in direction
+         * state->last_move_dir
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Draw any tile which differs from the way it was last drawn.
+     
+             * In a completion flash, we adjust the FLASHING bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Update the status bar.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

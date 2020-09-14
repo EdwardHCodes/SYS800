@@ -1,0 +1,421 @@
+***************************************************************************                                                                            Fast Fourier Transform                                                     Network Abstraction, Definitions                                           Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - To incorporate link list of different sized networks                                                                             ****************************************************************************************************************************************************** added debug option 5/91 brown@nadia                                        change sign at AAA                                                                                                                                    Fast Fourier Transform                                                     FFT Network Interaction and Support Modules                                Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - Generalized to one procedure call with typed I/O                                                                                 *************************************************************************** Overview:
+	
+   My realization of the FFT involves a representation of a network of
+   "butterfly" elements that takes a set of 'N' sound samples as input and
+   computes the discrete Fourier transform.  This network consists of a 
+   series of stages (log2 N), each stage consisting of N/2 parallel butterfly
+   elements. Consecutive stages are connected by specific, predetermined flow 
+   paths, (see Oppenheim, Schafer for details) and each butterfly element has
+   an associated multiplicative coefficient.
+
+   FFT NETWORK:
+   -----------	
+      ____    _    ____    _    ____    _    ____    _    ____
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg1|  | |  |W^r1|  | |  |reg1|  | |  |W^r1|  | |  |reg1|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |  
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg2|  | |  |W^r2|  | |  |reg2|  | |  |W^r2|  | |  |reg2|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg |  | |  |W^r |  | |  |reg |  | |  |W^r |  | |  |reg |
+     | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2| .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|--o
+
+              ^            ^            ^            ^
+    Initial   |  Bttrfly   |   Rd/Wrt   |   Bttrfly  |   Rd/Wrt
+    Buffer    |            |  Register  |            |  Register
+              |____________|____________|____________|
+                                 |
+                                 |
+                            Interconnect
+			       Paths
+
+   The use of "in-place" computation permits one to use only one set of 
+   registers realized by an array of complex number structures.  To describe
+   the coefficients for each butterfly I am using a two dimensional array
+   (stage, butterfly) of complex numbers.  The predetermined stage connections
+   will be described in a two dimensional array of indicies.  These indicies 
+   will be used to determine the order of reading at each stage of the    
+   computation.  
+*************************************************************************** INCLUDE FILES                                                             *************************************************************************** ROCKBOX  ROCKBOX  the following is needed only to declare pd_fft() as exportable in MSW  some basic definitions  data type used in calculation  type definitions for I/O buffers  real only           imaginary only      real and imaginary  magnitude only      phase only          magnitude and phase scale definitions for I/O buffers  20log10             transform direction definition  Forward FFT         Inverse FFT         window type definitions  network structure definition *************************************************************************** GLOBAL DECLARATIONS                                                       *************************************************************************** prototypes *************************************************************************** GENERALIZED FAST FOURIER TRANSFORM MODULE                                 *************************************************************************** modifies: result_buf
+   effects:  Computes npnt FFT specified by form, scale, and dir parameters.  
+         Source samples (single precision float) are taken from soure_buf and 
+	 the transfrmd representation is stored in result_buf (single precision
+	 float).  The parameters are defined as follows:
+	
+	 trnsfrm_dir = FORWARD | INVERSE
+	 npnt        = 2^k for some any positive integer k
+	 window      = HANNING | RECTANGULAR
+	 (RECT = real and imag parts, POLAR = magnitude and phase)
+	 source_form = REAL | IMAG | RECT | POLAR  
+	 result_form = REAL | IMAG | RECT | MAG | PHASE | POLAR
+	 xxxxxx_scale= LINEAR | DB ( 20log10 |mag| )
+	 
+	 The input/output buffers are stored in a form appropriate to the type.
+	 For example: REAL  => {real, real, real ...}, 
+	              MAG   => {mag, mag, mag, ... },
+		      RECT  => {real, imag, real, imag, ... },
+		      POLAR => {mag, phase, mag, phase, ... }.
+
+         To look at the magnitude (in db) of a 1024 point FFT of a real time 
+	 signal we have:
+
+	 fft(FORWARD, 1024, RECTANGULAR, input, REAL, LINEAR, output, MAG, DB)
+
+	 All possible input and output combinations are possible given the 
+	 choice of type and scale parameters.
+ A linked list of fft networks of different sizes is maintained to
+	    avoid building with every call.  The network is built on the first
+	    call but reused for subsequent calls requesting the same size 
+	    transformation.
+	  current net doesn't match size or window type  keep looking  network matches desired size  do transformation  none of existing networks match required size add new network to end of list  allocate  add to end of list              first network to be created     alloc.  build new network and compute transformation  effects: Deallocates all preserved FFT networks.  Should be used when 
+         finished with all computations.
+*************************************************************************** NETWORK CONSTRUCTION                                                      *************************************************************************** modifies:fft_net
+   effects: Constructs the fft network as described in fft.h.  Butterfly
+         coefficients, read/write indicies, bit reversed load indicies,
+	 and array allocations are computed.
+ network definition  allocate registers, index, coefficient arrays  create appropriate windows  calculate butterfly coefficients  stage one coeffs are 1 + 0j  stage 2 to last stage coeffs need calculation  (1<<r <=> 2^r  AAA change these signs  change back  calculate network indicies:  stage exchange indicies are 
+	    calculated and then used as offset values from the base
+	    register locations.  The final addresses are then stored in
+	    fft_net.
+	  allocate temporary 2d stage exchange index, 1d temp 
+		     load index  calculate stage exchange indicies:  compute actual address values using indicies as offsets  calculate load indicies (bit reverse ordering)  bit reverse ordering achieved by passing normal
+	    order indicies backwards through the network  init to normal order indicies  pass indicies backwards through net  free all temporary arrays *************************************************************************** REGISTER LOAD AND STORE                                                   *************************************************************************** effects:  Multiplies the input buffer with the appropriate window and
+         stores the resulting values in the initial registers of the
+	 network.  Input buffer must contain values appropriate to form.  
+	 For RECT, the buffer contains real num. followed by imag num, 
+	 and for POLAR, it contains magnitude followed by phase.  Pure
+	 inputs are listed normally.  Both LINEAR and DB scales are 
+	 interpreted.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude followed by phase  log pure REAL  window scaling after linearization  log pure IMAGinary  log REAL and log IMAGinary  log mag followed by phase  modifies: buf
+   effects:  Writes the final contents of the network registers into buf in 
+         either linear or db scale, polar or rectangular form.  If any of 
+	 the pure forms(REAL, IMAG, MAG, or PHASE) are used then only the 
+	 corresponding part of the registers is stored in buf.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude only  phase only  deal with bad case  magnitude and phase  a hack to avoid div by zero  deal with bad case  real only  imag only  real and imag  magnitude only   phase only  deal with bad case  magnitude and phase  deal with bad case *************************************************************************** COMPUTE TRANSFORMATION                                                    *************************************************************************** modifies: fft_net
+   effects: Passes the values (already loaded) in the registers through
+	 the network, multiplying with appropriate coefficients at each 
+	 stage.  The fft result will be in the registers at the end of
+	 the computation.  The direction of the transformation is indicated
+	 by the network flag 'direction'.  The form of the computation is:
+
+	 X(pn) = X(p) + C*X(q)
+	 X(qn) = X(p) - C*X(q)
+
+	 where X(pn,qn) represents the output of the registers at each stage.  
+	 The calculations are actually done in place.  Register pointers are 
+	 used to speed up the calculations.
+
+	 Register and coefficient addresses involved in the calculations 
+	 are stored sequentially and are accessed as such. fft_net->indexp,
+	 indexq contain pointers to the relevant addresses, and fft_net->coeffs, 
+	 inv_coeffs points to the appropriate coefficients at each stage of the 
+	 computation.
+ predetermined register addresses and coefficients  FORWARD FFT coefficients  INVERSE FFT coefficients  stage one coefficients are 1 + 0j so C*X(q)=X(q)   bps mults can be avoided                           add X(p) and X(q)  exchange register with temp  next set of register for calculations:  mult X(q) by coeff C  exchange register with temp  add X(p) and X(q)  exchange register with temp  next set of register for calculations: ************************************************************************** SUPPORT MODULES                                                          ************************************************************************** effects: Allocates appropriate two dimensional arrays and assigns
+	   correct internal pointers.
+ two dimensional arrays with elements stored sequentially  one dimensional load window  effects: Deallocates given FFT network.
+ effects: Returns TRUE if n is a power of two, otherwise FALSE.
+ more than one bit high  effects: Fills the buffer window with a hanning window of the appropriate
+         size scaled by scale.
+ effects: Fills the buffer window with a rectangular window of the
+   appropriate size of height scale.
+ effects; Converts short_buf to floats and stores them in float_buf.
+ here's the meat: ***************************************************************************                                                                            Fast Fourier Transform                                                     Network Abstraction, Definitions                                           Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - To incorporate link list of different sized networks                                                                             ****************************************************************************************************************************************************** added debug option 5/91 brown@nadia                                        change sign at AAA                                                                                                                                    Fast Fourier Transform                                                     FFT Network Interaction and Support Modules                                Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - Generalized to one procedure call with typed I/O                                                                                 *************************************************************************** Overview:
+	
+   My realization of the FFT involves a representation of a network of
+   "butterfly" elements that takes a set of 'N' sound samples as input and
+   computes the discrete Fourier transform.  This network consists of a 
+   series of stages (log2 N), each stage consisting of N/2 parallel butterfly
+   elements. Consecutive stages are connected by specific, predetermined flow 
+   paths, (see Oppenheim, Schafer for details) and each butterfly element has
+   an associated multiplicative coefficient.
+
+   FFT NETWORK:
+   -----------	
+      ____    _    ____    _    ____    _    ____    _    ____
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg1|  | |  |W^r1|  | |  |reg1|  | |  |W^r1|  | |  |reg1|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |  
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg2|  | |  |W^r2|  | |  |reg2|  | |  |W^r2|  | |  |reg2|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg |  | |  |W^r |  | |  |reg |  | |  |W^r |  | |  |reg |
+     | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2| .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|--o
+
+              ^            ^            ^            ^
+    Initial   |  Bttrfly   |   Rd/Wrt   |   Bttrfly  |   Rd/Wrt
+    Buffer    |            |  Register  |            |  Register
+              |____________|____________|____________|
+                                 |
+                                 |
+                            Interconnect
+			       Paths
+
+   The use of "in-place" computation permits one to use only one set of 
+   registers realized by an array of complex number structures.  To describe
+   the coefficients for each butterfly I am using a two dimensional array
+   (stage, butterfly) of complex numbers.  The predetermined stage connections
+   will be described in a two dimensional array of indicies.  These indicies 
+   will be used to determine the order of reading at each stage of the    
+   computation.  
+*************************************************************************** INCLUDE FILES                                                             *************************************************************************** ROCKBOX  ROCKBOX  the following is needed only to declare pd_fft() as exportable in MSW  some basic definitions  data type used in calculation  type definitions for I/O buffers  real only           imaginary only      real and imaginary  magnitude only      phase only          magnitude and phase scale definitions for I/O buffers  20log10             transform direction definition  Forward FFT         Inverse FFT         window type definitions  network structure definition *************************************************************************** GLOBAL DECLARATIONS                                                       *************************************************************************** prototypes *************************************************************************** GENERALIZED FAST FOURIER TRANSFORM MODULE                                 *************************************************************************** modifies: result_buf
+   effects:  Computes npnt FFT specified by form, scale, and dir parameters.  
+         Source samples (single precision float) are taken from soure_buf and 
+	 the transfrmd representation is stored in result_buf (single precision
+	 float).  The parameters are defined as follows:
+	
+	 trnsfrm_dir = FORWARD | INVERSE
+	 npnt        = 2^k for some any positive integer k
+	 window      = HANNING | RECTANGULAR
+	 (RECT = real and imag parts, POLAR = magnitude and phase)
+	 source_form = REAL | IMAG | RECT | POLAR  
+	 result_form = REAL | IMAG | RECT | MAG | PHASE | POLAR
+	 xxxxxx_scale= LINEAR | DB ( 20log10 |mag| )
+	 
+	 The input/output buffers are stored in a form appropriate to the type.
+	 For example: REAL  => {real, real, real ...}, 
+	              MAG   => {mag, mag, mag, ... },
+		      RECT  => {real, imag, real, imag, ... },
+		      POLAR => {mag, phase, mag, phase, ... }.
+
+         To look at the magnitude (in db) of a 1024 point FFT of a real time 
+	 signal we have:
+
+	 fft(FORWARD, 1024, RECTANGULAR, input, REAL, LINEAR, output, MAG, DB)
+
+	 All possible input and output combinations are possible given the 
+	 choice of type and scale parameters.
+ A linked list of fft networks of different sizes is maintained to
+	    avoid building with every call.  The network is built on the first
+	    call but reused for subsequent calls requesting the same size 
+	    transformation.
+	  current net doesn't match size or window type  keep looking  network matches desired size  do transformation  none of existing networks match required size add new network to end of list  allocate  add to end of list              first network to be created     alloc.  build new network and compute transformation  effects: Deallocates all preserved FFT networks.  Should be used when 
+         finished with all computations.
+*************************************************************************** NETWORK CONSTRUCTION                                                      *************************************************************************** modifies:fft_net
+   effects: Constructs the fft network as described in fft.h.  Butterfly
+         coefficients, read/write indicies, bit reversed load indicies,
+	 and array allocations are computed.
+ network definition  allocate registers, index, coefficient arrays  create appropriate windows  calculate butterfly coefficients  stage one coeffs are 1 + 0j  stage 2 to last stage coeffs need calculation  (1<<r <=> 2^r  AAA change these signs  change back  calculate network indicies:  stage exchange indicies are 
+	    calculated and then used as offset values from the base
+	    register locations.  The final addresses are then stored in
+	    fft_net.
+	  allocate temporary 2d stage exchange index, 1d temp 
+		     load index  calculate stage exchange indicies:  compute actual address values using indicies as offsets  calculate load indicies (bit reverse ordering)  bit reverse ordering achieved by passing normal
+	    order indicies backwards through the network  init to normal order indicies  pass indicies backwards through net  free all temporary arrays *************************************************************************** REGISTER LOAD AND STORE                                                   *************************************************************************** effects:  Multiplies the input buffer with the appropriate window and
+         stores the resulting values in the initial registers of the
+	 network.  Input buffer must contain values appropriate to form.  
+	 For RECT, the buffer contains real num. followed by imag num, 
+	 and for POLAR, it contains magnitude followed by phase.  Pure
+	 inputs are listed normally.  Both LINEAR and DB scales are 
+	 interpreted.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude followed by phase  log pure REAL  window scaling after linearization  log pure IMAGinary  log REAL and log IMAGinary  log mag followed by phase  modifies: buf
+   effects:  Writes the final contents of the network registers into buf in 
+         either linear or db scale, polar or rectangular form.  If any of 
+	 the pure forms(REAL, IMAG, MAG, or PHASE) are used then only the 
+	 corresponding part of the registers is stored in buf.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude only  phase only  deal with bad case  magnitude and phase  a hack to avoid div by zero  deal with bad case  real only  imag only  real and imag  magnitude only   phase only  deal with bad case  magnitude and phase  deal with bad case *************************************************************************** COMPUTE TRANSFORMATION                                                    *************************************************************************** modifies: fft_net
+   effects: Passes the values (already loaded) in the registers through
+	 the network, multiplying with appropriate coefficients at each 
+	 stage.  The fft result will be in the registers at the end of
+	 the computation.  The direction of the transformation is indicated
+	 by the network flag 'direction'.  The form of the computation is:
+
+	 X(pn) = X(p) + C*X(q)
+	 X(qn) = X(p) - C*X(q)
+
+	 where X(pn,qn) represents the output of the registers at each stage.  
+	 The calculations are actually done in place.  Register pointers are 
+	 used to speed up the calculations.
+
+	 Register and coefficient addresses involved in the calculations 
+	 are stored sequentially and are accessed as such. fft_net->indexp,
+	 indexq contain pointers to the relevant addresses, and fft_net->coeffs, 
+	 inv_coeffs points to the appropriate coefficients at each stage of the 
+	 computation.
+ predetermined register addresses and coefficients  FORWARD FFT coefficients  INVERSE FFT coefficients  stage one coefficients are 1 + 0j so C*X(q)=X(q)   bps mults can be avoided                           add X(p) and X(q)  exchange register with temp  next set of register for calculations:  mult X(q) by coeff C  exchange register with temp  add X(p) and X(q)  exchange register with temp  next set of register for calculations: ************************************************************************** SUPPORT MODULES                                                          ************************************************************************** effects: Allocates appropriate two dimensional arrays and assigns
+	   correct internal pointers.
+ two dimensional arrays with elements stored sequentially  one dimensional load window  effects: Deallocates given FFT network.
+ effects: Returns TRUE if n is a power of two, otherwise FALSE.
+ more than one bit high  effects: Fills the buffer window with a hanning window of the appropriate
+         size scaled by scale.
+ effects: Fills the buffer window with a rectangular window of the
+   appropriate size of height scale.
+ effects; Converts short_buf to floats and stores them in float_buf.
+ here's the meat: ***************************************************************************                                                                            Fast Fourier Transform                                                     Network Abstraction, Definitions                                           Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - To incorporate link list of different sized networks                                                                             ****************************************************************************************************************************************************** added debug option 5/91 brown@nadia                                        change sign at AAA                                                                                                                                    Fast Fourier Transform                                                     FFT Network Interaction and Support Modules                                Kevin Peterson, MIT Media Lab, EMS                                         UROP - Fall '86                                                            REV: 6/12/87(KHP) - Generalized to one procedure call with typed I/O                                                                                 *************************************************************************** Overview:
+	
+   My realization of the FFT involves a representation of a network of
+   "butterfly" elements that takes a set of 'N' sound samples as input and
+   computes the discrete Fourier transform.  This network consists of a 
+   series of stages (log2 N), each stage consisting of N/2 parallel butterfly
+   elements. Consecutive stages are connected by specific, predetermined flow 
+   paths, (see Oppenheim, Schafer for details) and each butterfly element has
+   an associated multiplicative coefficient.
+
+   FFT NETWORK:
+   -----------	
+      ____    _    ____    _    ____    _    ____    _    ____
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg1|  | |  |W^r1|  | |  |reg1|  | |  |W^r1|  | |  |reg1|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |  
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg2|  | |  |W^r2|  | |  |reg2|  | |  |W^r2|  | |  |reg2|
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    | .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|o-| |-o|____|--o
+             | |          | |          | |          | |
+             | |          | |          | |          | |
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+       :      :     :      :     :      :     :      :     :
+
+      ____   | |   ____   | |   ____   | |   ____   | |   ____ 
+  o--|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |o-| |-o|    |--o
+     |reg |  | |  |W^r |  | |  |reg |  | |  |W^r |  | |  |reg |
+     | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2|  | |  | N/2| .....
+     |    |  | |  |    |  | |  |    |  | |  |    |  | |  |    |
+  o--|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|o-|_|-o|____|--o
+
+              ^            ^            ^            ^
+    Initial   |  Bttrfly   |   Rd/Wrt   |   Bttrfly  |   Rd/Wrt
+    Buffer    |            |  Register  |            |  Register
+              |____________|____________|____________|
+                                 |
+                                 |
+                            Interconnect
+			       Paths
+
+   The use of "in-place" computation permits one to use only one set of 
+   registers realized by an array of complex number structures.  To describe
+   the coefficients for each butterfly I am using a two dimensional array
+   (stage, butterfly) of complex numbers.  The predetermined stage connections
+   will be described in a two dimensional array of indicies.  These indicies 
+   will be used to determine the order of reading at each stage of the    
+   computation.  
+*************************************************************************** INCLUDE FILES                                                             *************************************************************************** ROCKBOX  ROCKBOX  the following is needed only to declare pd_fft() as exportable in MSW  some basic definitions  data type used in calculation  type definitions for I/O buffers  real only           imaginary only      real and imaginary  magnitude only      phase only          magnitude and phase scale definitions for I/O buffers  20log10             transform direction definition  Forward FFT         Inverse FFT         window type definitions  network structure definition *************************************************************************** GLOBAL DECLARATIONS                                                       *************************************************************************** prototypes *************************************************************************** GENERALIZED FAST FOURIER TRANSFORM MODULE                                 *************************************************************************** modifies: result_buf
+   effects:  Computes npnt FFT specified by form, scale, and dir parameters.  
+         Source samples (single precision float) are taken from soure_buf and 
+	 the transfrmd representation is stored in result_buf (single precision
+	 float).  The parameters are defined as follows:
+	
+	 trnsfrm_dir = FORWARD | INVERSE
+	 npnt        = 2^k for some any positive integer k
+	 window      = HANNING | RECTANGULAR
+	 (RECT = real and imag parts, POLAR = magnitude and phase)
+	 source_form = REAL | IMAG | RECT | POLAR  
+	 result_form = REAL | IMAG | RECT | MAG | PHASE | POLAR
+	 xxxxxx_scale= LINEAR | DB ( 20log10 |mag| )
+	 
+	 The input/output buffers are stored in a form appropriate to the type.
+	 For example: REAL  => {real, real, real ...}, 
+	              MAG   => {mag, mag, mag, ... },
+		      RECT  => {real, imag, real, imag, ... },
+		      POLAR => {mag, phase, mag, phase, ... }.
+
+         To look at the magnitude (in db) of a 1024 point FFT of a real time 
+	 signal we have:
+
+	 fft(FORWARD, 1024, RECTANGULAR, input, REAL, LINEAR, output, MAG, DB)
+
+	 All possible input and output combinations are possible given the 
+	 choice of type and scale parameters.
+ A linked list of fft networks of different sizes is maintained to
+	    avoid building with every call.  The network is built on the first
+	    call but reused for subsequent calls requesting the same size 
+	    transformation.
+	  current net doesn't match size or window type  keep looking  network matches desired size  do transformation  none of existing networks match required size add new network to end of list  allocate  add to end of list              first network to be created     alloc.  build new network and compute transformation  effects: Deallocates all preserved FFT networks.  Should be used when 
+         finished with all computations.
+*************************************************************************** NETWORK CONSTRUCTION                                                      *************************************************************************** modifies:fft_net
+   effects: Constructs the fft network as described in fft.h.  Butterfly
+         coefficients, read/write indicies, bit reversed load indicies,
+	 and array allocations are computed.
+ network definition  allocate registers, index, coefficient arrays  create appropriate windows  calculate butterfly coefficients  stage one coeffs are 1 + 0j  stage 2 to last stage coeffs need calculation  (1<<r <=> 2^r  AAA change these signs  change back  calculate network indicies:  stage exchange indicies are 
+	    calculated and then used as offset values from the base
+	    register locations.  The final addresses are then stored in
+	    fft_net.
+	  allocate temporary 2d stage exchange index, 1d temp 
+		     load index  calculate stage exchange indicies:  compute actual address values using indicies as offsets  calculate load indicies (bit reverse ordering)  bit reverse ordering achieved by passing normal
+	    order indicies backwards through the network  init to normal order indicies  pass indicies backwards through net  free all temporary arrays *************************************************************************** REGISTER LOAD AND STORE                                                   *************************************************************************** effects:  Multiplies the input buffer with the appropriate window and
+         stores the resulting values in the initial registers of the
+	 network.  Input buffer must contain values appropriate to form.  
+	 For RECT, the buffer contains real num. followed by imag num, 
+	 and for POLAR, it contains magnitude followed by phase.  Pure
+	 inputs are listed normally.  Both LINEAR and DB scales are 
+	 interpreted.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude followed by phase  log pure REAL  window scaling after linearization  log pure IMAGinary  log REAL and log IMAGinary  log mag followed by phase  modifies: buf
+   effects:  Writes the final contents of the network registers into buf in 
+         either linear or db scale, polar or rectangular form.  If any of 
+	 the pure forms(REAL, IMAG, MAG, or PHASE) are used then only the 
+	 corresponding part of the registers is stored in buf.
+ pure REAL  pure IMAGinary  both REAL and IMAGinary  magnitude only  phase only  deal with bad case  magnitude and phase  a hack to avoid div by zero  deal with bad case  real only  imag only  real and imag  magnitude only   phase only  deal with bad case  magnitude and phase  deal with bad case *************************************************************************** COMPUTE TRANSFORMATION                                                    *************************************************************************** modifies: fft_net
+   effects: Passes the values (already loaded) in the registers through
+	 the network, multiplying with appropriate coefficients at each 
+	 stage.  The fft result will be in the registers at the end of
+	 the computation.  The direction of the transformation is indicated
+	 by the network flag 'direction'.  The form of the computation is:
+
+	 X(pn) = X(p) + C*X(q)
+	 X(qn) = X(p) - C*X(q)
+
+	 where X(pn,qn) represents the output of the registers at each stage.  
+	 The calculations are actually done in place.  Register pointers are 
+	 used to speed up the calculations.
+
+	 Register and coefficient addresses involved in the calculations 
+	 are stored sequentially and are accessed as such. fft_net->indexp,
+	 indexq contain pointers to the relevant addresses, and fft_net->coeffs, 
+	 inv_coeffs points to the appropriate coefficients at each stage of the 
+	 computation.
+ predetermined register addresses and coefficients  FORWARD FFT coefficients  INVERSE FFT coefficients  stage one coefficients are 1 + 0j so C*X(q)=X(q)   bps mults can be avoided                           add X(p) and X(q)  exchange register with temp  next set of register for calculations:  mult X(q) by coeff C  exchange register with temp  add X(p) and X(q)  exchange register with temp  next set of register for calculations: ************************************************************************** SUPPORT MODULES                                                          ************************************************************************** effects: Allocates appropriate two dimensional arrays and assigns
+	   correct internal pointers.
+ two dimensional arrays with elements stored sequentially  one dimensional load window  effects: Deallocates given FFT network.
+ effects: Returns TRUE if n is a power of two, otherwise FALSE.
+ more than one bit high  effects: Fills the buffer window with a hanning window of the appropriate
+         size scaled by scale.
+ effects: Fills the buffer window with a rectangular window of the
+   appropriate size of height scale.
+ effects; Converts short_buf to floats and stores them in float_buf.
+ here's the meat: 

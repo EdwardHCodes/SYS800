@@ -1,0 +1,166 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer video thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Video stream and thread * Video thread data passed around to its various functions  Stream data  Our video decoder  Info about video stream  Thread state  Media status  Our event queue to receive commands  Operational info  Current time from beginning of stream  Scheduled time of current frame  T-minus value to frame_time (-:early, +:late)  Severe skipping - wait for I-frame  Number of frames still to skip  Number of picture headers read  Number of I-picture headers read  Estmated number remaining as of last I  Last time a frame was drawn  Sync info  Current due time of frame (unadjusted)  Frame period in clock ticks  Number of I and P frames since sync/skip  Last sync fit result  Number drawn since reset  Number skipped since reset  TODO: Check if 4KB is appropriate - it works for my test streams,
+   so maybe we can reduce it.  no I/P skips until it learns  Intra-coded  Forward-predicted  Bidirectionally-predicted  DC-coded  Say what?   defined(DEBUG) || defined(SIMULATOR)  Multi-use:
+ * 1) Find the sequence header and initialize video out
+ * 2) Find the end of the final frame
+  Fully reset if obtaining size for a new stream  Ignored  Do any needed decoding/slide up to the specified time  Sometimes theres no sequence headers nearby and libmpeg2 may have reset
+     * fully at some point  No frame matching the time was found up to the end of
+                     * the stream - consider a perfect match since no better
+                     * can be made  I-frame; start decoding  P-frames don't count without I-frames  No picture  Still too early and have not hit at EOS  One perfect point if dependent frames were decoded  One perfect point for matching time goal  Two or more perfect points = perfect match - yay!  Too late, no I-Frame yet  end while  Print a thumbnail of whatever was last decoded - scale and
+         * position to fill the specified rectangle  Print the last frame decoded  This only returns to play or quit  Begin decoding state   There should be a frame already, just draw it   Settings may have changed to nonlimited - just draw
+                 * what was previously being waited for   At end of stream - no playback possible so fire the
+                 * completion event  Show video and draw the last frame we had if any or reveal the
+             * underlying framebuffer if hiding  Match graylib behavior as much as possible  Reset operational info but not sync info  Our bun is done  Can only use after a reset was issued  This will reset the decoder in full for this particular event  Time to go - make thread exit  These return when in playing state  Loop and wait for quit message  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit  Request next packet data  Wait for data to be buffered  No more data.  New video sequence, inform output of any changes  This is not in presentation order - do our best anyway  Frame type: I/P/B/D  Things are extremely late and all frames will be
+                   dropped until the next key frame  skip frame   wait for I-frame  now, decode  If skip_level at least the estimated number of frames
+                       left in I-I span, skip until next I-frame  wait for I-frame  We want to drop something, so this B-frame won't even be
+                   decoded. Drawing can happen on the next frame if so desired
+                   so long as the B-frames were not dependent upon those from
+                   a previous open GOP where the needed reference frames were
+                   skipped  Tick adjustment to keep sync  No picture  Get presentation times in audio samples - quite accurate
+               enough - add previous frame duration if not stamped  No limiting => no dropping or waiting - draw this frame  have frame  How early/late are we? > 0 = late, < 0  early  Late or on-time  now, late  Early  now, early  less early  earlier/same  else there's been no frame drop  Skip anything not decoded  have frame (assume so from now on)  Keep goal_time >= 0  No skipping - just wait if we're early and correct for
+                   lateness as much as possible. * Possibly skip this frame * Frameskipping has the following order of preference:
+             *
+             * Frame Type  Who      Notes/Rationale
+             * B           decoder  arbitrarily drop - no decode or draw
+             * Any         renderer arbitrarily drop - I/P unless B decoded
+             * P           decoder  must wait for I-frame
+             * I           decoder  must wait for I-frame
+             *
+             * If a frame can be drawn and it has been at least 1/2 second,
+             * the image will be updated no matter how late it is just to
+             * avoid looking stuck.
+              Frame skip was set previously but either there wasn't anything
+                   dropped yet or not dropped enough. So we quit at least rendering 
+                   the actual frame to avoid further increase of a/v-drift.  At this point a frame _will_ be drawn  - a skip may happen on
+               the next however  Calculate number of frames to drop/skip - allow brief periods
+               of lateness before producing skips  Wait until time catches up  Watch for messages while waiting for the frame time  Several ticks to wait - do some sleeping  Just a little left - spin and be accurate  Record last frame time  end while  Initializes the video thread  We put the video thread on another processor for multi-core targets.  Wait for thread to initialize  Normally STREAM_NULL should be ignored  Terminates the video thread * Misc ***************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer video thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Video stream and thread * Video thread data passed around to its various functions  Stream data  Our video decoder  Info about video stream  Thread state  Media status  Our event queue to receive commands  Operational info  Current time from beginning of stream  Scheduled time of current frame  T-minus value to frame_time (-:early, +:late)  Severe skipping - wait for I-frame  Number of frames still to skip  Number of picture headers read  Number of I-picture headers read  Estmated number remaining as of last I  Last time a frame was drawn  Sync info  Current due time of frame (unadjusted)  Frame period in clock ticks  Number of I and P frames since sync/skip  Last sync fit result  Number drawn since reset  Number skipped since reset  TODO: Check if 4KB is appropriate - it works for my test streams,
+   so maybe we can reduce it.  no I/P skips until it learns  Intra-coded  Forward-predicted  Bidirectionally-predicted  DC-coded  Say what?   defined(DEBUG) || defined(SIMULATOR)  Multi-use:
+ * 1) Find the sequence header and initialize video out
+ * 2) Find the end of the final frame
+  Fully reset if obtaining size for a new stream  Ignored  Do any needed decoding/slide up to the specified time  Sometimes theres no sequence headers nearby and libmpeg2 may have reset
+     * fully at some point  No frame matching the time was found up to the end of
+                     * the stream - consider a perfect match since no better
+                     * can be made  I-frame; start decoding  P-frames don't count without I-frames  No picture  Still too early and have not hit at EOS  One perfect point if dependent frames were decoded  One perfect point for matching time goal  Two or more perfect points = perfect match - yay!  Too late, no I-Frame yet  end while  Print a thumbnail of whatever was last decoded - scale and
+         * position to fill the specified rectangle  Print the last frame decoded  This only returns to play or quit  Begin decoding state   There should be a frame already, just draw it   Settings may have changed to nonlimited - just draw
+                 * what was previously being waited for   At end of stream - no playback possible so fire the
+                 * completion event  Show video and draw the last frame we had if any or reveal the
+             * underlying framebuffer if hiding  Match graylib behavior as much as possible  Reset operational info but not sync info  Our bun is done  Can only use after a reset was issued  This will reset the decoder in full for this particular event  Time to go - make thread exit  These return when in playing state  Loop and wait for quit message  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit  Request next packet data  Wait for data to be buffered  No more data.  New video sequence, inform output of any changes  This is not in presentation order - do our best anyway  Frame type: I/P/B/D  Things are extremely late and all frames will be
+                   dropped until the next key frame  skip frame   wait for I-frame  now, decode  If skip_level at least the estimated number of frames
+                       left in I-I span, skip until next I-frame  wait for I-frame  We want to drop something, so this B-frame won't even be
+                   decoded. Drawing can happen on the next frame if so desired
+                   so long as the B-frames were not dependent upon those from
+                   a previous open GOP where the needed reference frames were
+                   skipped  Tick adjustment to keep sync  No picture  Get presentation times in audio samples - quite accurate
+               enough - add previous frame duration if not stamped  No limiting => no dropping or waiting - draw this frame  have frame  How early/late are we? > 0 = late, < 0  early  Late or on-time  now, late  Early  now, early  less early  earlier/same  else there's been no frame drop  Skip anything not decoded  have frame (assume so from now on)  Keep goal_time >= 0  No skipping - just wait if we're early and correct for
+                   lateness as much as possible. * Possibly skip this frame * Frameskipping has the following order of preference:
+             *
+             * Frame Type  Who      Notes/Rationale
+             * B           decoder  arbitrarily drop - no decode or draw
+             * Any         renderer arbitrarily drop - I/P unless B decoded
+             * P           decoder  must wait for I-frame
+             * I           decoder  must wait for I-frame
+             *
+             * If a frame can be drawn and it has been at least 1/2 second,
+             * the image will be updated no matter how late it is just to
+             * avoid looking stuck.
+              Frame skip was set previously but either there wasn't anything
+                   dropped yet or not dropped enough. So we quit at least rendering 
+                   the actual frame to avoid further increase of a/v-drift.  At this point a frame _will_ be drawn  - a skip may happen on
+               the next however  Calculate number of frames to drop/skip - allow brief periods
+               of lateness before producing skips  Wait until time catches up  Watch for messages while waiting for the frame time  Several ticks to wait - do some sleeping  Just a little left - spin and be accurate  Record last frame time  end while  Initializes the video thread  We put the video thread on another processor for multi-core targets.  Wait for thread to initialize  Normally STREAM_NULL should be ignored  Terminates the video thread * Misc ***************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer video thread implementation
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Video stream and thread * Video thread data passed around to its various functions  Stream data  Our video decoder  Info about video stream  Thread state  Media status  Our event queue to receive commands  Operational info  Current time from beginning of stream  Scheduled time of current frame  T-minus value to frame_time (-:early, +:late)  Severe skipping - wait for I-frame  Number of frames still to skip  Number of picture headers read  Number of I-picture headers read  Estmated number remaining as of last I  Last time a frame was drawn  Sync info  Current due time of frame (unadjusted)  Frame period in clock ticks  Number of I and P frames since sync/skip  Last sync fit result  Number drawn since reset  Number skipped since reset  TODO: Check if 4KB is appropriate - it works for my test streams,
+   so maybe we can reduce it.  no I/P skips until it learns  Intra-coded  Forward-predicted  Bidirectionally-predicted  DC-coded  Say what?   defined(DEBUG) || defined(SIMULATOR)  Multi-use:
+ * 1) Find the sequence header and initialize video out
+ * 2) Find the end of the final frame
+  Fully reset if obtaining size for a new stream  Ignored  Do any needed decoding/slide up to the specified time  Sometimes theres no sequence headers nearby and libmpeg2 may have reset
+     * fully at some point  No frame matching the time was found up to the end of
+                     * the stream - consider a perfect match since no better
+                     * can be made  I-frame; start decoding  P-frames don't count without I-frames  No picture  Still too early and have not hit at EOS  One perfect point if dependent frames were decoded  One perfect point for matching time goal  Two or more perfect points = perfect match - yay!  Too late, no I-Frame yet  end while  Print a thumbnail of whatever was last decoded - scale and
+         * position to fill the specified rectangle  Print the last frame decoded  This only returns to play or quit  Begin decoding state   There should be a frame already, just draw it   Settings may have changed to nonlimited - just draw
+                 * what was previously being waited for   At end of stream - no playback possible so fire the
+                 * completion event  Show video and draw the last frame we had if any or reveal the
+             * underlying framebuffer if hiding  Match graylib behavior as much as possible  Reset operational info but not sync info  Our bun is done  Can only use after a reset was issued  This will reset the decoder in full for this particular event  Time to go - make thread exit  These return when in playing state  Loop and wait for quit message  Check for any pending messages and process them  Wait for a message to be queued  Process a message already dequeued  These states are the only ones that should return  Anything else is interpreted as an exit  Request next packet data  Wait for data to be buffered  No more data.  New video sequence, inform output of any changes  This is not in presentation order - do our best anyway  Frame type: I/P/B/D  Things are extremely late and all frames will be
+                   dropped until the next key frame  skip frame   wait for I-frame  now, decode  If skip_level at least the estimated number of frames
+                       left in I-I span, skip until next I-frame  wait for I-frame  We want to drop something, so this B-frame won't even be
+                   decoded. Drawing can happen on the next frame if so desired
+                   so long as the B-frames were not dependent upon those from
+                   a previous open GOP where the needed reference frames were
+                   skipped  Tick adjustment to keep sync  No picture  Get presentation times in audio samples - quite accurate
+               enough - add previous frame duration if not stamped  No limiting => no dropping or waiting - draw this frame  have frame  How early/late are we? > 0 = late, < 0  early  Late or on-time  now, late  Early  now, early  less early  earlier/same  else there's been no frame drop  Skip anything not decoded  have frame (assume so from now on)  Keep goal_time >= 0  No skipping - just wait if we're early and correct for
+                   lateness as much as possible. * Possibly skip this frame * Frameskipping has the following order of preference:
+             *
+             * Frame Type  Who      Notes/Rationale
+             * B           decoder  arbitrarily drop - no decode or draw
+             * Any         renderer arbitrarily drop - I/P unless B decoded
+             * P           decoder  must wait for I-frame
+             * I           decoder  must wait for I-frame
+             *
+             * If a frame can be drawn and it has been at least 1/2 second,
+             * the image will be updated no matter how late it is just to
+             * avoid looking stuck.
+              Frame skip was set previously but either there wasn't anything
+                   dropped yet or not dropped enough. So we quit at least rendering 
+                   the actual frame to avoid further increase of a/v-drift.  At this point a frame _will_ be drawn  - a skip may happen on
+               the next however  Calculate number of frames to drop/skip - allow brief periods
+               of lateness before producing skips  Wait until time catches up  Watch for messages while waiting for the frame time  Several ticks to wait - do some sleeping  Just a little left - spin and be accurate  Record last frame time  end while  Initializes the video thread  We put the video thread on another processor for multi-core targets.  Wait for thread to initialize  Normally STREAM_NULL should be ignored  Terminates the video thread * Misc *

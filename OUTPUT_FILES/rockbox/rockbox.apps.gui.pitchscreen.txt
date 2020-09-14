@@ -1,0 +1,235 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for abs()  icons are currently 7x8, so add ~2 pixels     on both sides when drawing  .1%   1%   2%  .1%   1%  10 cents    1 semitone  This is a table of semitone percentage values of the appropriate 
+   precision (based on PITCH_SPEED_PRECISION).  Note that these are
+   all constant expressions, which will be evaluated at compile time,
+   so no need to worry about how complex the expressions look.  
+   That's just to get the precision right.
+
+   I calculated these values, starting from 50, as 
+
+   x(n) = 50 * 2^(n/12)
+
+   All that math in each entry simply converts the float constant
+   to an integer equal to PITCH_SPEED_PRECISION times the float value,
+   with as little precision loss as possible (i.e. correctly rounding
+   the last digit).
+ Octave lower  Normal sound  Octave higher  A table of values for approximating the cent curve with 
+   linear interpolation.  Multipy the next lowest semitone
+   by this much to find the corresponding cent percentage. 
+   
+   These values were calculated as 
+   x(n) = 100 * 2^(n * 20/1200) 
+ this one's the next semitone but we have it here for convenience  Number of cents between entries in the cent_interp table  This stores whether the pitch and speed are at their own limits  or that of the timestretching algorithm                         
+ *
+ * The pitchscreen is divided into 3 viewports (each row is a viewport)
+ * Then each viewport is again divided into 3 colums, each showsing some infos
+ * Additionally, on touchscreen, each cell represents a button
+ *
+ * Below a sketch describing what each cell will show (what's drawn on it)
+ * --------------------------
+ * |      |        |        | <-- pitch up in the middle (text and button)
+ * |      |        |        | <-- arrows for mode toggling on the sides for touchscreen
+ * |------------------------|
+ * |      |        |        | <-- semitone/speed up/down on the sides
+ * |      |        |        | <-- reset pitch&speed in the middle
+ * |------------------------|
+ * |      |        |        | <-- pitch down in the middle
+ * |      |        |        | <-- Two "OK" for exit on the sides for touchscreen
+ * |------------------------|
+ *
+ *
+ 
+ * Fixes the viewports so they represent the 3 rows, and adds a little margin
+ * on all sides for the icons (which are drawn outside of the grid
+ *
+ * The modified viewports need to be passed to the touchscreen handling function
+ * must be called before pitchscreen_draw, or within
+ * since it neither clears nor updates the display  "Pitch up/Pitch down" - hide for a small screen,
+      * the text is drawn centered automatically
+      *
+      * note: this assumes 5 lines always fit on a touchscreen (should be
+      * reasonable)  two arrows in the top row, left and right column  UP: Pitch Up  draw text  DOWN: Pitch Down  one OK in the middle first column of the vp (at half height)  one OK in the middle of the last column of the vp (at half height)  draw text  Middle section  Middle section upper line - hide for a small screen  Pitch:XXX.X%  Rate  Middle section lower line  "Speed:XXX%"  "limit" and "timestretch" labels  Middle section left/right labels  Only display if they fit  need this to maintain correct pitch/speed caps  for large jumps, snap up to whole numbers  for large jumps, snap down to whole numbers  pitch_delta == 0 -> no real change  increase the multiple to increase precision of this calculation  we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         now find the fractional part  Check to make sure fractional_index isn't too big  This should never happen.  this will be the integer offset from the cent_interp entry  Find the index into the semitone table  set pitch to the semitone's integer part value  get the range of the cent modification for future calculation  figure out the cent mod amount based on the semitone fractional value  modify pitch based on the mod amount we just calculated  snap to the delta interval  clamp the pitch so it doesn't go beyond the pitch limits  clamp the pitch so it doesn't go beyond the stretch limits 
+ * Check for touchscreen presses as per sketch above in this file
+ * 
+ * goes through each row of the, checks whether the touchscreen
+ * was pressed in it. Then it looks the columns of each row for specific actions
+  top row  press on top row, left or right column
+         * only toggle mode if released  center column pressed  now the center row  left column  right column  center column was pressed  now the bottom row  left or right column is exit  center column was pressed 
+    returns:
+    0 on exit
+    1 if USB was connected
+ should maybe be passed per parameter later, not needed for now  the speed variable holds the apparent speed of the playback  Figure out whether to be in timestretch mode  Count decimals for speaking  set the semitone index based on the current pitch  initialize pitchscreen vps  also, draw the icons now, it's only needed once  snap to whole numbers  snap to whole numbers  no longer in timestretch mode.  Reset speed  do this to make sure we properly obey the stretch limits  limit the amount of stretch  set the amount of stretch  update the speed variable with the new speed  Reset new_speed so we only call dsp_set_timestretch  when needed                                         **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for abs()  icons are currently 7x8, so add ~2 pixels     on both sides when drawing  .1%   1%   2%  .1%   1%  10 cents    1 semitone  This is a table of semitone percentage values of the appropriate 
+   precision (based on PITCH_SPEED_PRECISION).  Note that these are
+   all constant expressions, which will be evaluated at compile time,
+   so no need to worry about how complex the expressions look.  
+   That's just to get the precision right.
+
+   I calculated these values, starting from 50, as 
+
+   x(n) = 50 * 2^(n/12)
+
+   All that math in each entry simply converts the float constant
+   to an integer equal to PITCH_SPEED_PRECISION times the float value,
+   with as little precision loss as possible (i.e. correctly rounding
+   the last digit).
+ Octave lower  Normal sound  Octave higher  A table of values for approximating the cent curve with 
+   linear interpolation.  Multipy the next lowest semitone
+   by this much to find the corresponding cent percentage. 
+   
+   These values were calculated as 
+   x(n) = 100 * 2^(n * 20/1200) 
+ this one's the next semitone but we have it here for convenience  Number of cents between entries in the cent_interp table  This stores whether the pitch and speed are at their own limits  or that of the timestretching algorithm                         
+ *
+ * The pitchscreen is divided into 3 viewports (each row is a viewport)
+ * Then each viewport is again divided into 3 colums, each showsing some infos
+ * Additionally, on touchscreen, each cell represents a button
+ *
+ * Below a sketch describing what each cell will show (what's drawn on it)
+ * --------------------------
+ * |      |        |        | <-- pitch up in the middle (text and button)
+ * |      |        |        | <-- arrows for mode toggling on the sides for touchscreen
+ * |------------------------|
+ * |      |        |        | <-- semitone/speed up/down on the sides
+ * |      |        |        | <-- reset pitch&speed in the middle
+ * |------------------------|
+ * |      |        |        | <-- pitch down in the middle
+ * |      |        |        | <-- Two "OK" for exit on the sides for touchscreen
+ * |------------------------|
+ *
+ *
+ 
+ * Fixes the viewports so they represent the 3 rows, and adds a little margin
+ * on all sides for the icons (which are drawn outside of the grid
+ *
+ * The modified viewports need to be passed to the touchscreen handling function
+ * must be called before pitchscreen_draw, or within
+ * since it neither clears nor updates the display  "Pitch up/Pitch down" - hide for a small screen,
+      * the text is drawn centered automatically
+      *
+      * note: this assumes 5 lines always fit on a touchscreen (should be
+      * reasonable)  two arrows in the top row, left and right column  UP: Pitch Up  draw text  DOWN: Pitch Down  one OK in the middle first column of the vp (at half height)  one OK in the middle of the last column of the vp (at half height)  draw text  Middle section  Middle section upper line - hide for a small screen  Pitch:XXX.X%  Rate  Middle section lower line  "Speed:XXX%"  "limit" and "timestretch" labels  Middle section left/right labels  Only display if they fit  need this to maintain correct pitch/speed caps  for large jumps, snap up to whole numbers  for large jumps, snap down to whole numbers  pitch_delta == 0 -> no real change  increase the multiple to increase precision of this calculation  we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         now find the fractional part  Check to make sure fractional_index isn't too big  This should never happen.  this will be the integer offset from the cent_interp entry  Find the index into the semitone table  set pitch to the semitone's integer part value  get the range of the cent modification for future calculation  figure out the cent mod amount based on the semitone fractional value  modify pitch based on the mod amount we just calculated  snap to the delta interval  clamp the pitch so it doesn't go beyond the pitch limits  clamp the pitch so it doesn't go beyond the stretch limits 
+ * Check for touchscreen presses as per sketch above in this file
+ * 
+ * goes through each row of the, checks whether the touchscreen
+ * was pressed in it. Then it looks the columns of each row for specific actions
+  top row  press on top row, left or right column
+         * only toggle mode if released  center column pressed  now the center row  left column  right column  center column was pressed  now the bottom row  left or right column is exit  center column was pressed 
+    returns:
+    0 on exit
+    1 if USB was connected
+ should maybe be passed per parameter later, not needed for now  the speed variable holds the apparent speed of the playback  Figure out whether to be in timestretch mode  Count decimals for speaking  set the semitone index based on the current pitch  initialize pitchscreen vps  also, draw the icons now, it's only needed once  snap to whole numbers  snap to whole numbers  no longer in timestretch mode.  Reset speed  do this to make sure we properly obey the stretch limits  limit the amount of stretch  set the amount of stretch  update the speed variable with the new speed  Reset new_speed so we only call dsp_set_timestretch  when needed                                         **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** for abs()  icons are currently 7x8, so add ~2 pixels     on both sides when drawing  .1%   1%   2%  .1%   1%  10 cents    1 semitone  This is a table of semitone percentage values of the appropriate 
+   precision (based on PITCH_SPEED_PRECISION).  Note that these are
+   all constant expressions, which will be evaluated at compile time,
+   so no need to worry about how complex the expressions look.  
+   That's just to get the precision right.
+
+   I calculated these values, starting from 50, as 
+
+   x(n) = 50 * 2^(n/12)
+
+   All that math in each entry simply converts the float constant
+   to an integer equal to PITCH_SPEED_PRECISION times the float value,
+   with as little precision loss as possible (i.e. correctly rounding
+   the last digit).
+ Octave lower  Normal sound  Octave higher  A table of values for approximating the cent curve with 
+   linear interpolation.  Multipy the next lowest semitone
+   by this much to find the corresponding cent percentage. 
+   
+   These values were calculated as 
+   x(n) = 100 * 2^(n * 20/1200) 
+ this one's the next semitone but we have it here for convenience  Number of cents between entries in the cent_interp table  This stores whether the pitch and speed are at their own limits  or that of the timestretching algorithm                         
+ *
+ * The pitchscreen is divided into 3 viewports (each row is a viewport)
+ * Then each viewport is again divided into 3 colums, each showsing some infos
+ * Additionally, on touchscreen, each cell represents a button
+ *
+ * Below a sketch describing what each cell will show (what's drawn on it)
+ * --------------------------
+ * |      |        |        | <-- pitch up in the middle (text and button)
+ * |      |        |        | <-- arrows for mode toggling on the sides for touchscreen
+ * |------------------------|
+ * |      |        |        | <-- semitone/speed up/down on the sides
+ * |      |        |        | <-- reset pitch&speed in the middle
+ * |------------------------|
+ * |      |        |        | <-- pitch down in the middle
+ * |      |        |        | <-- Two "OK" for exit on the sides for touchscreen
+ * |------------------------|
+ *
+ *
+ 
+ * Fixes the viewports so they represent the 3 rows, and adds a little margin
+ * on all sides for the icons (which are drawn outside of the grid
+ *
+ * The modified viewports need to be passed to the touchscreen handling function
+ * must be called before pitchscreen_draw, or within
+ * since it neither clears nor updates the display  "Pitch up/Pitch down" - hide for a small screen,
+      * the text is drawn centered automatically
+      *
+      * note: this assumes 5 lines always fit on a touchscreen (should be
+      * reasonable)  two arrows in the top row, left and right column  UP: Pitch Up  draw text  DOWN: Pitch Down  one OK in the middle first column of the vp (at half height)  one OK in the middle of the last column of the vp (at half height)  draw text  Middle section  Middle section upper line - hide for a small screen  Pitch:XXX.X%  Rate  Middle section lower line  "Speed:XXX%"  "limit" and "timestretch" labels  Middle section left/right labels  Only display if they fit  need this to maintain correct pitch/speed caps  for large jumps, snap up to whole numbers  for large jumps, snap down to whole numbers  pitch_delta == 0 -> no real change  increase the multiple to increase precision of this calculation  we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         we have to ignore allow_cutoff, because we can't have the  stretch go higher than STRETCH_MAX                         now find the fractional part  Check to make sure fractional_index isn't too big  This should never happen.  this will be the integer offset from the cent_interp entry  Find the index into the semitone table  set pitch to the semitone's integer part value  get the range of the cent modification for future calculation  figure out the cent mod amount based on the semitone fractional value  modify pitch based on the mod amount we just calculated  snap to the delta interval  clamp the pitch so it doesn't go beyond the pitch limits  clamp the pitch so it doesn't go beyond the stretch limits 
+ * Check for touchscreen presses as per sketch above in this file
+ * 
+ * goes through each row of the, checks whether the touchscreen
+ * was pressed in it. Then it looks the columns of each row for specific actions
+  top row  press on top row, left or right column
+         * only toggle mode if released  center column pressed  now the center row  left column  right column  center column was pressed  now the bottom row  left or right column is exit  center column was pressed 
+    returns:
+    0 on exit
+    1 if USB was connected
+ should maybe be passed per parameter later, not needed for now  the speed variable holds the apparent speed of the playback  Figure out whether to be in timestretch mode  Count decimals for speaking  set the semitone index based on the current pitch  initialize pitchscreen vps  also, draw the icons now, it's only needed once  snap to whole numbers  snap to whole numbers  no longer in timestretch mode.  Reset speed  do this to make sure we properly obey the stretch limits  limit the amount of stretch  set the amount of stretch  update the speed variable with the new speed  Reset new_speed so we only call dsp_set_timestretch  when needed                                         

@@ -1,0 +1,1000 @@
+
+ * gtk.c: GTK front end for my puzzle collection.
+  We can only use printing if we are using Cairo for drawing and we
+   have a GTK version >= 2.10 (when GtkPrintOperation was added).  We can embed the page setup. Before 2.18, we needed to have a
+   separate page setup.  The old names are still more concise!  GTK 3 has retired stock button labels  #undef USE_CAIRO  #define NO_THICK_LINE  ----------------------------------------------------------------------
+ * Error reporting functions used elsewhere.
+  ----------------------------------------------------------------------
+ * GTK front end to puzzles.
+ 
+ * An internal API for functions which need to be different for
+ * printing and drawing.
+ 
+ * This structure holds all the data relevant to a single window.
+ * In principle this would allow us to open multiple independent
+ * puzzle windows, although I can't currently see any real point in
+ * doing so. I'm just coding cleanly because there's no
+ * particularly good reason not to.
+  true if we're running without GTK, for --screenshot  for painting outside puzzle area  which of colours[] is background  pixmap size (w, h are area size, s is GDK scale)  offset of pixmap in drawing area 
+     * This is used to get round an annoying lack of GTK notification
+     * message. If we request a window resize with
+     * gtk_window_resize(), we normally get back a "configure" event
+     * on the window and on its drawing area, and we respond to the
+     * latter by doing an appropriate resize of the puzzle. If the
+     * window is maximised, so that gtk_window_resize() _doesn't_
+     * change its size, then that configure event never shows up. But
+     * if we requested the resize in response to a change of puzzle
+     * parameters (say, the user selected a differently-sized preset
+     * from the menu), then we would still like to be _notified_ that
+     * the window size was staying the same, so that we can respond by
+     * choosing an appropriate tile size for the new puzzle preset in
+     * the existing window size.
+     *
+     * Fortunately, in GTK 3, we may not get a "configure" event on
+     * the drawing area in this situation, but we still get a
+     * "size_allocate" event on the whole window (which, in other
+     * situations when we _do_ get a "configure" on the area, turns up
+     * second). So we treat _that_ event as indicating that if the
+     * "configure" event hasn't already shown up then it's not going
+     * to arrive.
+     *
+     * This flag is where we bookkeep this system. On
+     * gtk_window_resize we set this flag to true; the area's
+     * configure handler sets it back to false; then if that doesn't
+     * happen, the window's size_allocate handler does a fallback
+     * puzzle resize when it sees this flag still set to true.
+     
+         * If we have a widget and it has a style that specifies a
+         * default background colour, use that as the background for
+         * the puzzle drawing area.
+         
+     * GTK 3 has decided that there's no such thing as a 'default
+     * background colour' any more, because widget styles might set
+     * the background to something more complicated like a background
+     * image. We don't want to get into overlaying our entire puzzle
+     * on an arbitrary background image, so we'll just make up a
+     * reasonable shade of grey.
+     *
+     * This is also what we do on GTK 2 in headless mode, where we
+     * don't have a widget style to query.
+      ----------------------------------------------------------------------
+ * Cairo drawing functions.
+  Get the dimensions of the region to be hatched.  Set the line color and width.  Clip to the region.  Hatch the bounding area of the fill region.  Just in case...  ----------------------------------------------------------------------
+ * GDK drawing functions.
+ 
+     * In principle we ought to be able to use gdk_draw_polygon for
+     * the outline as well. In fact, it turns out to interact badly
+     * with a clipping region, for no terribly obvious reason, so I
+     * draw the outline as a sequence of lines instead.
+     
+     * We can't create the pixmap right now, because fe->window
+     * might not yet exist. So we just cache w and h and create it
+     * during the firs call to blitter_save.
+      ----------------------------------------------------------------------
+ * Pango font functions.
+ 
+     * Use Pango to find the closest match to the requested
+     * font.
+      `Monospace' and `Sans' are meta-families guaranteed to exist 
+     * I found some online Pango documentation which
+     * described a function called
+     * pango_font_description_set_absolute_size(), which is
+     * _exactly_ what I want here. Unfortunately, none of
+     * my local Pango installations have it (presumably
+     * they're too old), so I'm going to have to hack round
+     * it by figuring out the point size myself. This
+     * limits me to X and probably also breaks in later
+     * Pango installations, so ideally I should add another
+     * CHECK_VERSION type ifdef and use set_absolute_size
+     * where available. All very annoying.
+     
+     * Create a layout.
+      ----------------------------------------------------------------------
+ * Old-fashioned font functions.
+ 
+     * In GTK 1.2, I don't know of any plausible way to
+     * pick a suitable font, so I'm just going to be
+     * tedious.
+     
+     * Measure vertical string extents with respect to the same
+     * string always...
+     
+     * ... but horizontal extents with respect to the provided
+     * string. This means that multiple pieces of text centred
+     * on the same y-coordinate don't have different baselines.
+     
+     * Actually draw the text.
+      ----------------------------------------------------------------------
+ * The exported drawing functions.
+ 
+     * Find or create the font.
+     
+     * Do the job.
+     
+     * We assume Pango can cope with any UTF-8 likely to be emitted
+     * by a puzzle.
+     
+     * Compute the puzzle's position in pixels on the logical page.
+     
+     * And determine the scale.
+     *
+     * I need a scale such that the maximum puzzle-coordinate
+     * extent of the rectangle (pw * scale) is equal to the pixel
+     * equivalent of the puzzle's millimetre width (wmm * dpmmx).
+     
+     * Now instruct Cairo to transform points based on our calculated
+     * values (order here *is* important).
+      USE_PRINTING  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  Handle mnemonics.  don't even know what button!  don't even know what button! 
+     * Apparently we need to do this because otherwise the status
+     * bar will fail to update immediately. Annoying, but there we
+     * go.
+      may clear timer_active  can happen due to --generate  can happen due to --generate 
+     * `Escape' effectively clicks the cancel button
+      GTK_CHECK_VERSION(3,0,0)  set_transient_window_pos(parent, window);  GTK_CHECK_VERSION(3,0,0) 
+     * GtkEntry has a nasty habit of eating the Return key, which
+     * is unhelpful since it doesn't actually _do_ anything with it
+     * (it calls gtk_widget_activate, but our edit boxes never need
+     * activating). So I catch Return before GtkEntry sees it, and
+     * pass it straight on to the parent widget. Effect: hitting
+     * Return in an edit box will now activate the default button
+     * in the dialog just like it will everywhere else.
+      GtkDialog isn't quite flexible enough 
+	     * Edit box with a label beside it.
+	     
+	     * Simple checkbox.
+	     
+	     * Drop-down list (GtkComboBox).
+	      eat delimiter  set_transient_window_pos(fe->window, fe->cfgbox); 
+     * Currently I don't want to make the GTK port scale large
+     * puzzles to fit on the screen. This is because X does permit
+     * extremely large windows and many window managers provide a
+     * means of navigating round them, and the users I consulted
+     * before deciding said that they'd rather have enormous puzzle
+     * windows spanning multiple screen pages than have them
+     * shrunk. I could change my mind later or introduce
+     * configurability; this would be the place to do so, by
+     * replacing the initial values of x and y with the screen
+     * dimensions.
+     
+ * Called when any other code in this file has changed the
+ * selected game parameters.
+ 
+     * Update the greying on the Copy menu option.
+     
+     * This function tests whether a widget has not yet taken up space
+     * on the screen which it will occupy in future. (Therefore, it
+     * returns true only if the widget does exist but does not have a
+     * size allocation. A null widget is already taking up all the
+     * space it ever will.)
+      nonexistent widgets aren't a problem  skip if no gtk_widget_get_allocation  widget exists but has no size yet 
+         * In order to permit the user to resize the window smaller as
+         * well as bigger, we call this function after the window size
+         * has ended up where we want it. This shouldn't shrink the
+         * window immediately; it just arranges that the next time the
+         * user tries to shrink it, they can.
+         *
+         * However, at puzzle creation time, we defer the first of
+         * these operations until after the menu bar and status bar
+         * are actually visible. On Ubuntu 12.04 I've found that these
+         * can take a while to be displayed, and that it's a mistake
+         * to reduce the drawing area's size allocation before they've
+         * turned up or else the drawing area makes room for them by
+         * shrinking to less than the size we intended.
+          !GTK_CHECK_VERSION(3,0,0) 
+     * When the main puzzle window changes size, it might be because
+     * the menu bar or status bar has turned up after starting off
+     * absent, in which case we should have another go at enacting a
+     * pending shrink of the drawing area.
+     
+     * For this simple application we can safely assume that the
+     * data passed to this function is pure ASCII, which means we
+     * can return precisely the same stuff for types STRING,
+     * COMPOUND_TEXT or UTF8_STRING.
+      Set defaults to what was selected last time.  We ignore `widget' because it is easier and faster to store the
+       widgets we need in `fe' then to get the children of `widget'.  non-interactive midend for bulk puzzle generation 
+     * Create our document structure and fill it up with puzzles.
+     
+		 * Set the non-interactive mid-end to have the same
+		 * parameters as the standard one.
+		  Begin the document.  End and free the document.  Don't error out on -Werror=switch.  USE_PRINTING  file exists  Put the old preset back! 
+         * Display a keyboard accelerator alongside this menu item.
+         * Actually this won't be processed via the usual GTK
+         * accelerator system, because we add it to a dummy
+         * accelerator group which is never actually activated on the
+         * main window; this permits back ends to override special
+         * keys like 'n' and 'r' and 'u' in some UI states. So
+         * whatever keystroke we display here will still go to
+         * key_event and be handled in the normal way.
+          for argtype  in headless mode, configure_area won't have set this  Defaults 
+         * We need to use the same midend as the main frontend because
+         * we need midend_print_puzzle() to be able to print the
+         * current puzzle.
+         case ARG_EITHER
+	     * First try treating the argument as a game ID.
+	     
+		 * It's a valid game ID.
+		 
+         * try_shrink_drawing_area() will do some fiddling with the
+         * window size request (see comment in that function) after
+         * all the bits and pieces such as the menu bar and status bar
+         * have appeared in the puzzle window.
+         *
+         * However, on Unity systems, the menu bar _doesn't_ appear in
+         * the puzzle window, because the Unity shell hijacks it into
+         * the menu bar at the very top of the screen. We therefore
+         * try to detect that situation here, so that we don't sit
+         * here forever waiting for a menu bar.
+         
+     * Intentionally _not_ added to the window via
+     * gtk_window_add_accel_group; see menu_key_event
+      STYLUS_BASED 
+     * Command line parsing in this function is rather fiddly,
+     * because GTK wants to have a go at argc/argv _first_ - and
+     * yet we can't let it, because gtk_init() will bomb out if it
+     * can't open an X display, whereas in fact we want to permit
+     * our --generate and --print modes to run without an X
+     * display.
+     * 
+     * So what we do is:
+     * 	- we parse the command line ourselves, without modifying
+     * 	  argc/argv
+     * 	- if we encounter an error which might plausibly be the
+     * 	  result of a GTK command line (i.e. not detailed errors in
+     * 	  particular options of ours) we store the error message
+     * 	  and terminate parsing.
+     * 	- if we got enough out of the command line to know it
+     * 	  specifies a non-X mode of operation, we either display
+     * 	  the stored error and return failure, or if there is no
+     * 	  stored error we do the non-X operation and return
+     * 	  success.
+     *  - otherwise, we go straight to gtk_init().
+     
+	     * This is an internal option which I don't expect
+	     * users to have any particular use for. The effect of
+	     * --redo is that once the game has been loaded and
+	     * initialised, the next move in the redo chain is
+	     * replayed, and the game screen is redrawn part way
+	     * through the making of the move. This is only
+	     * meaningful if there _is_ a next move in the redo
+	     * chain, which means in turn that this option is only
+	     * useful if you're also passing a save file on the
+	     * command line.
+	     *
+	     * This option is used by the script which generates
+	     * the puzzle icons and website screenshots, and I
+	     * don't imagine it's useful for anything else.
+	     * (Unless, I suppose, users don't like my screenshots
+	     * and want to generate their own in the same way for
+	     * some repackaged version of the puzzles.)
+	     
+	     * Another internal option for the icon building
+	     * script. This causes a screenshot of the central
+	     * drawing area (i.e. not including the menu bar or
+	     * status bar) to be saved to a PNG file once the
+	     * window has been drawn, and then the application
+	     * quits immediately.
+	     
+     * Special standalone mode for generating puzzle IDs on the
+     * command line. Useful for generating puzzles to be printed
+     * out and solved offline (for puzzles where that even makes
+     * sense - Solo, for example, is a lot more pencil-and-paper
+     * friendly than Twiddle!)
+     * 
+     * Usage:
+     * 
+     *   <puzzle-name> --generate [<n> [<params>]]
+     * 
+     * <n>, if present, is the number of puzzle IDs to generate.
+     * <params>, if present, is the same type of parameter string
+     * you would pass to the puzzle when running it in GUI mode,
+     * including optional extras such as the expansion factor in
+     * Rectangles and the difficulty level in Solo.
+     * 
+     * If you specify <params>, you must also specify <n> (although
+     * you may specify it to be 1). Sorry; that was the
+     * simplest-to-parse command-line syntax I came up with.
+     
+         * If we're in this branch, we should display any pending
+         * error message from the command line, since GTK isn't going
+         * to take another crack at making sense of it.
+         
+	 * In this loop, we either generate a game ID or read one
+	 * from stdin depending on whether we're in generate mode;
+	 * then we either write it to stdout or print it, depending
+	 * on whether we're in print mode. Thus, this loop handles
+	 * generate-to-stdout, print-from-stdin and generate-and-
+	 * immediately-print modes.
+	 * 
+	 * (It could also handle a copy-stdin-to-stdout mode,
+	 * although there's currently no combination of options
+	 * which will cause this loop to be activated in that mode.
+	 * It wouldn't be _entirely_ pointless, though, because
+	 * stdin could contain bare params strings or random-seed
+	 * IDs, and stdout would contain nothing but fully
+	 * generated descriptive game IDs.)
+	 
+                 * Now destroy the aux_info in the midend, by means of
+                 * re-entering the same game id, and then try to solve
+                 * it.
+                 
+                 * If the solve operation returned the error "Solution
+                 * not known for this puzzle", that's OK, because that
+                 * just means it's a puzzle for which we don't have an
+                 * algorithmic solver and hence can't solve it without
+                 * the aux_info, e.g. Netslide. Any other error is a
+                 * problem, though.
+                 
+         * Another specialist mode which causes the puzzle to list the
+         * game_params strings for all its preset configurations.
+         
+	     * Some puzzles will not redraw their entire area if
+	     * given a partially completed animation, which means
+	     * we must redraw now and _then_ redraw again after
+	     * freezing the move timer.
+	      Start a redo.  And freeze the timer at the specified position. 
+ * gtk.c: GTK front end for my puzzle collection.
+  We can only use printing if we are using Cairo for drawing and we
+   have a GTK version >= 2.10 (when GtkPrintOperation was added).  We can embed the page setup. Before 2.18, we needed to have a
+   separate page setup.  The old names are still more concise!  GTK 3 has retired stock button labels  #undef USE_CAIRO  #define NO_THICK_LINE  ----------------------------------------------------------------------
+ * Error reporting functions used elsewhere.
+  ----------------------------------------------------------------------
+ * GTK front end to puzzles.
+ 
+ * An internal API for functions which need to be different for
+ * printing and drawing.
+ 
+ * This structure holds all the data relevant to a single window.
+ * In principle this would allow us to open multiple independent
+ * puzzle windows, although I can't currently see any real point in
+ * doing so. I'm just coding cleanly because there's no
+ * particularly good reason not to.
+  true if we're running without GTK, for --screenshot  for painting outside puzzle area  which of colours[] is background  pixmap size (w, h are area size, s is GDK scale)  offset of pixmap in drawing area 
+     * This is used to get round an annoying lack of GTK notification
+     * message. If we request a window resize with
+     * gtk_window_resize(), we normally get back a "configure" event
+     * on the window and on its drawing area, and we respond to the
+     * latter by doing an appropriate resize of the puzzle. If the
+     * window is maximised, so that gtk_window_resize() _doesn't_
+     * change its size, then that configure event never shows up. But
+     * if we requested the resize in response to a change of puzzle
+     * parameters (say, the user selected a differently-sized preset
+     * from the menu), then we would still like to be _notified_ that
+     * the window size was staying the same, so that we can respond by
+     * choosing an appropriate tile size for the new puzzle preset in
+     * the existing window size.
+     *
+     * Fortunately, in GTK 3, we may not get a "configure" event on
+     * the drawing area in this situation, but we still get a
+     * "size_allocate" event on the whole window (which, in other
+     * situations when we _do_ get a "configure" on the area, turns up
+     * second). So we treat _that_ event as indicating that if the
+     * "configure" event hasn't already shown up then it's not going
+     * to arrive.
+     *
+     * This flag is where we bookkeep this system. On
+     * gtk_window_resize we set this flag to true; the area's
+     * configure handler sets it back to false; then if that doesn't
+     * happen, the window's size_allocate handler does a fallback
+     * puzzle resize when it sees this flag still set to true.
+     
+         * If we have a widget and it has a style that specifies a
+         * default background colour, use that as the background for
+         * the puzzle drawing area.
+         
+     * GTK 3 has decided that there's no such thing as a 'default
+     * background colour' any more, because widget styles might set
+     * the background to something more complicated like a background
+     * image. We don't want to get into overlaying our entire puzzle
+     * on an arbitrary background image, so we'll just make up a
+     * reasonable shade of grey.
+     *
+     * This is also what we do on GTK 2 in headless mode, where we
+     * don't have a widget style to query.
+      ----------------------------------------------------------------------
+ * Cairo drawing functions.
+  Get the dimensions of the region to be hatched.  Set the line color and width.  Clip to the region.  Hatch the bounding area of the fill region.  Just in case...  ----------------------------------------------------------------------
+ * GDK drawing functions.
+ 
+     * In principle we ought to be able to use gdk_draw_polygon for
+     * the outline as well. In fact, it turns out to interact badly
+     * with a clipping region, for no terribly obvious reason, so I
+     * draw the outline as a sequence of lines instead.
+     
+     * We can't create the pixmap right now, because fe->window
+     * might not yet exist. So we just cache w and h and create it
+     * during the firs call to blitter_save.
+      ----------------------------------------------------------------------
+ * Pango font functions.
+ 
+     * Use Pango to find the closest match to the requested
+     * font.
+      `Monospace' and `Sans' are meta-families guaranteed to exist 
+     * I found some online Pango documentation which
+     * described a function called
+     * pango_font_description_set_absolute_size(), which is
+     * _exactly_ what I want here. Unfortunately, none of
+     * my local Pango installations have it (presumably
+     * they're too old), so I'm going to have to hack round
+     * it by figuring out the point size myself. This
+     * limits me to X and probably also breaks in later
+     * Pango installations, so ideally I should add another
+     * CHECK_VERSION type ifdef and use set_absolute_size
+     * where available. All very annoying.
+     
+     * Create a layout.
+      ----------------------------------------------------------------------
+ * Old-fashioned font functions.
+ 
+     * In GTK 1.2, I don't know of any plausible way to
+     * pick a suitable font, so I'm just going to be
+     * tedious.
+     
+     * Measure vertical string extents with respect to the same
+     * string always...
+     
+     * ... but horizontal extents with respect to the provided
+     * string. This means that multiple pieces of text centred
+     * on the same y-coordinate don't have different baselines.
+     
+     * Actually draw the text.
+      ----------------------------------------------------------------------
+ * The exported drawing functions.
+ 
+     * Find or create the font.
+     
+     * Do the job.
+     
+     * We assume Pango can cope with any UTF-8 likely to be emitted
+     * by a puzzle.
+     
+     * Compute the puzzle's position in pixels on the logical page.
+     
+     * And determine the scale.
+     *
+     * I need a scale such that the maximum puzzle-coordinate
+     * extent of the rectangle (pw * scale) is equal to the pixel
+     * equivalent of the puzzle's millimetre width (wmm * dpmmx).
+     
+     * Now instruct Cairo to transform points based on our calculated
+     * values (order here *is* important).
+      USE_PRINTING  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  Handle mnemonics.  don't even know what button!  don't even know what button! 
+     * Apparently we need to do this because otherwise the status
+     * bar will fail to update immediately. Annoying, but there we
+     * go.
+      may clear timer_active  can happen due to --generate  can happen due to --generate 
+     * `Escape' effectively clicks the cancel button
+      GTK_CHECK_VERSION(3,0,0)  set_transient_window_pos(parent, window);  GTK_CHECK_VERSION(3,0,0) 
+     * GtkEntry has a nasty habit of eating the Return key, which
+     * is unhelpful since it doesn't actually _do_ anything with it
+     * (it calls gtk_widget_activate, but our edit boxes never need
+     * activating). So I catch Return before GtkEntry sees it, and
+     * pass it straight on to the parent widget. Effect: hitting
+     * Return in an edit box will now activate the default button
+     * in the dialog just like it will everywhere else.
+      GtkDialog isn't quite flexible enough 
+	     * Edit box with a label beside it.
+	     
+	     * Simple checkbox.
+	     
+	     * Drop-down list (GtkComboBox).
+	      eat delimiter  set_transient_window_pos(fe->window, fe->cfgbox); 
+     * Currently I don't want to make the GTK port scale large
+     * puzzles to fit on the screen. This is because X does permit
+     * extremely large windows and many window managers provide a
+     * means of navigating round them, and the users I consulted
+     * before deciding said that they'd rather have enormous puzzle
+     * windows spanning multiple screen pages than have them
+     * shrunk. I could change my mind later or introduce
+     * configurability; this would be the place to do so, by
+     * replacing the initial values of x and y with the screen
+     * dimensions.
+     
+ * Called when any other code in this file has changed the
+ * selected game parameters.
+ 
+     * Update the greying on the Copy menu option.
+     
+     * This function tests whether a widget has not yet taken up space
+     * on the screen which it will occupy in future. (Therefore, it
+     * returns true only if the widget does exist but does not have a
+     * size allocation. A null widget is already taking up all the
+     * space it ever will.)
+      nonexistent widgets aren't a problem  skip if no gtk_widget_get_allocation  widget exists but has no size yet 
+         * In order to permit the user to resize the window smaller as
+         * well as bigger, we call this function after the window size
+         * has ended up where we want it. This shouldn't shrink the
+         * window immediately; it just arranges that the next time the
+         * user tries to shrink it, they can.
+         *
+         * However, at puzzle creation time, we defer the first of
+         * these operations until after the menu bar and status bar
+         * are actually visible. On Ubuntu 12.04 I've found that these
+         * can take a while to be displayed, and that it's a mistake
+         * to reduce the drawing area's size allocation before they've
+         * turned up or else the drawing area makes room for them by
+         * shrinking to less than the size we intended.
+          !GTK_CHECK_VERSION(3,0,0) 
+     * When the main puzzle window changes size, it might be because
+     * the menu bar or status bar has turned up after starting off
+     * absent, in which case we should have another go at enacting a
+     * pending shrink of the drawing area.
+     
+     * For this simple application we can safely assume that the
+     * data passed to this function is pure ASCII, which means we
+     * can return precisely the same stuff for types STRING,
+     * COMPOUND_TEXT or UTF8_STRING.
+      Set defaults to what was selected last time.  We ignore `widget' because it is easier and faster to store the
+       widgets we need in `fe' then to get the children of `widget'.  non-interactive midend for bulk puzzle generation 
+     * Create our document structure and fill it up with puzzles.
+     
+		 * Set the non-interactive mid-end to have the same
+		 * parameters as the standard one.
+		  Begin the document.  End and free the document.  Don't error out on -Werror=switch.  USE_PRINTING  file exists  Put the old preset back! 
+         * Display a keyboard accelerator alongside this menu item.
+         * Actually this won't be processed via the usual GTK
+         * accelerator system, because we add it to a dummy
+         * accelerator group which is never actually activated on the
+         * main window; this permits back ends to override special
+         * keys like 'n' and 'r' and 'u' in some UI states. So
+         * whatever keystroke we display here will still go to
+         * key_event and be handled in the normal way.
+          for argtype  in headless mode, configure_area won't have set this  Defaults 
+         * We need to use the same midend as the main frontend because
+         * we need midend_print_puzzle() to be able to print the
+         * current puzzle.
+         case ARG_EITHER
+	     * First try treating the argument as a game ID.
+	     
+		 * It's a valid game ID.
+		 
+         * try_shrink_drawing_area() will do some fiddling with the
+         * window size request (see comment in that function) after
+         * all the bits and pieces such as the menu bar and status bar
+         * have appeared in the puzzle window.
+         *
+         * However, on Unity systems, the menu bar _doesn't_ appear in
+         * the puzzle window, because the Unity shell hijacks it into
+         * the menu bar at the very top of the screen. We therefore
+         * try to detect that situation here, so that we don't sit
+         * here forever waiting for a menu bar.
+         
+     * Intentionally _not_ added to the window via
+     * gtk_window_add_accel_group; see menu_key_event
+      STYLUS_BASED 
+     * Command line parsing in this function is rather fiddly,
+     * because GTK wants to have a go at argc/argv _first_ - and
+     * yet we can't let it, because gtk_init() will bomb out if it
+     * can't open an X display, whereas in fact we want to permit
+     * our --generate and --print modes to run without an X
+     * display.
+     * 
+     * So what we do is:
+     * 	- we parse the command line ourselves, without modifying
+     * 	  argc/argv
+     * 	- if we encounter an error which might plausibly be the
+     * 	  result of a GTK command line (i.e. not detailed errors in
+     * 	  particular options of ours) we store the error message
+     * 	  and terminate parsing.
+     * 	- if we got enough out of the command line to know it
+     * 	  specifies a non-X mode of operation, we either display
+     * 	  the stored error and return failure, or if there is no
+     * 	  stored error we do the non-X operation and return
+     * 	  success.
+     *  - otherwise, we go straight to gtk_init().
+     
+	     * This is an internal option which I don't expect
+	     * users to have any particular use for. The effect of
+	     * --redo is that once the game has been loaded and
+	     * initialised, the next move in the redo chain is
+	     * replayed, and the game screen is redrawn part way
+	     * through the making of the move. This is only
+	     * meaningful if there _is_ a next move in the redo
+	     * chain, which means in turn that this option is only
+	     * useful if you're also passing a save file on the
+	     * command line.
+	     *
+	     * This option is used by the script which generates
+	     * the puzzle icons and website screenshots, and I
+	     * don't imagine it's useful for anything else.
+	     * (Unless, I suppose, users don't like my screenshots
+	     * and want to generate their own in the same way for
+	     * some repackaged version of the puzzles.)
+	     
+	     * Another internal option for the icon building
+	     * script. This causes a screenshot of the central
+	     * drawing area (i.e. not including the menu bar or
+	     * status bar) to be saved to a PNG file once the
+	     * window has been drawn, and then the application
+	     * quits immediately.
+	     
+     * Special standalone mode for generating puzzle IDs on the
+     * command line. Useful for generating puzzles to be printed
+     * out and solved offline (for puzzles where that even makes
+     * sense - Solo, for example, is a lot more pencil-and-paper
+     * friendly than Twiddle!)
+     * 
+     * Usage:
+     * 
+     *   <puzzle-name> --generate [<n> [<params>]]
+     * 
+     * <n>, if present, is the number of puzzle IDs to generate.
+     * <params>, if present, is the same type of parameter string
+     * you would pass to the puzzle when running it in GUI mode,
+     * including optional extras such as the expansion factor in
+     * Rectangles and the difficulty level in Solo.
+     * 
+     * If you specify <params>, you must also specify <n> (although
+     * you may specify it to be 1). Sorry; that was the
+     * simplest-to-parse command-line syntax I came up with.
+     
+         * If we're in this branch, we should display any pending
+         * error message from the command line, since GTK isn't going
+         * to take another crack at making sense of it.
+         
+	 * In this loop, we either generate a game ID or read one
+	 * from stdin depending on whether we're in generate mode;
+	 * then we either write it to stdout or print it, depending
+	 * on whether we're in print mode. Thus, this loop handles
+	 * generate-to-stdout, print-from-stdin and generate-and-
+	 * immediately-print modes.
+	 * 
+	 * (It could also handle a copy-stdin-to-stdout mode,
+	 * although there's currently no combination of options
+	 * which will cause this loop to be activated in that mode.
+	 * It wouldn't be _entirely_ pointless, though, because
+	 * stdin could contain bare params strings or random-seed
+	 * IDs, and stdout would contain nothing but fully
+	 * generated descriptive game IDs.)
+	 
+                 * Now destroy the aux_info in the midend, by means of
+                 * re-entering the same game id, and then try to solve
+                 * it.
+                 
+                 * If the solve operation returned the error "Solution
+                 * not known for this puzzle", that's OK, because that
+                 * just means it's a puzzle for which we don't have an
+                 * algorithmic solver and hence can't solve it without
+                 * the aux_info, e.g. Netslide. Any other error is a
+                 * problem, though.
+                 
+         * Another specialist mode which causes the puzzle to list the
+         * game_params strings for all its preset configurations.
+         
+	     * Some puzzles will not redraw their entire area if
+	     * given a partially completed animation, which means
+	     * we must redraw now and _then_ redraw again after
+	     * freezing the move timer.
+	      Start a redo.  And freeze the timer at the specified position. 
+ * gtk.c: GTK front end for my puzzle collection.
+  We can only use printing if we are using Cairo for drawing and we
+   have a GTK version >= 2.10 (when GtkPrintOperation was added).  We can embed the page setup. Before 2.18, we needed to have a
+   separate page setup.  The old names are still more concise!  GTK 3 has retired stock button labels  #undef USE_CAIRO  #define NO_THICK_LINE  ----------------------------------------------------------------------
+ * Error reporting functions used elsewhere.
+  ----------------------------------------------------------------------
+ * GTK front end to puzzles.
+ 
+ * An internal API for functions which need to be different for
+ * printing and drawing.
+ 
+ * This structure holds all the data relevant to a single window.
+ * In principle this would allow us to open multiple independent
+ * puzzle windows, although I can't currently see any real point in
+ * doing so. I'm just coding cleanly because there's no
+ * particularly good reason not to.
+  true if we're running without GTK, for --screenshot  for painting outside puzzle area  which of colours[] is background  pixmap size (w, h are area size, s is GDK scale)  offset of pixmap in drawing area 
+     * This is used to get round an annoying lack of GTK notification
+     * message. If we request a window resize with
+     * gtk_window_resize(), we normally get back a "configure" event
+     * on the window and on its drawing area, and we respond to the
+     * latter by doing an appropriate resize of the puzzle. If the
+     * window is maximised, so that gtk_window_resize() _doesn't_
+     * change its size, then that configure event never shows up. But
+     * if we requested the resize in response to a change of puzzle
+     * parameters (say, the user selected a differently-sized preset
+     * from the menu), then we would still like to be _notified_ that
+     * the window size was staying the same, so that we can respond by
+     * choosing an appropriate tile size for the new puzzle preset in
+     * the existing window size.
+     *
+     * Fortunately, in GTK 3, we may not get a "configure" event on
+     * the drawing area in this situation, but we still get a
+     * "size_allocate" event on the whole window (which, in other
+     * situations when we _do_ get a "configure" on the area, turns up
+     * second). So we treat _that_ event as indicating that if the
+     * "configure" event hasn't already shown up then it's not going
+     * to arrive.
+     *
+     * This flag is where we bookkeep this system. On
+     * gtk_window_resize we set this flag to true; the area's
+     * configure handler sets it back to false; then if that doesn't
+     * happen, the window's size_allocate handler does a fallback
+     * puzzle resize when it sees this flag still set to true.
+     
+         * If we have a widget and it has a style that specifies a
+         * default background colour, use that as the background for
+         * the puzzle drawing area.
+         
+     * GTK 3 has decided that there's no such thing as a 'default
+     * background colour' any more, because widget styles might set
+     * the background to something more complicated like a background
+     * image. We don't want to get into overlaying our entire puzzle
+     * on an arbitrary background image, so we'll just make up a
+     * reasonable shade of grey.
+     *
+     * This is also what we do on GTK 2 in headless mode, where we
+     * don't have a widget style to query.
+      ----------------------------------------------------------------------
+ * Cairo drawing functions.
+  Get the dimensions of the region to be hatched.  Set the line color and width.  Clip to the region.  Hatch the bounding area of the fill region.  Just in case...  ----------------------------------------------------------------------
+ * GDK drawing functions.
+ 
+     * In principle we ought to be able to use gdk_draw_polygon for
+     * the outline as well. In fact, it turns out to interact badly
+     * with a clipping region, for no terribly obvious reason, so I
+     * draw the outline as a sequence of lines instead.
+     
+     * We can't create the pixmap right now, because fe->window
+     * might not yet exist. So we just cache w and h and create it
+     * during the firs call to blitter_save.
+      ----------------------------------------------------------------------
+ * Pango font functions.
+ 
+     * Use Pango to find the closest match to the requested
+     * font.
+      `Monospace' and `Sans' are meta-families guaranteed to exist 
+     * I found some online Pango documentation which
+     * described a function called
+     * pango_font_description_set_absolute_size(), which is
+     * _exactly_ what I want here. Unfortunately, none of
+     * my local Pango installations have it (presumably
+     * they're too old), so I'm going to have to hack round
+     * it by figuring out the point size myself. This
+     * limits me to X and probably also breaks in later
+     * Pango installations, so ideally I should add another
+     * CHECK_VERSION type ifdef and use set_absolute_size
+     * where available. All very annoying.
+     
+     * Create a layout.
+      ----------------------------------------------------------------------
+ * Old-fashioned font functions.
+ 
+     * In GTK 1.2, I don't know of any plausible way to
+     * pick a suitable font, so I'm just going to be
+     * tedious.
+     
+     * Measure vertical string extents with respect to the same
+     * string always...
+     
+     * ... but horizontal extents with respect to the provided
+     * string. This means that multiple pieces of text centred
+     * on the same y-coordinate don't have different baselines.
+     
+     * Actually draw the text.
+      ----------------------------------------------------------------------
+ * The exported drawing functions.
+ 
+     * Find or create the font.
+     
+     * Do the job.
+     
+     * We assume Pango can cope with any UTF-8 likely to be emitted
+     * by a puzzle.
+     
+     * Compute the puzzle's position in pixels on the logical page.
+     
+     * And determine the scale.
+     *
+     * I need a scale such that the maximum puzzle-coordinate
+     * extent of the rectangle (pw * scale) is equal to the pixel
+     * equivalent of the puzzle's millimetre width (wmm * dpmmx).
+     
+     * Now instruct Cairo to transform points based on our calculated
+     * values (order here *is* important).
+      USE_PRINTING  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  Handle mnemonics.  don't even know what button!  don't even know what button! 
+     * Apparently we need to do this because otherwise the status
+     * bar will fail to update immediately. Annoying, but there we
+     * go.
+      may clear timer_active  can happen due to --generate  can happen due to --generate 
+     * `Escape' effectively clicks the cancel button
+      GTK_CHECK_VERSION(3,0,0)  set_transient_window_pos(parent, window);  GTK_CHECK_VERSION(3,0,0) 
+     * GtkEntry has a nasty habit of eating the Return key, which
+     * is unhelpful since it doesn't actually _do_ anything with it
+     * (it calls gtk_widget_activate, but our edit boxes never need
+     * activating). So I catch Return before GtkEntry sees it, and
+     * pass it straight on to the parent widget. Effect: hitting
+     * Return in an edit box will now activate the default button
+     * in the dialog just like it will everywhere else.
+      GtkDialog isn't quite flexible enough 
+	     * Edit box with a label beside it.
+	     
+	     * Simple checkbox.
+	     
+	     * Drop-down list (GtkComboBox).
+	      eat delimiter  set_transient_window_pos(fe->window, fe->cfgbox); 
+     * Currently I don't want to make the GTK port scale large
+     * puzzles to fit on the screen. This is because X does permit
+     * extremely large windows and many window managers provide a
+     * means of navigating round them, and the users I consulted
+     * before deciding said that they'd rather have enormous puzzle
+     * windows spanning multiple screen pages than have them
+     * shrunk. I could change my mind later or introduce
+     * configurability; this would be the place to do so, by
+     * replacing the initial values of x and y with the screen
+     * dimensions.
+     
+ * Called when any other code in this file has changed the
+ * selected game parameters.
+ 
+     * Update the greying on the Copy menu option.
+     
+     * This function tests whether a widget has not yet taken up space
+     * on the screen which it will occupy in future. (Therefore, it
+     * returns true only if the widget does exist but does not have a
+     * size allocation. A null widget is already taking up all the
+     * space it ever will.)
+      nonexistent widgets aren't a problem  skip if no gtk_widget_get_allocation  widget exists but has no size yet 
+         * In order to permit the user to resize the window smaller as
+         * well as bigger, we call this function after the window size
+         * has ended up where we want it. This shouldn't shrink the
+         * window immediately; it just arranges that the next time the
+         * user tries to shrink it, they can.
+         *
+         * However, at puzzle creation time, we defer the first of
+         * these operations until after the menu bar and status bar
+         * are actually visible. On Ubuntu 12.04 I've found that these
+         * can take a while to be displayed, and that it's a mistake
+         * to reduce the drawing area's size allocation before they've
+         * turned up or else the drawing area makes room for them by
+         * shrinking to less than the size we intended.
+          !GTK_CHECK_VERSION(3,0,0) 
+     * When the main puzzle window changes size, it might be because
+     * the menu bar or status bar has turned up after starting off
+     * absent, in which case we should have another go at enacting a
+     * pending shrink of the drawing area.
+     
+     * For this simple application we can safely assume that the
+     * data passed to this function is pure ASCII, which means we
+     * can return precisely the same stuff for types STRING,
+     * COMPOUND_TEXT or UTF8_STRING.
+      Set defaults to what was selected last time.  We ignore `widget' because it is easier and faster to store the
+       widgets we need in `fe' then to get the children of `widget'.  non-interactive midend for bulk puzzle generation 
+     * Create our document structure and fill it up with puzzles.
+     
+		 * Set the non-interactive mid-end to have the same
+		 * parameters as the standard one.
+		  Begin the document.  End and free the document.  Don't error out on -Werror=switch.  USE_PRINTING  file exists  Put the old preset back! 
+         * Display a keyboard accelerator alongside this menu item.
+         * Actually this won't be processed via the usual GTK
+         * accelerator system, because we add it to a dummy
+         * accelerator group which is never actually activated on the
+         * main window; this permits back ends to override special
+         * keys like 'n' and 'r' and 'u' in some UI states. So
+         * whatever keystroke we display here will still go to
+         * key_event and be handled in the normal way.
+          for argtype  in headless mode, configure_area won't have set this  Defaults 
+         * We need to use the same midend as the main frontend because
+         * we need midend_print_puzzle() to be able to print the
+         * current puzzle.
+         case ARG_EITHER
+	     * First try treating the argument as a game ID.
+	     
+		 * It's a valid game ID.
+		 
+         * try_shrink_drawing_area() will do some fiddling with the
+         * window size request (see comment in that function) after
+         * all the bits and pieces such as the menu bar and status bar
+         * have appeared in the puzzle window.
+         *
+         * However, on Unity systems, the menu bar _doesn't_ appear in
+         * the puzzle window, because the Unity shell hijacks it into
+         * the menu bar at the very top of the screen. We therefore
+         * try to detect that situation here, so that we don't sit
+         * here forever waiting for a menu bar.
+         
+     * Intentionally _not_ added to the window via
+     * gtk_window_add_accel_group; see menu_key_event
+      STYLUS_BASED 
+     * Command line parsing in this function is rather fiddly,
+     * because GTK wants to have a go at argc/argv _first_ - and
+     * yet we can't let it, because gtk_init() will bomb out if it
+     * can't open an X display, whereas in fact we want to permit
+     * our --generate and --print modes to run without an X
+     * display.
+     * 
+     * So what we do is:
+     * 	- we parse the command line ourselves, without modifying
+     * 	  argc/argv
+     * 	- if we encounter an error which might plausibly be the
+     * 	  result of a GTK command line (i.e. not detailed errors in
+     * 	  particular options of ours) we store the error message
+     * 	  and terminate parsing.
+     * 	- if we got enough out of the command line to know it
+     * 	  specifies a non-X mode of operation, we either display
+     * 	  the stored error and return failure, or if there is no
+     * 	  stored error we do the non-X operation and return
+     * 	  success.
+     *  - otherwise, we go straight to gtk_init().
+     
+	     * This is an internal option which I don't expect
+	     * users to have any particular use for. The effect of
+	     * --redo is that once the game has been loaded and
+	     * initialised, the next move in the redo chain is
+	     * replayed, and the game screen is redrawn part way
+	     * through the making of the move. This is only
+	     * meaningful if there _is_ a next move in the redo
+	     * chain, which means in turn that this option is only
+	     * useful if you're also passing a save file on the
+	     * command line.
+	     *
+	     * This option is used by the script which generates
+	     * the puzzle icons and website screenshots, and I
+	     * don't imagine it's useful for anything else.
+	     * (Unless, I suppose, users don't like my screenshots
+	     * and want to generate their own in the same way for
+	     * some repackaged version of the puzzles.)
+	     
+	     * Another internal option for the icon building
+	     * script. This causes a screenshot of the central
+	     * drawing area (i.e. not including the menu bar or
+	     * status bar) to be saved to a PNG file once the
+	     * window has been drawn, and then the application
+	     * quits immediately.
+	     
+     * Special standalone mode for generating puzzle IDs on the
+     * command line. Useful for generating puzzles to be printed
+     * out and solved offline (for puzzles where that even makes
+     * sense - Solo, for example, is a lot more pencil-and-paper
+     * friendly than Twiddle!)
+     * 
+     * Usage:
+     * 
+     *   <puzzle-name> --generate [<n> [<params>]]
+     * 
+     * <n>, if present, is the number of puzzle IDs to generate.
+     * <params>, if present, is the same type of parameter string
+     * you would pass to the puzzle when running it in GUI mode,
+     * including optional extras such as the expansion factor in
+     * Rectangles and the difficulty level in Solo.
+     * 
+     * If you specify <params>, you must also specify <n> (although
+     * you may specify it to be 1). Sorry; that was the
+     * simplest-to-parse command-line syntax I came up with.
+     
+         * If we're in this branch, we should display any pending
+         * error message from the command line, since GTK isn't going
+         * to take another crack at making sense of it.
+         
+	 * In this loop, we either generate a game ID or read one
+	 * from stdin depending on whether we're in generate mode;
+	 * then we either write it to stdout or print it, depending
+	 * on whether we're in print mode. Thus, this loop handles
+	 * generate-to-stdout, print-from-stdin and generate-and-
+	 * immediately-print modes.
+	 * 
+	 * (It could also handle a copy-stdin-to-stdout mode,
+	 * although there's currently no combination of options
+	 * which will cause this loop to be activated in that mode.
+	 * It wouldn't be _entirely_ pointless, though, because
+	 * stdin could contain bare params strings or random-seed
+	 * IDs, and stdout would contain nothing but fully
+	 * generated descriptive game IDs.)
+	 
+                 * Now destroy the aux_info in the midend, by means of
+                 * re-entering the same game id, and then try to solve
+                 * it.
+                 
+                 * If the solve operation returned the error "Solution
+                 * not known for this puzzle", that's OK, because that
+                 * just means it's a puzzle for which we don't have an
+                 * algorithmic solver and hence can't solve it without
+                 * the aux_info, e.g. Netslide. Any other error is a
+                 * problem, though.
+                 
+         * Another specialist mode which causes the puzzle to list the
+         * game_params strings for all its preset configurations.
+         
+	     * Some puzzles will not redraw their entire area if
+	     * given a partially completed animation, which means
+	     * we must redraw now and _then_ redraw again after
+	     * freezing the move timer.
+	      Start a redo.  And freeze the timer at the specified position. 

@@ -1,0 +1,190 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Daniel Ankers
+ *
+ * PP5002 and PP502x SoC threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Single-core variants for FORCE_SINGLE_CORE  Shared single-core build debugging version  No wakey - core already wakey (because this is it)  NUM_CORES > 1 * Model-generic PP dual-core code *---------------------------------------------------------------------------
+ * Do any device-specific inits for the threads and synchronize the kernel
+ * initializations.
+ *---------------------------------------------------------------------------
+  Wake up coprocessor and let it initialize kernel and threads  Sleep until COP has finished  Wake the CPU and return ---------------------------------------------------------------------------
+ * Switches to a stack that always resides in the Rockbox core then calls
+ * the final exit routine to actually finish removing the thread from the
+ * scheduler.
+ *
+ * Needed when a thread suicides on a core other than the main CPU since the
+ * stack used when idling is the stack of the last thread to run. This stack
+ * may not reside in the core firmware in which case the core will continue
+ * to use a stack from an unloaded module until another thread runs on it.
+ *---------------------------------------------------------------------------
+  switch to idle stack   CPU? ---------------------------------------------------------------------------
+ * Machine-specific helper function for switching the processor a thread is
+ * running on. Basically, the thread suicides on the departing core and is
+ * reborn on the destination. Were it not for gcc's ill-behavior regarding
+ * naked functions written in C where it actually clobbers non-volatile
+ * registers before the intended prologue code, this would all be much
+ * simpler.  Generic setup is done in switch_core itself.
+ ---------------------------------------------------------------------------
+ * This actually performs the core switch.
+  can't use the first two ctx fields  save remaining context  save context ptr + restart address  make 'start' non-null  switch to idle stack on old core  write back everything  mark as started  restore non-volatiles and stack  invalidate new core's cache  restore remaining context * PP-model-specific dual-core code * PP5002 has no mailboxes - Bytes to emulate the PP502x mailbox bits  00h  01h  02h  03h  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  Signal intent to sleep  && stay_awake == 0?  Sleep: PP5002 crashes if the instruction that puts it to sleep is
+         * located at 0xNNNNNNN0. 4/8/C works. This sequence makes sure
+         * that the correct alternative is executed. Don't change the order
+         * of the next 4 instructions!  nop's needed because of pipeline  Clear stay_awake and sleep intent  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  Signal intent to wake other core  and set stay_awake  If it intends to sleep, let it first  intend_sleep != 0 ?  && not sleeping ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Enable IRQ  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  r0 = 0x4 << core  signal intent to sleep  && !(MBX_MSG_STAT & (0x10<<core)) ?  Then sleep  Clear control reg  Signal intent to wake - clear wake flag  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  r2 = (0x11 << othercore)  Signal intent to wake othercore  If it intends to sleep, let it first  (MSG_MSG_STAT & (0x4 << othercore)) != 0 ?  && (PROC_CTL(othercore) & PROC_SLEEP) == 0 ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  CPU_PPxxxx  Keep constant pool in range of inline ASM  NUM_CORES **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Daniel Ankers
+ *
+ * PP5002 and PP502x SoC threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Single-core variants for FORCE_SINGLE_CORE  Shared single-core build debugging version  No wakey - core already wakey (because this is it)  NUM_CORES > 1 * Model-generic PP dual-core code *---------------------------------------------------------------------------
+ * Do any device-specific inits for the threads and synchronize the kernel
+ * initializations.
+ *---------------------------------------------------------------------------
+  Wake up coprocessor and let it initialize kernel and threads  Sleep until COP has finished  Wake the CPU and return ---------------------------------------------------------------------------
+ * Switches to a stack that always resides in the Rockbox core then calls
+ * the final exit routine to actually finish removing the thread from the
+ * scheduler.
+ *
+ * Needed when a thread suicides on a core other than the main CPU since the
+ * stack used when idling is the stack of the last thread to run. This stack
+ * may not reside in the core firmware in which case the core will continue
+ * to use a stack from an unloaded module until another thread runs on it.
+ *---------------------------------------------------------------------------
+  switch to idle stack   CPU? ---------------------------------------------------------------------------
+ * Machine-specific helper function for switching the processor a thread is
+ * running on. Basically, the thread suicides on the departing core and is
+ * reborn on the destination. Were it not for gcc's ill-behavior regarding
+ * naked functions written in C where it actually clobbers non-volatile
+ * registers before the intended prologue code, this would all be much
+ * simpler.  Generic setup is done in switch_core itself.
+ ---------------------------------------------------------------------------
+ * This actually performs the core switch.
+  can't use the first two ctx fields  save remaining context  save context ptr + restart address  make 'start' non-null  switch to idle stack on old core  write back everything  mark as started  restore non-volatiles and stack  invalidate new core's cache  restore remaining context * PP-model-specific dual-core code * PP5002 has no mailboxes - Bytes to emulate the PP502x mailbox bits  00h  01h  02h  03h  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  Signal intent to sleep  && stay_awake == 0?  Sleep: PP5002 crashes if the instruction that puts it to sleep is
+         * located at 0xNNNNNNN0. 4/8/C works. This sequence makes sure
+         * that the correct alternative is executed. Don't change the order
+         * of the next 4 instructions!  nop's needed because of pipeline  Clear stay_awake and sleep intent  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  Signal intent to wake other core  and set stay_awake  If it intends to sleep, let it first  intend_sleep != 0 ?  && not sleeping ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Enable IRQ  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  r0 = 0x4 << core  signal intent to sleep  && !(MBX_MSG_STAT & (0x10<<core)) ?  Then sleep  Clear control reg  Signal intent to wake - clear wake flag  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  r2 = (0x11 << othercore)  Signal intent to wake othercore  If it intends to sleep, let it first  (MSG_MSG_STAT & (0x4 << othercore)) != 0 ?  && (PROC_CTL(othercore) & PROC_SLEEP) == 0 ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  CPU_PPxxxx  Keep constant pool in range of inline ASM  NUM_CORES **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Daniel Ankers
+ *
+ * PP5002 and PP502x SoC threading support
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Single-core variants for FORCE_SINGLE_CORE  Shared single-core build debugging version  No wakey - core already wakey (because this is it)  NUM_CORES > 1 * Model-generic PP dual-core code *---------------------------------------------------------------------------
+ * Do any device-specific inits for the threads and synchronize the kernel
+ * initializations.
+ *---------------------------------------------------------------------------
+  Wake up coprocessor and let it initialize kernel and threads  Sleep until COP has finished  Wake the CPU and return ---------------------------------------------------------------------------
+ * Switches to a stack that always resides in the Rockbox core then calls
+ * the final exit routine to actually finish removing the thread from the
+ * scheduler.
+ *
+ * Needed when a thread suicides on a core other than the main CPU since the
+ * stack used when idling is the stack of the last thread to run. This stack
+ * may not reside in the core firmware in which case the core will continue
+ * to use a stack from an unloaded module until another thread runs on it.
+ *---------------------------------------------------------------------------
+  switch to idle stack   CPU? ---------------------------------------------------------------------------
+ * Machine-specific helper function for switching the processor a thread is
+ * running on. Basically, the thread suicides on the departing core and is
+ * reborn on the destination. Were it not for gcc's ill-behavior regarding
+ * naked functions written in C where it actually clobbers non-volatile
+ * registers before the intended prologue code, this would all be much
+ * simpler.  Generic setup is done in switch_core itself.
+ ---------------------------------------------------------------------------
+ * This actually performs the core switch.
+  can't use the first two ctx fields  save remaining context  save context ptr + restart address  make 'start' non-null  switch to idle stack on old core  write back everything  mark as started  restore non-volatiles and stack  invalidate new core's cache  restore remaining context * PP-model-specific dual-core code * PP5002 has no mailboxes - Bytes to emulate the PP502x mailbox bits  00h  01h  02h  03h  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  Signal intent to sleep  && stay_awake == 0?  Sleep: PP5002 crashes if the instruction that puts it to sleep is
+         * located at 0xNNNNNNN0. 4/8/C works. This sequence makes sure
+         * that the correct alternative is executed. Don't change the order
+         * of the next 4 instructions!  nop's needed because of pipeline  Clear stay_awake and sleep intent  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  Signal intent to wake other core  and set stay_awake  If it intends to sleep, let it first  intend_sleep != 0 ?  && not sleeping ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Enable IRQ  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  Select ASM ---------------------------------------------------------------------------
+ * Put core in a power-saving state if waking list wasn't repopulated and if
+ * no other core requested a wakeup for it to perform a task.
+ *---------------------------------------------------------------------------
+  r0 = 0x4 << core  signal intent to sleep  && !(MBX_MSG_STAT & (0x10<<core)) ?  Then sleep  Clear control reg  Signal intent to wake - clear wake flag  Wait for wake procedure to finish ---------------------------------------------------------------------------
+ * Wake another processor core that is sleeping or prevent it from doing so
+ * if it was already destined. FIQ, IRQ should be disabled before calling.
+ *---------------------------------------------------------------------------
+  avoid r0 since that contains othercore  Disable IRQ  r2 = (0x11 << othercore)  Signal intent to wake othercore  If it intends to sleep, let it first  (MSG_MSG_STAT & (0x4 << othercore)) != 0 ?  && (PROC_CTL(othercore) & PROC_SLEEP) == 0 ?  Wait for sleep or wake  If sleeping, wake it  Done with wake procedure  Restore IRQ  C version for reference  Signal intent to sleep  Something waking or other processor intends to wake us?  Signal wake - clear wake flag  Wait for other processor to finish wake procedure  Disable interrupts - avoid reentrancy from the tick  Signal intent to wake other processor - set stay awake  If it intends to sleep, wait until it does or aborts  If sleeping, wake it up  Done with wake procedure  ASM/C selection  CPU_PPxxxx  Keep constant pool in range of inline ASM  NUM_CORES 

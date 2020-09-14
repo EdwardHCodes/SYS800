@@ -1,0 +1,289 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * ARM PrimeCell PL080 Multiple Master DMA controller
+ #define PANIC_DEBUG task helpers  enable/disable DMA controller  enable/disable DMA channel  Disable the channel, clears the FIFO after
+       completing current AHB transfer  Wait for it to go inactive  Halt the channel, ignores subsequent DMA requests,
+       the contents of the FIFO are drained  Wait for it to go inactive  Disable channel and restore Halt bit  launch next task in queue  Clear any pending interrupts leftover from previous operation DMACINTTCCLR(dmac->baddr) = (1 << ch->prio); not needed  copy whole LLI to HW registers  Clear any pending interrupt  ISR  backup current task cb_data  mark current task as finished (resources can be reused)  launch next DMA task  run user callback, new tasks could be launched/queued here  disable DMA channel if there are no running tasks  Lowest channel index is serviced first  clear terminal count interrupt 
+ * API
+  disable channel  clear channel interrupts  flow control notes:
+     *  - currently only master modes are supported (FLOWCNTRL_x_DMA).
+     *  - must use DMAC_PERI_NONE when srcperi and/or dstperi are memory.
+      1D->2D DMA transfers:
+ *
+ *   srcaddr:  aaaaaaaaaaabbbbbbbbbbbccccccc
+ *             <-           size          ->
+ *             <- width -><- width -><- r ->
+ *
+ *   dstaddr:               aaaaaaaaaaa.....
+ *   dstaddr + stride:      bbbbbbbbbbb.....
+ *   dstaddr + 2*stride:    ccccccc.........
+ *                          <-   stride   ->
+ *                          <- width ->
+ *
+ * 1D->1D DMA transfers:
+ *
+ *   If 'width'=='stride', uses 'lli_xfer_max_count' for LLI count.
+ *
+ * Queue modes:
+ *
+ *   QUEUE_NORMAL: each task in the queue is launched using a new
+ *   DMA transfer once previous task is finished.
+ *
+ *   QUEUE_LINK: when a task is queued, it is linked with the last
+ *   queued task, creating a single continuous DMA transfer. New
+ *   tasks must be queued while the channel is running, otherwise
+ *   the continuous DMA transfer will be broken.
+ *
+ * Misc notes:
+ *
+ *   Arguments 'size', 'width' and 'stride' are in bytes.
+ *
+ *   Maximum supported 'width' depends on bus 'swidth' size, it is:
+ *   maximum width = DMAC_LLI_MAX_COUNT << swidth
+ *
+ *   User must supply 'srcaddr', 'dstaddr', 'width', 'size', 'stride'
+ *   and 'lli_xfer_max_count' aligned to configured source and
+ *   destination bus widths, otherwise transfers will be internally
+ *   aligned by DMA hardware.
+  clean d-cache line by MVA  get and fill new task  use maximum LLI transfer count for 1D->1D transfers  fill LLI circular buffer  clean dcache after completing a line  last lli, enable terminal count interrupt  previous code is not protected against IRQs, it is fine to
+       enter the DMA interrupt handler while an application is
+       queuing a task, but the aplication must be protected when
+       doing concurrent queueing.  queue new task, launch it if it is the only queued task  if it is a direct HW link, do it ASAP  check if the link was successful  dummy read for delay  Locate the LLI where the new task must be linked. Link it even
+           if it was a direct HW link, dmac_ch_get_info() needs it.  If the updated LLI was loaded by the HW while it was being
+           modified, verify that the HW link is correct.  clear queue  returns source or destination address of the actual LLI transfer,
+   remaining bytes for current task, and total remaining bytes  index  Read DMA transfer progress:
+         *
+         * The recommended procedure (stop channel -> read progress ->
+         * relaunch channel) is problematic for real time transfers,
+         * specially when fast sample rates are combined with small
+         * pheripheral FIFOs.
+         *
+         * An experimental method is used, it is based on the results
+         * observed when reading the LLI registers at the instant they
+         * are being updated by the HW (using s5l8702, 2:1 CPU/AHB
+         * clock ratio):
+         * - SRCADDR may return erroneous/corrupted data
+         * - LINK and COUNT always returns valid data
+         * - it seems that HW internally updates LINK and COUNT
+         *   'atomically', this means that reading twice using the
+         *   sequence LINK1->COUNT1->LINK2->COUNT2:
+         *     if LINK1 == LINK2 then COUNT1 is consistent with LINK
+         *     if LINK1 <> LINK2 then COUNT2 is consistent with LINK2
+          HW read sequence  HW count  In QUEUE_LINK mode, when the task has just finished and is
+         * waiting to enter the interrupt handler, the readed HW data
+         * may correspont to the next linked task. Check it and update
+         * real cur_task accordly.
+          get previous to next LLI in the circular buffer  Calculate current address, choose destination address when
+         * dest increment is set (usually MEMMEM or PERIMEM transfers),
+         * otherwise use source address (usually MEMPERI transfers).
+          calculate bytes for current task  count bytes for the remaining tasks **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * ARM PrimeCell PL080 Multiple Master DMA controller
+ #define PANIC_DEBUG task helpers  enable/disable DMA controller  enable/disable DMA channel  Disable the channel, clears the FIFO after
+       completing current AHB transfer  Wait for it to go inactive  Halt the channel, ignores subsequent DMA requests,
+       the contents of the FIFO are drained  Wait for it to go inactive  Disable channel and restore Halt bit  launch next task in queue  Clear any pending interrupts leftover from previous operation DMACINTTCCLR(dmac->baddr) = (1 << ch->prio); not needed  copy whole LLI to HW registers  Clear any pending interrupt  ISR  backup current task cb_data  mark current task as finished (resources can be reused)  launch next DMA task  run user callback, new tasks could be launched/queued here  disable DMA channel if there are no running tasks  Lowest channel index is serviced first  clear terminal count interrupt 
+ * API
+  disable channel  clear channel interrupts  flow control notes:
+     *  - currently only master modes are supported (FLOWCNTRL_x_DMA).
+     *  - must use DMAC_PERI_NONE when srcperi and/or dstperi are memory.
+      1D->2D DMA transfers:
+ *
+ *   srcaddr:  aaaaaaaaaaabbbbbbbbbbbccccccc
+ *             <-           size          ->
+ *             <- width -><- width -><- r ->
+ *
+ *   dstaddr:               aaaaaaaaaaa.....
+ *   dstaddr + stride:      bbbbbbbbbbb.....
+ *   dstaddr + 2*stride:    ccccccc.........
+ *                          <-   stride   ->
+ *                          <- width ->
+ *
+ * 1D->1D DMA transfers:
+ *
+ *   If 'width'=='stride', uses 'lli_xfer_max_count' for LLI count.
+ *
+ * Queue modes:
+ *
+ *   QUEUE_NORMAL: each task in the queue is launched using a new
+ *   DMA transfer once previous task is finished.
+ *
+ *   QUEUE_LINK: when a task is queued, it is linked with the last
+ *   queued task, creating a single continuous DMA transfer. New
+ *   tasks must be queued while the channel is running, otherwise
+ *   the continuous DMA transfer will be broken.
+ *
+ * Misc notes:
+ *
+ *   Arguments 'size', 'width' and 'stride' are in bytes.
+ *
+ *   Maximum supported 'width' depends on bus 'swidth' size, it is:
+ *   maximum width = DMAC_LLI_MAX_COUNT << swidth
+ *
+ *   User must supply 'srcaddr', 'dstaddr', 'width', 'size', 'stride'
+ *   and 'lli_xfer_max_count' aligned to configured source and
+ *   destination bus widths, otherwise transfers will be internally
+ *   aligned by DMA hardware.
+  clean d-cache line by MVA  get and fill new task  use maximum LLI transfer count for 1D->1D transfers  fill LLI circular buffer  clean dcache after completing a line  last lli, enable terminal count interrupt  previous code is not protected against IRQs, it is fine to
+       enter the DMA interrupt handler while an application is
+       queuing a task, but the aplication must be protected when
+       doing concurrent queueing.  queue new task, launch it if it is the only queued task  if it is a direct HW link, do it ASAP  check if the link was successful  dummy read for delay  Locate the LLI where the new task must be linked. Link it even
+           if it was a direct HW link, dmac_ch_get_info() needs it.  If the updated LLI was loaded by the HW while it was being
+           modified, verify that the HW link is correct.  clear queue  returns source or destination address of the actual LLI transfer,
+   remaining bytes for current task, and total remaining bytes  index  Read DMA transfer progress:
+         *
+         * The recommended procedure (stop channel -> read progress ->
+         * relaunch channel) is problematic for real time transfers,
+         * specially when fast sample rates are combined with small
+         * pheripheral FIFOs.
+         *
+         * An experimental method is used, it is based on the results
+         * observed when reading the LLI registers at the instant they
+         * are being updated by the HW (using s5l8702, 2:1 CPU/AHB
+         * clock ratio):
+         * - SRCADDR may return erroneous/corrupted data
+         * - LINK and COUNT always returns valid data
+         * - it seems that HW internally updates LINK and COUNT
+         *   'atomically', this means that reading twice using the
+         *   sequence LINK1->COUNT1->LINK2->COUNT2:
+         *     if LINK1 == LINK2 then COUNT1 is consistent with LINK
+         *     if LINK1 <> LINK2 then COUNT2 is consistent with LINK2
+          HW read sequence  HW count  In QUEUE_LINK mode, when the task has just finished and is
+         * waiting to enter the interrupt handler, the readed HW data
+         * may correspont to the next linked task. Check it and update
+         * real cur_task accordly.
+          get previous to next LLI in the circular buffer  Calculate current address, choose destination address when
+         * dest increment is set (usually MEMMEM or PERIMEM transfers),
+         * otherwise use source address (usually MEMPERI transfers).
+          calculate bytes for current task  count bytes for the remaining tasks **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Cástor Muñoz
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * ARM PrimeCell PL080 Multiple Master DMA controller
+ #define PANIC_DEBUG task helpers  enable/disable DMA controller  enable/disable DMA channel  Disable the channel, clears the FIFO after
+       completing current AHB transfer  Wait for it to go inactive  Halt the channel, ignores subsequent DMA requests,
+       the contents of the FIFO are drained  Wait for it to go inactive  Disable channel and restore Halt bit  launch next task in queue  Clear any pending interrupts leftover from previous operation DMACINTTCCLR(dmac->baddr) = (1 << ch->prio); not needed  copy whole LLI to HW registers  Clear any pending interrupt  ISR  backup current task cb_data  mark current task as finished (resources can be reused)  launch next DMA task  run user callback, new tasks could be launched/queued here  disable DMA channel if there are no running tasks  Lowest channel index is serviced first  clear terminal count interrupt 
+ * API
+  disable channel  clear channel interrupts  flow control notes:
+     *  - currently only master modes are supported (FLOWCNTRL_x_DMA).
+     *  - must use DMAC_PERI_NONE when srcperi and/or dstperi are memory.
+      1D->2D DMA transfers:
+ *
+ *   srcaddr:  aaaaaaaaaaabbbbbbbbbbbccccccc
+ *             <-           size          ->
+ *             <- width -><- width -><- r ->
+ *
+ *   dstaddr:               aaaaaaaaaaa.....
+ *   dstaddr + stride:      bbbbbbbbbbb.....
+ *   dstaddr + 2*stride:    ccccccc.........
+ *                          <-   stride   ->
+ *                          <- width ->
+ *
+ * 1D->1D DMA transfers:
+ *
+ *   If 'width'=='stride', uses 'lli_xfer_max_count' for LLI count.
+ *
+ * Queue modes:
+ *
+ *   QUEUE_NORMAL: each task in the queue is launched using a new
+ *   DMA transfer once previous task is finished.
+ *
+ *   QUEUE_LINK: when a task is queued, it is linked with the last
+ *   queued task, creating a single continuous DMA transfer. New
+ *   tasks must be queued while the channel is running, otherwise
+ *   the continuous DMA transfer will be broken.
+ *
+ * Misc notes:
+ *
+ *   Arguments 'size', 'width' and 'stride' are in bytes.
+ *
+ *   Maximum supported 'width' depends on bus 'swidth' size, it is:
+ *   maximum width = DMAC_LLI_MAX_COUNT << swidth
+ *
+ *   User must supply 'srcaddr', 'dstaddr', 'width', 'size', 'stride'
+ *   and 'lli_xfer_max_count' aligned to configured source and
+ *   destination bus widths, otherwise transfers will be internally
+ *   aligned by DMA hardware.
+  clean d-cache line by MVA  get and fill new task  use maximum LLI transfer count for 1D->1D transfers  fill LLI circular buffer  clean dcache after completing a line  last lli, enable terminal count interrupt  previous code is not protected against IRQs, it is fine to
+       enter the DMA interrupt handler while an application is
+       queuing a task, but the aplication must be protected when
+       doing concurrent queueing.  queue new task, launch it if it is the only queued task  if it is a direct HW link, do it ASAP  check if the link was successful  dummy read for delay  Locate the LLI where the new task must be linked. Link it even
+           if it was a direct HW link, dmac_ch_get_info() needs it.  If the updated LLI was loaded by the HW while it was being
+           modified, verify that the HW link is correct.  clear queue  returns source or destination address of the actual LLI transfer,
+   remaining bytes for current task, and total remaining bytes  index  Read DMA transfer progress:
+         *
+         * The recommended procedure (stop channel -> read progress ->
+         * relaunch channel) is problematic for real time transfers,
+         * specially when fast sample rates are combined with small
+         * pheripheral FIFOs.
+         *
+         * An experimental method is used, it is based on the results
+         * observed when reading the LLI registers at the instant they
+         * are being updated by the HW (using s5l8702, 2:1 CPU/AHB
+         * clock ratio):
+         * - SRCADDR may return erroneous/corrupted data
+         * - LINK and COUNT always returns valid data
+         * - it seems that HW internally updates LINK and COUNT
+         *   'atomically', this means that reading twice using the
+         *   sequence LINK1->COUNT1->LINK2->COUNT2:
+         *     if LINK1 == LINK2 then COUNT1 is consistent with LINK
+         *     if LINK1 <> LINK2 then COUNT2 is consistent with LINK2
+          HW read sequence  HW count  In QUEUE_LINK mode, when the task has just finished and is
+         * waiting to enter the interrupt handler, the readed HW data
+         * may correspont to the next linked task. Check it and update
+         * real cur_task accordly.
+          get previous to next LLI in the circular buffer  Calculate current address, choose destination address when
+         * dest increment is set (usually MEMMEM or PERIMEM transfers),
+         * otherwise use source address (usually MEMPERI transfers).
+          calculate bytes for current task  count bytes for the remaining tasks 

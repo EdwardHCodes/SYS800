@@ -1,0 +1,268 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Jörg Hohensohn
+ *
+ * This module collects the Talkbox and voice UI functions.
+ * (Talkbox reads directory names from mp3 clips called thumbnails,
+ *  the voice UI lets menus and screens "talk" from a voicefile in memory.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE plugin_get_buffer()  time_split_units()  Memory layout varies between targets because the
+   Archos (MASCODEC) devices cannot mix voice and audio playback
+ 
+             MASCODEC  | MASCODEC  | SWCODEC
+             (playing) | (stopped) |
+    voicebuf-----------+-----------+------------
+              audio    | voice     | voice
+                       |-----------|------------
+                       | thumbnail | thumbnail 
+                       |           |------------
+                       |           | filebuf
+                       |           |------------
+                       |           | audio
+  voicebufend----------+-----------+------------
+
+  SWCODEC allocates dedicated buffers (except voice and thumbnail are together
+  in the talkbuf), MASCODEC reuses audiobuf. **************** Constants **************** must be a power of two **************** Functional Macros **************** MSB **************** Data types **************** one entry of the index table  offset from start of voicefile file  size of the clip  file format of our voice file  version of the voicefile  the rockbox target the file was made for  offset to index table, (=header size)  number of "normal" clips contained in above index  number of "voice only" clips contained in above index  The header is folled by the index tables (n*struct clip_entry),
+     * which is followed by the mp3/speex encoded clip data **************** Globals **************** On low memory swcodec targets the entire voice file wouldn't fit in memory
+ * together with codecs, so we load clips each time they are accessed.  70+ clips should fit into 100k  1GB should be enough for everybody; will be capped to voicefile size  Multiple thumbnails can be loaded back-to-back in this buffer.  length of data in
+                                                          thumbnail buffer  loaded voicefile  a voicefile file is present  is there possibly any voice playing to be shutup  enqueue next utterance even if enqueue is false  write index of queue, by application  read index of queue, by ISR context  protects queue_read, queue_write and thumbnail_buf_used  how many bytes handed over to playback, owned by ISR  current frame header, for re-sync  name of last used lang file (in talk_init)  true if talk_init has been called  true if we should give the buffers away in shrink_callback if requested  if positive, temporarily disable voice UI (not saved)  size of the voice data in the voice file and the actually allocated buffer
+  * for it. voicebuf_size is always smaller or equal to voicefile_size  one entry of the internal queue  buflib handle to the clip data  total length of the clip  bytes that still need to be deoded  queue of scheduled clips **************** Private implementation **************** ISR (mp3_callback()) must not run during moving of the clip buffer,
+ * because the MAS may get out-of-sync  on low-mem and when the voice buffer size is not limited (i.e.
+     * on 2MB HWCODEC) we effectively own the entire buffer because
+     * the voicefile takes up all RAM. This blocks other Rockbox parts
+     * from allocating, especially during bootup. Therefore always give
+     * up the buffer and reload when clips are played back. On high-mem
+     * or when the clip buffer is limited to a few 100K this provision is
+     * not necessary.  the clip buffer isn't usable without index table  default  try to open the voice file of the selected language  voice-only entries use the second part of the table.
+           The first string comes after VOICEONLY_DELIMITER so we need to
+           substract VOICEONLY_DELIMITER + 1  must be newer than we have  table 2 is behind table 1  normal use of the first table  must be newer than we have  must be voice-only if it exceeds table 1  The first string comes after VOICEONLY_DELIMITER so we need to
+           add VOICEONLY_DELIMITER + 1  thumb clips are freed first  find the last-used clip but never consider silence  free the last one if no oldest one could be determined  need to clear the LOADED bit too (not for thumb clips)  common code for load_initial_clips() and get_clip()  explicit slot; use that  find an empty slot  no free slot in the cache table?  open error  this must not be called with LOADED_MASK set in clipsize  read error  mark as loaded  clip not included in voicefile  fetch a clip from the voice file  clip not included in voicefile  clip needs loading  free clips from cache until this one succeeds to allocate  handle should now hold a valid alloc. Load from disk
+         * and insert into cache  finally insert into metadata table  clip is in memory already; find where it was loaded  reset age  without the extra bit gives true size  nothing to do?  doesn't yield()  just allocate, populate on an as-needed basis later  the first alloc is the clip metadata table  load the voice file into the mp3 buffer  failed to open  load the header first  format check  this function caps the voicefile buffer and allocates it. It can
+ * be called after talk_init(), e.g. when the voice was temporarily disabled.
+ * The buffer size has to be capped again each time because the available
+ * audio buffer changes over time  cap to the max. number of clips or the size of the available audio
+     * buffer which we grab. We leave some to the rest of the system.
+     * While that reduces our buffer size it improves the chance that
+     * other allocs succeed without disabling voice which would require
+     * reloading the voice from disk (as we do not shrink our buffer when
+     * other code attempts new allocs these would fail)  just allocate, populate on an as-needed basis later
+     * re-create the clip buffer to ensure clip_ctx is up-to-date  make sure to have the silence clip, if available return value can
+     * be cached globally even for TALK_PROGRESSIVE_LOAD because the
+     * VOICE_PAUSE clip is specially handled  Use a static buffer to avoid difficulties with buflib during
+ * buffer passing to the voice_thread (swcodec). Clips can be played
+   in chunks so the size is not that important  shut up gcc  adjust buffer position to what has been played already  silence clip available?  called in ISR context (on HWCODEC) if mp3 data got consumed  voice_thread.c hints us how many of the buffer we provided it actually
+     * consumed. Because buffers have to be frame-aligned for speex
+     * it might be less than what we presented  we completed this  current clip not finished?  feed the next 64K-1 chunk  increment read position for the just played clip  add silence clip when queue runs empty playing a voice clip,
+             * only if the previous clip wasn't already silence  end of data  queue is not empty?  start next clip **************** Public routines **************** stop the playback and the pending clips  Had nothing to do (was frame boundary or not our clip)  reset the queue  Shutup the voice, except if force_enqueue_next is set.  schedule a clip, at the end or discard the existing queue  cut off all the pending stuff  Something is being enqueued, force_enqueue_next override is no
+       longer in effect.  safety check  check old level  space left?  queue was empty, we have to do the initial start  kickoff audio  return if a voice codec is required or not  Voice file is available  Thumbnail clips are required **************** Public implementation **************** not a new file, nothing to do  In case we have something speaking!  reset some states  reset the queue  pause clip not accessible  need to free these as their size depends on the voice file, and
+     * this function is called when the talk voice file changes  don't free thumb handle, it doesn't depend on the actual voice file
+     * and so we can re-use it if it's already allocated in any event  Now determine the maximum buffer size needed for the voicefile.
+         * The below pretends the entire voicefile would be loaded. The buffer
+         * size is eventually capped later on in load_voicefile_data()  check for the average clip size to estimate the maximum number of
+         * clips the buffer can hold  account for possible thumb clips  create buffer just for thumb clips  additionally to the clip we need a table to record the age of the clips
+     * so that, when memory is tight, only the most recently used ones are kept  compensate a bit for buflib alloc overhead.  Initialize the actual voice clip playback engine as well  close again, this was just to detect presence  somebody else claims the mp3 buffer, e.g. for regular play/record  play a voice ID from voicefile  no voicefile loaded, not an error -> pretent success  talking has been disabled  reload needed?  -1 is an indication for silence  check if this is a special ID, with a value  sign-extend the value  speak it  and stop, end of special case  not present  Speaks zero or more IDs (from an array).  Make sure the current utterance is not interrupted by the next one.  play a thumbnail from file  Returns size of spoken thumbnail, so >0 means something is spoken,
+   <=0 means something went wrong.  reload needed?  talking has been disabled  shutup now to free the thumbnail buffer  failed to open  free clips from cache until this one succeeds to allocate  ToDo: find audio, skip ID headers and trailers  Don't play missing clips  prefix thumbnail by speaking these ids, but only now
+               that we know there's actually a thumbnail to be
+               spoken.  finally insert into metadata table. thumb clips go under the
+         * VOICEONLY_DELIMITER id so the cache can distinguish them from
+         * normal clips  Play a thumbnail file  Does root end with a slash  Spell only the path component after the last slash  strip trailing slash  Play a file's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips are disabled, or as a fallback  Play a directory's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips disabled or as a fallback  Speak thumbnail for each component of a full path, again falling
+   back or going straight to spelling depending on settings.  path ought to start with /...  start of current component  end of current component  There are more slashes ahead  temporarily poke a NULL at end of component to truncate string  restore string  setup for next component  no more slashes, final component is a filename  say a numeric value, this word ordering works for english,
+   but not necessarily for other languages (e.g. german)  mille count  highest possible "-illion"  talking has been disabled  cut off all the pending stuff  special case  extract in groups of 3 digits  remove the used digits from number  digit place for next round  combination indexing  direct indexing  add billion, million, thousand  Say year like "nineteen ninety nine" instead of "one thousand 9
+   hundred ninety nine".  just say it as a regular number  Say century  as in 1900  as in 1905  sub-century year  Say time duration/interval. Input is time in seconds,
+   say hours,minutes,seconds.  strip trailing zeros from the fraction  singular/plural aware saying of a value  lookup table for the voice ID of the units  regular ID, int, signed  here come the "real" units  10^0 - 10^7  talking has been disabled  special pronounciation for year number  special case for time duration  singular?  use the singular for those units which have  special case with a "plus" before  needed for the "-0.5" corner case  say the number  say the unit, if any  Say time duration/interval. Input is time unit specifies base unit,
+   say hours,minutes,seconds, milliseconds. or any combination thereof  talking has been disabled  reload needed?  cut off all the pending stuff  spell a string  currently processed char  talking has been disabled  cut off all the pending stuff  if this grows into too many cases, I should use a table  Voice the hour  Voice the minutes  Say o'clock if the minute is 0.  Pronounce the leading 0  Voice the time in 24 hour format  Pronounce the leading 0  default **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Jörg Hohensohn
+ *
+ * This module collects the Talkbox and voice UI functions.
+ * (Talkbox reads directory names from mp3 clips called thumbnails,
+ *  the voice UI lets menus and screens "talk" from a voicefile in memory.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE plugin_get_buffer()  time_split_units()  Memory layout varies between targets because the
+   Archos (MASCODEC) devices cannot mix voice and audio playback
+ 
+             MASCODEC  | MASCODEC  | SWCODEC
+             (playing) | (stopped) |
+    voicebuf-----------+-----------+------------
+              audio    | voice     | voice
+                       |-----------|------------
+                       | thumbnail | thumbnail 
+                       |           |------------
+                       |           | filebuf
+                       |           |------------
+                       |           | audio
+  voicebufend----------+-----------+------------
+
+  SWCODEC allocates dedicated buffers (except voice and thumbnail are together
+  in the talkbuf), MASCODEC reuses audiobuf. **************** Constants **************** must be a power of two **************** Functional Macros **************** MSB **************** Data types **************** one entry of the index table  offset from start of voicefile file  size of the clip  file format of our voice file  version of the voicefile  the rockbox target the file was made for  offset to index table, (=header size)  number of "normal" clips contained in above index  number of "voice only" clips contained in above index  The header is folled by the index tables (n*struct clip_entry),
+     * which is followed by the mp3/speex encoded clip data **************** Globals **************** On low memory swcodec targets the entire voice file wouldn't fit in memory
+ * together with codecs, so we load clips each time they are accessed.  70+ clips should fit into 100k  1GB should be enough for everybody; will be capped to voicefile size  Multiple thumbnails can be loaded back-to-back in this buffer.  length of data in
+                                                          thumbnail buffer  loaded voicefile  a voicefile file is present  is there possibly any voice playing to be shutup  enqueue next utterance even if enqueue is false  write index of queue, by application  read index of queue, by ISR context  protects queue_read, queue_write and thumbnail_buf_used  how many bytes handed over to playback, owned by ISR  current frame header, for re-sync  name of last used lang file (in talk_init)  true if talk_init has been called  true if we should give the buffers away in shrink_callback if requested  if positive, temporarily disable voice UI (not saved)  size of the voice data in the voice file and the actually allocated buffer
+  * for it. voicebuf_size is always smaller or equal to voicefile_size  one entry of the internal queue  buflib handle to the clip data  total length of the clip  bytes that still need to be deoded  queue of scheduled clips **************** Private implementation **************** ISR (mp3_callback()) must not run during moving of the clip buffer,
+ * because the MAS may get out-of-sync  on low-mem and when the voice buffer size is not limited (i.e.
+     * on 2MB HWCODEC) we effectively own the entire buffer because
+     * the voicefile takes up all RAM. This blocks other Rockbox parts
+     * from allocating, especially during bootup. Therefore always give
+     * up the buffer and reload when clips are played back. On high-mem
+     * or when the clip buffer is limited to a few 100K this provision is
+     * not necessary.  the clip buffer isn't usable without index table  default  try to open the voice file of the selected language  voice-only entries use the second part of the table.
+           The first string comes after VOICEONLY_DELIMITER so we need to
+           substract VOICEONLY_DELIMITER + 1  must be newer than we have  table 2 is behind table 1  normal use of the first table  must be newer than we have  must be voice-only if it exceeds table 1  The first string comes after VOICEONLY_DELIMITER so we need to
+           add VOICEONLY_DELIMITER + 1  thumb clips are freed first  find the last-used clip but never consider silence  free the last one if no oldest one could be determined  need to clear the LOADED bit too (not for thumb clips)  common code for load_initial_clips() and get_clip()  explicit slot; use that  find an empty slot  no free slot in the cache table?  open error  this must not be called with LOADED_MASK set in clipsize  read error  mark as loaded  clip not included in voicefile  fetch a clip from the voice file  clip not included in voicefile  clip needs loading  free clips from cache until this one succeeds to allocate  handle should now hold a valid alloc. Load from disk
+         * and insert into cache  finally insert into metadata table  clip is in memory already; find where it was loaded  reset age  without the extra bit gives true size  nothing to do?  doesn't yield()  just allocate, populate on an as-needed basis later  the first alloc is the clip metadata table  load the voice file into the mp3 buffer  failed to open  load the header first  format check  this function caps the voicefile buffer and allocates it. It can
+ * be called after talk_init(), e.g. when the voice was temporarily disabled.
+ * The buffer size has to be capped again each time because the available
+ * audio buffer changes over time  cap to the max. number of clips or the size of the available audio
+     * buffer which we grab. We leave some to the rest of the system.
+     * While that reduces our buffer size it improves the chance that
+     * other allocs succeed without disabling voice which would require
+     * reloading the voice from disk (as we do not shrink our buffer when
+     * other code attempts new allocs these would fail)  just allocate, populate on an as-needed basis later
+     * re-create the clip buffer to ensure clip_ctx is up-to-date  make sure to have the silence clip, if available return value can
+     * be cached globally even for TALK_PROGRESSIVE_LOAD because the
+     * VOICE_PAUSE clip is specially handled  Use a static buffer to avoid difficulties with buflib during
+ * buffer passing to the voice_thread (swcodec). Clips can be played
+   in chunks so the size is not that important  shut up gcc  adjust buffer position to what has been played already  silence clip available?  called in ISR context (on HWCODEC) if mp3 data got consumed  voice_thread.c hints us how many of the buffer we provided it actually
+     * consumed. Because buffers have to be frame-aligned for speex
+     * it might be less than what we presented  we completed this  current clip not finished?  feed the next 64K-1 chunk  increment read position for the just played clip  add silence clip when queue runs empty playing a voice clip,
+             * only if the previous clip wasn't already silence  end of data  queue is not empty?  start next clip **************** Public routines **************** stop the playback and the pending clips  Had nothing to do (was frame boundary or not our clip)  reset the queue  Shutup the voice, except if force_enqueue_next is set.  schedule a clip, at the end or discard the existing queue  cut off all the pending stuff  Something is being enqueued, force_enqueue_next override is no
+       longer in effect.  safety check  check old level  space left?  queue was empty, we have to do the initial start  kickoff audio  return if a voice codec is required or not  Voice file is available  Thumbnail clips are required **************** Public implementation **************** not a new file, nothing to do  In case we have something speaking!  reset some states  reset the queue  pause clip not accessible  need to free these as their size depends on the voice file, and
+     * this function is called when the talk voice file changes  don't free thumb handle, it doesn't depend on the actual voice file
+     * and so we can re-use it if it's already allocated in any event  Now determine the maximum buffer size needed for the voicefile.
+         * The below pretends the entire voicefile would be loaded. The buffer
+         * size is eventually capped later on in load_voicefile_data()  check for the average clip size to estimate the maximum number of
+         * clips the buffer can hold  account for possible thumb clips  create buffer just for thumb clips  additionally to the clip we need a table to record the age of the clips
+     * so that, when memory is tight, only the most recently used ones are kept  compensate a bit for buflib alloc overhead.  Initialize the actual voice clip playback engine as well  close again, this was just to detect presence  somebody else claims the mp3 buffer, e.g. for regular play/record  play a voice ID from voicefile  no voicefile loaded, not an error -> pretent success  talking has been disabled  reload needed?  -1 is an indication for silence  check if this is a special ID, with a value  sign-extend the value  speak it  and stop, end of special case  not present  Speaks zero or more IDs (from an array).  Make sure the current utterance is not interrupted by the next one.  play a thumbnail from file  Returns size of spoken thumbnail, so >0 means something is spoken,
+   <=0 means something went wrong.  reload needed?  talking has been disabled  shutup now to free the thumbnail buffer  failed to open  free clips from cache until this one succeeds to allocate  ToDo: find audio, skip ID headers and trailers  Don't play missing clips  prefix thumbnail by speaking these ids, but only now
+               that we know there's actually a thumbnail to be
+               spoken.  finally insert into metadata table. thumb clips go under the
+         * VOICEONLY_DELIMITER id so the cache can distinguish them from
+         * normal clips  Play a thumbnail file  Does root end with a slash  Spell only the path component after the last slash  strip trailing slash  Play a file's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips are disabled, or as a fallback  Play a directory's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips disabled or as a fallback  Speak thumbnail for each component of a full path, again falling
+   back or going straight to spelling depending on settings.  path ought to start with /...  start of current component  end of current component  There are more slashes ahead  temporarily poke a NULL at end of component to truncate string  restore string  setup for next component  no more slashes, final component is a filename  say a numeric value, this word ordering works for english,
+   but not necessarily for other languages (e.g. german)  mille count  highest possible "-illion"  talking has been disabled  cut off all the pending stuff  special case  extract in groups of 3 digits  remove the used digits from number  digit place for next round  combination indexing  direct indexing  add billion, million, thousand  Say year like "nineteen ninety nine" instead of "one thousand 9
+   hundred ninety nine".  just say it as a regular number  Say century  as in 1900  as in 1905  sub-century year  Say time duration/interval. Input is time in seconds,
+   say hours,minutes,seconds.  strip trailing zeros from the fraction  singular/plural aware saying of a value  lookup table for the voice ID of the units  regular ID, int, signed  here come the "real" units  10^0 - 10^7  talking has been disabled  special pronounciation for year number  special case for time duration  singular?  use the singular for those units which have  special case with a "plus" before  needed for the "-0.5" corner case  say the number  say the unit, if any  Say time duration/interval. Input is time unit specifies base unit,
+   say hours,minutes,seconds, milliseconds. or any combination thereof  talking has been disabled  reload needed?  cut off all the pending stuff  spell a string  currently processed char  talking has been disabled  cut off all the pending stuff  if this grows into too many cases, I should use a table  Voice the hour  Voice the minutes  Say o'clock if the minute is 0.  Pronounce the leading 0  Voice the time in 24 hour format  Pronounce the leading 0  default **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Jörg Hohensohn
+ *
+ * This module collects the Talkbox and voice UI functions.
+ * (Talkbox reads directory names from mp3 clips called thumbnails,
+ *  the voice UI lets menus and screens "talk" from a voicefile in memory.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE plugin_get_buffer()  time_split_units()  Memory layout varies between targets because the
+   Archos (MASCODEC) devices cannot mix voice and audio playback
+ 
+             MASCODEC  | MASCODEC  | SWCODEC
+             (playing) | (stopped) |
+    voicebuf-----------+-----------+------------
+              audio    | voice     | voice
+                       |-----------|------------
+                       | thumbnail | thumbnail 
+                       |           |------------
+                       |           | filebuf
+                       |           |------------
+                       |           | audio
+  voicebufend----------+-----------+------------
+
+  SWCODEC allocates dedicated buffers (except voice and thumbnail are together
+  in the talkbuf), MASCODEC reuses audiobuf. **************** Constants **************** must be a power of two **************** Functional Macros **************** MSB **************** Data types **************** one entry of the index table  offset from start of voicefile file  size of the clip  file format of our voice file  version of the voicefile  the rockbox target the file was made for  offset to index table, (=header size)  number of "normal" clips contained in above index  number of "voice only" clips contained in above index  The header is folled by the index tables (n*struct clip_entry),
+     * which is followed by the mp3/speex encoded clip data **************** Globals **************** On low memory swcodec targets the entire voice file wouldn't fit in memory
+ * together with codecs, so we load clips each time they are accessed.  70+ clips should fit into 100k  1GB should be enough for everybody; will be capped to voicefile size  Multiple thumbnails can be loaded back-to-back in this buffer.  length of data in
+                                                          thumbnail buffer  loaded voicefile  a voicefile file is present  is there possibly any voice playing to be shutup  enqueue next utterance even if enqueue is false  write index of queue, by application  read index of queue, by ISR context  protects queue_read, queue_write and thumbnail_buf_used  how many bytes handed over to playback, owned by ISR  current frame header, for re-sync  name of last used lang file (in talk_init)  true if talk_init has been called  true if we should give the buffers away in shrink_callback if requested  if positive, temporarily disable voice UI (not saved)  size of the voice data in the voice file and the actually allocated buffer
+  * for it. voicebuf_size is always smaller or equal to voicefile_size  one entry of the internal queue  buflib handle to the clip data  total length of the clip  bytes that still need to be deoded  queue of scheduled clips **************** Private implementation **************** ISR (mp3_callback()) must not run during moving of the clip buffer,
+ * because the MAS may get out-of-sync  on low-mem and when the voice buffer size is not limited (i.e.
+     * on 2MB HWCODEC) we effectively own the entire buffer because
+     * the voicefile takes up all RAM. This blocks other Rockbox parts
+     * from allocating, especially during bootup. Therefore always give
+     * up the buffer and reload when clips are played back. On high-mem
+     * or when the clip buffer is limited to a few 100K this provision is
+     * not necessary.  the clip buffer isn't usable without index table  default  try to open the voice file of the selected language  voice-only entries use the second part of the table.
+           The first string comes after VOICEONLY_DELIMITER so we need to
+           substract VOICEONLY_DELIMITER + 1  must be newer than we have  table 2 is behind table 1  normal use of the first table  must be newer than we have  must be voice-only if it exceeds table 1  The first string comes after VOICEONLY_DELIMITER so we need to
+           add VOICEONLY_DELIMITER + 1  thumb clips are freed first  find the last-used clip but never consider silence  free the last one if no oldest one could be determined  need to clear the LOADED bit too (not for thumb clips)  common code for load_initial_clips() and get_clip()  explicit slot; use that  find an empty slot  no free slot in the cache table?  open error  this must not be called with LOADED_MASK set in clipsize  read error  mark as loaded  clip not included in voicefile  fetch a clip from the voice file  clip not included in voicefile  clip needs loading  free clips from cache until this one succeeds to allocate  handle should now hold a valid alloc. Load from disk
+         * and insert into cache  finally insert into metadata table  clip is in memory already; find where it was loaded  reset age  without the extra bit gives true size  nothing to do?  doesn't yield()  just allocate, populate on an as-needed basis later  the first alloc is the clip metadata table  load the voice file into the mp3 buffer  failed to open  load the header first  format check  this function caps the voicefile buffer and allocates it. It can
+ * be called after talk_init(), e.g. when the voice was temporarily disabled.
+ * The buffer size has to be capped again each time because the available
+ * audio buffer changes over time  cap to the max. number of clips or the size of the available audio
+     * buffer which we grab. We leave some to the rest of the system.
+     * While that reduces our buffer size it improves the chance that
+     * other allocs succeed without disabling voice which would require
+     * reloading the voice from disk (as we do not shrink our buffer when
+     * other code attempts new allocs these would fail)  just allocate, populate on an as-needed basis later
+     * re-create the clip buffer to ensure clip_ctx is up-to-date  make sure to have the silence clip, if available return value can
+     * be cached globally even for TALK_PROGRESSIVE_LOAD because the
+     * VOICE_PAUSE clip is specially handled  Use a static buffer to avoid difficulties with buflib during
+ * buffer passing to the voice_thread (swcodec). Clips can be played
+   in chunks so the size is not that important  shut up gcc  adjust buffer position to what has been played already  silence clip available?  called in ISR context (on HWCODEC) if mp3 data got consumed  voice_thread.c hints us how many of the buffer we provided it actually
+     * consumed. Because buffers have to be frame-aligned for speex
+     * it might be less than what we presented  we completed this  current clip not finished?  feed the next 64K-1 chunk  increment read position for the just played clip  add silence clip when queue runs empty playing a voice clip,
+             * only if the previous clip wasn't already silence  end of data  queue is not empty?  start next clip **************** Public routines **************** stop the playback and the pending clips  Had nothing to do (was frame boundary or not our clip)  reset the queue  Shutup the voice, except if force_enqueue_next is set.  schedule a clip, at the end or discard the existing queue  cut off all the pending stuff  Something is being enqueued, force_enqueue_next override is no
+       longer in effect.  safety check  check old level  space left?  queue was empty, we have to do the initial start  kickoff audio  return if a voice codec is required or not  Voice file is available  Thumbnail clips are required **************** Public implementation **************** not a new file, nothing to do  In case we have something speaking!  reset some states  reset the queue  pause clip not accessible  need to free these as their size depends on the voice file, and
+     * this function is called when the talk voice file changes  don't free thumb handle, it doesn't depend on the actual voice file
+     * and so we can re-use it if it's already allocated in any event  Now determine the maximum buffer size needed for the voicefile.
+         * The below pretends the entire voicefile would be loaded. The buffer
+         * size is eventually capped later on in load_voicefile_data()  check for the average clip size to estimate the maximum number of
+         * clips the buffer can hold  account for possible thumb clips  create buffer just for thumb clips  additionally to the clip we need a table to record the age of the clips
+     * so that, when memory is tight, only the most recently used ones are kept  compensate a bit for buflib alloc overhead.  Initialize the actual voice clip playback engine as well  close again, this was just to detect presence  somebody else claims the mp3 buffer, e.g. for regular play/record  play a voice ID from voicefile  no voicefile loaded, not an error -> pretent success  talking has been disabled  reload needed?  -1 is an indication for silence  check if this is a special ID, with a value  sign-extend the value  speak it  and stop, end of special case  not present  Speaks zero or more IDs (from an array).  Make sure the current utterance is not interrupted by the next one.  play a thumbnail from file  Returns size of spoken thumbnail, so >0 means something is spoken,
+   <=0 means something went wrong.  reload needed?  talking has been disabled  shutup now to free the thumbnail buffer  failed to open  free clips from cache until this one succeeds to allocate  ToDo: find audio, skip ID headers and trailers  Don't play missing clips  prefix thumbnail by speaking these ids, but only now
+               that we know there's actually a thumbnail to be
+               spoken.  finally insert into metadata table. thumb clips go under the
+         * VOICEONLY_DELIMITER id so the cache can distinguish them from
+         * normal clips  Play a thumbnail file  Does root end with a slash  Spell only the path component after the last slash  strip trailing slash  Play a file's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips are disabled, or as a fallback  Play a directory's .talk thumbnail, fallback to spelling the filename, or
+   go straight to spelling depending on settings.  .talk clips enabled  Either .talk clips disabled or as a fallback  Speak thumbnail for each component of a full path, again falling
+   back or going straight to spelling depending on settings.  path ought to start with /...  start of current component  end of current component  There are more slashes ahead  temporarily poke a NULL at end of component to truncate string  restore string  setup for next component  no more slashes, final component is a filename  say a numeric value, this word ordering works for english,
+   but not necessarily for other languages (e.g. german)  mille count  highest possible "-illion"  talking has been disabled  cut off all the pending stuff  special case  extract in groups of 3 digits  remove the used digits from number  digit place for next round  combination indexing  direct indexing  add billion, million, thousand  Say year like "nineteen ninety nine" instead of "one thousand 9
+   hundred ninety nine".  just say it as a regular number  Say century  as in 1900  as in 1905  sub-century year  Say time duration/interval. Input is time in seconds,
+   say hours,minutes,seconds.  strip trailing zeros from the fraction  singular/plural aware saying of a value  lookup table for the voice ID of the units  regular ID, int, signed  here come the "real" units  10^0 - 10^7  talking has been disabled  special pronounciation for year number  special case for time duration  singular?  use the singular for those units which have  special case with a "plus" before  needed for the "-0.5" corner case  say the number  say the unit, if any  Say time duration/interval. Input is time unit specifies base unit,
+   say hours,minutes,seconds, milliseconds. or any combination thereof  talking has been disabled  reload needed?  cut off all the pending stuff  spell a string  currently processed char  talking has been disabled  cut off all the pending stuff  if this grows into too many cases, I should use a table  Voice the hour  Voice the minutes  Say o'clock if the minute is 0.  Pronounce the leading 0  Voice the time in 24 hour format  Pronounce the leading 0  default 

@@ -1,0 +1,172 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 by Michael Sevakis
+ * Copyright (C) 2005 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** 64 bit clocks / word clock  EBU TX auto sync, PDIR2 fifo auto sync, IIS1 fifo auto sync  PDIR2 fifo auto sync, IIS1 fifo auto sync * Sample rates * SCLK = Fs * bit clocks per word
+ * so SCLK should be Fs * 64
+ *
+ * CLOCKSEL sets SCLK freq based on Audio CLK
+ * 0x0c SCLK = Audio CLK/2   88200 * 64 = 5644800 Hz
+ * 0x06 SCLK = Audio CLK/4   44100 * 64 = 2822400 Hz
+ * 0x04 SCLK = Audio CLK/8   22050 * 64 = 1411200 Hz
+ * 0x02 SCLK = Audio CLK/16  11025 * 64 = 705600 Hz
+ *
+ * CLSEL sets MCLK1/2 DAC freq based on XTAL freq
+ * 0x01 MCLK1/2 = XTAL freq
+ * 0x02 MCLK1/2 = XTAL/2 freq
+ *
+ * Audio CLK can be XTAL freq or XTAL/2 freq  (bit22 in PLLCR)
+ * we always set bit22 so Audio CLK is always XTAL freq
+  We run codec in master mode.
+ * Codec can reconstruct all frequencies
+ * from single 11.2896 MHz master clock
+  Lock status struct for playback and recording  apply audio settings  This clears the reset bit to enable monitoring immediately if monitoring
+   recording sources or always if playback is in progress - we might be 
+   switching samplerates on the fly  remember table entry  Reprogramming bits 15-12 requires FIFO to be in a reset
+       condition - Users Manual 17-8, Note 11  Important for TLV320 - this must happen in the correct order
+       or starting recording will sound absolutely awful once in
+       awhile - audiohw_set_frequency then coldfire_set_pllcr_audio_bits
+      Kick FIFO out of reset by writing to it  pcm_dma_apply_settings  DMA0 is mapped into vector 54 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  No bytes waiting  Enable interrupt at level 6, priority 0  Setup Coldfire I2S before initializing hardware or changing
+       other settings.  Initialize default register values.  pcm_play_dma_init * DMA ****************************************************************************
+ ** Playback DMA transfer
+ * For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  bit 14 is DMA0  Set up the DMA transfer that kicks in when the audio FIFO gets empty  Stop any DMA in progress  Set up DMA transfer   Source address       Destination address  Bytes to transfer    pcm_play_dma_start  Stops the DMA transfer and interrupt  per request and int OFF  No bytes remaining  Clear interrupt, errors, stop transfer  pcm_play_dma_stop  pause playback on current buffer  per request and int OFF  stop channel  restart playback on current buffer  everything ON  pcm_play_dma_pause  pcm_get_bytes_waiting  DMA0 Interrupt is called when the DMA has finished transfering a chunk
+   from the caller's buffer  per request and int OFF  Clear interrupt and errors  Source address  Bytes to transfer  per request and int ON  else inished playing  DMA0  Make sure interrupt doesn't change the second value after we read the
+     * first value.  pcm_play_dma_get_peak_buffer ***************************************************************************
+ ** Recording DMA transfer
+ * bit 15 is DMA1  For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  Stop any DMA in progress  Start the DMA transfer..  clear: ebu1cnew, valnogood, symbolerr, parityerr  Source address       Destination address  Bytes to transfer    pcm_rec_dma_start  per request and int OFF  Clear interrupt, errors, stop transfer  No bytes received  pcm_rec_dma_stop  DMA1 is mapped into vector 55 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  Enable interrupt at level 6, priority 1  pcm_init_recording  Disable interrupt  pcm_rec_dma_close  DMA1 Interrupt is called when the DMA has finished transfering a chunk
+   into the caller's buffer  per request and int OFF  Clear interrupt and errors  reason: symbolerr, parityerr.
+         * Ignore valnogood since several sources don't set it properly.  clear: ebu1cnew, symbolerr, parityerr  Inform PCM we have more data (or error)  Destination address  Bytes to transfer  per request and int ON  DMA1  pcm_rec_dma_get_peak_buffer **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 by Michael Sevakis
+ * Copyright (C) 2005 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** 64 bit clocks / word clock  EBU TX auto sync, PDIR2 fifo auto sync, IIS1 fifo auto sync  PDIR2 fifo auto sync, IIS1 fifo auto sync * Sample rates * SCLK = Fs * bit clocks per word
+ * so SCLK should be Fs * 64
+ *
+ * CLOCKSEL sets SCLK freq based on Audio CLK
+ * 0x0c SCLK = Audio CLK/2   88200 * 64 = 5644800 Hz
+ * 0x06 SCLK = Audio CLK/4   44100 * 64 = 2822400 Hz
+ * 0x04 SCLK = Audio CLK/8   22050 * 64 = 1411200 Hz
+ * 0x02 SCLK = Audio CLK/16  11025 * 64 = 705600 Hz
+ *
+ * CLSEL sets MCLK1/2 DAC freq based on XTAL freq
+ * 0x01 MCLK1/2 = XTAL freq
+ * 0x02 MCLK1/2 = XTAL/2 freq
+ *
+ * Audio CLK can be XTAL freq or XTAL/2 freq  (bit22 in PLLCR)
+ * we always set bit22 so Audio CLK is always XTAL freq
+  We run codec in master mode.
+ * Codec can reconstruct all frequencies
+ * from single 11.2896 MHz master clock
+  Lock status struct for playback and recording  apply audio settings  This clears the reset bit to enable monitoring immediately if monitoring
+   recording sources or always if playback is in progress - we might be 
+   switching samplerates on the fly  remember table entry  Reprogramming bits 15-12 requires FIFO to be in a reset
+       condition - Users Manual 17-8, Note 11  Important for TLV320 - this must happen in the correct order
+       or starting recording will sound absolutely awful once in
+       awhile - audiohw_set_frequency then coldfire_set_pllcr_audio_bits
+      Kick FIFO out of reset by writing to it  pcm_dma_apply_settings  DMA0 is mapped into vector 54 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  No bytes waiting  Enable interrupt at level 6, priority 0  Setup Coldfire I2S before initializing hardware or changing
+       other settings.  Initialize default register values.  pcm_play_dma_init * DMA ****************************************************************************
+ ** Playback DMA transfer
+ * For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  bit 14 is DMA0  Set up the DMA transfer that kicks in when the audio FIFO gets empty  Stop any DMA in progress  Set up DMA transfer   Source address       Destination address  Bytes to transfer    pcm_play_dma_start  Stops the DMA transfer and interrupt  per request and int OFF  No bytes remaining  Clear interrupt, errors, stop transfer  pcm_play_dma_stop  pause playback on current buffer  per request and int OFF  stop channel  restart playback on current buffer  everything ON  pcm_play_dma_pause  pcm_get_bytes_waiting  DMA0 Interrupt is called when the DMA has finished transfering a chunk
+   from the caller's buffer  per request and int OFF  Clear interrupt and errors  Source address  Bytes to transfer  per request and int ON  else inished playing  DMA0  Make sure interrupt doesn't change the second value after we read the
+     * first value.  pcm_play_dma_get_peak_buffer ***************************************************************************
+ ** Recording DMA transfer
+ * bit 15 is DMA1  For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  Stop any DMA in progress  Start the DMA transfer..  clear: ebu1cnew, valnogood, symbolerr, parityerr  Source address       Destination address  Bytes to transfer    pcm_rec_dma_start  per request and int OFF  Clear interrupt, errors, stop transfer  No bytes received  pcm_rec_dma_stop  DMA1 is mapped into vector 55 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  Enable interrupt at level 6, priority 1  pcm_init_recording  Disable interrupt  pcm_rec_dma_close  DMA1 Interrupt is called when the DMA has finished transfering a chunk
+   into the caller's buffer  per request and int OFF  Clear interrupt and errors  reason: symbolerr, parityerr.
+         * Ignore valnogood since several sources don't set it properly.  clear: ebu1cnew, symbolerr, parityerr  Inform PCM we have more data (or error)  Destination address  Bytes to transfer  per request and int ON  DMA1  pcm_rec_dma_get_peak_buffer **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 by Michael Sevakis
+ * Copyright (C) 2005 by Linus Nielsen Feltzing
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** 64 bit clocks / word clock  EBU TX auto sync, PDIR2 fifo auto sync, IIS1 fifo auto sync  PDIR2 fifo auto sync, IIS1 fifo auto sync * Sample rates * SCLK = Fs * bit clocks per word
+ * so SCLK should be Fs * 64
+ *
+ * CLOCKSEL sets SCLK freq based on Audio CLK
+ * 0x0c SCLK = Audio CLK/2   88200 * 64 = 5644800 Hz
+ * 0x06 SCLK = Audio CLK/4   44100 * 64 = 2822400 Hz
+ * 0x04 SCLK = Audio CLK/8   22050 * 64 = 1411200 Hz
+ * 0x02 SCLK = Audio CLK/16  11025 * 64 = 705600 Hz
+ *
+ * CLSEL sets MCLK1/2 DAC freq based on XTAL freq
+ * 0x01 MCLK1/2 = XTAL freq
+ * 0x02 MCLK1/2 = XTAL/2 freq
+ *
+ * Audio CLK can be XTAL freq or XTAL/2 freq  (bit22 in PLLCR)
+ * we always set bit22 so Audio CLK is always XTAL freq
+  We run codec in master mode.
+ * Codec can reconstruct all frequencies
+ * from single 11.2896 MHz master clock
+  Lock status struct for playback and recording  apply audio settings  This clears the reset bit to enable monitoring immediately if monitoring
+   recording sources or always if playback is in progress - we might be 
+   switching samplerates on the fly  remember table entry  Reprogramming bits 15-12 requires FIFO to be in a reset
+       condition - Users Manual 17-8, Note 11  Important for TLV320 - this must happen in the correct order
+       or starting recording will sound absolutely awful once in
+       awhile - audiohw_set_frequency then coldfire_set_pllcr_audio_bits
+      Kick FIFO out of reset by writing to it  pcm_dma_apply_settings  DMA0 is mapped into vector 54 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  No bytes waiting  Enable interrupt at level 6, priority 0  Setup Coldfire I2S before initializing hardware or changing
+       other settings.  Initialize default register values.  pcm_play_dma_init * DMA ****************************************************************************
+ ** Playback DMA transfer
+ * For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  bit 14 is DMA0  Set up the DMA transfer that kicks in when the audio FIFO gets empty  Stop any DMA in progress  Set up DMA transfer   Source address       Destination address  Bytes to transfer    pcm_play_dma_start  Stops the DMA transfer and interrupt  per request and int OFF  No bytes remaining  Clear interrupt, errors, stop transfer  pcm_play_dma_stop  pause playback on current buffer  per request and int OFF  stop channel  restart playback on current buffer  everything ON  pcm_play_dma_pause  pcm_get_bytes_waiting  DMA0 Interrupt is called when the DMA has finished transfering a chunk
+   from the caller's buffer  per request and int OFF  Clear interrupt and errors  Source address  Bytes to transfer  per request and int ON  else inished playing  DMA0  Make sure interrupt doesn't change the second value after we read the
+     * first value.  pcm_play_dma_get_peak_buffer ***************************************************************************
+ ** Recording DMA transfer
+ * bit 15 is DMA1  For the locks, DMA interrupt must be disabled when manipulating the lock
+   if the handler ever calls these - right now things are arranged so it
+   doesn't  Stop any DMA in progress  Start the DMA transfer..  clear: ebu1cnew, valnogood, symbolerr, parityerr  Source address       Destination address  Bytes to transfer    pcm_rec_dma_start  per request and int OFF  Clear interrupt, errors, stop transfer  No bytes received  pcm_rec_dma_stop  DMA1 is mapped into vector 55 in system.c  DMA0Req = PDOR3, DMA1Req = PDIR2  Enable interrupt at level 6, priority 1  pcm_init_recording  Disable interrupt  pcm_rec_dma_close  DMA1 Interrupt is called when the DMA has finished transfering a chunk
+   into the caller's buffer  per request and int OFF  Clear interrupt and errors  reason: symbolerr, parityerr.
+         * Ignore valnogood since several sources don't set it properly.  clear: ebu1cnew, symbolerr, parityerr  Inform PCM we have more data (or error)  Destination address  Bytes to transfer  per request and int ON  DMA1  pcm_rec_dma_get_peak_buffer 

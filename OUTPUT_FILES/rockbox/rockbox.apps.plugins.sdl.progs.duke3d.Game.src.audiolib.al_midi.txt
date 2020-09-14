@@ -1,0 +1,586 @@
+
+Copyright (C) 1994-1995 Apogee Software, Ltd.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+*********************************************************************
+   module: AL_MIDI.C
+
+   author: James R. Dose
+   date:   April 1, 1994
+
+   Low level routines to support General MIDI music on Adlib compatible
+   cards.
+
+   (c) Copyright 1994 James R. Dose.  All Rights Reserved.
+*********************************************************************#include <math.h> Pitch tablestatic unsigned NotePitch[ FINETUNE_MAX + 1 ][ 12 ] =   {      { C, C_SHARP, D, D_SHARP, E, F, F_SHARP, G, G_SHARP, A, A_SHARP, B },   }; Slot numbers as a function of the voice and the operator. ( melodic only) voice 0 1 2 3 4 5 6 7 8 This table gives the offset of each slot within the chip. offset = fn( slot)*********************************************************************
+
+   Memory locked functions:
+
+*********************************************************************---------------------------------------------------------------------
+   Function: AL_SendOutputToPort
+
+   Sends data to the Adlib using a specified port.
+---------------------------------------------------------------------   for( delay = 2; delay > 0 ; delay-- )   for( delay = 35; delay > 0 ; delay-- )   for( delay = 2; delay > 0 ; delay-- )---------------------------------------------------------------------
+   Function: AL_SendOutput
+
+   Sends data to the Adlib.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoiceTimbre
+
+   Programs the specified voice's timbre.
+--------------------------------------------------------------------- Let voice clear the release Let voice clear the release---------------------------------------------------------------------
+   Function: AL_SetVoiceVolume
+
+   Sets the volume of the specified voice.
+--------------------------------------------------------------------- amplitude Check if this timbre is Additive amplitude Set left channel volume Set right channel volume Check if this timbre is Additive amplitude Set left channel volume Set right channel volume---------------------------------------------------------------------
+   Function: AL_AllocVoice
+
+   Retrieves a free voice from the voice pool.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_GetVoice
+
+   Determines which voice is associated with a specified note and
+   MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoicePitch
+
+   Programs the pitch of the specified voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelVolume
+
+   Sets the volume of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelPan
+
+   Sets the pan position of the specified MIDI channel.
+--------------------------------------------------------------------- Don't pan drum sounds---------------------------------------------------------------------
+   Function: AL_SetChannelDetune
+
+   Sets the stereo voice detune of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ResetVoices
+
+   Sets all voice info to the default state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_CalcPitchInfo
+
+   Calculates the pitch table.
+---------------------------------------------------------------------   int    finetune;   double detune;   for( finetune = 1; finetune <= FINETUNE_MAX; finetune++ )      {      detune = pow( 2, ( double )finetune / ( 12.0 * FINETUNE_RANGE ) );      for( note = 0; note < 12; note++ )         {         NotePitch[ finetune ][ note ] = ( ( double )NotePitch[ 0 ][ note ] * detune );         }      }---------------------------------------------------------------------
+   Function: AL_FlushCard
+
+   Sets all voices to a known (quiet) state.
+--------------------------------------------------------------------- Set the envelope to be fast and quiet Maximum attenuation---------------------------------------------------------------------
+   Function: AL_StereoOn
+
+   Sets the card send info in stereo.
+--------------------------------------------------------------------- Set card to OPL3 operation Set card to OPL3 operation---------------------------------------------------------------------
+   Function: AL_StereoOff
+
+   Sets the card send info in mono.
+--------------------------------------------------------------------- Set card back to OPL2 operation Set card back to OPL2 operation---------------------------------------------------------------------
+   Function: AL_Reset
+
+   Sets the card to a known (quiet) state.
+--------------------------------------------------------------------- Set the values: AM Depth, VIB depth & Rhythm---------------------------------------------------------------------
+   Function: AL_ReserveVoice
+
+   Marks a voice as being not available for use.  This allows the
+   driver to use the rest of the card while another driver uses the
+   reserved voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ReleaseVoice
+
+   Marks a previously reserved voice as being free to use.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_NoteOff
+
+   Turns off a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_NoteOn
+
+   Plays a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_AllNotesOff
+
+   Turns off all currently playing voices.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ControlChange
+
+   Sets the value of a controller on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_ProgramChange
+
+   Selects the instrument to use on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_SetPitchBend
+
+   Sets the pitch bend amount on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_DetectFM
+
+   Determines if an Adlib compatible card is installed in the machine.
+--------------------------------------------------------------------- Reset T1 & T2 Reset IRQ Set timer 1 Start timer 1---------------------------------------------------------------------
+   Function: AL_LockEnd
+
+   Used for determining the length of the functions to lock in memory.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Shutdown
+
+   Ends use of the sound card and resets it to a quiet state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetMaxMidiChannel
+
+   Sets the maximum MIDI channel that FM cards respond to.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Init
+
+   Begins use of the sound card.
+--------------------------------------------------------------------- Temporarally commented out for ROTT. Stereo FM seems to take too long on some computers and causes the mouse driver to miss interrupts.
+   switch( soundcard )
+      {
+      case ProAudioSpectrum :
+      case SoundMan16 :
+         AL_OPL3 = TRUE;
+         AL_Stereo = TRUE;
+         AL_LeftPort  = 0x388;
+         AL_RightPort = 0x38A;
+         break;
+
+      case SoundBlaster :
+         status = BLASTER_GetCardSettings( &Blaster );
+         if ( status != BLASTER_Ok )
+            {
+            status = BLASTER_GetEnv( &Blaster );
+            if ( status != BLASTER_Ok )
+               {
+               break;
+               }
+            }
+
+         switch( Blaster.Type )
+            {
+            case SBPro2 :
+            case SB16 :
+               AL_OPL3 = TRUE;
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+
+            case SBPro :
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+            }
+         break;
+      }
+---------------------------------------------------------------------
+   Function: AL_RegisterTimbreBank
+
+   Copies user supplied timbres over the default timbre bank.
+---------------------------------------------------------------------
+Copyright (C) 1994-1995 Apogee Software, Ltd.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+*********************************************************************
+   module: AL_MIDI.C
+
+   author: James R. Dose
+   date:   April 1, 1994
+
+   Low level routines to support General MIDI music on Adlib compatible
+   cards.
+
+   (c) Copyright 1994 James R. Dose.  All Rights Reserved.
+*********************************************************************#include <math.h> Pitch tablestatic unsigned NotePitch[ FINETUNE_MAX + 1 ][ 12 ] =   {      { C, C_SHARP, D, D_SHARP, E, F, F_SHARP, G, G_SHARP, A, A_SHARP, B },   }; Slot numbers as a function of the voice and the operator. ( melodic only) voice 0 1 2 3 4 5 6 7 8 This table gives the offset of each slot within the chip. offset = fn( slot)*********************************************************************
+
+   Memory locked functions:
+
+*********************************************************************---------------------------------------------------------------------
+   Function: AL_SendOutputToPort
+
+   Sends data to the Adlib using a specified port.
+---------------------------------------------------------------------   for( delay = 2; delay > 0 ; delay-- )   for( delay = 35; delay > 0 ; delay-- )   for( delay = 2; delay > 0 ; delay-- )---------------------------------------------------------------------
+   Function: AL_SendOutput
+
+   Sends data to the Adlib.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoiceTimbre
+
+   Programs the specified voice's timbre.
+--------------------------------------------------------------------- Let voice clear the release Let voice clear the release---------------------------------------------------------------------
+   Function: AL_SetVoiceVolume
+
+   Sets the volume of the specified voice.
+--------------------------------------------------------------------- amplitude Check if this timbre is Additive amplitude Set left channel volume Set right channel volume Check if this timbre is Additive amplitude Set left channel volume Set right channel volume---------------------------------------------------------------------
+   Function: AL_AllocVoice
+
+   Retrieves a free voice from the voice pool.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_GetVoice
+
+   Determines which voice is associated with a specified note and
+   MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoicePitch
+
+   Programs the pitch of the specified voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelVolume
+
+   Sets the volume of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelPan
+
+   Sets the pan position of the specified MIDI channel.
+--------------------------------------------------------------------- Don't pan drum sounds---------------------------------------------------------------------
+   Function: AL_SetChannelDetune
+
+   Sets the stereo voice detune of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ResetVoices
+
+   Sets all voice info to the default state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_CalcPitchInfo
+
+   Calculates the pitch table.
+---------------------------------------------------------------------   int    finetune;   double detune;   for( finetune = 1; finetune <= FINETUNE_MAX; finetune++ )      {      detune = pow( 2, ( double )finetune / ( 12.0 * FINETUNE_RANGE ) );      for( note = 0; note < 12; note++ )         {         NotePitch[ finetune ][ note ] = ( ( double )NotePitch[ 0 ][ note ] * detune );         }      }---------------------------------------------------------------------
+   Function: AL_FlushCard
+
+   Sets all voices to a known (quiet) state.
+--------------------------------------------------------------------- Set the envelope to be fast and quiet Maximum attenuation---------------------------------------------------------------------
+   Function: AL_StereoOn
+
+   Sets the card send info in stereo.
+--------------------------------------------------------------------- Set card to OPL3 operation Set card to OPL3 operation---------------------------------------------------------------------
+   Function: AL_StereoOff
+
+   Sets the card send info in mono.
+--------------------------------------------------------------------- Set card back to OPL2 operation Set card back to OPL2 operation---------------------------------------------------------------------
+   Function: AL_Reset
+
+   Sets the card to a known (quiet) state.
+--------------------------------------------------------------------- Set the values: AM Depth, VIB depth & Rhythm---------------------------------------------------------------------
+   Function: AL_ReserveVoice
+
+   Marks a voice as being not available for use.  This allows the
+   driver to use the rest of the card while another driver uses the
+   reserved voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ReleaseVoice
+
+   Marks a previously reserved voice as being free to use.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_NoteOff
+
+   Turns off a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_NoteOn
+
+   Plays a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_AllNotesOff
+
+   Turns off all currently playing voices.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ControlChange
+
+   Sets the value of a controller on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_ProgramChange
+
+   Selects the instrument to use on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_SetPitchBend
+
+   Sets the pitch bend amount on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_DetectFM
+
+   Determines if an Adlib compatible card is installed in the machine.
+--------------------------------------------------------------------- Reset T1 & T2 Reset IRQ Set timer 1 Start timer 1---------------------------------------------------------------------
+   Function: AL_LockEnd
+
+   Used for determining the length of the functions to lock in memory.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Shutdown
+
+   Ends use of the sound card and resets it to a quiet state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetMaxMidiChannel
+
+   Sets the maximum MIDI channel that FM cards respond to.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Init
+
+   Begins use of the sound card.
+--------------------------------------------------------------------- Temporarally commented out for ROTT. Stereo FM seems to take too long on some computers and causes the mouse driver to miss interrupts.
+   switch( soundcard )
+      {
+      case ProAudioSpectrum :
+      case SoundMan16 :
+         AL_OPL3 = TRUE;
+         AL_Stereo = TRUE;
+         AL_LeftPort  = 0x388;
+         AL_RightPort = 0x38A;
+         break;
+
+      case SoundBlaster :
+         status = BLASTER_GetCardSettings( &Blaster );
+         if ( status != BLASTER_Ok )
+            {
+            status = BLASTER_GetEnv( &Blaster );
+            if ( status != BLASTER_Ok )
+               {
+               break;
+               }
+            }
+
+         switch( Blaster.Type )
+            {
+            case SBPro2 :
+            case SB16 :
+               AL_OPL3 = TRUE;
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+
+            case SBPro :
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+            }
+         break;
+      }
+---------------------------------------------------------------------
+   Function: AL_RegisterTimbreBank
+
+   Copies user supplied timbres over the default timbre bank.
+---------------------------------------------------------------------
+Copyright (C) 1994-1995 Apogee Software, Ltd.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+*********************************************************************
+   module: AL_MIDI.C
+
+   author: James R. Dose
+   date:   April 1, 1994
+
+   Low level routines to support General MIDI music on Adlib compatible
+   cards.
+
+   (c) Copyright 1994 James R. Dose.  All Rights Reserved.
+*********************************************************************#include <math.h> Pitch tablestatic unsigned NotePitch[ FINETUNE_MAX + 1 ][ 12 ] =   {      { C, C_SHARP, D, D_SHARP, E, F, F_SHARP, G, G_SHARP, A, A_SHARP, B },   }; Slot numbers as a function of the voice and the operator. ( melodic only) voice 0 1 2 3 4 5 6 7 8 This table gives the offset of each slot within the chip. offset = fn( slot)*********************************************************************
+
+   Memory locked functions:
+
+*********************************************************************---------------------------------------------------------------------
+   Function: AL_SendOutputToPort
+
+   Sends data to the Adlib using a specified port.
+---------------------------------------------------------------------   for( delay = 2; delay > 0 ; delay-- )   for( delay = 35; delay > 0 ; delay-- )   for( delay = 2; delay > 0 ; delay-- )---------------------------------------------------------------------
+   Function: AL_SendOutput
+
+   Sends data to the Adlib.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoiceTimbre
+
+   Programs the specified voice's timbre.
+--------------------------------------------------------------------- Let voice clear the release Let voice clear the release---------------------------------------------------------------------
+   Function: AL_SetVoiceVolume
+
+   Sets the volume of the specified voice.
+--------------------------------------------------------------------- amplitude Check if this timbre is Additive amplitude Set left channel volume Set right channel volume Check if this timbre is Additive amplitude Set left channel volume Set right channel volume---------------------------------------------------------------------
+   Function: AL_AllocVoice
+
+   Retrieves a free voice from the voice pool.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_GetVoice
+
+   Determines which voice is associated with a specified note and
+   MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetVoicePitch
+
+   Programs the pitch of the specified voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelVolume
+
+   Sets the volume of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetChannelPan
+
+   Sets the pan position of the specified MIDI channel.
+--------------------------------------------------------------------- Don't pan drum sounds---------------------------------------------------------------------
+   Function: AL_SetChannelDetune
+
+   Sets the stereo voice detune of the specified MIDI channel.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ResetVoices
+
+   Sets all voice info to the default state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_CalcPitchInfo
+
+   Calculates the pitch table.
+---------------------------------------------------------------------   int    finetune;   double detune;   for( finetune = 1; finetune <= FINETUNE_MAX; finetune++ )      {      detune = pow( 2, ( double )finetune / ( 12.0 * FINETUNE_RANGE ) );      for( note = 0; note < 12; note++ )         {         NotePitch[ finetune ][ note ] = ( ( double )NotePitch[ 0 ][ note ] * detune );         }      }---------------------------------------------------------------------
+   Function: AL_FlushCard
+
+   Sets all voices to a known (quiet) state.
+--------------------------------------------------------------------- Set the envelope to be fast and quiet Maximum attenuation---------------------------------------------------------------------
+   Function: AL_StereoOn
+
+   Sets the card send info in stereo.
+--------------------------------------------------------------------- Set card to OPL3 operation Set card to OPL3 operation---------------------------------------------------------------------
+   Function: AL_StereoOff
+
+   Sets the card send info in mono.
+--------------------------------------------------------------------- Set card back to OPL2 operation Set card back to OPL2 operation---------------------------------------------------------------------
+   Function: AL_Reset
+
+   Sets the card to a known (quiet) state.
+--------------------------------------------------------------------- Set the values: AM Depth, VIB depth & Rhythm---------------------------------------------------------------------
+   Function: AL_ReserveVoice
+
+   Marks a voice as being not available for use.  This allows the
+   driver to use the rest of the card while another driver uses the
+   reserved voice.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ReleaseVoice
+
+   Marks a previously reserved voice as being free to use.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_NoteOff
+
+   Turns off a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_NoteOn
+
+   Plays a note on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_AllNotesOff
+
+   Turns off all currently playing voices.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_ControlChange
+
+   Sets the value of a controller on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_ProgramChange
+
+   Selects the instrument to use on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_SetPitchBend
+
+   Sets the pitch bend amount on the specified MIDI channel.
+--------------------------------------------------------------------- We only play channels 1 through 10---------------------------------------------------------------------
+   Function: AL_DetectFM
+
+   Determines if an Adlib compatible card is installed in the machine.
+--------------------------------------------------------------------- Reset T1 & T2 Reset IRQ Set timer 1 Start timer 1---------------------------------------------------------------------
+   Function: AL_LockEnd
+
+   Used for determining the length of the functions to lock in memory.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Shutdown
+
+   Ends use of the sound card and resets it to a quiet state.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_SetMaxMidiChannel
+
+   Sets the maximum MIDI channel that FM cards respond to.
+------------------------------------------------------------------------------------------------------------------------------------------
+   Function: AL_Init
+
+   Begins use of the sound card.
+--------------------------------------------------------------------- Temporarally commented out for ROTT. Stereo FM seems to take too long on some computers and causes the mouse driver to miss interrupts.
+   switch( soundcard )
+      {
+      case ProAudioSpectrum :
+      case SoundMan16 :
+         AL_OPL3 = TRUE;
+         AL_Stereo = TRUE;
+         AL_LeftPort  = 0x388;
+         AL_RightPort = 0x38A;
+         break;
+
+      case SoundBlaster :
+         status = BLASTER_GetCardSettings( &Blaster );
+         if ( status != BLASTER_Ok )
+            {
+            status = BLASTER_GetEnv( &Blaster );
+            if ( status != BLASTER_Ok )
+               {
+               break;
+               }
+            }
+
+         switch( Blaster.Type )
+            {
+            case SBPro2 :
+            case SB16 :
+               AL_OPL3 = TRUE;
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+
+            case SBPro :
+               AL_Stereo = TRUE;
+               AL_LeftPort  = Blaster.Address;
+               AL_RightPort = Blaster.Address + 2;
+               break;
+            }
+         break;
+      }
+---------------------------------------------------------------------
+   Function: AL_RegisterTimbreBank
+
+   Copies user supplied timbres over the default timbre bank.
+---------------------------------------------------------------------

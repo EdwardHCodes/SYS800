@@ -1,0 +1,298 @@
+ -*- indent-tabs-mode: nil; tab-width: 1000 -*- 
+ * palisade.c: Nikoli's `Five Cells' puzzle.
+ *
+ * See http://nikoli.co.jp/en/puzzles/five_cells.html
+  TODO:
+ *
+ * - better solver: implement the sketched-out deductions
+ *
+ * - improve the victory flash?
+ *    - the LINE_NOs look ugly against COL_FLASH.
+ *    - white-blink the edges (instead), a la loopy?
+  length w*h  I definitely want 5x5n5 since that gives "Five Cells" its name.
+     * But how about the others?  By which criteria do I choose?  +---+  <<  The one possible domino (up to symmetry).      +---+---+
+ * | 3 |                                                     | 3 | 3 |
+ * |   |   If two dominos are adjacent as depicted here  >>  +---+---+
+ * | 3 |   then it's ambiguous whether the edge between      | 3 | 3 |
+ * +---+   the dominos is horizontal or vertical.            +---+---+
+  succeed partial validation  MAYBE FIXME: we (just?) don't have the UI for winning these.  or wh % k != 0  succeed full validation  --- Solver -------------------------------------------------------  the solver may write at will to these arrays, but shouldn't free them  it's up to the client to dup/free as needed  also in shared_state  also in shared_state  also in game_state  particular to the solver  Deductions:
+ *
+ * - If two adjacent clues do not have a border between them, this
+ *   gives a lower limit on the size of their region (which is also an
+ *   upper limit if both clues are 3).  Rule out any non-border which
+ *   would make its region either too large or too small.
+ *
+ * - If a clue, k, is adjacent to k borders or (4 - k) non-borders,
+ *   the remaining edges incident to the clue are readily decided.
+ *
+ * - If a region has only one other region (e.g. square) to grow into
+ *   and it's not of full size yet, grow it into that one region.
+ *
+ * - If two regions are adjacent and their combined size would be too
+ *   large, put an edge between them.
+ *
+ * - If a border is adjacent to two non-borders, its last vertex-mate
+ *   must also be a border.  If a maybe-border is adjacent to three
+ *   nonborders, the maybe-border is a non-border.
+ *
+ * - If a clue square is adjacent to several squares belonging to the
+ *   same region, and enabling (disabling) those borders would violate
+ *   the clue, those borders must be disabled (enabled).
+ *
+ * - If there's a path crossing only non-borders between two squares,
+ *   the maybe-border between them is a non-border.
+ *   (This is implicitly computed in the dsf representation)
+  TODO deductions:
+ *
+ * If a vertex is adjacent to a LINE_YES and (4-3)*LINE_NO, at least
+ * one of the last two edges are LINE_YES.  If they're adjacent to a
+ * 1, then the other two edges incident to that 1 are LINE_NO.
+ *
+ * For each square: set all as unknown, then for each k-omino and each
+ * way of placing it on that square, if that way is consistent with
+ * the board, mark its edges and interior as possible LINE_YES and
+ * LINE_NO, respectively.  When all k-ominos are through, see what
+ * isn't possible and remove those impossibilities from the board.
+ * (Sounds pretty nasty for k > 4 or so.)
+ *
+ * A black-bordered subregion must have a size divisible by k.  So,
+ * draw a graph with one node per dsf component and edges between
+ * those dsf components which have adjacent squares.  Identify cut
+ * vertices and edges.  If a cut-vertex-delimited component contains a
+ * number of squares not divisible by k, cut vertex not included, then
+ * the cut vertex must belong to the component.  If it has exactly one
+ * edge _out_ of the component, the line(s) corresponding to that edge
+ * are all LINE_YES (i.e. a BORDER()).
+ * (This sounds complicated, but visually it is rather easy.)
+ *
+ * [Look at loopy and see how the at-least/-most k out of m edges
+ * thing is done.  See how it is propagated across multiple squares.]
+  bitcount[x & BORDER_MASK] == number of enabled borders  the ordering is important: disconnected works for invalid
+     * squares (i.e. out of bounds), connected doesn't.  If i is connected to j and i has borders with p of the
+     * remaining three squares and j with q of the remaining three
+     * squares, then the region has size at least 1+(3-p) + 1+(3-q).
+     * If p = q = 3 then the region has size exactly 2.  changed = true, but this is a one-shot...  ^^^ bounds checking before ^^^^^  only one place for i to grow  for each vertex  feels hacky: I align these with BORDER_[U0 R1 D2 L3]  for each edge adjacent to the vertex  if a square is adjacent to two connected squares, the two
+     * borders (i,j) and (i,k) are either both on or both off.  don't need it otherwise  build connected components in `dsf', along the lines of `borders'.  check: UNVISITED and dsf.c match up 
+     * A game is solved if:
+     *
+     *  - the borders drawn on the grid divide it into connected
+     *    components such that every square is in a component of the
+     *    correct size
+     *  - the borders also satisfy the clue set
+     
+     * ... and thirdly:
+     *
+     *  - there are no *stray* borders, in that every border is
+     *    actually part of the division between two components.
+     *    Otherwise you could cheat by finding a subdivision which did
+     *    not *exceed* any clue square's counter, and then adding a
+     *    few extra edges.
+      idempotent  --- Generator ----------------------------------------------------  strip away unnecssary clues  nop  ... or 6, 7, 8, 9 :-)  struct copy  turn into sensible ASCII  compile-time-assert (borderflag is-a-kind-of char).
+         *
+         * depends on zero-size arrays being disallowed.  GCC says
+         * ISO C forbids this, pointing to [-Werror=edantic].  Also,
+         * it depends on type-checking of (obviously) dead code.  we could at least in principle put this anywhere, but it
+         * seems silly to not put it where the assumption is used.  reset  find edge closest to click point  there's not exactly one such edge  how the ... ?!  CURSOR_SELECT or CURSOR_SELECT2 tells us to toggle whether
+         * the button press should be interpreted as having CTRL or
+         * shift pressed along with it, respectively.  leaks `ret', then we die  leaks `ret', then we die  --- Drawing routines ---------------------------------------------  black  red  yellow  BIT( 8)  BIT( 9)  BIT(10)  BIT(11)  {  }  border errors  we draw each border twice, except the outermost
+                 * big border, so we have to check for errors on
+                 * both sides of each border. region too large  region too small  dangling borders within a single region  we know it's a single region because there's a
+                      * path crossing no border from i to ii...  or because any such border would be an error  placate optimiser  7mm, like loopy  game_request_keys  wants_statusbar  flags  -*- indent-tabs-mode: nil; tab-width: 1000 -*- 
+ * palisade.c: Nikoli's `Five Cells' puzzle.
+ *
+ * See http://nikoli.co.jp/en/puzzles/five_cells.html
+  TODO:
+ *
+ * - better solver: implement the sketched-out deductions
+ *
+ * - improve the victory flash?
+ *    - the LINE_NOs look ugly against COL_FLASH.
+ *    - white-blink the edges (instead), a la loopy?
+  length w*h  I definitely want 5x5n5 since that gives "Five Cells" its name.
+     * But how about the others?  By which criteria do I choose?  +---+  <<  The one possible domino (up to symmetry).      +---+---+
+ * | 3 |                                                     | 3 | 3 |
+ * |   |   If two dominos are adjacent as depicted here  >>  +---+---+
+ * | 3 |   then it's ambiguous whether the edge between      | 3 | 3 |
+ * +---+   the dominos is horizontal or vertical.            +---+---+
+  succeed partial validation  MAYBE FIXME: we (just?) don't have the UI for winning these.  or wh % k != 0  succeed full validation  --- Solver -------------------------------------------------------  the solver may write at will to these arrays, but shouldn't free them  it's up to the client to dup/free as needed  also in shared_state  also in shared_state  also in game_state  particular to the solver  Deductions:
+ *
+ * - If two adjacent clues do not have a border between them, this
+ *   gives a lower limit on the size of their region (which is also an
+ *   upper limit if both clues are 3).  Rule out any non-border which
+ *   would make its region either too large or too small.
+ *
+ * - If a clue, k, is adjacent to k borders or (4 - k) non-borders,
+ *   the remaining edges incident to the clue are readily decided.
+ *
+ * - If a region has only one other region (e.g. square) to grow into
+ *   and it's not of full size yet, grow it into that one region.
+ *
+ * - If two regions are adjacent and their combined size would be too
+ *   large, put an edge between them.
+ *
+ * - If a border is adjacent to two non-borders, its last vertex-mate
+ *   must also be a border.  If a maybe-border is adjacent to three
+ *   nonborders, the maybe-border is a non-border.
+ *
+ * - If a clue square is adjacent to several squares belonging to the
+ *   same region, and enabling (disabling) those borders would violate
+ *   the clue, those borders must be disabled (enabled).
+ *
+ * - If there's a path crossing only non-borders between two squares,
+ *   the maybe-border between them is a non-border.
+ *   (This is implicitly computed in the dsf representation)
+  TODO deductions:
+ *
+ * If a vertex is adjacent to a LINE_YES and (4-3)*LINE_NO, at least
+ * one of the last two edges are LINE_YES.  If they're adjacent to a
+ * 1, then the other two edges incident to that 1 are LINE_NO.
+ *
+ * For each square: set all as unknown, then for each k-omino and each
+ * way of placing it on that square, if that way is consistent with
+ * the board, mark its edges and interior as possible LINE_YES and
+ * LINE_NO, respectively.  When all k-ominos are through, see what
+ * isn't possible and remove those impossibilities from the board.
+ * (Sounds pretty nasty for k > 4 or so.)
+ *
+ * A black-bordered subregion must have a size divisible by k.  So,
+ * draw a graph with one node per dsf component and edges between
+ * those dsf components which have adjacent squares.  Identify cut
+ * vertices and edges.  If a cut-vertex-delimited component contains a
+ * number of squares not divisible by k, cut vertex not included, then
+ * the cut vertex must belong to the component.  If it has exactly one
+ * edge _out_ of the component, the line(s) corresponding to that edge
+ * are all LINE_YES (i.e. a BORDER()).
+ * (This sounds complicated, but visually it is rather easy.)
+ *
+ * [Look at loopy and see how the at-least/-most k out of m edges
+ * thing is done.  See how it is propagated across multiple squares.]
+  bitcount[x & BORDER_MASK] == number of enabled borders  the ordering is important: disconnected works for invalid
+     * squares (i.e. out of bounds), connected doesn't.  If i is connected to j and i has borders with p of the
+     * remaining three squares and j with q of the remaining three
+     * squares, then the region has size at least 1+(3-p) + 1+(3-q).
+     * If p = q = 3 then the region has size exactly 2.  changed = true, but this is a one-shot...  ^^^ bounds checking before ^^^^^  only one place for i to grow  for each vertex  feels hacky: I align these with BORDER_[U0 R1 D2 L3]  for each edge adjacent to the vertex  if a square is adjacent to two connected squares, the two
+     * borders (i,j) and (i,k) are either both on or both off.  don't need it otherwise  build connected components in `dsf', along the lines of `borders'.  check: UNVISITED and dsf.c match up 
+     * A game is solved if:
+     *
+     *  - the borders drawn on the grid divide it into connected
+     *    components such that every square is in a component of the
+     *    correct size
+     *  - the borders also satisfy the clue set
+     
+     * ... and thirdly:
+     *
+     *  - there are no *stray* borders, in that every border is
+     *    actually part of the division between two components.
+     *    Otherwise you could cheat by finding a subdivision which did
+     *    not *exceed* any clue square's counter, and then adding a
+     *    few extra edges.
+      idempotent  --- Generator ----------------------------------------------------  strip away unnecssary clues  nop  ... or 6, 7, 8, 9 :-)  struct copy  turn into sensible ASCII  compile-time-assert (borderflag is-a-kind-of char).
+         *
+         * depends on zero-size arrays being disallowed.  GCC says
+         * ISO C forbids this, pointing to [-Werror=edantic].  Also,
+         * it depends on type-checking of (obviously) dead code.  we could at least in principle put this anywhere, but it
+         * seems silly to not put it where the assumption is used.  reset  find edge closest to click point  there's not exactly one such edge  how the ... ?!  CURSOR_SELECT or CURSOR_SELECT2 tells us to toggle whether
+         * the button press should be interpreted as having CTRL or
+         * shift pressed along with it, respectively.  leaks `ret', then we die  leaks `ret', then we die  --- Drawing routines ---------------------------------------------  black  red  yellow  BIT( 8)  BIT( 9)  BIT(10)  BIT(11)  {  }  border errors  we draw each border twice, except the outermost
+                 * big border, so we have to check for errors on
+                 * both sides of each border. region too large  region too small  dangling borders within a single region  we know it's a single region because there's a
+                      * path crossing no border from i to ii...  or because any such border would be an error  placate optimiser  7mm, like loopy  game_request_keys  wants_statusbar  flags  -*- indent-tabs-mode: nil; tab-width: 1000 -*- 
+ * palisade.c: Nikoli's `Five Cells' puzzle.
+ *
+ * See http://nikoli.co.jp/en/puzzles/five_cells.html
+  TODO:
+ *
+ * - better solver: implement the sketched-out deductions
+ *
+ * - improve the victory flash?
+ *    - the LINE_NOs look ugly against COL_FLASH.
+ *    - white-blink the edges (instead), a la loopy?
+  length w*h  I definitely want 5x5n5 since that gives "Five Cells" its name.
+     * But how about the others?  By which criteria do I choose?  +---+  <<  The one possible domino (up to symmetry).      +---+---+
+ * | 3 |                                                     | 3 | 3 |
+ * |   |   If two dominos are adjacent as depicted here  >>  +---+---+
+ * | 3 |   then it's ambiguous whether the edge between      | 3 | 3 |
+ * +---+   the dominos is horizontal or vertical.            +---+---+
+  succeed partial validation  MAYBE FIXME: we (just?) don't have the UI for winning these.  or wh % k != 0  succeed full validation  --- Solver -------------------------------------------------------  the solver may write at will to these arrays, but shouldn't free them  it's up to the client to dup/free as needed  also in shared_state  also in shared_state  also in game_state  particular to the solver  Deductions:
+ *
+ * - If two adjacent clues do not have a border between them, this
+ *   gives a lower limit on the size of their region (which is also an
+ *   upper limit if both clues are 3).  Rule out any non-border which
+ *   would make its region either too large or too small.
+ *
+ * - If a clue, k, is adjacent to k borders or (4 - k) non-borders,
+ *   the remaining edges incident to the clue are readily decided.
+ *
+ * - If a region has only one other region (e.g. square) to grow into
+ *   and it's not of full size yet, grow it into that one region.
+ *
+ * - If two regions are adjacent and their combined size would be too
+ *   large, put an edge between them.
+ *
+ * - If a border is adjacent to two non-borders, its last vertex-mate
+ *   must also be a border.  If a maybe-border is adjacent to three
+ *   nonborders, the maybe-border is a non-border.
+ *
+ * - If a clue square is adjacent to several squares belonging to the
+ *   same region, and enabling (disabling) those borders would violate
+ *   the clue, those borders must be disabled (enabled).
+ *
+ * - If there's a path crossing only non-borders between two squares,
+ *   the maybe-border between them is a non-border.
+ *   (This is implicitly computed in the dsf representation)
+  TODO deductions:
+ *
+ * If a vertex is adjacent to a LINE_YES and (4-3)*LINE_NO, at least
+ * one of the last two edges are LINE_YES.  If they're adjacent to a
+ * 1, then the other two edges incident to that 1 are LINE_NO.
+ *
+ * For each square: set all as unknown, then for each k-omino and each
+ * way of placing it on that square, if that way is consistent with
+ * the board, mark its edges and interior as possible LINE_YES and
+ * LINE_NO, respectively.  When all k-ominos are through, see what
+ * isn't possible and remove those impossibilities from the board.
+ * (Sounds pretty nasty for k > 4 or so.)
+ *
+ * A black-bordered subregion must have a size divisible by k.  So,
+ * draw a graph with one node per dsf component and edges between
+ * those dsf components which have adjacent squares.  Identify cut
+ * vertices and edges.  If a cut-vertex-delimited component contains a
+ * number of squares not divisible by k, cut vertex not included, then
+ * the cut vertex must belong to the component.  If it has exactly one
+ * edge _out_ of the component, the line(s) corresponding to that edge
+ * are all LINE_YES (i.e. a BORDER()).
+ * (This sounds complicated, but visually it is rather easy.)
+ *
+ * [Look at loopy and see how the at-least/-most k out of m edges
+ * thing is done.  See how it is propagated across multiple squares.]
+  bitcount[x & BORDER_MASK] == number of enabled borders  the ordering is important: disconnected works for invalid
+     * squares (i.e. out of bounds), connected doesn't.  If i is connected to j and i has borders with p of the
+     * remaining three squares and j with q of the remaining three
+     * squares, then the region has size at least 1+(3-p) + 1+(3-q).
+     * If p = q = 3 then the region has size exactly 2.  changed = true, but this is a one-shot...  ^^^ bounds checking before ^^^^^  only one place for i to grow  for each vertex  feels hacky: I align these with BORDER_[U0 R1 D2 L3]  for each edge adjacent to the vertex  if a square is adjacent to two connected squares, the two
+     * borders (i,j) and (i,k) are either both on or both off.  don't need it otherwise  build connected components in `dsf', along the lines of `borders'.  check: UNVISITED and dsf.c match up 
+     * A game is solved if:
+     *
+     *  - the borders drawn on the grid divide it into connected
+     *    components such that every square is in a component of the
+     *    correct size
+     *  - the borders also satisfy the clue set
+     
+     * ... and thirdly:
+     *
+     *  - there are no *stray* borders, in that every border is
+     *    actually part of the division between two components.
+     *    Otherwise you could cheat by finding a subdivision which did
+     *    not *exceed* any clue square's counter, and then adding a
+     *    few extra edges.
+      idempotent  --- Generator ----------------------------------------------------  strip away unnecssary clues  nop  ... or 6, 7, 8, 9 :-)  struct copy  turn into sensible ASCII  compile-time-assert (borderflag is-a-kind-of char).
+         *
+         * depends on zero-size arrays being disallowed.  GCC says
+         * ISO C forbids this, pointing to [-Werror=edantic].  Also,
+         * it depends on type-checking of (obviously) dead code.  we could at least in principle put this anywhere, but it
+         * seems silly to not put it where the assumption is used.  reset  find edge closest to click point  there's not exactly one such edge  how the ... ?!  CURSOR_SELECT or CURSOR_SELECT2 tells us to toggle whether
+         * the button press should be interpreted as having CTRL or
+         * shift pressed along with it, respectively.  leaks `ret', then we die  leaks `ret', then we die  --- Drawing routines ---------------------------------------------  black  red  yellow  BIT( 8)  BIT( 9)  BIT(10)  BIT(11)  {  }  border errors  we draw each border twice, except the outermost
+                 * big border, so we have to check for errors on
+                 * both sides of each border. region too large  region too small  dangling borders within a single region  we know it's a single region because there's a
+                      * path crossing no border from i to ii...  or because any such border would be an error  placate optimiser  7mm, like loopy  game_request_keys  wants_statusbar  flags 

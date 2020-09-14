@@ -1,0 +1,217 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE Actually generate the database of stages  These do nothing if not previously defined  !DSP_PROCESS_START  Linked lists give fewer loads in processing loop compared to some index
+ * list, which is more important than keeping occasionally executed code
+ * simple * General DSP-local data * Sample input-output data (first)  Mask of free slots for this DSP  Mask of enabled stages  Mask of active stages  This enabled stage  Next enabled slot  In place operation mask/flag  Sample format version  Index in database array  Pointer to first in list of enabled
+                                       stages  Pool of slots for stages - supports 32 or fewer combined as-is atm.  General DSP config * Processing stages support functions * Find the slot for a given enabled id  Not enabled  In proc_mask_enabled == it must be there  Broadcast to all enabled stages or to the one with the specifically
+ * crafted setting  Message to all enabled stages  To I/O only  Message to a particular stage  Add an item to the enabled list  Use the lowest-indexed available slot  Should NOT happen, ever, unless called before init  Order of enabled list is same as DB array  This is the one  Remove an item from the enabled list  In proc_mask_enabled == it must be there  If enabled, just find it in list, if not, link a new one  New entry - set defaults  Cleanup below  No change  Deactivate it first  Is the stage specified by the id currently enabled?  Activate or deactivate a stage  Not enabled  No change in state  Is the stage specified by the id currently active?  Force the specified stage to receive a format update before the next
+ * buffer is sent to process()  Set invalid  Set or unset in-place operation  Determine by the rules if the processing function should be called *
+ * dsp_process:
+ *
+ * Process and convert src audio to dst based on the DSP configuration.
+ * dsp:            the DSP instance in use
+ *
+ * src:
+ *     remcount  = number of input samples remaining; set to desired
+ *                 number of samples to be processed
+ *     pin[0]    = left channel if non-interleaved, audio data if
+ *                 interleaved or mono
+ *     pin[1]    = right channel if non-interleaved, ignored if
+ *                 interleaved or mono
+ *     proc_mask = set to zero on first call, updated by this function
+ *                 to keep track of which in-place stages have been
+ *                 run on the buffers to avoid multiple applications of
+ *                 them
+ *     format    = for internal buffers, gives the relevant format
+ *                 details
+ *
+ * dst:
+ *     remcount  = number of samples placed in buffer so far; set to
+ *                 zero on first call
+ *     p16out    = current fill pointer in destination buffer; set to
+ *                 buffer start on first call
+ *     bufcount  = remaining buffer space in samples; set to maximum
+ *                 desired output count on first call
+ *     format    = ignored
+ *
+ * Processing stops when src is exhausted or dst is filled, whichever
+ * happens first. Samples can still be output when src buffer is empty
+ * if samples are held internally. Generally speaking, continue calling
+ * until no data is consumed and no data is produced to purge the DSP
+ * to the maximum extent feasible. Some internal processing stages may
+ * require more input before more output can be generated, thus there
+ * is no guarantee the DSP is free of data awaiting processing at that
+ * point.
+ *
+ * Additionally, samples consumed and samples produced do not necessarily
+ * have a direct correlation. Samples may be consumed without producing
+ * any output and samples may be produced without consuming any input.
+ * It depends on which stages are actively processing data at the time
+ * of the call and how they function internally.
+  No place to put anything thus nothing may be safely consumed  Tag input with codec-specified sample format  Out-of-place-processing stages take the current buf as input
+         * and switch the buffer to their own output buffer  Convert input samples to internal format  Call all active/enabled stages depending if format is
+           same/changed on the last output buffer  Don't overread/write src/destination  Output full or purged internal buffers  Advance buffers by what output consumed and produced  while  Return the id given a dsp pointer (or even via something within
+   the struct itself)  obviously invalid  Do what needs initializing before enable/disable calls can be made.
+ * Must be done before changing settings for the first time.  Notify each db entry of global init for each DSP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE Actually generate the database of stages  These do nothing if not previously defined  !DSP_PROCESS_START  Linked lists give fewer loads in processing loop compared to some index
+ * list, which is more important than keeping occasionally executed code
+ * simple * General DSP-local data * Sample input-output data (first)  Mask of free slots for this DSP  Mask of enabled stages  Mask of active stages  This enabled stage  Next enabled slot  In place operation mask/flag  Sample format version  Index in database array  Pointer to first in list of enabled
+                                       stages  Pool of slots for stages - supports 32 or fewer combined as-is atm.  General DSP config * Processing stages support functions * Find the slot for a given enabled id  Not enabled  In proc_mask_enabled == it must be there  Broadcast to all enabled stages or to the one with the specifically
+ * crafted setting  Message to all enabled stages  To I/O only  Message to a particular stage  Add an item to the enabled list  Use the lowest-indexed available slot  Should NOT happen, ever, unless called before init  Order of enabled list is same as DB array  This is the one  Remove an item from the enabled list  In proc_mask_enabled == it must be there  If enabled, just find it in list, if not, link a new one  New entry - set defaults  Cleanup below  No change  Deactivate it first  Is the stage specified by the id currently enabled?  Activate or deactivate a stage  Not enabled  No change in state  Is the stage specified by the id currently active?  Force the specified stage to receive a format update before the next
+ * buffer is sent to process()  Set invalid  Set or unset in-place operation  Determine by the rules if the processing function should be called *
+ * dsp_process:
+ *
+ * Process and convert src audio to dst based on the DSP configuration.
+ * dsp:            the DSP instance in use
+ *
+ * src:
+ *     remcount  = number of input samples remaining; set to desired
+ *                 number of samples to be processed
+ *     pin[0]    = left channel if non-interleaved, audio data if
+ *                 interleaved or mono
+ *     pin[1]    = right channel if non-interleaved, ignored if
+ *                 interleaved or mono
+ *     proc_mask = set to zero on first call, updated by this function
+ *                 to keep track of which in-place stages have been
+ *                 run on the buffers to avoid multiple applications of
+ *                 them
+ *     format    = for internal buffers, gives the relevant format
+ *                 details
+ *
+ * dst:
+ *     remcount  = number of samples placed in buffer so far; set to
+ *                 zero on first call
+ *     p16out    = current fill pointer in destination buffer; set to
+ *                 buffer start on first call
+ *     bufcount  = remaining buffer space in samples; set to maximum
+ *                 desired output count on first call
+ *     format    = ignored
+ *
+ * Processing stops when src is exhausted or dst is filled, whichever
+ * happens first. Samples can still be output when src buffer is empty
+ * if samples are held internally. Generally speaking, continue calling
+ * until no data is consumed and no data is produced to purge the DSP
+ * to the maximum extent feasible. Some internal processing stages may
+ * require more input before more output can be generated, thus there
+ * is no guarantee the DSP is free of data awaiting processing at that
+ * point.
+ *
+ * Additionally, samples consumed and samples produced do not necessarily
+ * have a direct correlation. Samples may be consumed without producing
+ * any output and samples may be produced without consuming any input.
+ * It depends on which stages are actively processing data at the time
+ * of the call and how they function internally.
+  No place to put anything thus nothing may be safely consumed  Tag input with codec-specified sample format  Out-of-place-processing stages take the current buf as input
+         * and switch the buffer to their own output buffer  Convert input samples to internal format  Call all active/enabled stages depending if format is
+           same/changed on the last output buffer  Don't overread/write src/destination  Output full or purged internal buffers  Advance buffers by what output consumed and produced  while  Return the id given a dsp pointer (or even via something within
+   the struct itself)  obviously invalid  Do what needs initializing before enable/disable calls can be made.
+ * Must be done before changing settings for the first time.  Notify each db entry of global init for each DSP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE Actually generate the database of stages  These do nothing if not previously defined  !DSP_PROCESS_START  Linked lists give fewer loads in processing loop compared to some index
+ * list, which is more important than keeping occasionally executed code
+ * simple * General DSP-local data * Sample input-output data (first)  Mask of free slots for this DSP  Mask of enabled stages  Mask of active stages  This enabled stage  Next enabled slot  In place operation mask/flag  Sample format version  Index in database array  Pointer to first in list of enabled
+                                       stages  Pool of slots for stages - supports 32 or fewer combined as-is atm.  General DSP config * Processing stages support functions * Find the slot for a given enabled id  Not enabled  In proc_mask_enabled == it must be there  Broadcast to all enabled stages or to the one with the specifically
+ * crafted setting  Message to all enabled stages  To I/O only  Message to a particular stage  Add an item to the enabled list  Use the lowest-indexed available slot  Should NOT happen, ever, unless called before init  Order of enabled list is same as DB array  This is the one  Remove an item from the enabled list  In proc_mask_enabled == it must be there  If enabled, just find it in list, if not, link a new one  New entry - set defaults  Cleanup below  No change  Deactivate it first  Is the stage specified by the id currently enabled?  Activate or deactivate a stage  Not enabled  No change in state  Is the stage specified by the id currently active?  Force the specified stage to receive a format update before the next
+ * buffer is sent to process()  Set invalid  Set or unset in-place operation  Determine by the rules if the processing function should be called *
+ * dsp_process:
+ *
+ * Process and convert src audio to dst based on the DSP configuration.
+ * dsp:            the DSP instance in use
+ *
+ * src:
+ *     remcount  = number of input samples remaining; set to desired
+ *                 number of samples to be processed
+ *     pin[0]    = left channel if non-interleaved, audio data if
+ *                 interleaved or mono
+ *     pin[1]    = right channel if non-interleaved, ignored if
+ *                 interleaved or mono
+ *     proc_mask = set to zero on first call, updated by this function
+ *                 to keep track of which in-place stages have been
+ *                 run on the buffers to avoid multiple applications of
+ *                 them
+ *     format    = for internal buffers, gives the relevant format
+ *                 details
+ *
+ * dst:
+ *     remcount  = number of samples placed in buffer so far; set to
+ *                 zero on first call
+ *     p16out    = current fill pointer in destination buffer; set to
+ *                 buffer start on first call
+ *     bufcount  = remaining buffer space in samples; set to maximum
+ *                 desired output count on first call
+ *     format    = ignored
+ *
+ * Processing stops when src is exhausted or dst is filled, whichever
+ * happens first. Samples can still be output when src buffer is empty
+ * if samples are held internally. Generally speaking, continue calling
+ * until no data is consumed and no data is produced to purge the DSP
+ * to the maximum extent feasible. Some internal processing stages may
+ * require more input before more output can be generated, thus there
+ * is no guarantee the DSP is free of data awaiting processing at that
+ * point.
+ *
+ * Additionally, samples consumed and samples produced do not necessarily
+ * have a direct correlation. Samples may be consumed without producing
+ * any output and samples may be produced without consuming any input.
+ * It depends on which stages are actively processing data at the time
+ * of the call and how they function internally.
+  No place to put anything thus nothing may be safely consumed  Tag input with codec-specified sample format  Out-of-place-processing stages take the current buf as input
+         * and switch the buffer to their own output buffer  Convert input samples to internal format  Call all active/enabled stages depending if format is
+           same/changed on the last output buffer  Don't overread/write src/destination  Output full or purged internal buffers  Advance buffers by what output consumed and produced  while  Return the id given a dsp pointer (or even via something within
+   the struct itself)  obviously invalid  Do what needs initializing before enable/disable calls can be made.
+ * Must be done before changing settings for the first time.  Notify each db entry of global init for each DSP 

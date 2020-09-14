@@ -1,0 +1,199 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2012 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Do read  Do write  returns <0 on error and status otherwise 
+ * SCSI commands (see decode_scsi for more details)
+  start a complicated, authenticated, session to do things  start a complicated, authenticated, session to do things 
+ * DNK: command is in cdb[10], subcommand in cdb[11], cdb[7] must be 0xbc
+  there are more obscure commands:
+     * - 0x11 returns a 10-byte packet containing a 8-byte "LeftIdl8", scrambled
+     *   with para_noise (the 2-byte padding is random so that output is random
+     *   until unscrambled)
+     * - 0x21 returns a 0x2b2 packet contaning a 0x2b0 "DNK", scrambled similarly
+     * - 0x22 can write the DNK (sending scrambled data again)
+     * - 0x23 has more subproperties:
+     *   - 5 is "eDKS"
+     *   - 7 is "ProductGroup"
+     *   - 10 is nvp properties (see get_dnk_nvp) (NOTE: nvp number vary by model here)
+     *   - 11 seems to read something from nvp and encrypt it with AES, not sure what
+     *   - many other read important/canonical entries of NVP (number does NOT vary model)
+     * - 0x24 can write the same properties read by 0x23
+     *
+     * This website has some background on Sony's acronym (DNK, EKB, ...):
+     *   https://wiki.physik.fu-berlin.de/linux-minidisc/doku.php?id=atracdownload-wiki
+      get the model DID: code stolen from get_dnk_prop  if the user forced the series, simply match by name, special for '?' which
+     * prompts the list  display list on error  we need to get the model ID  model IDs follow a pattern: the high 16-bit seem to encode the series and low 16-bit the size
+ * (although this is not entirely reliable). Just try to find any device with the same high 16-bits
+ * and return the series it belongs to.  Read nvp node, retrun nonzero on error, update size to actual length. The
+ * index is the raw node number sent to the device  the returned data has a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number
+     *
+     * NOTE: byte 0 is always 0 because the OF always picks small para_noise
+     * indexes but I guess the actual encoding the one above  unscramble and copy  read nvp node, retrun nonzero on error  the data buffer is prepended with a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number  scramble, always use index 0 for para_noise  para_noise index  node index  maybe user specified an explicit size  find entry in NVP  if not overriden, try to get size from database  if we can't find it, maybe check if it's a number  string is not a number  if we don't have a size, take a big size to be sure  take the size in the database as a hint of the size, but the device could
+     * return less data  find entry in NVP  if we can't find it, maybe check if it's a number  string is not a number  build buffer  flags: bit 0 means size flag (means size in paragraph) there are more but they are very obscure  bcd bcd bcd bcd bcd bcd the 16 first bytes are 'DEVINFO', 0x80, followed by zeroes older devices may have used subcommand 3 instead of 4, but this is not
+     * supported by any device I have seen  the device is not supposed to send back anything but if it does, print it  it is possile to write any NVP node using the SCSI interface but only
+     * give the user the possibility to write destination, because that's the
+     * most useful one  get model/series  in all cases, we need to read shp  get  set  try to parse dest as integer  assume string  try to parse sps as integer  try to parse dest as integer  assume string  try to see if we know a device in the same series, so we can recommend a force action  vendor must be SONY  model must be WALKMAN  filter non-Sony devices 
+     * DNK (Device Node Key) commands are 12 bytes long and the CDB is of the form
+     *   DD 00 00 00 xx xx 00 BC ll ll xx yy 
+     * where
+     * - xxxx is the argument (16 bits)
+     * - llll is the length (16 bits)
+     * - xx is the command
+     * - yy is the subcommand
+      we need to parse the arguments, we support either as one big hexdump:
+     *   fc002064626d6e0080000000
+     * or as a sequence of hex bytes:
+     *   fc 00 20 64 62 6d 6e 00 80 00 00 00
+      allow the string to start with 0x  list devices  special list_devices/decode_scsi command **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2012 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Do read  Do write  returns <0 on error and status otherwise 
+ * SCSI commands (see decode_scsi for more details)
+  start a complicated, authenticated, session to do things  start a complicated, authenticated, session to do things 
+ * DNK: command is in cdb[10], subcommand in cdb[11], cdb[7] must be 0xbc
+  there are more obscure commands:
+     * - 0x11 returns a 10-byte packet containing a 8-byte "LeftIdl8", scrambled
+     *   with para_noise (the 2-byte padding is random so that output is random
+     *   until unscrambled)
+     * - 0x21 returns a 0x2b2 packet contaning a 0x2b0 "DNK", scrambled similarly
+     * - 0x22 can write the DNK (sending scrambled data again)
+     * - 0x23 has more subproperties:
+     *   - 5 is "eDKS"
+     *   - 7 is "ProductGroup"
+     *   - 10 is nvp properties (see get_dnk_nvp) (NOTE: nvp number vary by model here)
+     *   - 11 seems to read something from nvp and encrypt it with AES, not sure what
+     *   - many other read important/canonical entries of NVP (number does NOT vary model)
+     * - 0x24 can write the same properties read by 0x23
+     *
+     * This website has some background on Sony's acronym (DNK, EKB, ...):
+     *   https://wiki.physik.fu-berlin.de/linux-minidisc/doku.php?id=atracdownload-wiki
+      get the model DID: code stolen from get_dnk_prop  if the user forced the series, simply match by name, special for '?' which
+     * prompts the list  display list on error  we need to get the model ID  model IDs follow a pattern: the high 16-bit seem to encode the series and low 16-bit the size
+ * (although this is not entirely reliable). Just try to find any device with the same high 16-bits
+ * and return the series it belongs to.  Read nvp node, retrun nonzero on error, update size to actual length. The
+ * index is the raw node number sent to the device  the returned data has a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number
+     *
+     * NOTE: byte 0 is always 0 because the OF always picks small para_noise
+     * indexes but I guess the actual encoding the one above  unscramble and copy  read nvp node, retrun nonzero on error  the data buffer is prepended with a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number  scramble, always use index 0 for para_noise  para_noise index  node index  maybe user specified an explicit size  find entry in NVP  if not overriden, try to get size from database  if we can't find it, maybe check if it's a number  string is not a number  if we don't have a size, take a big size to be sure  take the size in the database as a hint of the size, but the device could
+     * return less data  find entry in NVP  if we can't find it, maybe check if it's a number  string is not a number  build buffer  flags: bit 0 means size flag (means size in paragraph) there are more but they are very obscure  bcd bcd bcd bcd bcd bcd the 16 first bytes are 'DEVINFO', 0x80, followed by zeroes older devices may have used subcommand 3 instead of 4, but this is not
+     * supported by any device I have seen  the device is not supposed to send back anything but if it does, print it  it is possile to write any NVP node using the SCSI interface but only
+     * give the user the possibility to write destination, because that's the
+     * most useful one  get model/series  in all cases, we need to read shp  get  set  try to parse dest as integer  assume string  try to parse sps as integer  try to parse dest as integer  assume string  try to see if we know a device in the same series, so we can recommend a force action  vendor must be SONY  model must be WALKMAN  filter non-Sony devices 
+     * DNK (Device Node Key) commands are 12 bytes long and the CDB is of the form
+     *   DD 00 00 00 xx xx 00 BC ll ll xx yy 
+     * where
+     * - xxxx is the argument (16 bits)
+     * - llll is the length (16 bits)
+     * - xx is the command
+     * - yy is the subcommand
+      we need to parse the arguments, we support either as one big hexdump:
+     *   fc002064626d6e0080000000
+     * or as a sequence of hex bytes:
+     *   fc 00 20 64 62 6d 6e 00 80 00 00 00
+      allow the string to start with 0x  list devices  special list_devices/decode_scsi command **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2012 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Do read  Do write  returns <0 on error and status otherwise 
+ * SCSI commands (see decode_scsi for more details)
+  start a complicated, authenticated, session to do things  start a complicated, authenticated, session to do things 
+ * DNK: command is in cdb[10], subcommand in cdb[11], cdb[7] must be 0xbc
+  there are more obscure commands:
+     * - 0x11 returns a 10-byte packet containing a 8-byte "LeftIdl8", scrambled
+     *   with para_noise (the 2-byte padding is random so that output is random
+     *   until unscrambled)
+     * - 0x21 returns a 0x2b2 packet contaning a 0x2b0 "DNK", scrambled similarly
+     * - 0x22 can write the DNK (sending scrambled data again)
+     * - 0x23 has more subproperties:
+     *   - 5 is "eDKS"
+     *   - 7 is "ProductGroup"
+     *   - 10 is nvp properties (see get_dnk_nvp) (NOTE: nvp number vary by model here)
+     *   - 11 seems to read something from nvp and encrypt it with AES, not sure what
+     *   - many other read important/canonical entries of NVP (number does NOT vary model)
+     * - 0x24 can write the same properties read by 0x23
+     *
+     * This website has some background on Sony's acronym (DNK, EKB, ...):
+     *   https://wiki.physik.fu-berlin.de/linux-minidisc/doku.php?id=atracdownload-wiki
+      get the model DID: code stolen from get_dnk_prop  if the user forced the series, simply match by name, special for '?' which
+     * prompts the list  display list on error  we need to get the model ID  model IDs follow a pattern: the high 16-bit seem to encode the series and low 16-bit the size
+ * (although this is not entirely reliable). Just try to find any device with the same high 16-bits
+ * and return the series it belongs to.  Read nvp node, retrun nonzero on error, update size to actual length. The
+ * index is the raw node number sent to the device  the returned data has a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number
+     *
+     * NOTE: byte 0 is always 0 because the OF always picks small para_noise
+     * indexes but I guess the actual encoding the one above  unscramble and copy  read nvp node, retrun nonzero on error  the data buffer is prepended with a 4 byte header:
+     * - byte 0/1 is the para_noise index, written as a 16bit big-endian number
+     * - byte 2/3 is the node index, written as a 16-bit big-endian number  scramble, always use index 0 for para_noise  para_noise index  node index  maybe user specified an explicit size  find entry in NVP  if not overriden, try to get size from database  if we can't find it, maybe check if it's a number  string is not a number  if we don't have a size, take a big size to be sure  take the size in the database as a hint of the size, but the device could
+     * return less data  find entry in NVP  if we can't find it, maybe check if it's a number  string is not a number  build buffer  flags: bit 0 means size flag (means size in paragraph) there are more but they are very obscure  bcd bcd bcd bcd bcd bcd the 16 first bytes are 'DEVINFO', 0x80, followed by zeroes older devices may have used subcommand 3 instead of 4, but this is not
+     * supported by any device I have seen  the device is not supposed to send back anything but if it does, print it  it is possile to write any NVP node using the SCSI interface but only
+     * give the user the possibility to write destination, because that's the
+     * most useful one  get model/series  in all cases, we need to read shp  get  set  try to parse dest as integer  assume string  try to parse sps as integer  try to parse dest as integer  assume string  try to see if we know a device in the same series, so we can recommend a force action  vendor must be SONY  model must be WALKMAN  filter non-Sony devices 
+     * DNK (Device Node Key) commands are 12 bytes long and the CDB is of the form
+     *   DD 00 00 00 xx xx 00 BC ll ll xx yy 
+     * where
+     * - xxxx is the argument (16 bits)
+     * - llll is the length (16 bits)
+     * - xx is the command
+     * - yy is the subcommand
+      we need to parse the arguments, we support either as one big hexdump:
+     *   fc002064626d6e0080000000
+     * or as a sequence of hex bytes:
+     *   fc 00 20 64 62 6d 6e 00 80 00 00 00
+      allow the string to start with 0x  list devices  special list_devices/decode_scsi command 

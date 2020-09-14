@@ -1,0 +1,94 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** unmute HP  Enable AUDIOOUT block  Enable digital filter clock  Enable DAC  Set capless mode  Set word-length to 16-bit  Power up DAC  Hold HP to ground to avoid pop, then release and power up HP  Set HP mode to AB  change bias to -50%  Stop holding to ground  Set dmawait count to 31 (see errata, workaround random stop)  start converting audio  unmute DAC  send a few samples to avoid pop  wait for everything to stabilize before unmuting  Switch to class A  Hold HP to ground  Mute HP and power down  Power down HP  Mute DAC  Power down DAC  Gate off DAC  Disable digital filter clock  will also gate off the module  volume in half dB
+ * don't check input values  minimum is -100dB and max is 0dB  unmute, enable zero cross and set volume.
+     * 0xff is 0dB  volume in half dB
+ * don't check input values  minimum is -57.5dB and max is 6dB in DAC mode
+     * and -51.5dB / 12dB in Line1 mode  unmute, enable zero cross and set volume. Two cases: line1 and dac  In line1 mode, the HP is the only way to adjust the volume  In DAC mode we can use both the HP and the DAC volume.
+         * Use the DAC for volume <0 and HP for volume >0  Select base_mult and src_hold depending on the audio range:
+     *     0 < f <= 12000   --> base_mult = 1, src_hold = 3 (div by 4)
+     * 12000 < f <= 24000   --> base_mult = 1, src_hold = 1 (div by 2)
+     * 24000 < f <= 48000   --> base_mult = 1, src_hold = 0 (div by 1)
+     * 48000 < f <= 96000   --> base_mult = 2, src_hold = 0 (mul by 2)
+     * 96000 < f <= .....   --> base_mult = 4, src_hold = 0 (mul by 4)  compute the divisor (a tricky to keep to do it with 32-bit words only)  select between DAC and Line1  reapply volume setting  0 and 1.5dB: off  3dB: low  4.5dB: low  6dB: low  others: off  avoid power sequence if not needed  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  assume speaker is wired to lineout * 1) make sure charge capacitors are discharged * 2) set min gain, nominal vag levels and zerocross desires  volume is decreasing with the value in the register  vag should be set to VDDIO/2, 0 is 1.725V, 15 is 1.350V, 25mV steps * 3) Power up lineout * 4) Ramp the vag * 5) Unmute * 6) Ramp volume * Reverse procedure  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  6*10^6*basemult/(src_frac*8*(src_hold+1)) in Hz  convert half-dB to tenth-dB  volume is fixed to 15.5 dB gain convert 2-dB to tenth-dB  STMP3700/3770 has not speaker amplifier, assume it is on lineout **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** unmute HP  Enable AUDIOOUT block  Enable digital filter clock  Enable DAC  Set capless mode  Set word-length to 16-bit  Power up DAC  Hold HP to ground to avoid pop, then release and power up HP  Set HP mode to AB  change bias to -50%  Stop holding to ground  Set dmawait count to 31 (see errata, workaround random stop)  start converting audio  unmute DAC  send a few samples to avoid pop  wait for everything to stabilize before unmuting  Switch to class A  Hold HP to ground  Mute HP and power down  Power down HP  Mute DAC  Power down DAC  Gate off DAC  Disable digital filter clock  will also gate off the module  volume in half dB
+ * don't check input values  minimum is -100dB and max is 0dB  unmute, enable zero cross and set volume.
+     * 0xff is 0dB  volume in half dB
+ * don't check input values  minimum is -57.5dB and max is 6dB in DAC mode
+     * and -51.5dB / 12dB in Line1 mode  unmute, enable zero cross and set volume. Two cases: line1 and dac  In line1 mode, the HP is the only way to adjust the volume  In DAC mode we can use both the HP and the DAC volume.
+         * Use the DAC for volume <0 and HP for volume >0  Select base_mult and src_hold depending on the audio range:
+     *     0 < f <= 12000   --> base_mult = 1, src_hold = 3 (div by 4)
+     * 12000 < f <= 24000   --> base_mult = 1, src_hold = 1 (div by 2)
+     * 24000 < f <= 48000   --> base_mult = 1, src_hold = 0 (div by 1)
+     * 48000 < f <= 96000   --> base_mult = 2, src_hold = 0 (mul by 2)
+     * 96000 < f <= .....   --> base_mult = 4, src_hold = 0 (mul by 4)  compute the divisor (a tricky to keep to do it with 32-bit words only)  select between DAC and Line1  reapply volume setting  0 and 1.5dB: off  3dB: low  4.5dB: low  6dB: low  others: off  avoid power sequence if not needed  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  assume speaker is wired to lineout * 1) make sure charge capacitors are discharged * 2) set min gain, nominal vag levels and zerocross desires  volume is decreasing with the value in the register  vag should be set to VDDIO/2, 0 is 1.725V, 15 is 1.350V, 25mV steps * 3) Power up lineout * 4) Ramp the vag * 5) Unmute * 6) Ramp volume * Reverse procedure  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  6*10^6*basemult/(src_frac*8*(src_hold+1)) in Hz  convert half-dB to tenth-dB  volume is fixed to 15.5 dB gain convert 2-dB to tenth-dB  STMP3700/3770 has not speaker amplifier, assume it is on lineout **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** unmute HP  Enable AUDIOOUT block  Enable digital filter clock  Enable DAC  Set capless mode  Set word-length to 16-bit  Power up DAC  Hold HP to ground to avoid pop, then release and power up HP  Set HP mode to AB  change bias to -50%  Stop holding to ground  Set dmawait count to 31 (see errata, workaround random stop)  start converting audio  unmute DAC  send a few samples to avoid pop  wait for everything to stabilize before unmuting  Switch to class A  Hold HP to ground  Mute HP and power down  Power down HP  Mute DAC  Power down DAC  Gate off DAC  Disable digital filter clock  will also gate off the module  volume in half dB
+ * don't check input values  minimum is -100dB and max is 0dB  unmute, enable zero cross and set volume.
+     * 0xff is 0dB  volume in half dB
+ * don't check input values  minimum is -57.5dB and max is 6dB in DAC mode
+     * and -51.5dB / 12dB in Line1 mode  unmute, enable zero cross and set volume. Two cases: line1 and dac  In line1 mode, the HP is the only way to adjust the volume  In DAC mode we can use both the HP and the DAC volume.
+         * Use the DAC for volume <0 and HP for volume >0  Select base_mult and src_hold depending on the audio range:
+     *     0 < f <= 12000   --> base_mult = 1, src_hold = 3 (div by 4)
+     * 12000 < f <= 24000   --> base_mult = 1, src_hold = 1 (div by 2)
+     * 24000 < f <= 48000   --> base_mult = 1, src_hold = 0 (div by 1)
+     * 48000 < f <= 96000   --> base_mult = 2, src_hold = 0 (mul by 2)
+     * 96000 < f <= .....   --> base_mult = 4, src_hold = 0 (mul by 4)  compute the divisor (a tricky to keep to do it with 32-bit words only)  select between DAC and Line1  reapply volume setting  0 and 1.5dB: off  3dB: low  4.5dB: low  6dB: low  others: off  avoid power sequence if not needed  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  assume speaker is wired to lineout * 1) make sure charge capacitors are discharged * 2) set min gain, nominal vag levels and zerocross desires  volume is decreasing with the value in the register  vag should be set to VDDIO/2, 0 is 1.725V, 15 is 1.350V, 25mV steps * 3) Power up lineout * 4) Ramp the vag * 5) Unmute * 6) Ramp volume * Reverse procedure  despite what the manual says, we can perfectly set and clear this bit
+         * at will, no need for a reset  6*10^6*basemult/(src_frac*8*(src_hold+1)) in Hz  convert half-dB to tenth-dB  volume is fixed to 15.5 dB gain convert 2-dB to tenth-dB  STMP3700/3770 has not speaker amplifier, assume it is on lineout 

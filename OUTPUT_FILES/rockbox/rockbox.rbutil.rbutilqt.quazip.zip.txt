@@ -1,0 +1,172 @@
+ zip.c -- IO on .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications for Zip64 support
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         For more info read MiniZip_info.txt
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         Fixing static code analysis issues
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+         Changes
+   Oct-2009 - Mathias Svensson - Remove old C style function prototypes
+   Oct-2009 - Mathias Svensson - Added Zip64 Support when creating new file archives
+   Oct-2009 - Mathias Svensson - Did some code cleanup and refactoring to get better overview of some functions.
+   Oct-2009 - Mathias Svensson - Added zipRemoveExtraInfoBlock to strip extra field data from its ZIP64 data
+                                 It is used when recreting zip archive with RAW when deleting items from a zip.
+                                 ZIP64 data is automaticly added to items that needs it, and existing ZIP64 data need to be removed.
+   Oct-2009 - Mathias Svensson - Added support for BZIP2 as compression mode (bzip2 lib is required)
+   Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+ compile with -Dlocal if your debugger can't find static symbols  best for standard pkware crypt  (16384) 
+#define SIZECENTRALDIRITEM (0x2e)
+#define SIZEZIPLOCALHEADER (0x1e)
+ I've found an old Unix (a SunOS 4.1.3_U1) without all SEEK_* defined....  NOT sure that this work on ALL platform  46  for future use and alignement  zLib stream structure for inflate  bzLib stream structure for bziped  1 is stream is initialised  last written byte in buffered_data  offset of the local header of the file
+                                     currenty writing  central header data for the current file  size of the central header for cur file  Extra bytes allocated to the centralheader but that are not used  flag of the file currently writing  compression method of file currenty wr. 1 for directly writing raw data  buffer contain compressed data to be writ Add ZIP64 extened information in the extra field  keys defining the pseudo-random sequence  io structore of the zipfile  datablock with central dir in construction 1 if a file in the zip is currently writ. info on the file curretly writing  position of the beginning of the zipfile ************************************************************************** ===========================================================================
+   Inputs a long in LSB order to the given file
+   nbByte == 1, 2 ,4 or 8 (byte, short or long, ZPOS64_T)
+ data overflow - hack for ZIP64 (X Roche)  data overflow - hack for ZIP64 **************************************************************************************************************************************************** ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+Locate the End of Zip64 Central directory locator and from there find the CD of a zipfile (at the end, just before
+the global comment)
+ maximum size of global comment  Signature "0x07064b50" Zip64 end of central directory locater  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto Zip64 end of central directory record  the signature  signature of 'Zip64 end of central directory'  byte before the zipfile, (>0 for sfx) size of the central directory   offset of start of central directory  number of the current dist, used for
+                              spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                              for spaning ZIP, unsupported, always 0 total number of entries in
+                                the central dir
+                                (same than number_entry on nospan)  check first if we find a ZIP64 record  disable to allow appending to empty ZIP archive
+        if (central_pos==0)
+            err=ZIP_ERRNO;
+ the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+    starting disk number  TODO..  read the comment from the standard central header.  Read End of central Directory info  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number  zipfile global comment length  !NO_ADDFILEINEXISTINGZIP********************************************************** now we add file in a zipfile  Read and Cache Central Directory Records  !NO_ADDFILEINEXISTINGZIP !NO_ADDFILEINEXISTINGZIP write the local header  Version 6.3 is required for Unicode support  version needed to extract  CRC / Compressed size / Uncompressed size will be filled in later and rewritten later  crc 32, unknown  compressed size, unknown  compressed size, unknown  uncompressed size, unknown  uncompressed size, unknown  write the Zip64 extended info  Remember position of Zip64 extended info for the local file header. (needed when we update size after done with file) 
+ NOTE.
+ When writing RAW the ZIP64 extended information in extrafield_local and extrafield_global needs to be stripped
+ before calling this function it can be done with zipRemoveExtraInfoBlock
+
+ It is not done here because then we need to realloc a new buffer since parameters are 'const' and I want to minimize
+ unnecessary allocations.
+  Extra space we have reserved in case we need to add ZIP64 extra info data  version info crccompr sizeuncompr sizedisk nm start Init BZip stuff here init_keys(password,zi->ci.keys,zi->ci.pcrc_32_tab); ATTANTION! Without this row, you don't unpack your password protected archive in other app.           uLong uTotalOutBefore_hi = zi->ci.bstream.total_out_hi32;  while(...)  this is normal  update Current Item crc and sizes, version Made byversion neededcrccompr sizecompr size set internal file attributes field uncompr sizeuncompr size Add ZIP64 extra info field for uncompressed size  Add ZIP64 extra info field for compressed size  Add ZIP64 extra info field for relative offset to local file header of current file  we can not write more data to the buffer that we have room for.  Add Extra Information Header for 'ZIP64 information'  HeaderID  DataSize  Update how much extra free space we got in the memory buffer  and increase the centralheader size so the new ZIP64 fields are included  ( 4 below is the size of HeaderID and DataSize field )  Update the extra info size field  Update the LocalFileHeader with the new values.  crc 32, unknown  Update the size in the ZIP64 extended field.  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown  Write local Descriptor after file data  crc 32, unknown  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown num disks number of the disk with the start of the central directory relative offset Relative offset to the Zip64EndOfCentralDirectory total disks Do not support spawning of disk so always say 1 here number of the disk with the start of the central directory  size of this 'zip64 end of central directory'  why ZPOS64_T of this ?  version made by  version needed  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number signature number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  use value in ZIP64 record  total number of entries in the central dir  use value in ZIP64 record  size of the central directory  offset of start of central directory with respect to the starting disk number  Header found.  skip it. do not copy to temp buffer  Extra Info block should not be removed, So copy it to the temp buffer.  clean old extra info block.  copy the new extra info block over the old  set the new extra info size  If the output is non-seekable, the data descriptor is needed. If the data descriptor is not written, we can't use a non-seekable output. zip.c -- IO on .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications for Zip64 support
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         For more info read MiniZip_info.txt
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         Fixing static code analysis issues
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+         Changes
+   Oct-2009 - Mathias Svensson - Remove old C style function prototypes
+   Oct-2009 - Mathias Svensson - Added Zip64 Support when creating new file archives
+   Oct-2009 - Mathias Svensson - Did some code cleanup and refactoring to get better overview of some functions.
+   Oct-2009 - Mathias Svensson - Added zipRemoveExtraInfoBlock to strip extra field data from its ZIP64 data
+                                 It is used when recreting zip archive with RAW when deleting items from a zip.
+                                 ZIP64 data is automaticly added to items that needs it, and existing ZIP64 data need to be removed.
+   Oct-2009 - Mathias Svensson - Added support for BZIP2 as compression mode (bzip2 lib is required)
+   Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+ compile with -Dlocal if your debugger can't find static symbols  best for standard pkware crypt  (16384) 
+#define SIZECENTRALDIRITEM (0x2e)
+#define SIZEZIPLOCALHEADER (0x1e)
+ I've found an old Unix (a SunOS 4.1.3_U1) without all SEEK_* defined....  NOT sure that this work on ALL platform  46  for future use and alignement  zLib stream structure for inflate  bzLib stream structure for bziped  1 is stream is initialised  last written byte in buffered_data  offset of the local header of the file
+                                     currenty writing  central header data for the current file  size of the central header for cur file  Extra bytes allocated to the centralheader but that are not used  flag of the file currently writing  compression method of file currenty wr. 1 for directly writing raw data  buffer contain compressed data to be writ Add ZIP64 extened information in the extra field  keys defining the pseudo-random sequence  io structore of the zipfile  datablock with central dir in construction 1 if a file in the zip is currently writ. info on the file curretly writing  position of the beginning of the zipfile ************************************************************************** ===========================================================================
+   Inputs a long in LSB order to the given file
+   nbByte == 1, 2 ,4 or 8 (byte, short or long, ZPOS64_T)
+ data overflow - hack for ZIP64 (X Roche)  data overflow - hack for ZIP64 **************************************************************************************************************************************************** ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+Locate the End of Zip64 Central directory locator and from there find the CD of a zipfile (at the end, just before
+the global comment)
+ maximum size of global comment  Signature "0x07064b50" Zip64 end of central directory locater  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto Zip64 end of central directory record  the signature  signature of 'Zip64 end of central directory'  byte before the zipfile, (>0 for sfx) size of the central directory   offset of start of central directory  number of the current dist, used for
+                              spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                              for spaning ZIP, unsupported, always 0 total number of entries in
+                                the central dir
+                                (same than number_entry on nospan)  check first if we find a ZIP64 record  disable to allow appending to empty ZIP archive
+        if (central_pos==0)
+            err=ZIP_ERRNO;
+ the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+    starting disk number  TODO..  read the comment from the standard central header.  Read End of central Directory info  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number  zipfile global comment length  !NO_ADDFILEINEXISTINGZIP********************************************************** now we add file in a zipfile  Read and Cache Central Directory Records  !NO_ADDFILEINEXISTINGZIP !NO_ADDFILEINEXISTINGZIP write the local header  Version 6.3 is required for Unicode support  version needed to extract  CRC / Compressed size / Uncompressed size will be filled in later and rewritten later  crc 32, unknown  compressed size, unknown  compressed size, unknown  uncompressed size, unknown  uncompressed size, unknown  write the Zip64 extended info  Remember position of Zip64 extended info for the local file header. (needed when we update size after done with file) 
+ NOTE.
+ When writing RAW the ZIP64 extended information in extrafield_local and extrafield_global needs to be stripped
+ before calling this function it can be done with zipRemoveExtraInfoBlock
+
+ It is not done here because then we need to realloc a new buffer since parameters are 'const' and I want to minimize
+ unnecessary allocations.
+  Extra space we have reserved in case we need to add ZIP64 extra info data  version info crccompr sizeuncompr sizedisk nm start Init BZip stuff here init_keys(password,zi->ci.keys,zi->ci.pcrc_32_tab); ATTANTION! Without this row, you don't unpack your password protected archive in other app.           uLong uTotalOutBefore_hi = zi->ci.bstream.total_out_hi32;  while(...)  this is normal  update Current Item crc and sizes, version Made byversion neededcrccompr sizecompr size set internal file attributes field uncompr sizeuncompr size Add ZIP64 extra info field for uncompressed size  Add ZIP64 extra info field for compressed size  Add ZIP64 extra info field for relative offset to local file header of current file  we can not write more data to the buffer that we have room for.  Add Extra Information Header for 'ZIP64 information'  HeaderID  DataSize  Update how much extra free space we got in the memory buffer  and increase the centralheader size so the new ZIP64 fields are included  ( 4 below is the size of HeaderID and DataSize field )  Update the extra info size field  Update the LocalFileHeader with the new values.  crc 32, unknown  Update the size in the ZIP64 extended field.  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown  Write local Descriptor after file data  crc 32, unknown  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown num disks number of the disk with the start of the central directory relative offset Relative offset to the Zip64EndOfCentralDirectory total disks Do not support spawning of disk so always say 1 here number of the disk with the start of the central directory  size of this 'zip64 end of central directory'  why ZPOS64_T of this ?  version made by  version needed  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number signature number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  use value in ZIP64 record  total number of entries in the central dir  use value in ZIP64 record  size of the central directory  offset of start of central directory with respect to the starting disk number  Header found.  skip it. do not copy to temp buffer  Extra Info block should not be removed, So copy it to the temp buffer.  clean old extra info block.  copy the new extra info block over the old  set the new extra info size  If the output is non-seekable, the data descriptor is needed. If the data descriptor is not written, we can't use a non-seekable output. zip.c -- IO on .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications for Zip64 support
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         For more info read MiniZip_info.txt
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         Fixing static code analysis issues
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+         Changes
+   Oct-2009 - Mathias Svensson - Remove old C style function prototypes
+   Oct-2009 - Mathias Svensson - Added Zip64 Support when creating new file archives
+   Oct-2009 - Mathias Svensson - Did some code cleanup and refactoring to get better overview of some functions.
+   Oct-2009 - Mathias Svensson - Added zipRemoveExtraInfoBlock to strip extra field data from its ZIP64 data
+                                 It is used when recreting zip archive with RAW when deleting items from a zip.
+                                 ZIP64 data is automaticly added to items that needs it, and existing ZIP64 data need to be removed.
+   Oct-2009 - Mathias Svensson - Added support for BZIP2 as compression mode (bzip2 lib is required)
+   Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+ compile with -Dlocal if your debugger can't find static symbols  best for standard pkware crypt  (16384) 
+#define SIZECENTRALDIRITEM (0x2e)
+#define SIZEZIPLOCALHEADER (0x1e)
+ I've found an old Unix (a SunOS 4.1.3_U1) without all SEEK_* defined....  NOT sure that this work on ALL platform  46  for future use and alignement  zLib stream structure for inflate  bzLib stream structure for bziped  1 is stream is initialised  last written byte in buffered_data  offset of the local header of the file
+                                     currenty writing  central header data for the current file  size of the central header for cur file  Extra bytes allocated to the centralheader but that are not used  flag of the file currently writing  compression method of file currenty wr. 1 for directly writing raw data  buffer contain compressed data to be writ Add ZIP64 extened information in the extra field  keys defining the pseudo-random sequence  io structore of the zipfile  datablock with central dir in construction 1 if a file in the zip is currently writ. info on the file curretly writing  position of the beginning of the zipfile ************************************************************************** ===========================================================================
+   Inputs a long in LSB order to the given file
+   nbByte == 1, 2 ,4 or 8 (byte, short or long, ZPOS64_T)
+ data overflow - hack for ZIP64 (X Roche)  data overflow - hack for ZIP64 **************************************************************************************************************************************************** ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+Locate the End of Zip64 Central directory locator and from there find the CD of a zipfile (at the end, just before
+the global comment)
+ maximum size of global comment  Signature "0x07064b50" Zip64 end of central directory locater  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto Zip64 end of central directory record  the signature  signature of 'Zip64 end of central directory'  byte before the zipfile, (>0 for sfx) size of the central directory   offset of start of central directory  number of the current dist, used for
+                              spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                              for spaning ZIP, unsupported, always 0 total number of entries in
+                                the central dir
+                                (same than number_entry on nospan)  check first if we find a ZIP64 record  disable to allow appending to empty ZIP archive
+        if (central_pos==0)
+            err=ZIP_ERRNO;
+ the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+    starting disk number  TODO..  read the comment from the standard central header.  Read End of central Directory info  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number  zipfile global comment length  !NO_ADDFILEINEXISTINGZIP********************************************************** now we add file in a zipfile  Read and Cache Central Directory Records  !NO_ADDFILEINEXISTINGZIP !NO_ADDFILEINEXISTINGZIP write the local header  Version 6.3 is required for Unicode support  version needed to extract  CRC / Compressed size / Uncompressed size will be filled in later and rewritten later  crc 32, unknown  compressed size, unknown  compressed size, unknown  uncompressed size, unknown  uncompressed size, unknown  write the Zip64 extended info  Remember position of Zip64 extended info for the local file header. (needed when we update size after done with file) 
+ NOTE.
+ When writing RAW the ZIP64 extended information in extrafield_local and extrafield_global needs to be stripped
+ before calling this function it can be done with zipRemoveExtraInfoBlock
+
+ It is not done here because then we need to realloc a new buffer since parameters are 'const' and I want to minimize
+ unnecessary allocations.
+  Extra space we have reserved in case we need to add ZIP64 extra info data  version info crccompr sizeuncompr sizedisk nm start Init BZip stuff here init_keys(password,zi->ci.keys,zi->ci.pcrc_32_tab); ATTANTION! Without this row, you don't unpack your password protected archive in other app.           uLong uTotalOutBefore_hi = zi->ci.bstream.total_out_hi32;  while(...)  this is normal  update Current Item crc and sizes, version Made byversion neededcrccompr sizecompr size set internal file attributes field uncompr sizeuncompr size Add ZIP64 extra info field for uncompressed size  Add ZIP64 extra info field for compressed size  Add ZIP64 extra info field for relative offset to local file header of current file  we can not write more data to the buffer that we have room for.  Add Extra Information Header for 'ZIP64 information'  HeaderID  DataSize  Update how much extra free space we got in the memory buffer  and increase the centralheader size so the new ZIP64 fields are included  ( 4 below is the size of HeaderID and DataSize field )  Update the extra info size field  Update the LocalFileHeader with the new values.  crc 32, unknown  Update the size in the ZIP64 extended field.  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown  Write local Descriptor after file data  crc 32, unknown  compressed size, unknown  uncompressed size, unknown  compressed size, unknown  uncompressed size, unknown num disks number of the disk with the start of the central directory relative offset Relative offset to the Zip64EndOfCentralDirectory total disks Do not support spawning of disk so always say 1 here number of the disk with the start of the central directory  size of this 'zip64 end of central directory'  why ZPOS64_T of this ?  version made by  version needed  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the starting disk number signature number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  use value in ZIP64 record  total number of entries in the central dir  use value in ZIP64 record  size of the central directory  offset of start of central directory with respect to the starting disk number  Header found.  skip it. do not copy to temp buffer  Extra Info block should not be removed, So copy it to the temp buffer.  clean old extra info block.  copy the new extra info block over the old  set the new extra info size  If the output is non-seekable, the data descriptor is needed. If the data descriptor is not written, we can't use a non-seekable output.

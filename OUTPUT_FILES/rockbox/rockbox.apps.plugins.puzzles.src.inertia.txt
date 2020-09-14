@@ -1,0 +1,991 @@
+
+ * inertia.c: Game involving navigating round a grid picking up
+ * gems.
+ * 
+ * Game rules and basic generator design by Ben Olmstead.
+ * This re-implementation was written by Simon Tatham.
+  Used in the game_state  Used in the game IDs  Used in the game generation  Used only in the game_drawstate
+ * Lvalue macro which expects x and y to be in range.
+ 
+ * Rvalue macro which can cope with x and y being out of range.
+  structure copy 
+     * Avoid completely degenerate cases which only have one
+     * row/column. We probably could generate completable puzzles
+     * of that shape, but they'd be forced to be extremely boring
+     * and at large sizes would take a while to happen upon at
+     * random as well.
+     
+     * The grid construction algorithm creates 1/5 as many gems as
+     * grid squares, and must create at least one gem to have an
+     * actual puzzle. However, an area-five grid is ruled out by
+     * the above constraint, so the practical minimum is six.
+      ----------------------------------------------------------------------
+ * Solver used by grid generator.
+ 
+     * Returns true if we can transition directly from (x1,y1)
+     * going in direction dir1, to (x2,y2) going in direction dir2.
+     
+     * If we're actually in the middle of an unoccupyable square,
+     * we cannot make any move.
+     
+     * If a move is capable of stopping at x1,y1,dir1, and x2,y2 is
+     * the same coordinate as x1,y1, then we can make the
+     * transition (by stopping and changing direction).
+     * 
+     * For this to be the case, we have to either have a wall
+     * beyond x1,y1,dir1, or have a stop on x1,y1.
+     
+     * If a move is capable of continuing here, then x1,y1,dir1 can
+     * move one space further on.
+     
+     * That's it.
+     
+     * This function finds all the candidate gem squares, which are
+     * precisely those squares which can be picked up on a loop
+     * from the starting point back to the starting point. Doing
+     * this may involve passing through such a square in the middle
+     * of a move; so simple breadth-first search over the _squares_
+     * of the grid isn't quite adequate, because it might be that
+     * we can only reach a gem from the start by moving over it in
+     * one direction, but can only return to the start if we were
+     * moving over it in another direction.
+     * 
+     * Instead, we BFS over a space which mentions each grid square
+     * eight times - once for each direction. We also BFS twice:
+     * once to find out what square+direction pairs we can reach
+     * _from_ the start point, and once to find out what pairs we
+     * can reach the start point from. Then a square is reachable
+     * if any of the eight directions for that square has both
+     * flags set.
+     
+     * Find the starting square.
+      placate optimiser 
+	 * `head' and `tail' are indices within sc->positions which
+	 * track the list of board positions left to process.
+	 
+	 * Now repeatedly pick an element off the list and process
+	 * it.
+	 
+	     * The places we attempt to switch to here are:
+	     * 	- each possible direction change (all the other
+	     * 	  directions in this square)
+	     * 	- one step further in the direction we're going (or
+	     * 	  one step back, if we're in the reachable_to pass).
+	     
+     * And that should be it. Now all we have to do is find the
+     * squares for which there exists _some_ direction such that
+     * the square plus that direction form a tuple which is both
+     * reachable from the start and reachable to the start.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+	 * We're going to fill the grid with the five basic piece
+	 * types in about 1/5 proportion. For the moment, though,
+	 * we leave out the gems, because we'll put those in
+	 * _after_ we run the solver to tell us where the viable
+	 * locations are.
+	 
+	 * Find the viable gem locations, and immediately give up
+	 * and try again if there aren't enough of them.
+	 
+	 * We _could_ now select wh/5 of the POSSGEMs and set them
+	 * to GEM, and have a viable level. However, there's a
+	 * chance that a large chunk of the level will turn out to
+	 * be unreachable, so first we test for that.
+	 * 
+	 * We do this by finding the largest distance from any
+	 * square to the nearest POSSGEM, by breadth-first search.
+	 * If this is above a critical threshold, we abort and try
+	 * again.
+	 * 
+	 * (This search is purely geometric, without regard to
+	 * walls and long ways round.)
+	 
+	 * Now abandon this grid and go round again if maxdist is
+	 * above the required threshold.
+	 * 
+	 * We can safely start the threshold as low as 2. As we
+	 * accumulate failed generation attempts, we gradually
+	 * raise it as we get more desperate.
+	 
+	 * Now our reachable squares are plausibly evenly
+	 * distributed over the grid. I'm not actually going to
+	 * _enforce_ that I place the gems in such a way as not to
+	 * increase that maxdist value; I'm now just going to trust
+	 * to the RNG to pick a sensible subset of the POSSGEMs.
+	  structure copy 
+ * Internal function used by solver.
+ 
+     * See where we'd get to if we made this move.
+      placate optimiser  hit a wall, so end up stationary  hit a stop, so end up stationary  hit a gem, so we're still moving  hit a mine, so move is invalid 
+     * Before anything else, deal with the special case in which
+     * all the gems are already collected.
+     
+     * Solving Inertia is a question of first building up the graph
+     * of where you can get to from where, and secondly finding a
+     * tour of the graph which takes in every gem.
+     * 
+     * This is of course a close cousin of the travelling salesman
+     * problem, which is NP-complete; so I rather doubt that any
+     * _optimal_ tour can be found in plausible time. Hence I'll
+     * restrict myself to merely finding a not-too-bad one.
+     * 
+     * First construct the graph, by bfsing out move by move from
+     * the current player position. Graph vertices will be
+     * 	- every endpoint of a move (place the ball can be
+     * 	  stationary)
+     * 	- every gem (place the ball can go through in motion).
+     * 	  Vertices of this type have an associated direction, since
+     * 	  if a gem can be collected by sliding through it in two
+     * 	  different directions it doesn't follow that you can
+     * 	  change direction at it.
+     * 
+     * I'm going to refer to a non-directional vertex as
+     * (y*w+x)*DP1+DIRECTIONS, and a directional one as
+     * (y*w+x)*DP1+d.
+     
+     * nodeindex[] maps node codes as shown above to numeric
+     * indices in the nodes[] array.
+     
+     * Do the bfs to find all the interesting graph nodes.
+     
+	 * Plot all possible moves from this node. If the node is
+	 * directed, there's only one.
+	 
+     * Now we know how many nodes we have, allocate the edge array
+     * and go through setting up the edges.
+     
+     * Now set up the backedges array.
+     
+     * Set up the initial tour. At all times, our tour is a circuit
+     * of graph vertices (which may, and probably will often,
+     * repeat vertices). To begin with, it's got exactly one vertex
+     * in it, which is the player's current starting point.
+      node index 0 is the starting posn 
+     * Track which gems are as yet unvisited.
+     
+     * Allocate space for doing bfses inside the main loop.
+     
+     * Now enter the main loop, in each iteration of which we
+     * extend the tour to take in an as yet uncollected gem.
+     
+	 * First, start a pair of bfses at _every_ vertex currently
+	 * in the tour, and extend them outwards to find the
+	 * nearest as yet unreached gem vertex.
+	 * 
+	 * This is largely a heuristic: we could pick _any_ doubly
+	 * reachable node here and still get a valid tour as
+	 * output. I hope that picking a nearby one will result in
+	 * generally good tours.
+	  Now find the nearest unvisited gem. 
+	     * If we get to here, we haven't found a gem we can get
+	     * at all, which means we terminate this loop.
+	     
+	 * Now we have a graph vertex at list[tail-1] which is an
+	 * unvisited gem. We want to add that vertex to our tour.
+	 * So we run two more breadth-first searches: one starting
+	 * from that vertex and following forward edges, and
+	 * another starting from the same vertex and following
+	 * backward edges. This allows us to determine, for each
+	 * node on the current tour, how quickly we can get both to
+	 * and from the target vertex from that node.
+	 printf("pass %d: set dist of vertex %d to %d (via %d)\n", pass, ti, dp[ti], ni);
+	 * Now for every node n, dist[n] gives the length of the
+	 * shortest path from the target vertex to n, and dist2[n]
+	 * gives the length of the shortest path from n to the
+	 * target vertex.
+	 * 
+	 * Our next step is to search linearly along the tour to
+	 * find the optimum place to insert a trip to the target
+	 * vertex and back. Our two options are either
+	 *  (a) to find two adjacent vertices A,B in the tour and
+	 * 	replace the edge A->B with the path A->target->B
+	 *  (b) to find a single vertex X in the tour and replace
+	 * 	it with the complete round trip X->target->X.
+	 * We do whichever takes the fewest moves.
+	 
+	     * Try a round trip from vertex i.
+	     
+	     * Try a trip from vertex i via target to vertex i+1.
+	     
+	     * We couldn't find a round trip taking in this gem _at
+	     * all_. Give up.
+	     
+	 * Now actually lengthen the tour to take in this round
+	 * trip.
+	 
+	 * Find the shortest-path routes to and from the target,
+	 * and write them into the circuit.
+	 printf("pass %d: looking at vertex %d\n", pass, ni);
+	 * Finally, mark all gems that the new piece of circuit
+	 * passes through as visited.
+	 
+     * That's got a basic solution. Now optimise it by removing
+     * redundant sections of the circuit: it's entirely possible
+     * that a piece of circuit we carefully inserted at one stage
+     * to collect a gem has become pointless because the steps
+     * required to collect some _later_ gem necessarily passed
+     * through the same one.
+     * 
+     * So first we go through and work out how many times each gem
+     * is collected. Then we look for maximal sections of circuit
+     * which are redundant in the sense that their removal would
+     * not reduce any gem's collection count to zero, and replace
+     * each one with a bfs-derived fastest path between their
+     * endpoints.
+     
+	     * If there's any gem we didn't end up visiting at all,
+	     * give up.
+	     
+		     * circuit[i] collects a gem for the only time,
+		     * or is the last node in the circuit.
+		     * Therefore it cannot be removed; so we now
+		     * want to replace the path from circuit[j] to
+		     * circuit[i] with a bfs-shortest path.
+		     
+		     * Set up the upper and lower bounds of the
+		     * reduced section.
+		      resume loop from the right place  printf("dest=%d circuitlen=%d ni=%d dist[ni]=%d\n", dest, circuitlen, ni, dist[ni]); 
+		     * Now re-increment the visit counts for the
+		     * new path.
+		     
+	 * If we've managed an entire reduction pass in each
+	 * direction and not made the solution any shorter, we're
+	 * _really_ done.
+	 
+     * Encode the solution as a move string.
+     
+     * The deaths counter needs preserving across a serialisation.
+     
+     * Increment the deaths counter. We only do this if
+     * ui->just_made_move is set (redoing a suicide move doesn't
+     * kill you _again_), and also we only do it if the game wasn't
+     * already completed (once you're finished, you can play).
+     , wh = w*h 
+	 * Mouse-clicking near the target point (or, more
+	 * accurately, in the appropriate octant) is an alternative
+	 * way to input moves.
+	  I pass dx,dy rather than dy,dx so that the octants
+	     * end up the right way round. 
+     * Reject the move if we can't make it at all due to a wall
+     * being in the way.
+     
+     * Reject the move if we're dead!
+     
+     * Otherwise, we can make the move. All we need to specify is
+     * the direction.
+      ret has a soln-pointing dup , wh = w*h 
+	 * This is a solve move, so we don't actually _change_ the
+	 * grid but merely set up a stored solution path.
+	  huh?  wall in the way! 
+     * Now make the move.
+      or gems == 0  or not a solution  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  We can't allocate the blitter rectangle for the player background
+     * until we know what size to make it.  structure copy  rockbox hack , wh = w*h 
+     * Erase the player sprite.
+     
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * If we're in the process of animating a move, let's start by
+     * working out how far the player has moved from their _older_
+     * state.
+     
+     * Draw the grid contents.
+     * 
+     * We count the gems as we go round this loop, for the purposes
+     * of the status bar. Of course we have a gems counter in the
+     * game_state already, but if we do the counting in this loop
+     * then it tracks gems being picked up in a sliding move, and
+     * updates one by one.
+     
+	     * Special case: if the player is in the process of
+	     * moving over a gem, we draw the gem iff they haven't
+	     * gone past it yet.
+	     
+		 * Compute the distance from this square to the
+		 * original player position.
+		 
+		 * If the player has reached here, use the new grid
+		 * element. Otherwise use the old one.
+		 
+	     * Special case: erase the mine the dead player is
+	     * sitting on. Only at the end of the move.
+	     
+     * Gem counter in the status bar. We replace it with
+     * `COMPLETED!' when it reaches zero ... or rather, when the
+     * _current state_'s gem counter is zero. (Thus, `Gems: 0' is
+     * shown between the collection of the last gem and the
+     * completion of the move animation that did it.)
+      We subtract one from the visible death counter if we're still
+     * animating the move at the end of which the death took place. 
+     * Draw the player sprite.
+     
+     * We never report the game as lost, on the grounds that if the
+     * player has died they're quite likely to want to undo and carry
+     * on.
+      game_request_keys  wants_statusbar  flags 
+ * inertia.c: Game involving navigating round a grid picking up
+ * gems.
+ * 
+ * Game rules and basic generator design by Ben Olmstead.
+ * This re-implementation was written by Simon Tatham.
+  Used in the game_state  Used in the game IDs  Used in the game generation  Used only in the game_drawstate
+ * Lvalue macro which expects x and y to be in range.
+ 
+ * Rvalue macro which can cope with x and y being out of range.
+  structure copy 
+     * Avoid completely degenerate cases which only have one
+     * row/column. We probably could generate completable puzzles
+     * of that shape, but they'd be forced to be extremely boring
+     * and at large sizes would take a while to happen upon at
+     * random as well.
+     
+     * The grid construction algorithm creates 1/5 as many gems as
+     * grid squares, and must create at least one gem to have an
+     * actual puzzle. However, an area-five grid is ruled out by
+     * the above constraint, so the practical minimum is six.
+      ----------------------------------------------------------------------
+ * Solver used by grid generator.
+ 
+     * Returns true if we can transition directly from (x1,y1)
+     * going in direction dir1, to (x2,y2) going in direction dir2.
+     
+     * If we're actually in the middle of an unoccupyable square,
+     * we cannot make any move.
+     
+     * If a move is capable of stopping at x1,y1,dir1, and x2,y2 is
+     * the same coordinate as x1,y1, then we can make the
+     * transition (by stopping and changing direction).
+     * 
+     * For this to be the case, we have to either have a wall
+     * beyond x1,y1,dir1, or have a stop on x1,y1.
+     
+     * If a move is capable of continuing here, then x1,y1,dir1 can
+     * move one space further on.
+     
+     * That's it.
+     
+     * This function finds all the candidate gem squares, which are
+     * precisely those squares which can be picked up on a loop
+     * from the starting point back to the starting point. Doing
+     * this may involve passing through such a square in the middle
+     * of a move; so simple breadth-first search over the _squares_
+     * of the grid isn't quite adequate, because it might be that
+     * we can only reach a gem from the start by moving over it in
+     * one direction, but can only return to the start if we were
+     * moving over it in another direction.
+     * 
+     * Instead, we BFS over a space which mentions each grid square
+     * eight times - once for each direction. We also BFS twice:
+     * once to find out what square+direction pairs we can reach
+     * _from_ the start point, and once to find out what pairs we
+     * can reach the start point from. Then a square is reachable
+     * if any of the eight directions for that square has both
+     * flags set.
+     
+     * Find the starting square.
+      placate optimiser 
+	 * `head' and `tail' are indices within sc->positions which
+	 * track the list of board positions left to process.
+	 
+	 * Now repeatedly pick an element off the list and process
+	 * it.
+	 
+	     * The places we attempt to switch to here are:
+	     * 	- each possible direction change (all the other
+	     * 	  directions in this square)
+	     * 	- one step further in the direction we're going (or
+	     * 	  one step back, if we're in the reachable_to pass).
+	     
+     * And that should be it. Now all we have to do is find the
+     * squares for which there exists _some_ direction such that
+     * the square plus that direction form a tuple which is both
+     * reachable from the start and reachable to the start.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+	 * We're going to fill the grid with the five basic piece
+	 * types in about 1/5 proportion. For the moment, though,
+	 * we leave out the gems, because we'll put those in
+	 * _after_ we run the solver to tell us where the viable
+	 * locations are.
+	 
+	 * Find the viable gem locations, and immediately give up
+	 * and try again if there aren't enough of them.
+	 
+	 * We _could_ now select wh/5 of the POSSGEMs and set them
+	 * to GEM, and have a viable level. However, there's a
+	 * chance that a large chunk of the level will turn out to
+	 * be unreachable, so first we test for that.
+	 * 
+	 * We do this by finding the largest distance from any
+	 * square to the nearest POSSGEM, by breadth-first search.
+	 * If this is above a critical threshold, we abort and try
+	 * again.
+	 * 
+	 * (This search is purely geometric, without regard to
+	 * walls and long ways round.)
+	 
+	 * Now abandon this grid and go round again if maxdist is
+	 * above the required threshold.
+	 * 
+	 * We can safely start the threshold as low as 2. As we
+	 * accumulate failed generation attempts, we gradually
+	 * raise it as we get more desperate.
+	 
+	 * Now our reachable squares are plausibly evenly
+	 * distributed over the grid. I'm not actually going to
+	 * _enforce_ that I place the gems in such a way as not to
+	 * increase that maxdist value; I'm now just going to trust
+	 * to the RNG to pick a sensible subset of the POSSGEMs.
+	  structure copy 
+ * Internal function used by solver.
+ 
+     * See where we'd get to if we made this move.
+      placate optimiser  hit a wall, so end up stationary  hit a stop, so end up stationary  hit a gem, so we're still moving  hit a mine, so move is invalid 
+     * Before anything else, deal with the special case in which
+     * all the gems are already collected.
+     
+     * Solving Inertia is a question of first building up the graph
+     * of where you can get to from where, and secondly finding a
+     * tour of the graph which takes in every gem.
+     * 
+     * This is of course a close cousin of the travelling salesman
+     * problem, which is NP-complete; so I rather doubt that any
+     * _optimal_ tour can be found in plausible time. Hence I'll
+     * restrict myself to merely finding a not-too-bad one.
+     * 
+     * First construct the graph, by bfsing out move by move from
+     * the current player position. Graph vertices will be
+     * 	- every endpoint of a move (place the ball can be
+     * 	  stationary)
+     * 	- every gem (place the ball can go through in motion).
+     * 	  Vertices of this type have an associated direction, since
+     * 	  if a gem can be collected by sliding through it in two
+     * 	  different directions it doesn't follow that you can
+     * 	  change direction at it.
+     * 
+     * I'm going to refer to a non-directional vertex as
+     * (y*w+x)*DP1+DIRECTIONS, and a directional one as
+     * (y*w+x)*DP1+d.
+     
+     * nodeindex[] maps node codes as shown above to numeric
+     * indices in the nodes[] array.
+     
+     * Do the bfs to find all the interesting graph nodes.
+     
+	 * Plot all possible moves from this node. If the node is
+	 * directed, there's only one.
+	 
+     * Now we know how many nodes we have, allocate the edge array
+     * and go through setting up the edges.
+     
+     * Now set up the backedges array.
+     
+     * Set up the initial tour. At all times, our tour is a circuit
+     * of graph vertices (which may, and probably will often,
+     * repeat vertices). To begin with, it's got exactly one vertex
+     * in it, which is the player's current starting point.
+      node index 0 is the starting posn 
+     * Track which gems are as yet unvisited.
+     
+     * Allocate space for doing bfses inside the main loop.
+     
+     * Now enter the main loop, in each iteration of which we
+     * extend the tour to take in an as yet uncollected gem.
+     
+	 * First, start a pair of bfses at _every_ vertex currently
+	 * in the tour, and extend them outwards to find the
+	 * nearest as yet unreached gem vertex.
+	 * 
+	 * This is largely a heuristic: we could pick _any_ doubly
+	 * reachable node here and still get a valid tour as
+	 * output. I hope that picking a nearby one will result in
+	 * generally good tours.
+	  Now find the nearest unvisited gem. 
+	     * If we get to here, we haven't found a gem we can get
+	     * at all, which means we terminate this loop.
+	     
+	 * Now we have a graph vertex at list[tail-1] which is an
+	 * unvisited gem. We want to add that vertex to our tour.
+	 * So we run two more breadth-first searches: one starting
+	 * from that vertex and following forward edges, and
+	 * another starting from the same vertex and following
+	 * backward edges. This allows us to determine, for each
+	 * node on the current tour, how quickly we can get both to
+	 * and from the target vertex from that node.
+	 printf("pass %d: set dist of vertex %d to %d (via %d)\n", pass, ti, dp[ti], ni);
+	 * Now for every node n, dist[n] gives the length of the
+	 * shortest path from the target vertex to n, and dist2[n]
+	 * gives the length of the shortest path from n to the
+	 * target vertex.
+	 * 
+	 * Our next step is to search linearly along the tour to
+	 * find the optimum place to insert a trip to the target
+	 * vertex and back. Our two options are either
+	 *  (a) to find two adjacent vertices A,B in the tour and
+	 * 	replace the edge A->B with the path A->target->B
+	 *  (b) to find a single vertex X in the tour and replace
+	 * 	it with the complete round trip X->target->X.
+	 * We do whichever takes the fewest moves.
+	 
+	     * Try a round trip from vertex i.
+	     
+	     * Try a trip from vertex i via target to vertex i+1.
+	     
+	     * We couldn't find a round trip taking in this gem _at
+	     * all_. Give up.
+	     
+	 * Now actually lengthen the tour to take in this round
+	 * trip.
+	 
+	 * Find the shortest-path routes to and from the target,
+	 * and write them into the circuit.
+	 printf("pass %d: looking at vertex %d\n", pass, ni);
+	 * Finally, mark all gems that the new piece of circuit
+	 * passes through as visited.
+	 
+     * That's got a basic solution. Now optimise it by removing
+     * redundant sections of the circuit: it's entirely possible
+     * that a piece of circuit we carefully inserted at one stage
+     * to collect a gem has become pointless because the steps
+     * required to collect some _later_ gem necessarily passed
+     * through the same one.
+     * 
+     * So first we go through and work out how many times each gem
+     * is collected. Then we look for maximal sections of circuit
+     * which are redundant in the sense that their removal would
+     * not reduce any gem's collection count to zero, and replace
+     * each one with a bfs-derived fastest path between their
+     * endpoints.
+     
+	     * If there's any gem we didn't end up visiting at all,
+	     * give up.
+	     
+		     * circuit[i] collects a gem for the only time,
+		     * or is the last node in the circuit.
+		     * Therefore it cannot be removed; so we now
+		     * want to replace the path from circuit[j] to
+		     * circuit[i] with a bfs-shortest path.
+		     
+		     * Set up the upper and lower bounds of the
+		     * reduced section.
+		      resume loop from the right place  printf("dest=%d circuitlen=%d ni=%d dist[ni]=%d\n", dest, circuitlen, ni, dist[ni]); 
+		     * Now re-increment the visit counts for the
+		     * new path.
+		     
+	 * If we've managed an entire reduction pass in each
+	 * direction and not made the solution any shorter, we're
+	 * _really_ done.
+	 
+     * Encode the solution as a move string.
+     
+     * The deaths counter needs preserving across a serialisation.
+     
+     * Increment the deaths counter. We only do this if
+     * ui->just_made_move is set (redoing a suicide move doesn't
+     * kill you _again_), and also we only do it if the game wasn't
+     * already completed (once you're finished, you can play).
+     , wh = w*h 
+	 * Mouse-clicking near the target point (or, more
+	 * accurately, in the appropriate octant) is an alternative
+	 * way to input moves.
+	  I pass dx,dy rather than dy,dx so that the octants
+	     * end up the right way round. 
+     * Reject the move if we can't make it at all due to a wall
+     * being in the way.
+     
+     * Reject the move if we're dead!
+     
+     * Otherwise, we can make the move. All we need to specify is
+     * the direction.
+      ret has a soln-pointing dup , wh = w*h 
+	 * This is a solve move, so we don't actually _change_ the
+	 * grid but merely set up a stored solution path.
+	  huh?  wall in the way! 
+     * Now make the move.
+      or gems == 0  or not a solution  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  We can't allocate the blitter rectangle for the player background
+     * until we know what size to make it.  structure copy  rockbox hack , wh = w*h 
+     * Erase the player sprite.
+     
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * If we're in the process of animating a move, let's start by
+     * working out how far the player has moved from their _older_
+     * state.
+     
+     * Draw the grid contents.
+     * 
+     * We count the gems as we go round this loop, for the purposes
+     * of the status bar. Of course we have a gems counter in the
+     * game_state already, but if we do the counting in this loop
+     * then it tracks gems being picked up in a sliding move, and
+     * updates one by one.
+     
+	     * Special case: if the player is in the process of
+	     * moving over a gem, we draw the gem iff they haven't
+	     * gone past it yet.
+	     
+		 * Compute the distance from this square to the
+		 * original player position.
+		 
+		 * If the player has reached here, use the new grid
+		 * element. Otherwise use the old one.
+		 
+	     * Special case: erase the mine the dead player is
+	     * sitting on. Only at the end of the move.
+	     
+     * Gem counter in the status bar. We replace it with
+     * `COMPLETED!' when it reaches zero ... or rather, when the
+     * _current state_'s gem counter is zero. (Thus, `Gems: 0' is
+     * shown between the collection of the last gem and the
+     * completion of the move animation that did it.)
+      We subtract one from the visible death counter if we're still
+     * animating the move at the end of which the death took place. 
+     * Draw the player sprite.
+     
+     * We never report the game as lost, on the grounds that if the
+     * player has died they're quite likely to want to undo and carry
+     * on.
+      game_request_keys  wants_statusbar  flags 
+ * inertia.c: Game involving navigating round a grid picking up
+ * gems.
+ * 
+ * Game rules and basic generator design by Ben Olmstead.
+ * This re-implementation was written by Simon Tatham.
+  Used in the game_state  Used in the game IDs  Used in the game generation  Used only in the game_drawstate
+ * Lvalue macro which expects x and y to be in range.
+ 
+ * Rvalue macro which can cope with x and y being out of range.
+  structure copy 
+     * Avoid completely degenerate cases which only have one
+     * row/column. We probably could generate completable puzzles
+     * of that shape, but they'd be forced to be extremely boring
+     * and at large sizes would take a while to happen upon at
+     * random as well.
+     
+     * The grid construction algorithm creates 1/5 as many gems as
+     * grid squares, and must create at least one gem to have an
+     * actual puzzle. However, an area-five grid is ruled out by
+     * the above constraint, so the practical minimum is six.
+      ----------------------------------------------------------------------
+ * Solver used by grid generator.
+ 
+     * Returns true if we can transition directly from (x1,y1)
+     * going in direction dir1, to (x2,y2) going in direction dir2.
+     
+     * If we're actually in the middle of an unoccupyable square,
+     * we cannot make any move.
+     
+     * If a move is capable of stopping at x1,y1,dir1, and x2,y2 is
+     * the same coordinate as x1,y1, then we can make the
+     * transition (by stopping and changing direction).
+     * 
+     * For this to be the case, we have to either have a wall
+     * beyond x1,y1,dir1, or have a stop on x1,y1.
+     
+     * If a move is capable of continuing here, then x1,y1,dir1 can
+     * move one space further on.
+     
+     * That's it.
+     
+     * This function finds all the candidate gem squares, which are
+     * precisely those squares which can be picked up on a loop
+     * from the starting point back to the starting point. Doing
+     * this may involve passing through such a square in the middle
+     * of a move; so simple breadth-first search over the _squares_
+     * of the grid isn't quite adequate, because it might be that
+     * we can only reach a gem from the start by moving over it in
+     * one direction, but can only return to the start if we were
+     * moving over it in another direction.
+     * 
+     * Instead, we BFS over a space which mentions each grid square
+     * eight times - once for each direction. We also BFS twice:
+     * once to find out what square+direction pairs we can reach
+     * _from_ the start point, and once to find out what pairs we
+     * can reach the start point from. Then a square is reachable
+     * if any of the eight directions for that square has both
+     * flags set.
+     
+     * Find the starting square.
+      placate optimiser 
+	 * `head' and `tail' are indices within sc->positions which
+	 * track the list of board positions left to process.
+	 
+	 * Now repeatedly pick an element off the list and process
+	 * it.
+	 
+	     * The places we attempt to switch to here are:
+	     * 	- each possible direction change (all the other
+	     * 	  directions in this square)
+	     * 	- one step further in the direction we're going (or
+	     * 	  one step back, if we're in the reachable_to pass).
+	     
+     * And that should be it. Now all we have to do is find the
+     * squares for which there exists _some_ direction such that
+     * the square plus that direction form a tuple which is both
+     * reachable from the start and reachable to the start.
+      ----------------------------------------------------------------------
+ * Grid generation code.
+ 
+	 * We're going to fill the grid with the five basic piece
+	 * types in about 1/5 proportion. For the moment, though,
+	 * we leave out the gems, because we'll put those in
+	 * _after_ we run the solver to tell us where the viable
+	 * locations are.
+	 
+	 * Find the viable gem locations, and immediately give up
+	 * and try again if there aren't enough of them.
+	 
+	 * We _could_ now select wh/5 of the POSSGEMs and set them
+	 * to GEM, and have a viable level. However, there's a
+	 * chance that a large chunk of the level will turn out to
+	 * be unreachable, so first we test for that.
+	 * 
+	 * We do this by finding the largest distance from any
+	 * square to the nearest POSSGEM, by breadth-first search.
+	 * If this is above a critical threshold, we abort and try
+	 * again.
+	 * 
+	 * (This search is purely geometric, without regard to
+	 * walls and long ways round.)
+	 
+	 * Now abandon this grid and go round again if maxdist is
+	 * above the required threshold.
+	 * 
+	 * We can safely start the threshold as low as 2. As we
+	 * accumulate failed generation attempts, we gradually
+	 * raise it as we get more desperate.
+	 
+	 * Now our reachable squares are plausibly evenly
+	 * distributed over the grid. I'm not actually going to
+	 * _enforce_ that I place the gems in such a way as not to
+	 * increase that maxdist value; I'm now just going to trust
+	 * to the RNG to pick a sensible subset of the POSSGEMs.
+	  structure copy 
+ * Internal function used by solver.
+ 
+     * See where we'd get to if we made this move.
+      placate optimiser  hit a wall, so end up stationary  hit a stop, so end up stationary  hit a gem, so we're still moving  hit a mine, so move is invalid 
+     * Before anything else, deal with the special case in which
+     * all the gems are already collected.
+     
+     * Solving Inertia is a question of first building up the graph
+     * of where you can get to from where, and secondly finding a
+     * tour of the graph which takes in every gem.
+     * 
+     * This is of course a close cousin of the travelling salesman
+     * problem, which is NP-complete; so I rather doubt that any
+     * _optimal_ tour can be found in plausible time. Hence I'll
+     * restrict myself to merely finding a not-too-bad one.
+     * 
+     * First construct the graph, by bfsing out move by move from
+     * the current player position. Graph vertices will be
+     * 	- every endpoint of a move (place the ball can be
+     * 	  stationary)
+     * 	- every gem (place the ball can go through in motion).
+     * 	  Vertices of this type have an associated direction, since
+     * 	  if a gem can be collected by sliding through it in two
+     * 	  different directions it doesn't follow that you can
+     * 	  change direction at it.
+     * 
+     * I'm going to refer to a non-directional vertex as
+     * (y*w+x)*DP1+DIRECTIONS, and a directional one as
+     * (y*w+x)*DP1+d.
+     
+     * nodeindex[] maps node codes as shown above to numeric
+     * indices in the nodes[] array.
+     
+     * Do the bfs to find all the interesting graph nodes.
+     
+	 * Plot all possible moves from this node. If the node is
+	 * directed, there's only one.
+	 
+     * Now we know how many nodes we have, allocate the edge array
+     * and go through setting up the edges.
+     
+     * Now set up the backedges array.
+     
+     * Set up the initial tour. At all times, our tour is a circuit
+     * of graph vertices (which may, and probably will often,
+     * repeat vertices). To begin with, it's got exactly one vertex
+     * in it, which is the player's current starting point.
+      node index 0 is the starting posn 
+     * Track which gems are as yet unvisited.
+     
+     * Allocate space for doing bfses inside the main loop.
+     
+     * Now enter the main loop, in each iteration of which we
+     * extend the tour to take in an as yet uncollected gem.
+     
+	 * First, start a pair of bfses at _every_ vertex currently
+	 * in the tour, and extend them outwards to find the
+	 * nearest as yet unreached gem vertex.
+	 * 
+	 * This is largely a heuristic: we could pick _any_ doubly
+	 * reachable node here and still get a valid tour as
+	 * output. I hope that picking a nearby one will result in
+	 * generally good tours.
+	  Now find the nearest unvisited gem. 
+	     * If we get to here, we haven't found a gem we can get
+	     * at all, which means we terminate this loop.
+	     
+	 * Now we have a graph vertex at list[tail-1] which is an
+	 * unvisited gem. We want to add that vertex to our tour.
+	 * So we run two more breadth-first searches: one starting
+	 * from that vertex and following forward edges, and
+	 * another starting from the same vertex and following
+	 * backward edges. This allows us to determine, for each
+	 * node on the current tour, how quickly we can get both to
+	 * and from the target vertex from that node.
+	 printf("pass %d: set dist of vertex %d to %d (via %d)\n", pass, ti, dp[ti], ni);
+	 * Now for every node n, dist[n] gives the length of the
+	 * shortest path from the target vertex to n, and dist2[n]
+	 * gives the length of the shortest path from n to the
+	 * target vertex.
+	 * 
+	 * Our next step is to search linearly along the tour to
+	 * find the optimum place to insert a trip to the target
+	 * vertex and back. Our two options are either
+	 *  (a) to find two adjacent vertices A,B in the tour and
+	 * 	replace the edge A->B with the path A->target->B
+	 *  (b) to find a single vertex X in the tour and replace
+	 * 	it with the complete round trip X->target->X.
+	 * We do whichever takes the fewest moves.
+	 
+	     * Try a round trip from vertex i.
+	     
+	     * Try a trip from vertex i via target to vertex i+1.
+	     
+	     * We couldn't find a round trip taking in this gem _at
+	     * all_. Give up.
+	     
+	 * Now actually lengthen the tour to take in this round
+	 * trip.
+	 
+	 * Find the shortest-path routes to and from the target,
+	 * and write them into the circuit.
+	 printf("pass %d: looking at vertex %d\n", pass, ni);
+	 * Finally, mark all gems that the new piece of circuit
+	 * passes through as visited.
+	 
+     * That's got a basic solution. Now optimise it by removing
+     * redundant sections of the circuit: it's entirely possible
+     * that a piece of circuit we carefully inserted at one stage
+     * to collect a gem has become pointless because the steps
+     * required to collect some _later_ gem necessarily passed
+     * through the same one.
+     * 
+     * So first we go through and work out how many times each gem
+     * is collected. Then we look for maximal sections of circuit
+     * which are redundant in the sense that their removal would
+     * not reduce any gem's collection count to zero, and replace
+     * each one with a bfs-derived fastest path between their
+     * endpoints.
+     
+	     * If there's any gem we didn't end up visiting at all,
+	     * give up.
+	     
+		     * circuit[i] collects a gem for the only time,
+		     * or is the last node in the circuit.
+		     * Therefore it cannot be removed; so we now
+		     * want to replace the path from circuit[j] to
+		     * circuit[i] with a bfs-shortest path.
+		     
+		     * Set up the upper and lower bounds of the
+		     * reduced section.
+		      resume loop from the right place  printf("dest=%d circuitlen=%d ni=%d dist[ni]=%d\n", dest, circuitlen, ni, dist[ni]); 
+		     * Now re-increment the visit counts for the
+		     * new path.
+		     
+	 * If we've managed an entire reduction pass in each
+	 * direction and not made the solution any shorter, we're
+	 * _really_ done.
+	 
+     * Encode the solution as a move string.
+     
+     * The deaths counter needs preserving across a serialisation.
+     
+     * Increment the deaths counter. We only do this if
+     * ui->just_made_move is set (redoing a suicide move doesn't
+     * kill you _again_), and also we only do it if the game wasn't
+     * already completed (once you're finished, you can play).
+     , wh = w*h 
+	 * Mouse-clicking near the target point (or, more
+	 * accurately, in the appropriate octant) is an alternative
+	 * way to input moves.
+	  I pass dx,dy rather than dy,dx so that the octants
+	     * end up the right way round. 
+     * Reject the move if we can't make it at all due to a wall
+     * being in the way.
+     
+     * Reject the move if we're dead!
+     
+     * Otherwise, we can make the move. All we need to specify is
+     * the direction.
+      ret has a soln-pointing dup , wh = w*h 
+	 * This is a solve move, so we don't actually _change_ the
+	 * grid but merely set up a stored solution path.
+	  huh?  wall in the way! 
+     * Now make the move.
+      or gems == 0  or not a solution  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  We can't allocate the blitter rectangle for the player background
+     * until we know what size to make it.  structure copy  rockbox hack , wh = w*h 
+     * Erase the player sprite.
+     
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * If we're in the process of animating a move, let's start by
+     * working out how far the player has moved from their _older_
+     * state.
+     
+     * Draw the grid contents.
+     * 
+     * We count the gems as we go round this loop, for the purposes
+     * of the status bar. Of course we have a gems counter in the
+     * game_state already, but if we do the counting in this loop
+     * then it tracks gems being picked up in a sliding move, and
+     * updates one by one.
+     
+	     * Special case: if the player is in the process of
+	     * moving over a gem, we draw the gem iff they haven't
+	     * gone past it yet.
+	     
+		 * Compute the distance from this square to the
+		 * original player position.
+		 
+		 * If the player has reached here, use the new grid
+		 * element. Otherwise use the old one.
+		 
+	     * Special case: erase the mine the dead player is
+	     * sitting on. Only at the end of the move.
+	     
+     * Gem counter in the status bar. We replace it with
+     * `COMPLETED!' when it reaches zero ... or rather, when the
+     * _current state_'s gem counter is zero. (Thus, `Gems: 0' is
+     * shown between the collection of the last gem and the
+     * completion of the move animation that did it.)
+      We subtract one from the visible death counter if we're still
+     * animating the move at the end of which the death took place. 
+     * Draw the player sprite.
+     
+     * We never report the game as lost, on the grounds that if the
+     * player has died they're quite likely to want to undo and carry
+     * on.
+      game_request_keys  wants_statusbar  flags 

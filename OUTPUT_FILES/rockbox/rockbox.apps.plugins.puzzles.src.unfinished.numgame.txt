@@ -1,0 +1,724 @@
+
+ * This program implements a breadth-first search which
+ * exhaustively solves the Countdown numbers game, and related
+ * games with slightly different rule sets such as `Flippo'.
+ * 
+ * Currently it is simply a standalone command-line utility to
+ * which you provide a set of numbers and it tells you everything
+ * it can make together with how many different ways it can be
+ * made. I would like ultimately to turn it into the generator for
+ * a Puzzles puzzle, but I haven't even started on writing a
+ * Puzzles user interface yet.
+ 
+ * TODO:
+ * 
+ *  - start thinking about difficulty ratings
+ *     + anything involving associative operations will be flagged
+ * 	 as many-paths because of the associative options (e.g.
+ * 	 2*3*4 can be (2*3)*4 or 2*(3*4), or indeed (2*4)*3). This
+ * 	 is probably a _good_ thing, since those are unusually
+ * 	 easy.
+ *     + tree-structured calculations ((a*b)/(c+d)) have multiple
+ * 	 paths because the independent branches of the tree can be
+ * 	 evaluated in either order, whereas straight-line
+ * 	 calculations with no branches will be considered easier.
+ * 	 Can we do anything about this? It's certainly not clear to
+ * 	 me that tree-structure calculations are _easier_, although
+ * 	 I'm also not convinced they're harder.
+ *     + I think for a realistic difficulty assessment we must also
+ * 	 consider the `obviousness' of the arithmetic operations in
+ * 	 some heuristic sense, and also (in Countdown) how many
+ * 	 numbers ended up being used.
+ *  - actually try some generations
+ *  - at this point we're probably ready to start on the Puzzles
+ *    integration.
+ 
+ * To search for numbers we can make, we employ a breadth-first
+ * search across the space of sets of input numbers. That is, for
+ * example, we start with the set (3,6,25,50,75,100); we apply
+ * moves which involve combining two numbers (e.g. adding the 50
+ * and the 75 takes us to the set (3,6,25,100,125); and then we see
+ * if we ever end up with a set containing (say) 952.
+ * 
+ * If the rules are changed so that all the numbers must be used,
+ * this is easy to adjust to: we simply see if we end up with a set
+ * containing _only_ (say) 952.
+ * 
+ * Obviously, we can vary the rules about permitted arithmetic
+ * operations simply by altering the set of valid moves in the bfs.
+ * However, there's one common rule in this sort of puzzle which
+ * takes a little more thought, and that's _concatenation_. For
+ * example, if you are given (say) four 4s and required to make 10,
+ * you are permitted to combine two of the 4s into a 44 to begin
+ * with, making (44-4)/4 = 10. However, you are generally not
+ * allowed to concatenate two numbers that _weren't_ both in the
+ * original input set (you couldn't multiply two 4s to get 16 and
+ * then concatenate a 4 on to it to make 164), so concatenation is
+ * not an operation which is valid in all situations.
+ * 
+ * We could enforce this restriction by storing a flag alongside
+ * each number indicating whether or not it's an original number;
+ * the rules being that concatenation of two numbers is only valid
+ * if they both have the original flag, and that its output _also_
+ * has the original flag (so that you can concatenate three 4s into
+ * a 444), but that applying any other arithmetic operation clears
+ * the original flag on the output. However, we can get marginally
+ * simpler than that by observing that since concatenation has to
+ * happen to a number before any other operation, we can simply
+ * place all the concatenations at the start of the search. In
+ * other words, we have a global flag on an entire number _set_
+ * which indicates whether we are still permitted to perform
+ * concatenations; if so, we can concatenate any of the numbers in
+ * that set. Performing any other operation clears the flag.
+  we can do concatenation  index of ancestor set in set list  operation that got here from prev  rationals stored as n,d pairs  # of rationals, so half # of ints  SETFLAG_CONCAT only, at present  number of ways to reach this set  primary ancestor  further ancestors, if we care  which number in the set is it?  number of ways to reach this 
+     * Most operations should be shown in the output working, but
+     * concatenation should not; we just take the result of the
+     * concatenation and assume that it's obvious how it was
+     * derived.
+     
+     * Text display of the operator, in expressions and for
+     * debugging respectively.
+     
+     * Flags dictating when the operator can be applied.
+     
+     * Priority of the operator (for avoiding unnecessary
+     * parentheses when formatting it into a string).
+     
+     * Associativity of the operator. Bit 0 means we need parens
+     * when the left operand of one of these operators is another
+     * instance of it, e.g. (2^3)^4. Bit 1 means we need parens
+     * when the right operand is another instance of the same
+     * operator, e.g. 2-(3-4). Thus:
+     * 
+     * 	- this field is 0 for a fully associative operator, since
+     * 	  we never need parens.
+     *  - it's 1 for a right-associative operator.
+     *  - it's 2 for a left-associative operator.
+     * 	- it's 3 for a _non_-associative operator (which always
+     * 	  uses parens just to be sure).
+     
+     * Whether the operator is commutative. Saves time in the
+     * search if we don't have to try it both ways round.
+     
+     * Function which implements the operator. Returns true on
+     * success, false on failure. Takes two rationals and writes
+     * out a third.
+      i.e. whichever one isn't zero 
+     * a0/a1 + b0/b1 = (a0*b1 + b0*a1) / (a1*b1)
+     
+     * a0/a1 - b0/b1 = (a0*b1 - b0*a1) / (a1*b1)
+     
+     * a0/a1 * b0/b1 = (a0*b0) / (a1*b1)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Exact division means we require the result to be an integer.
+     
+     * Find the smallest power of ten strictly greater than n.
+     *
+     * Special case: we must return at least 10, even if n is
+     * zero. (This is because this function is used for finding
+     * the power of ten by which to multiply a number being
+     * concatenated to the front of n, and concatenating 1 to 0
+     * should yield 10 and not 1.)
+      integer overflow 
+     * We can't concatenate anything which isn't a non-negative
+     * integer.
+     
+     * For concatenation, we can safely assume leading zeroes
+     * aren't an issue. It isn't clear whether they `should' be
+     * allowed, but it turns out not to matter: concatenating a
+     * leading zero on to a number in order to harmlessly get rid
+     * of the zero is never necessary because unwanted zeroes can
+     * be disposed of by adding them to something instead. So we
+     * disallow them always.
+     *
+     * The only other possibility is that you might want to
+     * concatenate a leading zero on to something and then
+     * concatenate another non-zero digit on to _that_ (to make,
+     * for example, 106); but that's also unnecessary, because you
+     * can make 106 just as easily by concatenating the 0 on to the
+     * _end_ of the 1 first.
+     
+     * Exponentiation is permitted if the result is rational. This
+     * means that:
+     * 
+     * 	- first we see whether we can take the (denominator-of-b)th
+     * 	  root of a and get a rational; if not, we give up.
+     * 
+     *  - then we do take that root of a
+     * 
+     *  - then we multiply by itself (numerator-of-b) times.
+     
+     * Factorials of non-negative integers are permitted.
+     
+     * However, a special case: we don't take a factorial of
+     * anything which would thereby remain the same.
+     
+     * Add a decimal digit to the front of a number;
+     * fail if it's not an integer.
+     * So, 1 --> 0.1, 15 --> 0.15,
+     * or, rather, 1 --> 1/10, 15 --> 15/100,
+     * x --> x / (smallest power of 10 > than x)
+     *
+     
+     * This converts a number like .4 to .44444..., or .45 to .45454...
+     * The input number must be -1 < a < 1.
+     *
+     * Calculate the smallest power of 10 that divides the denominator exactly,
+     * returning if no such power of 10 exists. Then multiply the numerator
+     * up accordingly, and the new denominator becomes that power of 10 - 1.
+      -1 < a < 1 
+     * A root B is: 1           iff a == 0
+     *              B ^ (1/A)   otherwise
+      0% = 0, uninteresting. 
+     * gamma(a) = (a-1)!
+     *
+     * special case not caught by perform_fact: gamma(1) is 1 so
+     * don't bother.
+     
+     * sqrt(0) == 0, sqrt(1) == 1: don't perform unary noops.
+     
+ * In Countdown, divisions resulting in fractions are disallowed.
+ * http://www.askoxford.com/wordgames/countdown/rules/
+ 
+ * A slightly different rule set which handles the reasonably well
+ * known puzzle of making 24 using two 3s and two 8s. For this we
+ * need rational rather than integer division.
+ 
+ * A still more permissive rule set usable for the four-4s problem
+ * and similar things. Permits concatenation.
+ 
+ * The most permissive ruleset I can think of. Permits
+ * exponentiation, and also silly unary operators like factorials.
+  Find where we want to insert the new number  Move everything else up  Insert the new number 
+	 * New set added to the tree.
+	 
+	 * Rediscovered an existing set. Update its npaths.
+	 
+	 * And optionally enter it as an additional ancestor.
+	 
+     * Start the set off empty.
+     
+     * Target numbers are always integers.
+     
+     * Start with the input set.
+     
+     * Now perform the breadth-first search: keep looping over sets
+     * until we run out of steam.
+     
+	 * Record all the valid output numbers in this state. We
+	 * can always do this if there's only one number in the
+	 * state; otherwise, we can only do it if we aren't
+	 * required to use all the numbers in coming to our answer.
+	 
+	 * Try every possible operation from this state.
+	  can't use this operation here  can't combine a number with itself  no need to do this both ways round  operation failed 
+ * Print a text formula for producing a given output.
+ 
+	 * This number was passed straight down from this set's
+	 * predecessor. Find its index in the previous set and
+	 * recurse to there.
+	 
+	 * This number was created by a displayed operator in the
+	 * transition from this set to its predecessor. Hence we
+	 * write an open paren, then recurse into the first
+	 * operand, then write the operator, then the second
+	 * operand, and finally close the paren.
+	 
+	 * Determine whether we need parentheses.
+	 
+	 * This number is either an original, or something formed
+	 * by a non-displayed operator (concatenation). Either way,
+	 * we display it as is.
+	 
+ * gcc -g -O0 -o numgame numgame.c -I.. ../{malloc,tree234,nullfe}.c -lm
+  vim: set shiftwidth=4 tabstop=8: 
+ * This program implements a breadth-first search which
+ * exhaustively solves the Countdown numbers game, and related
+ * games with slightly different rule sets such as `Flippo'.
+ * 
+ * Currently it is simply a standalone command-line utility to
+ * which you provide a set of numbers and it tells you everything
+ * it can make together with how many different ways it can be
+ * made. I would like ultimately to turn it into the generator for
+ * a Puzzles puzzle, but I haven't even started on writing a
+ * Puzzles user interface yet.
+ 
+ * TODO:
+ * 
+ *  - start thinking about difficulty ratings
+ *     + anything involving associative operations will be flagged
+ * 	 as many-paths because of the associative options (e.g.
+ * 	 2*3*4 can be (2*3)*4 or 2*(3*4), or indeed (2*4)*3). This
+ * 	 is probably a _good_ thing, since those are unusually
+ * 	 easy.
+ *     + tree-structured calculations ((a*b)/(c+d)) have multiple
+ * 	 paths because the independent branches of the tree can be
+ * 	 evaluated in either order, whereas straight-line
+ * 	 calculations with no branches will be considered easier.
+ * 	 Can we do anything about this? It's certainly not clear to
+ * 	 me that tree-structure calculations are _easier_, although
+ * 	 I'm also not convinced they're harder.
+ *     + I think for a realistic difficulty assessment we must also
+ * 	 consider the `obviousness' of the arithmetic operations in
+ * 	 some heuristic sense, and also (in Countdown) how many
+ * 	 numbers ended up being used.
+ *  - actually try some generations
+ *  - at this point we're probably ready to start on the Puzzles
+ *    integration.
+ 
+ * To search for numbers we can make, we employ a breadth-first
+ * search across the space of sets of input numbers. That is, for
+ * example, we start with the set (3,6,25,50,75,100); we apply
+ * moves which involve combining two numbers (e.g. adding the 50
+ * and the 75 takes us to the set (3,6,25,100,125); and then we see
+ * if we ever end up with a set containing (say) 952.
+ * 
+ * If the rules are changed so that all the numbers must be used,
+ * this is easy to adjust to: we simply see if we end up with a set
+ * containing _only_ (say) 952.
+ * 
+ * Obviously, we can vary the rules about permitted arithmetic
+ * operations simply by altering the set of valid moves in the bfs.
+ * However, there's one common rule in this sort of puzzle which
+ * takes a little more thought, and that's _concatenation_. For
+ * example, if you are given (say) four 4s and required to make 10,
+ * you are permitted to combine two of the 4s into a 44 to begin
+ * with, making (44-4)/4 = 10. However, you are generally not
+ * allowed to concatenate two numbers that _weren't_ both in the
+ * original input set (you couldn't multiply two 4s to get 16 and
+ * then concatenate a 4 on to it to make 164), so concatenation is
+ * not an operation which is valid in all situations.
+ * 
+ * We could enforce this restriction by storing a flag alongside
+ * each number indicating whether or not it's an original number;
+ * the rules being that concatenation of two numbers is only valid
+ * if they both have the original flag, and that its output _also_
+ * has the original flag (so that you can concatenate three 4s into
+ * a 444), but that applying any other arithmetic operation clears
+ * the original flag on the output. However, we can get marginally
+ * simpler than that by observing that since concatenation has to
+ * happen to a number before any other operation, we can simply
+ * place all the concatenations at the start of the search. In
+ * other words, we have a global flag on an entire number _set_
+ * which indicates whether we are still permitted to perform
+ * concatenations; if so, we can concatenate any of the numbers in
+ * that set. Performing any other operation clears the flag.
+  we can do concatenation  index of ancestor set in set list  operation that got here from prev  rationals stored as n,d pairs  # of rationals, so half # of ints  SETFLAG_CONCAT only, at present  number of ways to reach this set  primary ancestor  further ancestors, if we care  which number in the set is it?  number of ways to reach this 
+     * Most operations should be shown in the output working, but
+     * concatenation should not; we just take the result of the
+     * concatenation and assume that it's obvious how it was
+     * derived.
+     
+     * Text display of the operator, in expressions and for
+     * debugging respectively.
+     
+     * Flags dictating when the operator can be applied.
+     
+     * Priority of the operator (for avoiding unnecessary
+     * parentheses when formatting it into a string).
+     
+     * Associativity of the operator. Bit 0 means we need parens
+     * when the left operand of one of these operators is another
+     * instance of it, e.g. (2^3)^4. Bit 1 means we need parens
+     * when the right operand is another instance of the same
+     * operator, e.g. 2-(3-4). Thus:
+     * 
+     * 	- this field is 0 for a fully associative operator, since
+     * 	  we never need parens.
+     *  - it's 1 for a right-associative operator.
+     *  - it's 2 for a left-associative operator.
+     * 	- it's 3 for a _non_-associative operator (which always
+     * 	  uses parens just to be sure).
+     
+     * Whether the operator is commutative. Saves time in the
+     * search if we don't have to try it both ways round.
+     
+     * Function which implements the operator. Returns true on
+     * success, false on failure. Takes two rationals and writes
+     * out a third.
+      i.e. whichever one isn't zero 
+     * a0/a1 + b0/b1 = (a0*b1 + b0*a1) / (a1*b1)
+     
+     * a0/a1 - b0/b1 = (a0*b1 - b0*a1) / (a1*b1)
+     
+     * a0/a1 * b0/b1 = (a0*b0) / (a1*b1)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Exact division means we require the result to be an integer.
+     
+     * Find the smallest power of ten strictly greater than n.
+     *
+     * Special case: we must return at least 10, even if n is
+     * zero. (This is because this function is used for finding
+     * the power of ten by which to multiply a number being
+     * concatenated to the front of n, and concatenating 1 to 0
+     * should yield 10 and not 1.)
+      integer overflow 
+     * We can't concatenate anything which isn't a non-negative
+     * integer.
+     
+     * For concatenation, we can safely assume leading zeroes
+     * aren't an issue. It isn't clear whether they `should' be
+     * allowed, but it turns out not to matter: concatenating a
+     * leading zero on to a number in order to harmlessly get rid
+     * of the zero is never necessary because unwanted zeroes can
+     * be disposed of by adding them to something instead. So we
+     * disallow them always.
+     *
+     * The only other possibility is that you might want to
+     * concatenate a leading zero on to something and then
+     * concatenate another non-zero digit on to _that_ (to make,
+     * for example, 106); but that's also unnecessary, because you
+     * can make 106 just as easily by concatenating the 0 on to the
+     * _end_ of the 1 first.
+     
+     * Exponentiation is permitted if the result is rational. This
+     * means that:
+     * 
+     * 	- first we see whether we can take the (denominator-of-b)th
+     * 	  root of a and get a rational; if not, we give up.
+     * 
+     *  - then we do take that root of a
+     * 
+     *  - then we multiply by itself (numerator-of-b) times.
+     
+     * Factorials of non-negative integers are permitted.
+     
+     * However, a special case: we don't take a factorial of
+     * anything which would thereby remain the same.
+     
+     * Add a decimal digit to the front of a number;
+     * fail if it's not an integer.
+     * So, 1 --> 0.1, 15 --> 0.15,
+     * or, rather, 1 --> 1/10, 15 --> 15/100,
+     * x --> x / (smallest power of 10 > than x)
+     *
+     
+     * This converts a number like .4 to .44444..., or .45 to .45454...
+     * The input number must be -1 < a < 1.
+     *
+     * Calculate the smallest power of 10 that divides the denominator exactly,
+     * returning if no such power of 10 exists. Then multiply the numerator
+     * up accordingly, and the new denominator becomes that power of 10 - 1.
+      -1 < a < 1 
+     * A root B is: 1           iff a == 0
+     *              B ^ (1/A)   otherwise
+      0% = 0, uninteresting. 
+     * gamma(a) = (a-1)!
+     *
+     * special case not caught by perform_fact: gamma(1) is 1 so
+     * don't bother.
+     
+     * sqrt(0) == 0, sqrt(1) == 1: don't perform unary noops.
+     
+ * In Countdown, divisions resulting in fractions are disallowed.
+ * http://www.askoxford.com/wordgames/countdown/rules/
+ 
+ * A slightly different rule set which handles the reasonably well
+ * known puzzle of making 24 using two 3s and two 8s. For this we
+ * need rational rather than integer division.
+ 
+ * A still more permissive rule set usable for the four-4s problem
+ * and similar things. Permits concatenation.
+ 
+ * The most permissive ruleset I can think of. Permits
+ * exponentiation, and also silly unary operators like factorials.
+  Find where we want to insert the new number  Move everything else up  Insert the new number 
+	 * New set added to the tree.
+	 
+	 * Rediscovered an existing set. Update its npaths.
+	 
+	 * And optionally enter it as an additional ancestor.
+	 
+     * Start the set off empty.
+     
+     * Target numbers are always integers.
+     
+     * Start with the input set.
+     
+     * Now perform the breadth-first search: keep looping over sets
+     * until we run out of steam.
+     
+	 * Record all the valid output numbers in this state. We
+	 * can always do this if there's only one number in the
+	 * state; otherwise, we can only do it if we aren't
+	 * required to use all the numbers in coming to our answer.
+	 
+	 * Try every possible operation from this state.
+	  can't use this operation here  can't combine a number with itself  no need to do this both ways round  operation failed 
+ * Print a text formula for producing a given output.
+ 
+	 * This number was passed straight down from this set's
+	 * predecessor. Find its index in the previous set and
+	 * recurse to there.
+	 
+	 * This number was created by a displayed operator in the
+	 * transition from this set to its predecessor. Hence we
+	 * write an open paren, then recurse into the first
+	 * operand, then write the operator, then the second
+	 * operand, and finally close the paren.
+	 
+	 * Determine whether we need parentheses.
+	 
+	 * This number is either an original, or something formed
+	 * by a non-displayed operator (concatenation). Either way,
+	 * we display it as is.
+	 
+ * gcc -g -O0 -o numgame numgame.c -I.. ../{malloc,tree234,nullfe}.c -lm
+  vim: set shiftwidth=4 tabstop=8: 
+ * This program implements a breadth-first search which
+ * exhaustively solves the Countdown numbers game, and related
+ * games with slightly different rule sets such as `Flippo'.
+ * 
+ * Currently it is simply a standalone command-line utility to
+ * which you provide a set of numbers and it tells you everything
+ * it can make together with how many different ways it can be
+ * made. I would like ultimately to turn it into the generator for
+ * a Puzzles puzzle, but I haven't even started on writing a
+ * Puzzles user interface yet.
+ 
+ * TODO:
+ * 
+ *  - start thinking about difficulty ratings
+ *     + anything involving associative operations will be flagged
+ * 	 as many-paths because of the associative options (e.g.
+ * 	 2*3*4 can be (2*3)*4 or 2*(3*4), or indeed (2*4)*3). This
+ * 	 is probably a _good_ thing, since those are unusually
+ * 	 easy.
+ *     + tree-structured calculations ((a*b)/(c+d)) have multiple
+ * 	 paths because the independent branches of the tree can be
+ * 	 evaluated in either order, whereas straight-line
+ * 	 calculations with no branches will be considered easier.
+ * 	 Can we do anything about this? It's certainly not clear to
+ * 	 me that tree-structure calculations are _easier_, although
+ * 	 I'm also not convinced they're harder.
+ *     + I think for a realistic difficulty assessment we must also
+ * 	 consider the `obviousness' of the arithmetic operations in
+ * 	 some heuristic sense, and also (in Countdown) how many
+ * 	 numbers ended up being used.
+ *  - actually try some generations
+ *  - at this point we're probably ready to start on the Puzzles
+ *    integration.
+ 
+ * To search for numbers we can make, we employ a breadth-first
+ * search across the space of sets of input numbers. That is, for
+ * example, we start with the set (3,6,25,50,75,100); we apply
+ * moves which involve combining two numbers (e.g. adding the 50
+ * and the 75 takes us to the set (3,6,25,100,125); and then we see
+ * if we ever end up with a set containing (say) 952.
+ * 
+ * If the rules are changed so that all the numbers must be used,
+ * this is easy to adjust to: we simply see if we end up with a set
+ * containing _only_ (say) 952.
+ * 
+ * Obviously, we can vary the rules about permitted arithmetic
+ * operations simply by altering the set of valid moves in the bfs.
+ * However, there's one common rule in this sort of puzzle which
+ * takes a little more thought, and that's _concatenation_. For
+ * example, if you are given (say) four 4s and required to make 10,
+ * you are permitted to combine two of the 4s into a 44 to begin
+ * with, making (44-4)/4 = 10. However, you are generally not
+ * allowed to concatenate two numbers that _weren't_ both in the
+ * original input set (you couldn't multiply two 4s to get 16 and
+ * then concatenate a 4 on to it to make 164), so concatenation is
+ * not an operation which is valid in all situations.
+ * 
+ * We could enforce this restriction by storing a flag alongside
+ * each number indicating whether or not it's an original number;
+ * the rules being that concatenation of two numbers is only valid
+ * if they both have the original flag, and that its output _also_
+ * has the original flag (so that you can concatenate three 4s into
+ * a 444), but that applying any other arithmetic operation clears
+ * the original flag on the output. However, we can get marginally
+ * simpler than that by observing that since concatenation has to
+ * happen to a number before any other operation, we can simply
+ * place all the concatenations at the start of the search. In
+ * other words, we have a global flag on an entire number _set_
+ * which indicates whether we are still permitted to perform
+ * concatenations; if so, we can concatenate any of the numbers in
+ * that set. Performing any other operation clears the flag.
+  we can do concatenation  index of ancestor set in set list  operation that got here from prev  rationals stored as n,d pairs  # of rationals, so half # of ints  SETFLAG_CONCAT only, at present  number of ways to reach this set  primary ancestor  further ancestors, if we care  which number in the set is it?  number of ways to reach this 
+     * Most operations should be shown in the output working, but
+     * concatenation should not; we just take the result of the
+     * concatenation and assume that it's obvious how it was
+     * derived.
+     
+     * Text display of the operator, in expressions and for
+     * debugging respectively.
+     
+     * Flags dictating when the operator can be applied.
+     
+     * Priority of the operator (for avoiding unnecessary
+     * parentheses when formatting it into a string).
+     
+     * Associativity of the operator. Bit 0 means we need parens
+     * when the left operand of one of these operators is another
+     * instance of it, e.g. (2^3)^4. Bit 1 means we need parens
+     * when the right operand is another instance of the same
+     * operator, e.g. 2-(3-4). Thus:
+     * 
+     * 	- this field is 0 for a fully associative operator, since
+     * 	  we never need parens.
+     *  - it's 1 for a right-associative operator.
+     *  - it's 2 for a left-associative operator.
+     * 	- it's 3 for a _non_-associative operator (which always
+     * 	  uses parens just to be sure).
+     
+     * Whether the operator is commutative. Saves time in the
+     * search if we don't have to try it both ways round.
+     
+     * Function which implements the operator. Returns true on
+     * success, false on failure. Takes two rationals and writes
+     * out a third.
+      i.e. whichever one isn't zero 
+     * a0/a1 + b0/b1 = (a0*b1 + b0*a1) / (a1*b1)
+     
+     * a0/a1 - b0/b1 = (a0*b1 - b0*a1) / (a1*b1)
+     
+     * a0/a1 * b0/b1 = (a0*b0) / (a1*b1)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Division by zero is outlawed.
+     
+     * a0/a1 / b0/b1 = (a0*b1) / (a1*b0)
+     
+     * Exact division means we require the result to be an integer.
+     
+     * Find the smallest power of ten strictly greater than n.
+     *
+     * Special case: we must return at least 10, even if n is
+     * zero. (This is because this function is used for finding
+     * the power of ten by which to multiply a number being
+     * concatenated to the front of n, and concatenating 1 to 0
+     * should yield 10 and not 1.)
+      integer overflow 
+     * We can't concatenate anything which isn't a non-negative
+     * integer.
+     
+     * For concatenation, we can safely assume leading zeroes
+     * aren't an issue. It isn't clear whether they `should' be
+     * allowed, but it turns out not to matter: concatenating a
+     * leading zero on to a number in order to harmlessly get rid
+     * of the zero is never necessary because unwanted zeroes can
+     * be disposed of by adding them to something instead. So we
+     * disallow them always.
+     *
+     * The only other possibility is that you might want to
+     * concatenate a leading zero on to something and then
+     * concatenate another non-zero digit on to _that_ (to make,
+     * for example, 106); but that's also unnecessary, because you
+     * can make 106 just as easily by concatenating the 0 on to the
+     * _end_ of the 1 first.
+     
+     * Exponentiation is permitted if the result is rational. This
+     * means that:
+     * 
+     * 	- first we see whether we can take the (denominator-of-b)th
+     * 	  root of a and get a rational; if not, we give up.
+     * 
+     *  - then we do take that root of a
+     * 
+     *  - then we multiply by itself (numerator-of-b) times.
+     
+     * Factorials of non-negative integers are permitted.
+     
+     * However, a special case: we don't take a factorial of
+     * anything which would thereby remain the same.
+     
+     * Add a decimal digit to the front of a number;
+     * fail if it's not an integer.
+     * So, 1 --> 0.1, 15 --> 0.15,
+     * or, rather, 1 --> 1/10, 15 --> 15/100,
+     * x --> x / (smallest power of 10 > than x)
+     *
+     
+     * This converts a number like .4 to .44444..., or .45 to .45454...
+     * The input number must be -1 < a < 1.
+     *
+     * Calculate the smallest power of 10 that divides the denominator exactly,
+     * returning if no such power of 10 exists. Then multiply the numerator
+     * up accordingly, and the new denominator becomes that power of 10 - 1.
+      -1 < a < 1 
+     * A root B is: 1           iff a == 0
+     *              B ^ (1/A)   otherwise
+      0% = 0, uninteresting. 
+     * gamma(a) = (a-1)!
+     *
+     * special case not caught by perform_fact: gamma(1) is 1 so
+     * don't bother.
+     
+     * sqrt(0) == 0, sqrt(1) == 1: don't perform unary noops.
+     
+ * In Countdown, divisions resulting in fractions are disallowed.
+ * http://www.askoxford.com/wordgames/countdown/rules/
+ 
+ * A slightly different rule set which handles the reasonably well
+ * known puzzle of making 24 using two 3s and two 8s. For this we
+ * need rational rather than integer division.
+ 
+ * A still more permissive rule set usable for the four-4s problem
+ * and similar things. Permits concatenation.
+ 
+ * The most permissive ruleset I can think of. Permits
+ * exponentiation, and also silly unary operators like factorials.
+  Find where we want to insert the new number  Move everything else up  Insert the new number 
+	 * New set added to the tree.
+	 
+	 * Rediscovered an existing set. Update its npaths.
+	 
+	 * And optionally enter it as an additional ancestor.
+	 
+     * Start the set off empty.
+     
+     * Target numbers are always integers.
+     
+     * Start with the input set.
+     
+     * Now perform the breadth-first search: keep looping over sets
+     * until we run out of steam.
+     
+	 * Record all the valid output numbers in this state. We
+	 * can always do this if there's only one number in the
+	 * state; otherwise, we can only do it if we aren't
+	 * required to use all the numbers in coming to our answer.
+	 
+	 * Try every possible operation from this state.
+	  can't use this operation here  can't combine a number with itself  no need to do this both ways round  operation failed 
+ * Print a text formula for producing a given output.
+ 
+	 * This number was passed straight down from this set's
+	 * predecessor. Find its index in the previous set and
+	 * recurse to there.
+	 
+	 * This number was created by a displayed operator in the
+	 * transition from this set to its predecessor. Hence we
+	 * write an open paren, then recurse into the first
+	 * operand, then write the operator, then the second
+	 * operand, and finally close the paren.
+	 
+	 * Determine whether we need parentheses.
+	 
+	 * This number is either an original, or something formed
+	 * by a non-displayed operator (concatenation). Either way,
+	 * we display it as is.
+	 
+ * gcc -g -O0 -o numgame numgame.c -I.. ../{malloc,tree234,nullfe}.c -lm
+  vim: set shiftwidth=4 tabstop=8: 

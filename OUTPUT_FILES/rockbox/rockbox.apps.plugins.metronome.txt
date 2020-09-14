@@ -1,0 +1,298 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Matthias Wientapper, 2014-2015 Thomas Orgis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * TODO:
+ *  - Think about generating the sounds on startup with SWCODEC.
+ *************************************************************************** About time resolution:
+    1000 means 1 ms resolution. It should get better with higher values
+    in theory, but in practice, too small timer intervals increase the
+    chance of being missed and make the metronome lag behind. Mean tempo
+    still works out with very small divider values (29 even) as long as
+    the rounding error compensation is active, although beat intervals
+    become jerky. You compromise between long-term accuracy and steadyness
+    from one beat to the next.
+
+    A drift you have to accept comes just from the audio clock itself, or even
+    from the difference between clocks in the device. The Sansa Clip+ has around
+    0.04 % error in audio frequency using the "good" PLLB. I presume that the
+    difference between timing using PLLA and PLLB is at least that big. Something
+    up to 40 ms time difference over one minute when comparing to an external
+    reference or just the metronome plugin with playback of a prepared PCM track
+    is to be expected.
+
+    Also, since playback on SWCODEC is not allowed to happen inside the timer
+    callback, there is a delay introduced by the main loop scheduling. This
+    could be compensated for by delaying the audio depending on a counter
+    incremented since the period elapsed in the callback, at the price of
+    putting the display out of sync. On a Clip+, the schedule delay isn't
+    biggest problem (drift for fine timer resolution is).
+
+    All in all, 1 ms is too small, 2 ms seems to work fine ...
+    4 ms might still be cool, too.
+ Simulator really wants 1024. Not 1000, not 512, only 1024.
+   Otherwise it is strangely slow.  2 ms resolution  actual (not quarter) beats per minute above which display blinking
+   is deactivated (since it is not needed anymore and because of performance
+   issues)  maximum count of programmed parts  IRIVER_H100_PAD||IRIVER_H300_PAD  raw PCM  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    Utilities from pdbox plugin (Copyright (C) 2009 Wincent Balin) --- am I
+    supposed to supply these functions with the plugin? Should I use a library?
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  Implementation of strtod() and atof(),
+   taken from SanOS (http://www.jbox.dk/sanos/).  Reset Rockbox errno -- W.B.  Skip leading whitespace Handle optional sign Fall through to increment position Process string of digits Process decimal part Correct for sign Process an exponent string Handle optional sign Fall through to increment pos Process string of digits Scale the result * * * * * * * * * * * * * * * * * * * * * *
+           Actual metronome stuff
+* * * * * * * * * * * * * * * * * * * * * *  file descriptor, global for cleanup().  Round fixed-point number to integer.  float to fixed-point  simple dynamic memory management
+    - only allocate blocks serially
+    - deallocation of most recent blocks by resetting the free region pointer
+    - everything aligned to 4 bytes (wasting some bytes, but playing safe)
+ beginning of managed region.  just after end of managed region  pointer to unused free space  position to reset to  Initialize memory management.  Can I trust that pointer to be aligned? Better be safe.  Remember and reset free region, for temporary mem usage.  Always handing out multiples of alignment size.  One part of a track, with one tempo (range), meter, etc.  linked list links index (in order, please)  Duration of part in bars.  3 in 3/4  4 in 3/4 to adjust bpm value  base tempo (1/4 notes per minute)  end tempo   either NULL or (bars*beats_per_bar) values  fixed-point acceleration in 1/min (really)  volume offset in integer dB  Store pattern characters verbatim for max. 64 beats (no string
+       termination). One could save storage here by encoding things in bits,
+       or by allocating dynamically to begin with.  linked list of parts  current part  total number of parts  Count parts with parsing errors.  Initialize a part that is not yet placed into the list.  Add to the list.  Stay away from zero.  Yay! Global state variables!  switch for programmed tracks metronome  Needed?  How big shall this become?  The currently (approximate) active bpm value, set from calc_period().  Should be unsigned?  beat interval in timer ticks  fixed-point error of last period computation  elapsed ticks  A beat is/was playing and count needs to increase.  Current display state code.  Draw display on next occasion  global static buffer for messages in any situation  For line parsing, more is needed, allocated on demand.
+   As my memory management doesn't allow to free it, keeping it local
+   ist not smart.  global state for tempo tapping  Really necessary? Cannot just play mono?
+   Also: This is wasted memory!  Convert the mono samples to interleaved stereo  State: 0: blank/title, 1: tick, 2: tock 3: silent klick  TODO: Could use more smart placement, using
+   lcd_getstringsize() and such.  Draw odd/even ticks/tocks differently to be able to go without
+           display clearing in between for fast beats.  One line in several.  Would it hurt to draw a 3rd line to 2-line display?
+           I guess there are 3-line displays out there.  Wildly guessing here with puts().  track mode  !track_mode  Trigger drawing of display at the next occasion using given state.  Actually draw display.  Modify actual volume by given offset without changing the configured one.
+   This is for parts with associated volume.  tempo at a certain point in beat space in an accelerated part  Offset could be negative, actually, so ensure tempo stays within both
+       bounds  deceleration  Calculate number of ticks to wait till next beat.  in quarter notes  Hack: Put the factor 60 in before computing deltat, to preserve
+       some accuracty.  Fixed tempo.  Minutes per base beat, from quarters per minute.  Acceleration, varying period with each beat.  Always computed from start of part for seeking and accuracy.  Playing safe with too small tempo changes, avoiding the acceleration
+           math that might divide by very small deltat.  deltat = 1.f / ps->accel * rb_log(v1/v0)  Arbitrarily choosing v1.  The treatment of the rounding error when converting to integer
+       period using period_diff helps a lot to keep track lengths close to
+       "correct" even with timerfreq_div as low as 77. Actually, I have _less_
+       drift than with timerfreq_div of 1000!   Last beat finished, to prepare for the next one.  Bar counter always incremented for acceleration, but only checked
+           against a limit if there is one.  Always recompute period, as acceleration changes it for each beat.  Decide what to play, update display, play it.
+   Beat counting happens here, too.  Hack: Clear trigger to avoid race condition.  Blinking and specific sound for tick, tock and silent beat.
+           Drawing display first for slow machines (YH820), to avoid
+           interrupting audio for regular playback.  helper function to change the volume by a certain amount, +/-
+   ripped from video.c function to accelerate bpm change I presume the timer ensures that not more than one instance
+   of the callback is running at a given time.  Clear blinker if tempo is slow enough.  Stopping playback means incrementing the beat. Normally, it would be
+   incremented after the passing of the current note duration, naturally
+   while starting the next one.  Finish the current beat.  Start playing immediately (or after a millisecond).  Conserve power: Only start timer when actually playing.  stop audio ISR 
+    Parse part definitions from tempomap file (see header for format).
+    Not bothering with encoding issues here.
+ parse meter spec into part structure if given token matches  Careful not to misinterpret accelerated tempo specification:
+       120-150/4 -> tempo
+       3/4 -> meter  Number before and after the '/'.  Only accept positive numbers.  Parse tempo, successful when getting a positive integer out of the token.  tempo[-tempo2/accel] ... first number always main tempo  Only positive numbers. This avoids the pattern string and general
+       strangeness, unless -150 should mean "from previous tempo to 150".  This parser is not fool-proof. It parses valid data, but could
+       do funny things if you provide tempo/tempo2-accel, for example.
+       My credo is that the application doesn't crash, but if you give rubbish,
+       you'll get rubbish.  Parse or compute accel in bpm/bar.  bars/bpm  bpm/bar  Compute from tempo difference and bar count.  Correct sign for all cases, starting with positive value.  Negative only when end tempo is smaller.  Convert (quarterbeats-per-minute per bar) -> 1/min, which could be
+           seen as beats-per-minute/beat  1/min  The other fancy variant: One tempo per beat.  It is a bug when the parser called this before. Alloc once.  The metronome pattern.
+   Ensure that the correct meter is present before calling this!  First check if the pattern is valid, error out if not.  Now store it.  Check condition, set error code and bail out if violated.  Skip comments and empty lines quickly.  Check for and store label.  After the optional label, there can be up to 5 tokens of interest.
+       Collect them in advance to make the parser code more sane.  Now try to be smart about guessing which token can be what value.
+       Remember: Always parse meter before pattern or tempo!  <bars> <tempo>  <bars> <meter> <tempo>  <bars> <tempo> <pattern>  <bars> <tempo> <volume>  <bars> <meter> <tempo> <pattern>  <bars> <tempo> <pattern> <volume>  <bars> <meter> <tempo> <volume>  the complete set  <bars> <meter> <tempo> <pattern> <volume>  For parsed parts default to emphasize every first beat.  all good  Remove part after some error.  Endless parts only know position 0 to step to.  This will jump to bar 0 for endless parts.  Always calculate period for acceleration.  Stepping forward in endless part always goes to the next one, if any.  Advanced one part.  Always calculate period for acceleration.  Each tap resets the position.  Could use fixed point math and rounding, even.  sync tock to tapping  stop audio IS  Select playback  Crazyness, allocating line buffer depending on free memory.  I'm assuming that read_line always terminates.  If no parts given, start in simple metronome mode.  Just checking the early bailout here.  main loop  Draws display before playback.  get out of here  If there was some action, display drawing is still needed.
+           This _might_ disturb audio on slow machines, but
+           then, you could just stop pressing buttons, then;-)  This determines the accuracy of the metronome with SWCODEC ... the
+           scheduler decides when we are allowed to play. **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Matthias Wientapper, 2014-2015 Thomas Orgis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * TODO:
+ *  - Think about generating the sounds on startup with SWCODEC.
+ *************************************************************************** About time resolution:
+    1000 means 1 ms resolution. It should get better with higher values
+    in theory, but in practice, too small timer intervals increase the
+    chance of being missed and make the metronome lag behind. Mean tempo
+    still works out with very small divider values (29 even) as long as
+    the rounding error compensation is active, although beat intervals
+    become jerky. You compromise between long-term accuracy and steadyness
+    from one beat to the next.
+
+    A drift you have to accept comes just from the audio clock itself, or even
+    from the difference between clocks in the device. The Sansa Clip+ has around
+    0.04 % error in audio frequency using the "good" PLLB. I presume that the
+    difference between timing using PLLA and PLLB is at least that big. Something
+    up to 40 ms time difference over one minute when comparing to an external
+    reference or just the metronome plugin with playback of a prepared PCM track
+    is to be expected.
+
+    Also, since playback on SWCODEC is not allowed to happen inside the timer
+    callback, there is a delay introduced by the main loop scheduling. This
+    could be compensated for by delaying the audio depending on a counter
+    incremented since the period elapsed in the callback, at the price of
+    putting the display out of sync. On a Clip+, the schedule delay isn't
+    biggest problem (drift for fine timer resolution is).
+
+    All in all, 1 ms is too small, 2 ms seems to work fine ...
+    4 ms might still be cool, too.
+ Simulator really wants 1024. Not 1000, not 512, only 1024.
+   Otherwise it is strangely slow.  2 ms resolution  actual (not quarter) beats per minute above which display blinking
+   is deactivated (since it is not needed anymore and because of performance
+   issues)  maximum count of programmed parts  IRIVER_H100_PAD||IRIVER_H300_PAD  raw PCM  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    Utilities from pdbox plugin (Copyright (C) 2009 Wincent Balin) --- am I
+    supposed to supply these functions with the plugin? Should I use a library?
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  Implementation of strtod() and atof(),
+   taken from SanOS (http://www.jbox.dk/sanos/).  Reset Rockbox errno -- W.B.  Skip leading whitespace Handle optional sign Fall through to increment position Process string of digits Process decimal part Correct for sign Process an exponent string Handle optional sign Fall through to increment pos Process string of digits Scale the result * * * * * * * * * * * * * * * * * * * * * *
+           Actual metronome stuff
+* * * * * * * * * * * * * * * * * * * * * *  file descriptor, global for cleanup().  Round fixed-point number to integer.  float to fixed-point  simple dynamic memory management
+    - only allocate blocks serially
+    - deallocation of most recent blocks by resetting the free region pointer
+    - everything aligned to 4 bytes (wasting some bytes, but playing safe)
+ beginning of managed region.  just after end of managed region  pointer to unused free space  position to reset to  Initialize memory management.  Can I trust that pointer to be aligned? Better be safe.  Remember and reset free region, for temporary mem usage.  Always handing out multiples of alignment size.  One part of a track, with one tempo (range), meter, etc.  linked list links index (in order, please)  Duration of part in bars.  3 in 3/4  4 in 3/4 to adjust bpm value  base tempo (1/4 notes per minute)  end tempo   either NULL or (bars*beats_per_bar) values  fixed-point acceleration in 1/min (really)  volume offset in integer dB  Store pattern characters verbatim for max. 64 beats (no string
+       termination). One could save storage here by encoding things in bits,
+       or by allocating dynamically to begin with.  linked list of parts  current part  total number of parts  Count parts with parsing errors.  Initialize a part that is not yet placed into the list.  Add to the list.  Stay away from zero.  Yay! Global state variables!  switch for programmed tracks metronome  Needed?  How big shall this become?  The currently (approximate) active bpm value, set from calc_period().  Should be unsigned?  beat interval in timer ticks  fixed-point error of last period computation  elapsed ticks  A beat is/was playing and count needs to increase.  Current display state code.  Draw display on next occasion  global static buffer for messages in any situation  For line parsing, more is needed, allocated on demand.
+   As my memory management doesn't allow to free it, keeping it local
+   ist not smart.  global state for tempo tapping  Really necessary? Cannot just play mono?
+   Also: This is wasted memory!  Convert the mono samples to interleaved stereo  State: 0: blank/title, 1: tick, 2: tock 3: silent klick  TODO: Could use more smart placement, using
+   lcd_getstringsize() and such.  Draw odd/even ticks/tocks differently to be able to go without
+           display clearing in between for fast beats.  One line in several.  Would it hurt to draw a 3rd line to 2-line display?
+           I guess there are 3-line displays out there.  Wildly guessing here with puts().  track mode  !track_mode  Trigger drawing of display at the next occasion using given state.  Actually draw display.  Modify actual volume by given offset without changing the configured one.
+   This is for parts with associated volume.  tempo at a certain point in beat space in an accelerated part  Offset could be negative, actually, so ensure tempo stays within both
+       bounds  deceleration  Calculate number of ticks to wait till next beat.  in quarter notes  Hack: Put the factor 60 in before computing deltat, to preserve
+       some accuracty.  Fixed tempo.  Minutes per base beat, from quarters per minute.  Acceleration, varying period with each beat.  Always computed from start of part for seeking and accuracy.  Playing safe with too small tempo changes, avoiding the acceleration
+           math that might divide by very small deltat.  deltat = 1.f / ps->accel * rb_log(v1/v0)  Arbitrarily choosing v1.  The treatment of the rounding error when converting to integer
+       period using period_diff helps a lot to keep track lengths close to
+       "correct" even with timerfreq_div as low as 77. Actually, I have _less_
+       drift than with timerfreq_div of 1000!   Last beat finished, to prepare for the next one.  Bar counter always incremented for acceleration, but only checked
+           against a limit if there is one.  Always recompute period, as acceleration changes it for each beat.  Decide what to play, update display, play it.
+   Beat counting happens here, too.  Hack: Clear trigger to avoid race condition.  Blinking and specific sound for tick, tock and silent beat.
+           Drawing display first for slow machines (YH820), to avoid
+           interrupting audio for regular playback.  helper function to change the volume by a certain amount, +/-
+   ripped from video.c function to accelerate bpm change I presume the timer ensures that not more than one instance
+   of the callback is running at a given time.  Clear blinker if tempo is slow enough.  Stopping playback means incrementing the beat. Normally, it would be
+   incremented after the passing of the current note duration, naturally
+   while starting the next one.  Finish the current beat.  Start playing immediately (or after a millisecond).  Conserve power: Only start timer when actually playing.  stop audio ISR 
+    Parse part definitions from tempomap file (see header for format).
+    Not bothering with encoding issues here.
+ parse meter spec into part structure if given token matches  Careful not to misinterpret accelerated tempo specification:
+       120-150/4 -> tempo
+       3/4 -> meter  Number before and after the '/'.  Only accept positive numbers.  Parse tempo, successful when getting a positive integer out of the token.  tempo[-tempo2/accel] ... first number always main tempo  Only positive numbers. This avoids the pattern string and general
+       strangeness, unless -150 should mean "from previous tempo to 150".  This parser is not fool-proof. It parses valid data, but could
+       do funny things if you provide tempo/tempo2-accel, for example.
+       My credo is that the application doesn't crash, but if you give rubbish,
+       you'll get rubbish.  Parse or compute accel in bpm/bar.  bars/bpm  bpm/bar  Compute from tempo difference and bar count.  Correct sign for all cases, starting with positive value.  Negative only when end tempo is smaller.  Convert (quarterbeats-per-minute per bar) -> 1/min, which could be
+           seen as beats-per-minute/beat  1/min  The other fancy variant: One tempo per beat.  It is a bug when the parser called this before. Alloc once.  The metronome pattern.
+   Ensure that the correct meter is present before calling this!  First check if the pattern is valid, error out if not.  Now store it.  Check condition, set error code and bail out if violated.  Skip comments and empty lines quickly.  Check for and store label.  After the optional label, there can be up to 5 tokens of interest.
+       Collect them in advance to make the parser code more sane.  Now try to be smart about guessing which token can be what value.
+       Remember: Always parse meter before pattern or tempo!  <bars> <tempo>  <bars> <meter> <tempo>  <bars> <tempo> <pattern>  <bars> <tempo> <volume>  <bars> <meter> <tempo> <pattern>  <bars> <tempo> <pattern> <volume>  <bars> <meter> <tempo> <volume>  the complete set  <bars> <meter> <tempo> <pattern> <volume>  For parsed parts default to emphasize every first beat.  all good  Remove part after some error.  Endless parts only know position 0 to step to.  This will jump to bar 0 for endless parts.  Always calculate period for acceleration.  Stepping forward in endless part always goes to the next one, if any.  Advanced one part.  Always calculate period for acceleration.  Each tap resets the position.  Could use fixed point math and rounding, even.  sync tock to tapping  stop audio IS  Select playback  Crazyness, allocating line buffer depending on free memory.  I'm assuming that read_line always terminates.  If no parts given, start in simple metronome mode.  Just checking the early bailout here.  main loop  Draws display before playback.  get out of here  If there was some action, display drawing is still needed.
+           This _might_ disturb audio on slow machines, but
+           then, you could just stop pressing buttons, then;-)  This determines the accuracy of the metronome with SWCODEC ... the
+           scheduler decides when we are allowed to play. **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2004 Matthias Wientapper, 2014-2015 Thomas Orgis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * TODO:
+ *  - Think about generating the sounds on startup with SWCODEC.
+ *************************************************************************** About time resolution:
+    1000 means 1 ms resolution. It should get better with higher values
+    in theory, but in practice, too small timer intervals increase the
+    chance of being missed and make the metronome lag behind. Mean tempo
+    still works out with very small divider values (29 even) as long as
+    the rounding error compensation is active, although beat intervals
+    become jerky. You compromise between long-term accuracy and steadyness
+    from one beat to the next.
+
+    A drift you have to accept comes just from the audio clock itself, or even
+    from the difference between clocks in the device. The Sansa Clip+ has around
+    0.04 % error in audio frequency using the "good" PLLB. I presume that the
+    difference between timing using PLLA and PLLB is at least that big. Something
+    up to 40 ms time difference over one minute when comparing to an external
+    reference or just the metronome plugin with playback of a prepared PCM track
+    is to be expected.
+
+    Also, since playback on SWCODEC is not allowed to happen inside the timer
+    callback, there is a delay introduced by the main loop scheduling. This
+    could be compensated for by delaying the audio depending on a counter
+    incremented since the period elapsed in the callback, at the price of
+    putting the display out of sync. On a Clip+, the schedule delay isn't
+    biggest problem (drift for fine timer resolution is).
+
+    All in all, 1 ms is too small, 2 ms seems to work fine ...
+    4 ms might still be cool, too.
+ Simulator really wants 1024. Not 1000, not 512, only 1024.
+   Otherwise it is strangely slow.  2 ms resolution  actual (not quarter) beats per minute above which display blinking
+   is deactivated (since it is not needed anymore and because of performance
+   issues)  maximum count of programmed parts  IRIVER_H100_PAD||IRIVER_H300_PAD  raw PCM  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    Utilities from pdbox plugin (Copyright (C) 2009 Wincent Balin) --- am I
+    supposed to supply these functions with the plugin? Should I use a library?
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  Implementation of strtod() and atof(),
+   taken from SanOS (http://www.jbox.dk/sanos/).  Reset Rockbox errno -- W.B.  Skip leading whitespace Handle optional sign Fall through to increment position Process string of digits Process decimal part Correct for sign Process an exponent string Handle optional sign Fall through to increment pos Process string of digits Scale the result * * * * * * * * * * * * * * * * * * * * * *
+           Actual metronome stuff
+* * * * * * * * * * * * * * * * * * * * * *  file descriptor, global for cleanup().  Round fixed-point number to integer.  float to fixed-point  simple dynamic memory management
+    - only allocate blocks serially
+    - deallocation of most recent blocks by resetting the free region pointer
+    - everything aligned to 4 bytes (wasting some bytes, but playing safe)
+ beginning of managed region.  just after end of managed region  pointer to unused free space  position to reset to  Initialize memory management.  Can I trust that pointer to be aligned? Better be safe.  Remember and reset free region, for temporary mem usage.  Always handing out multiples of alignment size.  One part of a track, with one tempo (range), meter, etc.  linked list links index (in order, please)  Duration of part in bars.  3 in 3/4  4 in 3/4 to adjust bpm value  base tempo (1/4 notes per minute)  end tempo   either NULL or (bars*beats_per_bar) values  fixed-point acceleration in 1/min (really)  volume offset in integer dB  Store pattern characters verbatim for max. 64 beats (no string
+       termination). One could save storage here by encoding things in bits,
+       or by allocating dynamically to begin with.  linked list of parts  current part  total number of parts  Count parts with parsing errors.  Initialize a part that is not yet placed into the list.  Add to the list.  Stay away from zero.  Yay! Global state variables!  switch for programmed tracks metronome  Needed?  How big shall this become?  The currently (approximate) active bpm value, set from calc_period().  Should be unsigned?  beat interval in timer ticks  fixed-point error of last period computation  elapsed ticks  A beat is/was playing and count needs to increase.  Current display state code.  Draw display on next occasion  global static buffer for messages in any situation  For line parsing, more is needed, allocated on demand.
+   As my memory management doesn't allow to free it, keeping it local
+   ist not smart.  global state for tempo tapping  Really necessary? Cannot just play mono?
+   Also: This is wasted memory!  Convert the mono samples to interleaved stereo  State: 0: blank/title, 1: tick, 2: tock 3: silent klick  TODO: Could use more smart placement, using
+   lcd_getstringsize() and such.  Draw odd/even ticks/tocks differently to be able to go without
+           display clearing in between for fast beats.  One line in several.  Would it hurt to draw a 3rd line to 2-line display?
+           I guess there are 3-line displays out there.  Wildly guessing here with puts().  track mode  !track_mode  Trigger drawing of display at the next occasion using given state.  Actually draw display.  Modify actual volume by given offset without changing the configured one.
+   This is for parts with associated volume.  tempo at a certain point in beat space in an accelerated part  Offset could be negative, actually, so ensure tempo stays within both
+       bounds  deceleration  Calculate number of ticks to wait till next beat.  in quarter notes  Hack: Put the factor 60 in before computing deltat, to preserve
+       some accuracty.  Fixed tempo.  Minutes per base beat, from quarters per minute.  Acceleration, varying period with each beat.  Always computed from start of part for seeking and accuracy.  Playing safe with too small tempo changes, avoiding the acceleration
+           math that might divide by very small deltat.  deltat = 1.f / ps->accel * rb_log(v1/v0)  Arbitrarily choosing v1.  The treatment of the rounding error when converting to integer
+       period using period_diff helps a lot to keep track lengths close to
+       "correct" even with timerfreq_div as low as 77. Actually, I have _less_
+       drift than with timerfreq_div of 1000!   Last beat finished, to prepare for the next one.  Bar counter always incremented for acceleration, but only checked
+           against a limit if there is one.  Always recompute period, as acceleration changes it for each beat.  Decide what to play, update display, play it.
+   Beat counting happens here, too.  Hack: Clear trigger to avoid race condition.  Blinking and specific sound for tick, tock and silent beat.
+           Drawing display first for slow machines (YH820), to avoid
+           interrupting audio for regular playback.  helper function to change the volume by a certain amount, +/-
+   ripped from video.c function to accelerate bpm change I presume the timer ensures that not more than one instance
+   of the callback is running at a given time.  Clear blinker if tempo is slow enough.  Stopping playback means incrementing the beat. Normally, it would be
+   incremented after the passing of the current note duration, naturally
+   while starting the next one.  Finish the current beat.  Start playing immediately (or after a millisecond).  Conserve power: Only start timer when actually playing.  stop audio ISR 
+    Parse part definitions from tempomap file (see header for format).
+    Not bothering with encoding issues here.
+ parse meter spec into part structure if given token matches  Careful not to misinterpret accelerated tempo specification:
+       120-150/4 -> tempo
+       3/4 -> meter  Number before and after the '/'.  Only accept positive numbers.  Parse tempo, successful when getting a positive integer out of the token.  tempo[-tempo2/accel] ... first number always main tempo  Only positive numbers. This avoids the pattern string and general
+       strangeness, unless -150 should mean "from previous tempo to 150".  This parser is not fool-proof. It parses valid data, but could
+       do funny things if you provide tempo/tempo2-accel, for example.
+       My credo is that the application doesn't crash, but if you give rubbish,
+       you'll get rubbish.  Parse or compute accel in bpm/bar.  bars/bpm  bpm/bar  Compute from tempo difference and bar count.  Correct sign for all cases, starting with positive value.  Negative only when end tempo is smaller.  Convert (quarterbeats-per-minute per bar) -> 1/min, which could be
+           seen as beats-per-minute/beat  1/min  The other fancy variant: One tempo per beat.  It is a bug when the parser called this before. Alloc once.  The metronome pattern.
+   Ensure that the correct meter is present before calling this!  First check if the pattern is valid, error out if not.  Now store it.  Check condition, set error code and bail out if violated.  Skip comments and empty lines quickly.  Check for and store label.  After the optional label, there can be up to 5 tokens of interest.
+       Collect them in advance to make the parser code more sane.  Now try to be smart about guessing which token can be what value.
+       Remember: Always parse meter before pattern or tempo!  <bars> <tempo>  <bars> <meter> <tempo>  <bars> <tempo> <pattern>  <bars> <tempo> <volume>  <bars> <meter> <tempo> <pattern>  <bars> <tempo> <pattern> <volume>  <bars> <meter> <tempo> <volume>  the complete set  <bars> <meter> <tempo> <pattern> <volume>  For parsed parts default to emphasize every first beat.  all good  Remove part after some error.  Endless parts only know position 0 to step to.  This will jump to bar 0 for endless parts.  Always calculate period for acceleration.  Stepping forward in endless part always goes to the next one, if any.  Advanced one part.  Always calculate period for acceleration.  Each tap resets the position.  Could use fixed point math and rounding, even.  sync tock to tapping  stop audio IS  Select playback  Crazyness, allocating line buffer depending on free memory.  I'm assuming that read_line always terminates.  If no parts given, start in simple metronome mode.  Just checking the early bailout here.  main loop  Draws display before playback.  get out of here  If there was some action, display drawing is still needed.
+           This _might_ disturb audio on slow machines, but
+           then, you could just stop pressing buttons, then;-)  This determines the accuracy of the metronome with SWCODEC ... the
+           scheduler decides when we are allowed to play. 

@@ -1,0 +1,625 @@
+
+Copyright (C) 1996-1997 Id Software, Inc.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+ sv_phys.c
+
+
+pushmove objects do not obey gravity, and do not interact with each other or trigger fields, but block normal movement and push normal objects when they move.
+
+onground is set for toss objects when they come to a complete rest.  it is set for steping or walking objects 
+
+doors, plats, etc are SOLID_BSP, and MOVETYPE_PUSH
+bonus items are SOLID_TRIGGER touch, and MOVETYPE_TOSS
+corpses are SOLID_NOT and MOVETYPE_TOSS
+crates are SOLID_BBOX and MOVETYPE_TOSS
+walking monsters are SOLID_SLIDEBOX and MOVETYPE_STEP
+flying/floating monsters are SOLID_SLIDEBOX and MOVETYPE_FLY
+
+solid_edge items only clip against bsp models.
+
+
+================
+SV_CheckAllEnts
+================
+ see if any solid entities are inside the final position
+================
+SV_CheckVelocity
+================
+ bound velocity
+=============
+SV_RunThink
+
+Runs thinking code if time.  There is some play in the exact time the think
+function will be called, because it is called before any movement is done
+in a frame.  Not used for pushmove objects, because they must be exact.
+Returns false if the entity removed itself.
+=============
+ don't let things stay in the past. it is possible to start that way by a trigger with a local time.
+==================
+SV_Impact
+
+Two entities have touched, so run their touch functions
+==================
+
+==================
+ClipVelocity
+
+Slide off of the impacting object
+returns the blocked flags (1 = floor, 2 = step / wall)
+==================
+ floor step
+============
+SV_FlyMove
+
+The basic solid body movement clip that slides along multiple planes
+Returns the clipflags if the velocity was modified (hit something solid)
+1 = floor
+2 = wall / step
+4 = dead stop
+If steptrace is not NULL, the trace of any vertical wall hit will be stored
+============
+ entity is trapped in another solid actually covered some distance moved the entire distance floor step save for player extrafriction run the impact function removed by the impact function cliped to another plane this shouldn't really happen modify original_velocity so it parallels all of the clip planes not ok go along this plane go along the crease				Con_Printf ("clip velocity, numplanes == %i\n",numplanes); if original velocity is against the original velocity, stop dead to avoid tiny occilations in sloping corners
+============
+SV_AddGravity
+
+============
+
+===============================================================================
+
+PUSHMOVE
+
+===============================================================================
+
+============
+SV_PushEntity
+
+Does not change the entities velocity at all
+============
+ only clip against bmodels
+============
+SV_PushMove
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+============
+SV_PushRotate
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players calculate destination position try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+================
+SV_Physics_Pusher
+
+================
+ advances ent->v.ltime if not blocked
+===============================================================================
+
+CLIENT MOVEMENT
+
+===============================================================================
+
+=============
+SV_CheckStuck
+
+This is a big hack to try and fix the rare case of getting stuck in the world
+clipping hull.
+=============
+
+=============
+SV_CheckWater
+=============
+
+============
+SV_WallFriction
+
+============
+ cut the tangential velocity
+=====================
+SV_TryUnstick
+
+Player has come to a dead stop, possibly due to the problem with limited
+float precision at some angle joins in the BSP hull.
+
+Try fixing by pushing one pixel in each direction.
+
+This is a hack, but in the interest of good gameplay...
+======================
+ try pushing a little in an axial direction retry the original moveCon_DPrintf ("unstuck!\n"); go back to the original pos and try again still not moving
+=====================
+SV_WalkMove
+
+Only used by players
+======================
+ do a regular slide move unless it looks like you ran into a step move didn't block on a step don't stair up while jumping gibbed by a trigger try moving up and forward to go up a step back to start pos move up FIXME: don't link? move forward check for stuckness, possibly due to the limited precision of floats in the clipping hulls stepping up didn't make any progress extra friction based on view angle move down FIXME: don't link? if the push down didn't end up on good ground, use the move without the step up.  This happens near wall / slope combinations, and can cause the player to hop up higher on a slope too steep to climb	
+================
+SV_Physics_Client
+
+Player character actions
+================
+ unconnected slot call standard client pre-think	 do a move decide which move function to call call standard player post-think		============================================================================
+=============
+SV_Physics_None
+
+Non moving objects can only think
+=============
+ regular thinking
+=============
+SV_Physics_Follow
+
+Entities that are "stuck" to another entity
+=============
+ regular thinking
+=============
+SV_Physics_Noclip
+
+A moving object that doesn't obey physics
+=============
+ regular thinking
+==============================================================================
+
+TOSS / BOUNCE
+
+==============================================================================
+
+=============
+SV_CheckWaterTransition
+
+=============
+ just spawned here just crossed into water just crossed into water
+=============
+SV_Physics_Toss
+
+Toss, bounce, and fly movement.  When onground, do nothing.
+=============
+ regular thinking@@ add gravity if onground, return without moving add gravity move angles move origin stop if on ground check for in water
+===============================================================================
+
+STEPPING MOVEMENT
+
+===============================================================================
+
+=============
+SV_Physics_Step
+
+Monsters freefall when they don't have a ground entity, otherwise
+all movement is done with discrete steps.
+
+This is also used for objects that have become still on the ground, but
+will fall if the floor is pulled out from under them.
+=============
+@@	ent->v.flags = (int)ent->v.flags & ~FL_ONGROUND; add gravity except:   flying monsters   swimming monsters who are in the water apply friction let dead monsters who aren't completely onground slide determine if it's on solid ground at all regular thinking freefall if not onground just hit ground regular thinking============================================================================
+================
+SV_Physics
+
+================
+ let the progs know that a new frame has startedSV_CheckAllEnts (); treat each object in turn force retouch even for stationary	extern particle_t	*active_particles, *free_particles;	particle_t	*p;		p = free_particles;		if (p)		{			free_particles = p->next;			p->next = active_particles;			active_particles = p;					p->die = 256;			p->color = 15;			p->type = pt_static;			VectorCopy (vec3_origin, p->vel);			VectorCopy (tent->v.origin, p->org);		}	p->color = 224;
+Copyright (C) 1996-1997 Id Software, Inc.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+ sv_phys.c
+
+
+pushmove objects do not obey gravity, and do not interact with each other or trigger fields, but block normal movement and push normal objects when they move.
+
+onground is set for toss objects when they come to a complete rest.  it is set for steping or walking objects 
+
+doors, plats, etc are SOLID_BSP, and MOVETYPE_PUSH
+bonus items are SOLID_TRIGGER touch, and MOVETYPE_TOSS
+corpses are SOLID_NOT and MOVETYPE_TOSS
+crates are SOLID_BBOX and MOVETYPE_TOSS
+walking monsters are SOLID_SLIDEBOX and MOVETYPE_STEP
+flying/floating monsters are SOLID_SLIDEBOX and MOVETYPE_FLY
+
+solid_edge items only clip against bsp models.
+
+
+================
+SV_CheckAllEnts
+================
+ see if any solid entities are inside the final position
+================
+SV_CheckVelocity
+================
+ bound velocity
+=============
+SV_RunThink
+
+Runs thinking code if time.  There is some play in the exact time the think
+function will be called, because it is called before any movement is done
+in a frame.  Not used for pushmove objects, because they must be exact.
+Returns false if the entity removed itself.
+=============
+ don't let things stay in the past. it is possible to start that way by a trigger with a local time.
+==================
+SV_Impact
+
+Two entities have touched, so run their touch functions
+==================
+
+==================
+ClipVelocity
+
+Slide off of the impacting object
+returns the blocked flags (1 = floor, 2 = step / wall)
+==================
+ floor step
+============
+SV_FlyMove
+
+The basic solid body movement clip that slides along multiple planes
+Returns the clipflags if the velocity was modified (hit something solid)
+1 = floor
+2 = wall / step
+4 = dead stop
+If steptrace is not NULL, the trace of any vertical wall hit will be stored
+============
+ entity is trapped in another solid actually covered some distance moved the entire distance floor step save for player extrafriction run the impact function removed by the impact function cliped to another plane this shouldn't really happen modify original_velocity so it parallels all of the clip planes not ok go along this plane go along the crease				Con_Printf ("clip velocity, numplanes == %i\n",numplanes); if original velocity is against the original velocity, stop dead to avoid tiny occilations in sloping corners
+============
+SV_AddGravity
+
+============
+
+===============================================================================
+
+PUSHMOVE
+
+===============================================================================
+
+============
+SV_PushEntity
+
+Does not change the entities velocity at all
+============
+ only clip against bmodels
+============
+SV_PushMove
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+============
+SV_PushRotate
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players calculate destination position try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+================
+SV_Physics_Pusher
+
+================
+ advances ent->v.ltime if not blocked
+===============================================================================
+
+CLIENT MOVEMENT
+
+===============================================================================
+
+=============
+SV_CheckStuck
+
+This is a big hack to try and fix the rare case of getting stuck in the world
+clipping hull.
+=============
+
+=============
+SV_CheckWater
+=============
+
+============
+SV_WallFriction
+
+============
+ cut the tangential velocity
+=====================
+SV_TryUnstick
+
+Player has come to a dead stop, possibly due to the problem with limited
+float precision at some angle joins in the BSP hull.
+
+Try fixing by pushing one pixel in each direction.
+
+This is a hack, but in the interest of good gameplay...
+======================
+ try pushing a little in an axial direction retry the original moveCon_DPrintf ("unstuck!\n"); go back to the original pos and try again still not moving
+=====================
+SV_WalkMove
+
+Only used by players
+======================
+ do a regular slide move unless it looks like you ran into a step move didn't block on a step don't stair up while jumping gibbed by a trigger try moving up and forward to go up a step back to start pos move up FIXME: don't link? move forward check for stuckness, possibly due to the limited precision of floats in the clipping hulls stepping up didn't make any progress extra friction based on view angle move down FIXME: don't link? if the push down didn't end up on good ground, use the move without the step up.  This happens near wall / slope combinations, and can cause the player to hop up higher on a slope too steep to climb	
+================
+SV_Physics_Client
+
+Player character actions
+================
+ unconnected slot call standard client pre-think	 do a move decide which move function to call call standard player post-think		============================================================================
+=============
+SV_Physics_None
+
+Non moving objects can only think
+=============
+ regular thinking
+=============
+SV_Physics_Follow
+
+Entities that are "stuck" to another entity
+=============
+ regular thinking
+=============
+SV_Physics_Noclip
+
+A moving object that doesn't obey physics
+=============
+ regular thinking
+==============================================================================
+
+TOSS / BOUNCE
+
+==============================================================================
+
+=============
+SV_CheckWaterTransition
+
+=============
+ just spawned here just crossed into water just crossed into water
+=============
+SV_Physics_Toss
+
+Toss, bounce, and fly movement.  When onground, do nothing.
+=============
+ regular thinking@@ add gravity if onground, return without moving add gravity move angles move origin stop if on ground check for in water
+===============================================================================
+
+STEPPING MOVEMENT
+
+===============================================================================
+
+=============
+SV_Physics_Step
+
+Monsters freefall when they don't have a ground entity, otherwise
+all movement is done with discrete steps.
+
+This is also used for objects that have become still on the ground, but
+will fall if the floor is pulled out from under them.
+=============
+@@	ent->v.flags = (int)ent->v.flags & ~FL_ONGROUND; add gravity except:   flying monsters   swimming monsters who are in the water apply friction let dead monsters who aren't completely onground slide determine if it's on solid ground at all regular thinking freefall if not onground just hit ground regular thinking============================================================================
+================
+SV_Physics
+
+================
+ let the progs know that a new frame has startedSV_CheckAllEnts (); treat each object in turn force retouch even for stationary	extern particle_t	*active_particles, *free_particles;	particle_t	*p;		p = free_particles;		if (p)		{			free_particles = p->next;			p->next = active_particles;			active_particles = p;					p->die = 256;			p->color = 15;			p->type = pt_static;			VectorCopy (vec3_origin, p->vel);			VectorCopy (tent->v.origin, p->org);		}	p->color = 224;
+Copyright (C) 1996-1997 Id Software, Inc.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+ sv_phys.c
+
+
+pushmove objects do not obey gravity, and do not interact with each other or trigger fields, but block normal movement and push normal objects when they move.
+
+onground is set for toss objects when they come to a complete rest.  it is set for steping or walking objects 
+
+doors, plats, etc are SOLID_BSP, and MOVETYPE_PUSH
+bonus items are SOLID_TRIGGER touch, and MOVETYPE_TOSS
+corpses are SOLID_NOT and MOVETYPE_TOSS
+crates are SOLID_BBOX and MOVETYPE_TOSS
+walking monsters are SOLID_SLIDEBOX and MOVETYPE_STEP
+flying/floating monsters are SOLID_SLIDEBOX and MOVETYPE_FLY
+
+solid_edge items only clip against bsp models.
+
+
+================
+SV_CheckAllEnts
+================
+ see if any solid entities are inside the final position
+================
+SV_CheckVelocity
+================
+ bound velocity
+=============
+SV_RunThink
+
+Runs thinking code if time.  There is some play in the exact time the think
+function will be called, because it is called before any movement is done
+in a frame.  Not used for pushmove objects, because they must be exact.
+Returns false if the entity removed itself.
+=============
+ don't let things stay in the past. it is possible to start that way by a trigger with a local time.
+==================
+SV_Impact
+
+Two entities have touched, so run their touch functions
+==================
+
+==================
+ClipVelocity
+
+Slide off of the impacting object
+returns the blocked flags (1 = floor, 2 = step / wall)
+==================
+ floor step
+============
+SV_FlyMove
+
+The basic solid body movement clip that slides along multiple planes
+Returns the clipflags if the velocity was modified (hit something solid)
+1 = floor
+2 = wall / step
+4 = dead stop
+If steptrace is not NULL, the trace of any vertical wall hit will be stored
+============
+ entity is trapped in another solid actually covered some distance moved the entire distance floor step save for player extrafriction run the impact function removed by the impact function cliped to another plane this shouldn't really happen modify original_velocity so it parallels all of the clip planes not ok go along this plane go along the crease				Con_Printf ("clip velocity, numplanes == %i\n",numplanes); if original velocity is against the original velocity, stop dead to avoid tiny occilations in sloping corners
+============
+SV_AddGravity
+
+============
+
+===============================================================================
+
+PUSHMOVE
+
+===============================================================================
+
+============
+SV_PushEntity
+
+Does not change the entities velocity at all
+============
+ only clip against bmodels
+============
+SV_PushMove
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+============
+SV_PushRotate
+
+============
+ move the pusher to it's final position see if any solid entities are inside the final position if the entity is standing on the pusher, it will definately be moved see if the ent's bbox is inside the pusher's final position remove the onground flag for non-players calculate destination position try moving the contacted entity  if it is still inside the pusher, block fail the move corpse if the pusher has a "blocked" function, call it otherwise, just stay in place until the obstacle is gone move back any entities we already moved
+================
+SV_Physics_Pusher
+
+================
+ advances ent->v.ltime if not blocked
+===============================================================================
+
+CLIENT MOVEMENT
+
+===============================================================================
+
+=============
+SV_CheckStuck
+
+This is a big hack to try and fix the rare case of getting stuck in the world
+clipping hull.
+=============
+
+=============
+SV_CheckWater
+=============
+
+============
+SV_WallFriction
+
+============
+ cut the tangential velocity
+=====================
+SV_TryUnstick
+
+Player has come to a dead stop, possibly due to the problem with limited
+float precision at some angle joins in the BSP hull.
+
+Try fixing by pushing one pixel in each direction.
+
+This is a hack, but in the interest of good gameplay...
+======================
+ try pushing a little in an axial direction retry the original moveCon_DPrintf ("unstuck!\n"); go back to the original pos and try again still not moving
+=====================
+SV_WalkMove
+
+Only used by players
+======================
+ do a regular slide move unless it looks like you ran into a step move didn't block on a step don't stair up while jumping gibbed by a trigger try moving up and forward to go up a step back to start pos move up FIXME: don't link? move forward check for stuckness, possibly due to the limited precision of floats in the clipping hulls stepping up didn't make any progress extra friction based on view angle move down FIXME: don't link? if the push down didn't end up on good ground, use the move without the step up.  This happens near wall / slope combinations, and can cause the player to hop up higher on a slope too steep to climb	
+================
+SV_Physics_Client
+
+Player character actions
+================
+ unconnected slot call standard client pre-think	 do a move decide which move function to call call standard player post-think		============================================================================
+=============
+SV_Physics_None
+
+Non moving objects can only think
+=============
+ regular thinking
+=============
+SV_Physics_Follow
+
+Entities that are "stuck" to another entity
+=============
+ regular thinking
+=============
+SV_Physics_Noclip
+
+A moving object that doesn't obey physics
+=============
+ regular thinking
+==============================================================================
+
+TOSS / BOUNCE
+
+==============================================================================
+
+=============
+SV_CheckWaterTransition
+
+=============
+ just spawned here just crossed into water just crossed into water
+=============
+SV_Physics_Toss
+
+Toss, bounce, and fly movement.  When onground, do nothing.
+=============
+ regular thinking@@ add gravity if onground, return without moving add gravity move angles move origin stop if on ground check for in water
+===============================================================================
+
+STEPPING MOVEMENT
+
+===============================================================================
+
+=============
+SV_Physics_Step
+
+Monsters freefall when they don't have a ground entity, otherwise
+all movement is done with discrete steps.
+
+This is also used for objects that have become still on the ground, but
+will fall if the floor is pulled out from under them.
+=============
+@@	ent->v.flags = (int)ent->v.flags & ~FL_ONGROUND; add gravity except:   flying monsters   swimming monsters who are in the water apply friction let dead monsters who aren't completely onground slide determine if it's on solid ground at all regular thinking freefall if not onground just hit ground regular thinking============================================================================
+================
+SV_Physics
+
+================
+ let the progs know that a new frame has startedSV_CheckAllEnts (); treat each object in turn force retouch even for stationary	extern particle_t	*active_particles, *free_particles;	particle_t	*p;		p = free_particles;		if (p)		{			free_particles = p->next;			p->next = active_particles;			active_particles = p;					p->die = 256;			p->color = 15;			p->type = pt_static;			VectorCopy (vec3_origin, p->vel);			VectorCopy (tent->v.origin, p->org);		}	p->color = 224;

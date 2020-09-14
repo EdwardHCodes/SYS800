@@ -1,0 +1,1531 @@
+
+ * dominosa.c: Domino jigsaw puzzle. Aim to place one of every
+ * possible domino within a rectangle in such a way that the number
+ * on each square matches the provided clue.
+ 
+ * Further possible deduction types in the solver:
+ *
+ *  * possibly an advanced form of deduce_parity via 2-connectedness.
+ *    We currently deal with areas of the graph with exactly one way
+ *    in and out; but if you have an area with exactly _two_ routes in
+ *    and out of it, then you can at least decide on the _relative_
+ *    parity of the two (either 'these two edges both bisect dominoes
+ *    or neither do', or 'exactly one of these edges bisects a
+ *    domino'). And occasionally that can be enough to let you rule
+ *    out one of the two remaining choices.
+ *     + For example, if both those edges bisect a domino, then those
+ *       two dominoes would also be both the same.
+ *     + Or perhaps between them they rule out all possibilities for
+ *       some other square.
+ *     + Or perhaps they themselves would be duplicates!
+ *     + Or perhaps, on purely geometric grounds, they would box in a
+ *       square to the point where it ended up having to be an
+ *       isolated singleton.
+ *     + The tricky part of this is how you do the graph theory.
+ *       Perhaps a modified form of Tarjan's bridge-finding algorithm
+ *       would work, but I haven't thought through the details.
+ *
+ *  * possibly an advanced version of set analysis which doesn't have
+ *    to start from squares all having the same number? For example,
+ *    if you have three mutually non-adjacent squares labelled 1,2,3
+ *    such that the numbers adjacent to each are precisely the other
+ *    two, then set analysis can work just fine in principle, and
+ *    tells you that those three squares must overlap the three
+ *    dominoes 1-2, 2-3 and 1-3 in some order, so you can rule out any
+ *    placements of those elsewhere.
+ *     + the difficulty with this is how you avoid it going painfully
+ *       exponential-time. You can't iterate over all the subsets, so
+ *       you'd need some kind of more sophisticated directed search.
+ *     + and the adjacency allowance has to be similarly accounted
+ *       for, which could get tricky to keep track of.
+  nth triangular number  number of dominoes for value n  map a pair of numbers to a unique domino index from 0 upwards. 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  h x w  h x w  structure copy  structure copy  Legacy encoding from before the difficulty system  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * Information about a particular domino.
+  The numbers on the domino, and its index in the dominoes array.  List of placements not yet ruled out for this domino.  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular 'placement' (i.e. specific location
+ * that a domino might go in).
+  The index of this placement in sc->placements.  The two squares that make up this placement.  The domino that has to go in this position, if any.  The index of this placement in each square's placements array,
+     * and in that of the domino.  Whether this is still considered a possible placement.  Other domino placements that overlap with this one. (Maximum 6:
+     * three overlapping each square of the placement.)  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular solver square.
+  The coordinates of the square, and its index in a normal grid array.  List of domino placements not yet ruled out for this square.  The number in the square.  A textual name we can easily reuse in solver diagnostics.  Set up the full placement lists for all squares, temporarily,
+     * so as to use them to calculate the overlap lists  Actually calculate the overlap lists  Fill in the index field of the placements  Lazily initialised by particular solver techniques that might
+     * never be needed  Given two placements p,q that overlap, returns si such that
+ * p->squares[si] is the square also in q  Sort function used to set up squares_by_number 
+ * If a domino has only one placement remaining, rule out all other
+ * placements that overlap it.
+ 
+ * If a square has only one placement remaining, rule out all other
+ * placements of its domino.
+  we already knew everything this would tell us 
+ * If all placements for a square involve the same domino, rule out
+ * all other placements of that domino.
+ 
+     * We only bother with this if the square has at least _two_
+     * placements. If it only has one, then a simpler deduction will
+     * have handled it already, or will do so the next time round the
+     * main solver loop - and we should let the simpler deduction do
+     * it, because that will give a less overblown diagnostic.
+      not all the same domino  no other placements of d to rule out 
+ * If any placement is overlapped by _all_ possible placements of a
+ * given domino, rule that placement out.
+ 
+     * As in deduce_square_single_domino, we only bother with this
+     * deduction if the domino has at least two placements.
+      Initialise our set of overlapped placements with all the active
+     * ones overlapped by placements[0].  Now loop over the other placements of d, winnowing that set.  If intersection[k] isn't in p->overlaps, exclude it
+             * from our set of placements overlapped by everything  no new exclusions 
+ * If a placement of domino D overlaps the only remaining placement
+ * for some square S which is not also for domino D, then placing D
+ * here would require another copy of it in S, so we can rule it out.
+  Find the square of q that _isn't_ part of p  If we get here, every possible placement for sq is either q
+         * itself, or another copy of d. Success! We can rule out p. 
+ * If placement P overlaps one placement for each of two squares S,T
+ * such that all the remaining placements for both S and T are the
+ * same domino D (and none of those placements joins S and T to each
+ * other), then P can't be placed, because it would leave S,T each
+ * having to be a copy of D, i.e. duplicates.
+ 
+     * Iterate over pairs of placements qi,qj overlapping p.
+      Find the square of qi that _isn't_ part of p 
+         * Identify the unique domino involved in all possible
+         * placements of sqi other than qi. If there isn't a unique
+         * one (either too many or too few), move on and try the next
+         * qi.
+          not counting qi itself 
+         * Now find an appropriate qj != qi.
+         
+             * As above, we want the same domino di to be the only one
+             * sqj can be if placement qj is ruled out. But also we
+             * need no placement of sqj to overlap sqi.
+              not counting qj itself  found a different domino  sqi,sqj can be joined to each other  If we get here, then every placement for either of sqi
+             * and sqj is a copy of di, except for the ones that
+             * overlap p. Success! We can rule out p. 
+ * Look for dominoes whose placement would disconnect the unfilled
+ * area of the grid into pieces with odd area. Such a domino can't be
+ * placed, because then the area on each side of it would be
+ * untileable.
+ 
+     * Run findloop, aka Tarjan's bridge-finding algorithm, on the
+     * graph whose vertices are squares, with two vertices separated
+     * by an edge iff some not-yet-ruled-out domino placement covers
+     * them both. (So each edge itself corresponds to a domino
+     * placement.)
+     *
+     * The effect is that any bridge in this graph is a domino whose
+     * placement would separate two previously connected areas of the
+     * unfilled squares of the grid.
+     *
+     * Placing that domino would not just disconnect those areas from
+     * each other, but also use up one square of each. So if we want
+     * to avoid leaving two odd areas after placing the domino, it
+     * follows that we want to avoid the bridge having an _even_
+     * number of vertices on each side.
+      To make a deduction, size0 and size1 must both be even,
+         * i.e. after placing this domino decrements each by 1 they
+         * would both become odd and untileable areas. 
+ * Try to find a set of squares all containing the same number, such
+ * that the set of possible dominoes for all the squares in that set
+ * is small enough to let us rule out placements of those dominoes
+ * elsewhere.
+ 
+         * If this is the first call to this function for a given
+         * grid, start by sorting the squares by their containing
+         * number.
+          Find the bounds of the subinterval of squares_by_number
+         * containing squares with this particular number. 
+         * Now sqs[0], ..., sqs[nsq-1] are the squares containing 'num'.
+         
+             * Abort this analysis if we're trying to enumerate all
+             * the subsets of a too-large base set.
+             *
+             * This _shouldn't_ happen, at the time of writing this
+             * code, because the largest puzzle we support is only
+             * supposed to have 10 instances of each number, and part
+             * of our input grid validation checks that each number
+             * does appear the right number of times. But just in case
+             * weird test input makes its way to this function, or the
+             * puzzle sizes are expanded later, it's easy enough to
+             * just rule out doing this analysis for overlarge sets of
+             * numbers.
+             
+         * Index the squares in wh_scratch, which we're using as a
+         * lookup table to map the official index of a square back to
+         * its value in our local indexing scheme.
+         
+         * For each square, make a bit mask of the dominoes that can
+         * overlap it, by finding the number at the other end of each
+         * one.
+         *
+         * Also, for each square, make a bit mask of other squares in
+         * the current list that might occupy the _same_ domino
+         * (because a possible placement of a double overlaps both).
+         * We'll need that for evaluating whether sets are properly
+         * exhaustive.
+          so we can find them later 
+                     * Special case: this is a double, so it gives
+                     * rise to entries in adjacent[].
+                     
+             * We don't do set analysis on the same square of the grid
+             * more than once in this loop. Otherwise you generate
+             * pointlessly overcomplicated diagnostics for simpler
+             * follow-up deductions. For example, suppose squares
+             * {A,B} must go with dominoes {X,Y}. So you rule out X,Y
+             * elsewhere, and then it turns out square C (from which
+             * one of those was eliminated) has only one remaining
+             * possibility Z. What you _don't_ want to do is
+             * triumphantly report a second case of set elimination
+             * where you say 'And also, squares {A,B,C} have to be
+             * {X,Y,Z}!' You'd prefer to give 'now C has to be Z' as a
+             * separate deduction later, more simply phrased.
+              Make the set of dominoes that these squares can inhabit.  this bit isn't set in the mask  Count them. 
+             * Do the two sets have the right relative size?
+             
+                 * The normal case, in which every possible domino
+                 * placement involves at most _one_ of these squares.
+                 *
+                 * This is exactly analogous to the set analysis
+                 * deductions in many other puzzles: if our N squares
+                 * between them have to account for N distinct
+                 * dominoes, with exactly one of those dominoes to
+                 * each square, then all those dominoes correspond to
+                 * all those squares and we can rule out any
+                 * placements of the same dominoes appearing
+                 * elsewhere.
+                  not at this difficulty level 
+                 * But in Dominosa, there's a special case if _two_
+                 * squares in this set can possibly both be covered by
+                 * the same double domino. (I.e. if they are adjacent,
+                 * and moreover, the double-domino placement
+                 * containing both is not yet ruled out.)
+                 *
+                 * In that situation, the simple argument doesn't hold
+                 * up, because the N squares might be covered by N-1
+                 * dominoes - or, put another way, if you list the
+                 * containing domino for each of the squares, they
+                 * might not be all distinct.
+                 *
+                 * In that situation, we can still do something, but
+                 * the details vary, and there are two further cases.
+                 
+                     * Suppose there is one _more_ square in our set
+                     * than there are dominoes it can involve. For
+                     * example, suppose we had four '0' squares which
+                     * between them could contain only the 0-0, 0-1
+                     * and 0-2 dominoes.
+                     *
+                     * Then that can only work at all if the 0-0
+                     * covers two of those squares - and in that
+                     * situation that _must_ be what's happened.
+                     *
+                     * So we can rule out the 0-1 and 0-2 dominoes (in
+                     * this example) in any placement that doesn't use
+                     * one of the squares in this set. And we can rule
+                     * out a placement of the 0-0 even if it uses
+                     * _one_ square from this set: in this situation,
+                     * we have to insist on it using _two_.
+                     
+                     * A restricted form of the deduction is still
+                     * possible if we have the same number of dominoes
+                     * as squares.
+                     *
+                     * If we have _three_ '0' squares none of which
+                     * can be any domino other than 0-0, 0-1 and 0-2,
+                     * and there's still a possibility of an 0-0
+                     * domino using up two of them, then we can't rule
+                     * out 0-1 or 0-2 anywhere else, because it's
+                     * possible that these three squares only use two
+                     * of the dominoes between them.
+                     *
+                     * But we _can_ rule out the double 0-0, in any
+                     * placement that uses _none_ of our three
+                     * squares. Because we do know that _at least one_
+                     * of our squares must be involved in the 0-0, or
+                     * else the three of them would only have the
+                     * other two dominoes left.
+                     
+                     * If none of those cases has happened, then our
+                     * set admits no deductions at all.
+                      Skip sets of size 1, or whose complement has size 1.
+             * Those can be handled by a simpler analysis, and should
+             * be, for more sensible solver diagnostics. 
+             * We've found a set! That means we can rule out any
+             * placement of any domino in that set which would leave
+             * the squares in the set with too few dominoes between
+             * them.
+             *
+             * We may or may not actually end up ruling anything out
+             * here. But even if we don't, we should record that these
+             * squares form a self-contained set, so that we don't
+             * pointlessly report a superset of them later which could
+             * instead be reported as just the other ones.
+             *
+             * Or rather, we do that for the main cases that let us
+             * rule out lots of dominoes. We only do this with the
+             * borderline case where we can only rule out a double if
+             * we _actually_ rule something out. Otherwise we'll never
+             * even _find_ a larger set with the same number of
+             * dominoes!
+              Count how many of our squares this placement uses.  See if that's too many to rule it out.  In case we didn't do this above 
+     * Start by identifying chains of placements which must all occur
+     * together if any of them occurs. We do this by making
+     * pc_scratch2 an edsf binding the placements into an equivalence
+     * class for each entire forcing chain, with the two possible sets
+     * of dominoes for the chain listed as inverses.
+     
+     * Now read out the whole dsf into pc_scratch, flattening its
+     * structured data into a simple integer id per chain of dominoes
+     * that must occur together.
+     *
+     * The integer ids have the property that any two that differ only
+     * in the lowest bit (i.e. of the form {2n,2n+1}) represent
+     * complementary chains, each of which rules out the other.
+     
+     * Identify chains that contain a duplicate domino, and rule them
+     * out. We do this by making a list of the placement indices in
+     * pc_scratch2, sorted by (chain id, domino id), so that dupes
+     * become adjacent.
+     
+         * This loop iterates once per contiguous segment of the same
+         * value in pc_scratch2, i.e. once per chain.
+         
+         * Now look for a duplicate domino within that chain.
+         
+     * A second way in which a whole forcing chain can be ruled out is
+     * if it contains all the dominoes that can occupy some other
+     * square, so that if the domnioes in the chain were all laid, the
+     * other square would be left without any choices.
+     *
+     * To detect this, we sort the placements again, this time by
+     * (domino index, chain index), so that we can easily find a
+     * sorted list of chains per domino. That allows us to iterate
+     * over the squares and check for a chain id common to all the
+     * placements of that square.
+      Store a lookup table of the first entry in pc_scratch2
+     * corresponding to each domino.  too simple to be worth trying 
+         * Start by checking for chains this square can actually form
+         * part of. We won't consider those. (The aim is to find a
+         * completely _different_ square whose placements are all
+         * ruled out by a chain.)
+          ruled out all chains; terminate loop early 
+             * We've found a chain we can rule out.
+             
+     * Another thing you can do with forcing chains, besides ruling
+     * out a whole one at a time, is to look at each pair of chains
+     * that overlap each other. Each such pair gives you two sets of
+     * domino placements, such that if either set is not placed, then
+     * the other one must be.
+     *
+     * This means that any domino which has a placement in _both_
+     * chains of a pair must occupy one of those two placements, i.e.
+     * we can rule that domino out anywhere else it might appear.
+      not enough placements to rule one out 
+                     * Placements j,k of domino d are in complementary
+                     * chains, so we can rule out all the others.
+                     
+ * Run the solver until it can't make any more progress.
+ *
+ * Return value is:
+ *   0 = no solution exists (puzzle clues are unsatisfiable)
+ *   1 = unique solution found (success!)
+ *   2 = multiple possibilities remain (puzzle is ambiguous or solver is not
+ *                                      smart enough)
+  ----------------------------------------------------------------------
+ * Functions for generating a candidate puzzle (before we run the
+ * solver to check it's soluble at the right difficulty level).
+  Game parameters.  The domino layout. Indexed by squares in the usual y*w+x raster
+     * order: layout[i] gives the index of the other square in the
+     * same domino as square i.  The output array, containing a number in every square.  List of domino values (i.e. number pairs), indexed by DINDEX.  List of domino locations, indexed arbitrarily.  Preallocated scratch spaces.  size wh  size 2*wh 
+ * Given a domino location in the form of two square indices, compute
+ * the square indices of the domino location that would lie on one
+ * side of it. Returns false if the location would be outside the
+ * grid, or if it isn't actually a domino in the layout.
+  out of bounds  not a domino 
+         * This is basically the same strategy as alloc_trivial:
+         * simply iterate through the locations and values in random
+         * relative order and pair them up. But we make sure to avoid
+         * the most common, and also simplest, cause of a non-unique
+         * solution:two dominoes side by side, sharing a number at
+         * opposite ends. Any section of that form automatically leads
+         * to an alternative solution:
+         *
+         *  +-------+         +---+---+
+         *  | 1   2 |         | 1 | 2 |
+         *  +-------+   <->   |   |   |
+         *  | 2   3 |         | 2 | 3 |
+         *  +-------+         +---+---+
+         *
+         * So as we place each domino, we check for a neighbouring
+         * domino on each side, and if there is one, rule out any
+         * placement of _this_ domino that places a number diagonally
+         * opposite the same number in the neighbour.
+         *
+         * Sometimes this can fail completely, if a domino on each
+         * side is already placed and between them they rule out all
+         * placements of this one. But it happens rarely enough that
+         * it's fine to just abort and try the layout again.
+          layout failed 
+     * Shuffle the location indices.
+     
+     * Start by randomly placing the double dominoes, to give a
+     * starting instance of every number to try to put other things
+     * next to.
+     
+     * Find all the dominoes that don't yet have a _wrong_ placement
+     * somewhere in the grid.
+     
+     * Make a shuffled list of all the unplaced dominoes, and go
+     * through it trying to find a placement for each one that also
+     * fills in at least one of the needed confounders.
+      this location is already filled  Try this location both ways round.  First, do the same check as in alloc_try_unique, to
+                     * avoid making an obviously insoluble puzzle.  can't place it this way round  Look to see if we're adding at least one
+                     * previously absent confounder. 
+                                 * Place this domino.
+                                  If we get here without executing 'goto place_ok', we
+             * didn't find anywhere useful to put this domino. Put it
+             * back on the list for the next pass.  We've found a domino to place. Place it, and fill in
+             * all the confounders it adds. 
+     * Cap the difficulty level for small puzzles which would
+     * otherwise become impossible to generate.
+     *
+     * Under an #ifndef, to make it easy to remove this cap for the
+     * purpose of re-testing what it ought to be.
+      OMIT_DIFFICULTY_CAP 
+     * Allocate space in which to lay the grid out.
+     
+     * I haven't been able to think of any particularly clever
+     * techniques for generating instances of Dominosa with a
+     * unique solution. Many of the deductions used in this puzzle
+     * are based on information involving half the grid at a time
+     * (`of all the 6s, exactly one is next to a 3'), so a strategy
+     * of partially solving the grid and then perturbing the place
+     * where the solver got stuck seems particularly likely to
+     * accidentally destroy the information which the solver had
+     * used in getting that far. (Contrast with, say, Mines, in
+     * which most deductions are local so this is an excellent
+     * strategy.)
+     *
+     * Therefore I resort to the basest of brute force methods:
+     * generate a random grid, see if it's solvable, throw it away
+     * and try again if not. My only concession to sophistication
+     * and cleverness is to at least _try_ not to generate obvious
+     * 2x2 ambiguous sections (see comment below in the domino-
+     * flipping section).
+     *
+     * During tests performed on 2005-07-15, I found that the brute
+     * force approach without that tweak had to throw away about 87
+     * grids on average (at the default n=6) before finding a
+     * unique one, or a staggering 379 at n=9; good job the
+     * generator and solver are fast! When I added the
+     * ambiguous-section avoidance, those numbers came down to 19
+     * and 26 respectively, which is a lot more sensible.
+      Just assign numbers to each domino completely at random.  Try to rule out the most common case of a non-unique solution 
+             * For Hard puzzles and above, we'd like there not to be
+             * any easy toehold to start with.
+             *
+             * Mostly, that's arranged by alloc_try_hard, which will
+             * ensure that no domino starts off with only one
+             * potential placement. But a few other deductions
+             * possible at Basic level can still sneak through the
+             * cracks - for example, if the only two placements of one
+             * domino overlap in a square, and you therefore rule out
+             * some other domino that can use that square, you might
+             * then find that _that_ domino now has only one
+             * placement, and you've made a start.
+             *
+             * Of course, the main difficulty-level check will still
+             * guarantee that you have to do a harder deduction
+             * _somewhere_ in the grid. But it's more elegant if
+             * there's nowhere obvious to get started at all.
+              puzzle couldn't be solved at this difficulty  puzzle _could_ be solved at easier difficulty 
+     * Encode the resulting game state.
+     * 
+     * Our encoding is a string of digits. Any number greater than
+     * 9 is represented by a decimal integer within square
+     * brackets. We know there are n+2 of every number (it's paired
+     * with each number from 0 to n inclusive, and one of those is
+     * itself so that adds another occurrence), so we can work out
+     * the string length in advance.
+     
+     * To work out the total length of the decimal encodings of all
+     * the numbers from 0 to n inclusive:
+     *  - every number has a units digit; total is n+1.
+     *  - all numbers above 9 have a tens digit; total is max(n+1-10,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n+1-100,0).
+     *  - and so on.
+      Now add two square brackets for each number above 9.  And multiply by n+2 for the repeated occurrences of each number. 
+     * Now actually encode the string.
+     
+     * Encode the solved state as an aux_info.
+     
+     * First make a pass putting in edges for -1, then make a pass
+     * putting in dominoes for +1.
+      Emit a barrier if this placement is ruled out for
+                 * the domino.  Emit a domino if this placement is the only one not
+                 * ruled out.  no domino pairing  already done 
+     * A left-click between two numbers toggles a domino covering
+     * them. A right-click toggles an edge.
+     
+         * Now we know which square the click was in, decide which
+         * edge of the square it was closest to.
+          clicked in right side of domino  clicked in left side of domino  clicked in bottom half of domino  clicked in top half of domino 
+         * We can't mark an edge next to any domino.
+          must have exactly one dimension odd 
+         * We can't mark an edge next to any domino.
+         
+             * Clear the existing edges and domino placements. We
+             * expect the S to be followed by other commands.
+             
+             * Toggle domino presence between d1 and d2.
+             
+                 * Erase any dominoes that might overlap the new one.
+                 
+                 * Place the new one.
+                 
+                 * Destroy any edges lurking around it.
+                 
+             * Toggle edge presence between d1 and d2.
+             
+     * After modifying the grid, check completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet  These flags must be disjoint with:
+   * the above enum (TYPE_*)    [0x000 -- 0x00F]
+   * EDGE_*                     [0x100 -- 0xF00]
+ * and must fit into an unsigned long (32 bits).
+ , h = state->h 
+         * Draw one end of a domino. This is composed of:
+         * 
+         *  - two filled circles (rounded corners)
+         *  - two rectangles
+         *  - a slight shift in the number
+         
+     * See how many dominoes of each type there are, so we can
+     * highlight clashes in red.
+      highlight a clash  we're flashing 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 :set textwidth=80: 
+ * dominosa.c: Domino jigsaw puzzle. Aim to place one of every
+ * possible domino within a rectangle in such a way that the number
+ * on each square matches the provided clue.
+ 
+ * Further possible deduction types in the solver:
+ *
+ *  * possibly an advanced form of deduce_parity via 2-connectedness.
+ *    We currently deal with areas of the graph with exactly one way
+ *    in and out; but if you have an area with exactly _two_ routes in
+ *    and out of it, then you can at least decide on the _relative_
+ *    parity of the two (either 'these two edges both bisect dominoes
+ *    or neither do', or 'exactly one of these edges bisects a
+ *    domino'). And occasionally that can be enough to let you rule
+ *    out one of the two remaining choices.
+ *     + For example, if both those edges bisect a domino, then those
+ *       two dominoes would also be both the same.
+ *     + Or perhaps between them they rule out all possibilities for
+ *       some other square.
+ *     + Or perhaps they themselves would be duplicates!
+ *     + Or perhaps, on purely geometric grounds, they would box in a
+ *       square to the point where it ended up having to be an
+ *       isolated singleton.
+ *     + The tricky part of this is how you do the graph theory.
+ *       Perhaps a modified form of Tarjan's bridge-finding algorithm
+ *       would work, but I haven't thought through the details.
+ *
+ *  * possibly an advanced version of set analysis which doesn't have
+ *    to start from squares all having the same number? For example,
+ *    if you have three mutually non-adjacent squares labelled 1,2,3
+ *    such that the numbers adjacent to each are precisely the other
+ *    two, then set analysis can work just fine in principle, and
+ *    tells you that those three squares must overlap the three
+ *    dominoes 1-2, 2-3 and 1-3 in some order, so you can rule out any
+ *    placements of those elsewhere.
+ *     + the difficulty with this is how you avoid it going painfully
+ *       exponential-time. You can't iterate over all the subsets, so
+ *       you'd need some kind of more sophisticated directed search.
+ *     + and the adjacency allowance has to be similarly accounted
+ *       for, which could get tricky to keep track of.
+  nth triangular number  number of dominoes for value n  map a pair of numbers to a unique domino index from 0 upwards. 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  h x w  h x w  structure copy  structure copy  Legacy encoding from before the difficulty system  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * Information about a particular domino.
+  The numbers on the domino, and its index in the dominoes array.  List of placements not yet ruled out for this domino.  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular 'placement' (i.e. specific location
+ * that a domino might go in).
+  The index of this placement in sc->placements.  The two squares that make up this placement.  The domino that has to go in this position, if any.  The index of this placement in each square's placements array,
+     * and in that of the domino.  Whether this is still considered a possible placement.  Other domino placements that overlap with this one. (Maximum 6:
+     * three overlapping each square of the placement.)  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular solver square.
+  The coordinates of the square, and its index in a normal grid array.  List of domino placements not yet ruled out for this square.  The number in the square.  A textual name we can easily reuse in solver diagnostics.  Set up the full placement lists for all squares, temporarily,
+     * so as to use them to calculate the overlap lists  Actually calculate the overlap lists  Fill in the index field of the placements  Lazily initialised by particular solver techniques that might
+     * never be needed  Given two placements p,q that overlap, returns si such that
+ * p->squares[si] is the square also in q  Sort function used to set up squares_by_number 
+ * If a domino has only one placement remaining, rule out all other
+ * placements that overlap it.
+ 
+ * If a square has only one placement remaining, rule out all other
+ * placements of its domino.
+  we already knew everything this would tell us 
+ * If all placements for a square involve the same domino, rule out
+ * all other placements of that domino.
+ 
+     * We only bother with this if the square has at least _two_
+     * placements. If it only has one, then a simpler deduction will
+     * have handled it already, or will do so the next time round the
+     * main solver loop - and we should let the simpler deduction do
+     * it, because that will give a less overblown diagnostic.
+      not all the same domino  no other placements of d to rule out 
+ * If any placement is overlapped by _all_ possible placements of a
+ * given domino, rule that placement out.
+ 
+     * As in deduce_square_single_domino, we only bother with this
+     * deduction if the domino has at least two placements.
+      Initialise our set of overlapped placements with all the active
+     * ones overlapped by placements[0].  Now loop over the other placements of d, winnowing that set.  If intersection[k] isn't in p->overlaps, exclude it
+             * from our set of placements overlapped by everything  no new exclusions 
+ * If a placement of domino D overlaps the only remaining placement
+ * for some square S which is not also for domino D, then placing D
+ * here would require another copy of it in S, so we can rule it out.
+  Find the square of q that _isn't_ part of p  If we get here, every possible placement for sq is either q
+         * itself, or another copy of d. Success! We can rule out p. 
+ * If placement P overlaps one placement for each of two squares S,T
+ * such that all the remaining placements for both S and T are the
+ * same domino D (and none of those placements joins S and T to each
+ * other), then P can't be placed, because it would leave S,T each
+ * having to be a copy of D, i.e. duplicates.
+ 
+     * Iterate over pairs of placements qi,qj overlapping p.
+      Find the square of qi that _isn't_ part of p 
+         * Identify the unique domino involved in all possible
+         * placements of sqi other than qi. If there isn't a unique
+         * one (either too many or too few), move on and try the next
+         * qi.
+          not counting qi itself 
+         * Now find an appropriate qj != qi.
+         
+             * As above, we want the same domino di to be the only one
+             * sqj can be if placement qj is ruled out. But also we
+             * need no placement of sqj to overlap sqi.
+              not counting qj itself  found a different domino  sqi,sqj can be joined to each other  If we get here, then every placement for either of sqi
+             * and sqj is a copy of di, except for the ones that
+             * overlap p. Success! We can rule out p. 
+ * Look for dominoes whose placement would disconnect the unfilled
+ * area of the grid into pieces with odd area. Such a domino can't be
+ * placed, because then the area on each side of it would be
+ * untileable.
+ 
+     * Run findloop, aka Tarjan's bridge-finding algorithm, on the
+     * graph whose vertices are squares, with two vertices separated
+     * by an edge iff some not-yet-ruled-out domino placement covers
+     * them both. (So each edge itself corresponds to a domino
+     * placement.)
+     *
+     * The effect is that any bridge in this graph is a domino whose
+     * placement would separate two previously connected areas of the
+     * unfilled squares of the grid.
+     *
+     * Placing that domino would not just disconnect those areas from
+     * each other, but also use up one square of each. So if we want
+     * to avoid leaving two odd areas after placing the domino, it
+     * follows that we want to avoid the bridge having an _even_
+     * number of vertices on each side.
+      To make a deduction, size0 and size1 must both be even,
+         * i.e. after placing this domino decrements each by 1 they
+         * would both become odd and untileable areas. 
+ * Try to find a set of squares all containing the same number, such
+ * that the set of possible dominoes for all the squares in that set
+ * is small enough to let us rule out placements of those dominoes
+ * elsewhere.
+ 
+         * If this is the first call to this function for a given
+         * grid, start by sorting the squares by their containing
+         * number.
+          Find the bounds of the subinterval of squares_by_number
+         * containing squares with this particular number. 
+         * Now sqs[0], ..., sqs[nsq-1] are the squares containing 'num'.
+         
+             * Abort this analysis if we're trying to enumerate all
+             * the subsets of a too-large base set.
+             *
+             * This _shouldn't_ happen, at the time of writing this
+             * code, because the largest puzzle we support is only
+             * supposed to have 10 instances of each number, and part
+             * of our input grid validation checks that each number
+             * does appear the right number of times. But just in case
+             * weird test input makes its way to this function, or the
+             * puzzle sizes are expanded later, it's easy enough to
+             * just rule out doing this analysis for overlarge sets of
+             * numbers.
+             
+         * Index the squares in wh_scratch, which we're using as a
+         * lookup table to map the official index of a square back to
+         * its value in our local indexing scheme.
+         
+         * For each square, make a bit mask of the dominoes that can
+         * overlap it, by finding the number at the other end of each
+         * one.
+         *
+         * Also, for each square, make a bit mask of other squares in
+         * the current list that might occupy the _same_ domino
+         * (because a possible placement of a double overlaps both).
+         * We'll need that for evaluating whether sets are properly
+         * exhaustive.
+          so we can find them later 
+                     * Special case: this is a double, so it gives
+                     * rise to entries in adjacent[].
+                     
+             * We don't do set analysis on the same square of the grid
+             * more than once in this loop. Otherwise you generate
+             * pointlessly overcomplicated diagnostics for simpler
+             * follow-up deductions. For example, suppose squares
+             * {A,B} must go with dominoes {X,Y}. So you rule out X,Y
+             * elsewhere, and then it turns out square C (from which
+             * one of those was eliminated) has only one remaining
+             * possibility Z. What you _don't_ want to do is
+             * triumphantly report a second case of set elimination
+             * where you say 'And also, squares {A,B,C} have to be
+             * {X,Y,Z}!' You'd prefer to give 'now C has to be Z' as a
+             * separate deduction later, more simply phrased.
+              Make the set of dominoes that these squares can inhabit.  this bit isn't set in the mask  Count them. 
+             * Do the two sets have the right relative size?
+             
+                 * The normal case, in which every possible domino
+                 * placement involves at most _one_ of these squares.
+                 *
+                 * This is exactly analogous to the set analysis
+                 * deductions in many other puzzles: if our N squares
+                 * between them have to account for N distinct
+                 * dominoes, with exactly one of those dominoes to
+                 * each square, then all those dominoes correspond to
+                 * all those squares and we can rule out any
+                 * placements of the same dominoes appearing
+                 * elsewhere.
+                  not at this difficulty level 
+                 * But in Dominosa, there's a special case if _two_
+                 * squares in this set can possibly both be covered by
+                 * the same double domino. (I.e. if they are adjacent,
+                 * and moreover, the double-domino placement
+                 * containing both is not yet ruled out.)
+                 *
+                 * In that situation, the simple argument doesn't hold
+                 * up, because the N squares might be covered by N-1
+                 * dominoes - or, put another way, if you list the
+                 * containing domino for each of the squares, they
+                 * might not be all distinct.
+                 *
+                 * In that situation, we can still do something, but
+                 * the details vary, and there are two further cases.
+                 
+                     * Suppose there is one _more_ square in our set
+                     * than there are dominoes it can involve. For
+                     * example, suppose we had four '0' squares which
+                     * between them could contain only the 0-0, 0-1
+                     * and 0-2 dominoes.
+                     *
+                     * Then that can only work at all if the 0-0
+                     * covers two of those squares - and in that
+                     * situation that _must_ be what's happened.
+                     *
+                     * So we can rule out the 0-1 and 0-2 dominoes (in
+                     * this example) in any placement that doesn't use
+                     * one of the squares in this set. And we can rule
+                     * out a placement of the 0-0 even if it uses
+                     * _one_ square from this set: in this situation,
+                     * we have to insist on it using _two_.
+                     
+                     * A restricted form of the deduction is still
+                     * possible if we have the same number of dominoes
+                     * as squares.
+                     *
+                     * If we have _three_ '0' squares none of which
+                     * can be any domino other than 0-0, 0-1 and 0-2,
+                     * and there's still a possibility of an 0-0
+                     * domino using up two of them, then we can't rule
+                     * out 0-1 or 0-2 anywhere else, because it's
+                     * possible that these three squares only use two
+                     * of the dominoes between them.
+                     *
+                     * But we _can_ rule out the double 0-0, in any
+                     * placement that uses _none_ of our three
+                     * squares. Because we do know that _at least one_
+                     * of our squares must be involved in the 0-0, or
+                     * else the three of them would only have the
+                     * other two dominoes left.
+                     
+                     * If none of those cases has happened, then our
+                     * set admits no deductions at all.
+                      Skip sets of size 1, or whose complement has size 1.
+             * Those can be handled by a simpler analysis, and should
+             * be, for more sensible solver diagnostics. 
+             * We've found a set! That means we can rule out any
+             * placement of any domino in that set which would leave
+             * the squares in the set with too few dominoes between
+             * them.
+             *
+             * We may or may not actually end up ruling anything out
+             * here. But even if we don't, we should record that these
+             * squares form a self-contained set, so that we don't
+             * pointlessly report a superset of them later which could
+             * instead be reported as just the other ones.
+             *
+             * Or rather, we do that for the main cases that let us
+             * rule out lots of dominoes. We only do this with the
+             * borderline case where we can only rule out a double if
+             * we _actually_ rule something out. Otherwise we'll never
+             * even _find_ a larger set with the same number of
+             * dominoes!
+              Count how many of our squares this placement uses.  See if that's too many to rule it out.  In case we didn't do this above 
+     * Start by identifying chains of placements which must all occur
+     * together if any of them occurs. We do this by making
+     * pc_scratch2 an edsf binding the placements into an equivalence
+     * class for each entire forcing chain, with the two possible sets
+     * of dominoes for the chain listed as inverses.
+     
+     * Now read out the whole dsf into pc_scratch, flattening its
+     * structured data into a simple integer id per chain of dominoes
+     * that must occur together.
+     *
+     * The integer ids have the property that any two that differ only
+     * in the lowest bit (i.e. of the form {2n,2n+1}) represent
+     * complementary chains, each of which rules out the other.
+     
+     * Identify chains that contain a duplicate domino, and rule them
+     * out. We do this by making a list of the placement indices in
+     * pc_scratch2, sorted by (chain id, domino id), so that dupes
+     * become adjacent.
+     
+         * This loop iterates once per contiguous segment of the same
+         * value in pc_scratch2, i.e. once per chain.
+         
+         * Now look for a duplicate domino within that chain.
+         
+     * A second way in which a whole forcing chain can be ruled out is
+     * if it contains all the dominoes that can occupy some other
+     * square, so that if the domnioes in the chain were all laid, the
+     * other square would be left without any choices.
+     *
+     * To detect this, we sort the placements again, this time by
+     * (domino index, chain index), so that we can easily find a
+     * sorted list of chains per domino. That allows us to iterate
+     * over the squares and check for a chain id common to all the
+     * placements of that square.
+      Store a lookup table of the first entry in pc_scratch2
+     * corresponding to each domino.  too simple to be worth trying 
+         * Start by checking for chains this square can actually form
+         * part of. We won't consider those. (The aim is to find a
+         * completely _different_ square whose placements are all
+         * ruled out by a chain.)
+          ruled out all chains; terminate loop early 
+             * We've found a chain we can rule out.
+             
+     * Another thing you can do with forcing chains, besides ruling
+     * out a whole one at a time, is to look at each pair of chains
+     * that overlap each other. Each such pair gives you two sets of
+     * domino placements, such that if either set is not placed, then
+     * the other one must be.
+     *
+     * This means that any domino which has a placement in _both_
+     * chains of a pair must occupy one of those two placements, i.e.
+     * we can rule that domino out anywhere else it might appear.
+      not enough placements to rule one out 
+                     * Placements j,k of domino d are in complementary
+                     * chains, so we can rule out all the others.
+                     
+ * Run the solver until it can't make any more progress.
+ *
+ * Return value is:
+ *   0 = no solution exists (puzzle clues are unsatisfiable)
+ *   1 = unique solution found (success!)
+ *   2 = multiple possibilities remain (puzzle is ambiguous or solver is not
+ *                                      smart enough)
+  ----------------------------------------------------------------------
+ * Functions for generating a candidate puzzle (before we run the
+ * solver to check it's soluble at the right difficulty level).
+  Game parameters.  The domino layout. Indexed by squares in the usual y*w+x raster
+     * order: layout[i] gives the index of the other square in the
+     * same domino as square i.  The output array, containing a number in every square.  List of domino values (i.e. number pairs), indexed by DINDEX.  List of domino locations, indexed arbitrarily.  Preallocated scratch spaces.  size wh  size 2*wh 
+ * Given a domino location in the form of two square indices, compute
+ * the square indices of the domino location that would lie on one
+ * side of it. Returns false if the location would be outside the
+ * grid, or if it isn't actually a domino in the layout.
+  out of bounds  not a domino 
+         * This is basically the same strategy as alloc_trivial:
+         * simply iterate through the locations and values in random
+         * relative order and pair them up. But we make sure to avoid
+         * the most common, and also simplest, cause of a non-unique
+         * solution:two dominoes side by side, sharing a number at
+         * opposite ends. Any section of that form automatically leads
+         * to an alternative solution:
+         *
+         *  +-------+         +---+---+
+         *  | 1   2 |         | 1 | 2 |
+         *  +-------+   <->   |   |   |
+         *  | 2   3 |         | 2 | 3 |
+         *  +-------+         +---+---+
+         *
+         * So as we place each domino, we check for a neighbouring
+         * domino on each side, and if there is one, rule out any
+         * placement of _this_ domino that places a number diagonally
+         * opposite the same number in the neighbour.
+         *
+         * Sometimes this can fail completely, if a domino on each
+         * side is already placed and between them they rule out all
+         * placements of this one. But it happens rarely enough that
+         * it's fine to just abort and try the layout again.
+          layout failed 
+     * Shuffle the location indices.
+     
+     * Start by randomly placing the double dominoes, to give a
+     * starting instance of every number to try to put other things
+     * next to.
+     
+     * Find all the dominoes that don't yet have a _wrong_ placement
+     * somewhere in the grid.
+     
+     * Make a shuffled list of all the unplaced dominoes, and go
+     * through it trying to find a placement for each one that also
+     * fills in at least one of the needed confounders.
+      this location is already filled  Try this location both ways round.  First, do the same check as in alloc_try_unique, to
+                     * avoid making an obviously insoluble puzzle.  can't place it this way round  Look to see if we're adding at least one
+                     * previously absent confounder. 
+                                 * Place this domino.
+                                  If we get here without executing 'goto place_ok', we
+             * didn't find anywhere useful to put this domino. Put it
+             * back on the list for the next pass.  We've found a domino to place. Place it, and fill in
+             * all the confounders it adds. 
+     * Cap the difficulty level for small puzzles which would
+     * otherwise become impossible to generate.
+     *
+     * Under an #ifndef, to make it easy to remove this cap for the
+     * purpose of re-testing what it ought to be.
+      OMIT_DIFFICULTY_CAP 
+     * Allocate space in which to lay the grid out.
+     
+     * I haven't been able to think of any particularly clever
+     * techniques for generating instances of Dominosa with a
+     * unique solution. Many of the deductions used in this puzzle
+     * are based on information involving half the grid at a time
+     * (`of all the 6s, exactly one is next to a 3'), so a strategy
+     * of partially solving the grid and then perturbing the place
+     * where the solver got stuck seems particularly likely to
+     * accidentally destroy the information which the solver had
+     * used in getting that far. (Contrast with, say, Mines, in
+     * which most deductions are local so this is an excellent
+     * strategy.)
+     *
+     * Therefore I resort to the basest of brute force methods:
+     * generate a random grid, see if it's solvable, throw it away
+     * and try again if not. My only concession to sophistication
+     * and cleverness is to at least _try_ not to generate obvious
+     * 2x2 ambiguous sections (see comment below in the domino-
+     * flipping section).
+     *
+     * During tests performed on 2005-07-15, I found that the brute
+     * force approach without that tweak had to throw away about 87
+     * grids on average (at the default n=6) before finding a
+     * unique one, or a staggering 379 at n=9; good job the
+     * generator and solver are fast! When I added the
+     * ambiguous-section avoidance, those numbers came down to 19
+     * and 26 respectively, which is a lot more sensible.
+      Just assign numbers to each domino completely at random.  Try to rule out the most common case of a non-unique solution 
+             * For Hard puzzles and above, we'd like there not to be
+             * any easy toehold to start with.
+             *
+             * Mostly, that's arranged by alloc_try_hard, which will
+             * ensure that no domino starts off with only one
+             * potential placement. But a few other deductions
+             * possible at Basic level can still sneak through the
+             * cracks - for example, if the only two placements of one
+             * domino overlap in a square, and you therefore rule out
+             * some other domino that can use that square, you might
+             * then find that _that_ domino now has only one
+             * placement, and you've made a start.
+             *
+             * Of course, the main difficulty-level check will still
+             * guarantee that you have to do a harder deduction
+             * _somewhere_ in the grid. But it's more elegant if
+             * there's nowhere obvious to get started at all.
+              puzzle couldn't be solved at this difficulty  puzzle _could_ be solved at easier difficulty 
+     * Encode the resulting game state.
+     * 
+     * Our encoding is a string of digits. Any number greater than
+     * 9 is represented by a decimal integer within square
+     * brackets. We know there are n+2 of every number (it's paired
+     * with each number from 0 to n inclusive, and one of those is
+     * itself so that adds another occurrence), so we can work out
+     * the string length in advance.
+     
+     * To work out the total length of the decimal encodings of all
+     * the numbers from 0 to n inclusive:
+     *  - every number has a units digit; total is n+1.
+     *  - all numbers above 9 have a tens digit; total is max(n+1-10,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n+1-100,0).
+     *  - and so on.
+      Now add two square brackets for each number above 9.  And multiply by n+2 for the repeated occurrences of each number. 
+     * Now actually encode the string.
+     
+     * Encode the solved state as an aux_info.
+     
+     * First make a pass putting in edges for -1, then make a pass
+     * putting in dominoes for +1.
+      Emit a barrier if this placement is ruled out for
+                 * the domino.  Emit a domino if this placement is the only one not
+                 * ruled out.  no domino pairing  already done 
+     * A left-click between two numbers toggles a domino covering
+     * them. A right-click toggles an edge.
+     
+         * Now we know which square the click was in, decide which
+         * edge of the square it was closest to.
+          clicked in right side of domino  clicked in left side of domino  clicked in bottom half of domino  clicked in top half of domino 
+         * We can't mark an edge next to any domino.
+          must have exactly one dimension odd 
+         * We can't mark an edge next to any domino.
+         
+             * Clear the existing edges and domino placements. We
+             * expect the S to be followed by other commands.
+             
+             * Toggle domino presence between d1 and d2.
+             
+                 * Erase any dominoes that might overlap the new one.
+                 
+                 * Place the new one.
+                 
+                 * Destroy any edges lurking around it.
+                 
+             * Toggle edge presence between d1 and d2.
+             
+     * After modifying the grid, check completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet  These flags must be disjoint with:
+   * the above enum (TYPE_*)    [0x000 -- 0x00F]
+   * EDGE_*                     [0x100 -- 0xF00]
+ * and must fit into an unsigned long (32 bits).
+ , h = state->h 
+         * Draw one end of a domino. This is composed of:
+         * 
+         *  - two filled circles (rounded corners)
+         *  - two rectangles
+         *  - a slight shift in the number
+         
+     * See how many dominoes of each type there are, so we can
+     * highlight clashes in red.
+      highlight a clash  we're flashing 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 :set textwidth=80: 
+ * dominosa.c: Domino jigsaw puzzle. Aim to place one of every
+ * possible domino within a rectangle in such a way that the number
+ * on each square matches the provided clue.
+ 
+ * Further possible deduction types in the solver:
+ *
+ *  * possibly an advanced form of deduce_parity via 2-connectedness.
+ *    We currently deal with areas of the graph with exactly one way
+ *    in and out; but if you have an area with exactly _two_ routes in
+ *    and out of it, then you can at least decide on the _relative_
+ *    parity of the two (either 'these two edges both bisect dominoes
+ *    or neither do', or 'exactly one of these edges bisects a
+ *    domino'). And occasionally that can be enough to let you rule
+ *    out one of the two remaining choices.
+ *     + For example, if both those edges bisect a domino, then those
+ *       two dominoes would also be both the same.
+ *     + Or perhaps between them they rule out all possibilities for
+ *       some other square.
+ *     + Or perhaps they themselves would be duplicates!
+ *     + Or perhaps, on purely geometric grounds, they would box in a
+ *       square to the point where it ended up having to be an
+ *       isolated singleton.
+ *     + The tricky part of this is how you do the graph theory.
+ *       Perhaps a modified form of Tarjan's bridge-finding algorithm
+ *       would work, but I haven't thought through the details.
+ *
+ *  * possibly an advanced version of set analysis which doesn't have
+ *    to start from squares all having the same number? For example,
+ *    if you have three mutually non-adjacent squares labelled 1,2,3
+ *    such that the numbers adjacent to each are precisely the other
+ *    two, then set analysis can work just fine in principle, and
+ *    tells you that those three squares must overlap the three
+ *    dominoes 1-2, 2-3 and 1-3 in some order, so you can rule out any
+ *    placements of those elsewhere.
+ *     + the difficulty with this is how you avoid it going painfully
+ *       exponential-time. You can't iterate over all the subsets, so
+ *       you'd need some kind of more sophisticated directed search.
+ *     + and the adjacency allowance has to be similarly accounted
+ *       for, which could get tricky to keep track of.
+  nth triangular number  number of dominoes for value n  map a pair of numbers to a unique domino index from 0 upwards. 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  end of list  h x w  h x w  structure copy  structure copy  Legacy encoding from before the difficulty system  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+ * Information about a particular domino.
+  The numbers on the domino, and its index in the dominoes array.  List of placements not yet ruled out for this domino.  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular 'placement' (i.e. specific location
+ * that a domino might go in).
+  The index of this placement in sc->placements.  The two squares that make up this placement.  The domino that has to go in this position, if any.  The index of this placement in each square's placements array,
+     * and in that of the domino.  Whether this is still considered a possible placement.  Other domino placements that overlap with this one. (Maximum 6:
+     * three overlapping each square of the placement.)  A textual name we can easily reuse in solver diagnostics. 
+ * Information about a particular solver square.
+  The coordinates of the square, and its index in a normal grid array.  List of domino placements not yet ruled out for this square.  The number in the square.  A textual name we can easily reuse in solver diagnostics.  Set up the full placement lists for all squares, temporarily,
+     * so as to use them to calculate the overlap lists  Actually calculate the overlap lists  Fill in the index field of the placements  Lazily initialised by particular solver techniques that might
+     * never be needed  Given two placements p,q that overlap, returns si such that
+ * p->squares[si] is the square also in q  Sort function used to set up squares_by_number 
+ * If a domino has only one placement remaining, rule out all other
+ * placements that overlap it.
+ 
+ * If a square has only one placement remaining, rule out all other
+ * placements of its domino.
+  we already knew everything this would tell us 
+ * If all placements for a square involve the same domino, rule out
+ * all other placements of that domino.
+ 
+     * We only bother with this if the square has at least _two_
+     * placements. If it only has one, then a simpler deduction will
+     * have handled it already, or will do so the next time round the
+     * main solver loop - and we should let the simpler deduction do
+     * it, because that will give a less overblown diagnostic.
+      not all the same domino  no other placements of d to rule out 
+ * If any placement is overlapped by _all_ possible placements of a
+ * given domino, rule that placement out.
+ 
+     * As in deduce_square_single_domino, we only bother with this
+     * deduction if the domino has at least two placements.
+      Initialise our set of overlapped placements with all the active
+     * ones overlapped by placements[0].  Now loop over the other placements of d, winnowing that set.  If intersection[k] isn't in p->overlaps, exclude it
+             * from our set of placements overlapped by everything  no new exclusions 
+ * If a placement of domino D overlaps the only remaining placement
+ * for some square S which is not also for domino D, then placing D
+ * here would require another copy of it in S, so we can rule it out.
+  Find the square of q that _isn't_ part of p  If we get here, every possible placement for sq is either q
+         * itself, or another copy of d. Success! We can rule out p. 
+ * If placement P overlaps one placement for each of two squares S,T
+ * such that all the remaining placements for both S and T are the
+ * same domino D (and none of those placements joins S and T to each
+ * other), then P can't be placed, because it would leave S,T each
+ * having to be a copy of D, i.e. duplicates.
+ 
+     * Iterate over pairs of placements qi,qj overlapping p.
+      Find the square of qi that _isn't_ part of p 
+         * Identify the unique domino involved in all possible
+         * placements of sqi other than qi. If there isn't a unique
+         * one (either too many or too few), move on and try the next
+         * qi.
+          not counting qi itself 
+         * Now find an appropriate qj != qi.
+         
+             * As above, we want the same domino di to be the only one
+             * sqj can be if placement qj is ruled out. But also we
+             * need no placement of sqj to overlap sqi.
+              not counting qj itself  found a different domino  sqi,sqj can be joined to each other  If we get here, then every placement for either of sqi
+             * and sqj is a copy of di, except for the ones that
+             * overlap p. Success! We can rule out p. 
+ * Look for dominoes whose placement would disconnect the unfilled
+ * area of the grid into pieces with odd area. Such a domino can't be
+ * placed, because then the area on each side of it would be
+ * untileable.
+ 
+     * Run findloop, aka Tarjan's bridge-finding algorithm, on the
+     * graph whose vertices are squares, with two vertices separated
+     * by an edge iff some not-yet-ruled-out domino placement covers
+     * them both. (So each edge itself corresponds to a domino
+     * placement.)
+     *
+     * The effect is that any bridge in this graph is a domino whose
+     * placement would separate two previously connected areas of the
+     * unfilled squares of the grid.
+     *
+     * Placing that domino would not just disconnect those areas from
+     * each other, but also use up one square of each. So if we want
+     * to avoid leaving two odd areas after placing the domino, it
+     * follows that we want to avoid the bridge having an _even_
+     * number of vertices on each side.
+      To make a deduction, size0 and size1 must both be even,
+         * i.e. after placing this domino decrements each by 1 they
+         * would both become odd and untileable areas. 
+ * Try to find a set of squares all containing the same number, such
+ * that the set of possible dominoes for all the squares in that set
+ * is small enough to let us rule out placements of those dominoes
+ * elsewhere.
+ 
+         * If this is the first call to this function for a given
+         * grid, start by sorting the squares by their containing
+         * number.
+          Find the bounds of the subinterval of squares_by_number
+         * containing squares with this particular number. 
+         * Now sqs[0], ..., sqs[nsq-1] are the squares containing 'num'.
+         
+             * Abort this analysis if we're trying to enumerate all
+             * the subsets of a too-large base set.
+             *
+             * This _shouldn't_ happen, at the time of writing this
+             * code, because the largest puzzle we support is only
+             * supposed to have 10 instances of each number, and part
+             * of our input grid validation checks that each number
+             * does appear the right number of times. But just in case
+             * weird test input makes its way to this function, or the
+             * puzzle sizes are expanded later, it's easy enough to
+             * just rule out doing this analysis for overlarge sets of
+             * numbers.
+             
+         * Index the squares in wh_scratch, which we're using as a
+         * lookup table to map the official index of a square back to
+         * its value in our local indexing scheme.
+         
+         * For each square, make a bit mask of the dominoes that can
+         * overlap it, by finding the number at the other end of each
+         * one.
+         *
+         * Also, for each square, make a bit mask of other squares in
+         * the current list that might occupy the _same_ domino
+         * (because a possible placement of a double overlaps both).
+         * We'll need that for evaluating whether sets are properly
+         * exhaustive.
+          so we can find them later 
+                     * Special case: this is a double, so it gives
+                     * rise to entries in adjacent[].
+                     
+             * We don't do set analysis on the same square of the grid
+             * more than once in this loop. Otherwise you generate
+             * pointlessly overcomplicated diagnostics for simpler
+             * follow-up deductions. For example, suppose squares
+             * {A,B} must go with dominoes {X,Y}. So you rule out X,Y
+             * elsewhere, and then it turns out square C (from which
+             * one of those was eliminated) has only one remaining
+             * possibility Z. What you _don't_ want to do is
+             * triumphantly report a second case of set elimination
+             * where you say 'And also, squares {A,B,C} have to be
+             * {X,Y,Z}!' You'd prefer to give 'now C has to be Z' as a
+             * separate deduction later, more simply phrased.
+              Make the set of dominoes that these squares can inhabit.  this bit isn't set in the mask  Count them. 
+             * Do the two sets have the right relative size?
+             
+                 * The normal case, in which every possible domino
+                 * placement involves at most _one_ of these squares.
+                 *
+                 * This is exactly analogous to the set analysis
+                 * deductions in many other puzzles: if our N squares
+                 * between them have to account for N distinct
+                 * dominoes, with exactly one of those dominoes to
+                 * each square, then all those dominoes correspond to
+                 * all those squares and we can rule out any
+                 * placements of the same dominoes appearing
+                 * elsewhere.
+                  not at this difficulty level 
+                 * But in Dominosa, there's a special case if _two_
+                 * squares in this set can possibly both be covered by
+                 * the same double domino. (I.e. if they are adjacent,
+                 * and moreover, the double-domino placement
+                 * containing both is not yet ruled out.)
+                 *
+                 * In that situation, the simple argument doesn't hold
+                 * up, because the N squares might be covered by N-1
+                 * dominoes - or, put another way, if you list the
+                 * containing domino for each of the squares, they
+                 * might not be all distinct.
+                 *
+                 * In that situation, we can still do something, but
+                 * the details vary, and there are two further cases.
+                 
+                     * Suppose there is one _more_ square in our set
+                     * than there are dominoes it can involve. For
+                     * example, suppose we had four '0' squares which
+                     * between them could contain only the 0-0, 0-1
+                     * and 0-2 dominoes.
+                     *
+                     * Then that can only work at all if the 0-0
+                     * covers two of those squares - and in that
+                     * situation that _must_ be what's happened.
+                     *
+                     * So we can rule out the 0-1 and 0-2 dominoes (in
+                     * this example) in any placement that doesn't use
+                     * one of the squares in this set. And we can rule
+                     * out a placement of the 0-0 even if it uses
+                     * _one_ square from this set: in this situation,
+                     * we have to insist on it using _two_.
+                     
+                     * A restricted form of the deduction is still
+                     * possible if we have the same number of dominoes
+                     * as squares.
+                     *
+                     * If we have _three_ '0' squares none of which
+                     * can be any domino other than 0-0, 0-1 and 0-2,
+                     * and there's still a possibility of an 0-0
+                     * domino using up two of them, then we can't rule
+                     * out 0-1 or 0-2 anywhere else, because it's
+                     * possible that these three squares only use two
+                     * of the dominoes between them.
+                     *
+                     * But we _can_ rule out the double 0-0, in any
+                     * placement that uses _none_ of our three
+                     * squares. Because we do know that _at least one_
+                     * of our squares must be involved in the 0-0, or
+                     * else the three of them would only have the
+                     * other two dominoes left.
+                     
+                     * If none of those cases has happened, then our
+                     * set admits no deductions at all.
+                      Skip sets of size 1, or whose complement has size 1.
+             * Those can be handled by a simpler analysis, and should
+             * be, for more sensible solver diagnostics. 
+             * We've found a set! That means we can rule out any
+             * placement of any domino in that set which would leave
+             * the squares in the set with too few dominoes between
+             * them.
+             *
+             * We may or may not actually end up ruling anything out
+             * here. But even if we don't, we should record that these
+             * squares form a self-contained set, so that we don't
+             * pointlessly report a superset of them later which could
+             * instead be reported as just the other ones.
+             *
+             * Or rather, we do that for the main cases that let us
+             * rule out lots of dominoes. We only do this with the
+             * borderline case where we can only rule out a double if
+             * we _actually_ rule something out. Otherwise we'll never
+             * even _find_ a larger set with the same number of
+             * dominoes!
+              Count how many of our squares this placement uses.  See if that's too many to rule it out.  In case we didn't do this above 
+     * Start by identifying chains of placements which must all occur
+     * together if any of them occurs. We do this by making
+     * pc_scratch2 an edsf binding the placements into an equivalence
+     * class for each entire forcing chain, with the two possible sets
+     * of dominoes for the chain listed as inverses.
+     
+     * Now read out the whole dsf into pc_scratch, flattening its
+     * structured data into a simple integer id per chain of dominoes
+     * that must occur together.
+     *
+     * The integer ids have the property that any two that differ only
+     * in the lowest bit (i.e. of the form {2n,2n+1}) represent
+     * complementary chains, each of which rules out the other.
+     
+     * Identify chains that contain a duplicate domino, and rule them
+     * out. We do this by making a list of the placement indices in
+     * pc_scratch2, sorted by (chain id, domino id), so that dupes
+     * become adjacent.
+     
+         * This loop iterates once per contiguous segment of the same
+         * value in pc_scratch2, i.e. once per chain.
+         
+         * Now look for a duplicate domino within that chain.
+         
+     * A second way in which a whole forcing chain can be ruled out is
+     * if it contains all the dominoes that can occupy some other
+     * square, so that if the domnioes in the chain were all laid, the
+     * other square would be left without any choices.
+     *
+     * To detect this, we sort the placements again, this time by
+     * (domino index, chain index), so that we can easily find a
+     * sorted list of chains per domino. That allows us to iterate
+     * over the squares and check for a chain id common to all the
+     * placements of that square.
+      Store a lookup table of the first entry in pc_scratch2
+     * corresponding to each domino.  too simple to be worth trying 
+         * Start by checking for chains this square can actually form
+         * part of. We won't consider those. (The aim is to find a
+         * completely _different_ square whose placements are all
+         * ruled out by a chain.)
+          ruled out all chains; terminate loop early 
+             * We've found a chain we can rule out.
+             
+     * Another thing you can do with forcing chains, besides ruling
+     * out a whole one at a time, is to look at each pair of chains
+     * that overlap each other. Each such pair gives you two sets of
+     * domino placements, such that if either set is not placed, then
+     * the other one must be.
+     *
+     * This means that any domino which has a placement in _both_
+     * chains of a pair must occupy one of those two placements, i.e.
+     * we can rule that domino out anywhere else it might appear.
+      not enough placements to rule one out 
+                     * Placements j,k of domino d are in complementary
+                     * chains, so we can rule out all the others.
+                     
+ * Run the solver until it can't make any more progress.
+ *
+ * Return value is:
+ *   0 = no solution exists (puzzle clues are unsatisfiable)
+ *   1 = unique solution found (success!)
+ *   2 = multiple possibilities remain (puzzle is ambiguous or solver is not
+ *                                      smart enough)
+  ----------------------------------------------------------------------
+ * Functions for generating a candidate puzzle (before we run the
+ * solver to check it's soluble at the right difficulty level).
+  Game parameters.  The domino layout. Indexed by squares in the usual y*w+x raster
+     * order: layout[i] gives the index of the other square in the
+     * same domino as square i.  The output array, containing a number in every square.  List of domino values (i.e. number pairs), indexed by DINDEX.  List of domino locations, indexed arbitrarily.  Preallocated scratch spaces.  size wh  size 2*wh 
+ * Given a domino location in the form of two square indices, compute
+ * the square indices of the domino location that would lie on one
+ * side of it. Returns false if the location would be outside the
+ * grid, or if it isn't actually a domino in the layout.
+  out of bounds  not a domino 
+         * This is basically the same strategy as alloc_trivial:
+         * simply iterate through the locations and values in random
+         * relative order and pair them up. But we make sure to avoid
+         * the most common, and also simplest, cause of a non-unique
+         * solution:two dominoes side by side, sharing a number at
+         * opposite ends. Any section of that form automatically leads
+         * to an alternative solution:
+         *
+         *  +-------+         +---+---+
+         *  | 1   2 |         | 1 | 2 |
+         *  +-------+   <->   |   |   |
+         *  | 2   3 |         | 2 | 3 |
+         *  +-------+         +---+---+
+         *
+         * So as we place each domino, we check for a neighbouring
+         * domino on each side, and if there is one, rule out any
+         * placement of _this_ domino that places a number diagonally
+         * opposite the same number in the neighbour.
+         *
+         * Sometimes this can fail completely, if a domino on each
+         * side is already placed and between them they rule out all
+         * placements of this one. But it happens rarely enough that
+         * it's fine to just abort and try the layout again.
+          layout failed 
+     * Shuffle the location indices.
+     
+     * Start by randomly placing the double dominoes, to give a
+     * starting instance of every number to try to put other things
+     * next to.
+     
+     * Find all the dominoes that don't yet have a _wrong_ placement
+     * somewhere in the grid.
+     
+     * Make a shuffled list of all the unplaced dominoes, and go
+     * through it trying to find a placement for each one that also
+     * fills in at least one of the needed confounders.
+      this location is already filled  Try this location both ways round.  First, do the same check as in alloc_try_unique, to
+                     * avoid making an obviously insoluble puzzle.  can't place it this way round  Look to see if we're adding at least one
+                     * previously absent confounder. 
+                                 * Place this domino.
+                                  If we get here without executing 'goto place_ok', we
+             * didn't find anywhere useful to put this domino. Put it
+             * back on the list for the next pass.  We've found a domino to place. Place it, and fill in
+             * all the confounders it adds. 
+     * Cap the difficulty level for small puzzles which would
+     * otherwise become impossible to generate.
+     *
+     * Under an #ifndef, to make it easy to remove this cap for the
+     * purpose of re-testing what it ought to be.
+      OMIT_DIFFICULTY_CAP 
+     * Allocate space in which to lay the grid out.
+     
+     * I haven't been able to think of any particularly clever
+     * techniques for generating instances of Dominosa with a
+     * unique solution. Many of the deductions used in this puzzle
+     * are based on information involving half the grid at a time
+     * (`of all the 6s, exactly one is next to a 3'), so a strategy
+     * of partially solving the grid and then perturbing the place
+     * where the solver got stuck seems particularly likely to
+     * accidentally destroy the information which the solver had
+     * used in getting that far. (Contrast with, say, Mines, in
+     * which most deductions are local so this is an excellent
+     * strategy.)
+     *
+     * Therefore I resort to the basest of brute force methods:
+     * generate a random grid, see if it's solvable, throw it away
+     * and try again if not. My only concession to sophistication
+     * and cleverness is to at least _try_ not to generate obvious
+     * 2x2 ambiguous sections (see comment below in the domino-
+     * flipping section).
+     *
+     * During tests performed on 2005-07-15, I found that the brute
+     * force approach without that tweak had to throw away about 87
+     * grids on average (at the default n=6) before finding a
+     * unique one, or a staggering 379 at n=9; good job the
+     * generator and solver are fast! When I added the
+     * ambiguous-section avoidance, those numbers came down to 19
+     * and 26 respectively, which is a lot more sensible.
+      Just assign numbers to each domino completely at random.  Try to rule out the most common case of a non-unique solution 
+             * For Hard puzzles and above, we'd like there not to be
+             * any easy toehold to start with.
+             *
+             * Mostly, that's arranged by alloc_try_hard, which will
+             * ensure that no domino starts off with only one
+             * potential placement. But a few other deductions
+             * possible at Basic level can still sneak through the
+             * cracks - for example, if the only two placements of one
+             * domino overlap in a square, and you therefore rule out
+             * some other domino that can use that square, you might
+             * then find that _that_ domino now has only one
+             * placement, and you've made a start.
+             *
+             * Of course, the main difficulty-level check will still
+             * guarantee that you have to do a harder deduction
+             * _somewhere_ in the grid. But it's more elegant if
+             * there's nowhere obvious to get started at all.
+              puzzle couldn't be solved at this difficulty  puzzle _could_ be solved at easier difficulty 
+     * Encode the resulting game state.
+     * 
+     * Our encoding is a string of digits. Any number greater than
+     * 9 is represented by a decimal integer within square
+     * brackets. We know there are n+2 of every number (it's paired
+     * with each number from 0 to n inclusive, and one of those is
+     * itself so that adds another occurrence), so we can work out
+     * the string length in advance.
+     
+     * To work out the total length of the decimal encodings of all
+     * the numbers from 0 to n inclusive:
+     *  - every number has a units digit; total is n+1.
+     *  - all numbers above 9 have a tens digit; total is max(n+1-10,0).
+     *  - all numbers above 99 have a hundreds digit; total is max(n+1-100,0).
+     *  - and so on.
+      Now add two square brackets for each number above 9.  And multiply by n+2 for the repeated occurrences of each number. 
+     * Now actually encode the string.
+     
+     * Encode the solved state as an aux_info.
+     
+     * First make a pass putting in edges for -1, then make a pass
+     * putting in dominoes for +1.
+      Emit a barrier if this placement is ruled out for
+                 * the domino.  Emit a domino if this placement is the only one not
+                 * ruled out.  no domino pairing  already done 
+     * A left-click between two numbers toggles a domino covering
+     * them. A right-click toggles an edge.
+     
+         * Now we know which square the click was in, decide which
+         * edge of the square it was closest to.
+          clicked in right side of domino  clicked in left side of domino  clicked in bottom half of domino  clicked in top half of domino 
+         * We can't mark an edge next to any domino.
+          must have exactly one dimension odd 
+         * We can't mark an edge next to any domino.
+         
+             * Clear the existing edges and domino placements. We
+             * expect the S to be followed by other commands.
+             
+             * Toggle domino presence between d1 and d2.
+             
+                 * Erase any dominoes that might overlap the new one.
+                 
+                 * Place the new one.
+                 
+                 * Destroy any edges lurking around it.
+                 
+             * Toggle edge presence between d1 and d2.
+             
+     * After modifying the grid, check completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  not decided yet  These flags must be disjoint with:
+   * the above enum (TYPE_*)    [0x000 -- 0x00F]
+   * EDGE_*                     [0x100 -- 0xF00]
+ * and must fit into an unsigned long (32 bits).
+ , h = state->h 
+         * Draw one end of a domino. This is composed of:
+         * 
+         *  - two filled circles (rounded corners)
+         *  - two rectangles
+         *  - a slight shift in the number
+         
+     * See how many dominoes of each type there are, so we can
+     * highlight clashes in red.
+      highlight a clash  we're flashing 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 :set textwidth=80: 

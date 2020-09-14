@@ -1,0 +1,607 @@
+ unzip.c -- IO for uncompress .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications of Unzip for Zip64
+         Copyright (C) 2007-2008 Even Rouault
+
+         Modifications for Zip64 support on both zip and unzip
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         For more info read MiniZip_info.txt
+
+         Modifications for static code analysis report
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+  ------------------------------------------------------------------------------------
+  Decryption code comes from crypt.c by Info-ZIP but has been greatly reduced in terms of
+  compatibility with older software. The following is from the original crypt.c.
+  Code woven in by Terry Thorsen 1/2003.
+
+  Copyright (c) 1990-2000 Info-ZIP.  All rights reserved.
+
+  See the accompanying file LICENSE, version 2000-Apr-09 or later
+  (the contents of which are also included in zip.h) for terms of use.
+  If, for some reason, all these files are missing, the Info-ZIP license
+  also may be found at:  ftp://ftp.info-zip.org/pub/infozip/license.html
+
+        crypt.c (full version) by Info-ZIP.      Last revised:  [see minizip_crypt.h]
+
+  The encryption/decryption parts of this source code (as opposed to the
+  non-echoing password parts) were originally written in Europe.  The
+  whole source package can be freely distributed, including from the USA.
+  (Prior to January 2000, re-export from the US was a violation of US law.)
+
+        This encryption code is a direct transcription of the algorithm from
+  Roger Schlafly, described by Phil Katz in the file appnote.txt.  This
+  file (appnote.txt) is distributed with the PKZIP program (even in the
+  version without encryption capabilities).
+
+        ------------------------------------------------------------------------------------
+
+        Changes in unzip.c
+
+        2007-2008 - Even Rouault - Addition of cpl_unzGetCurrentFileZStreamPos
+  2007-2008 - Even Rouault - Decoration of symbol names unz* -> cpl_unz*
+  2007-2008 - Even Rouault - Remove old C style function prototypes
+  2007-2008 - Even Rouault - Add unzip support for ZIP64
+
+        Copyright (C) 2007-2008 Even Rouault
+
+
+        Oct-2009 - Mathias Svensson - Removed cpl_* from symbol names (Even Rouault added them but since this is now moved to a new project (minizip64) I renamed them again).
+  Oct-2009 - Mathias Svensson - Fixed problem if uncompressed size was > 4G and compressed size was <4G
+                                should only read the compressed/uncompressed size from the Zip64 format if
+                                the size from normal header was 0xFFFFFFFF
+  Oct-2009 - Mathias Svensson - Applied some bug fixes from paches recived from Gilles Vollant
+        Oct-2009 - Mathias Svensson - Applied support to unzip files with compression mathod BZIP2 (bzip2 lib is required)
+                                Patch created by Daniel Borca
+
+  Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+  Copyright (C) 1998 - 2010 Gilles Vollant, Even Rouault, Mathias Svensson
+
+ compile with -Dlocal if your debugger can't find static symbols  unz_file_info_interntal contain internal info about a file in zipfile relative offset of local header 8 bytes  file_in_zip_read_info_s contain internal information about a file in zipfile,
+    when reading and decompress it  internal buffer for compressed data  zLib stream structure for inflate  bzLib stream structure for bziped  position in byte on the zipfile, for fseek flag set if stream structure is initialised offset of the local extra field  size of the local extra field  position in the local extra field in read crc32 of all data uncompressed  crc32 we must obtain after decompress all  number of byte to be decompressed number of byte to be obtained after decomp io structore of the zipfile  compression method (0==store)  byte before the zipfile, (>0 for sfx) unz64_s contain internal information about the zipfile
+ io structore of the zipfile  public global information  byte before the zipfile, (>0 for sfx) number of the current file in the zipfile pos of the current file in the central dir flag about the usability of the current file position of the beginning of the central dir size of the central directory   offset of start of central directory with
+                                   respect to the starting disk number  public info about the current file in zip private info about it structure about the current
+                                        file if we are decompressing it  keys defining the pseudo-random sequence  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+ My own strcmpi / strcasecmp 
+   Compare two filename (fileName1,fileName2).
+   If iCaseSenisivity = 1, comparision is case sensitivity (like strcmp)
+   If iCaseSenisivity = 2, comparision is not case sensitivity (like strcmpi
+                                                                or strcasecmp)
+   If iCaseSenisivity = 0, case sensitivity is defaut of your operating system
+        (like 1 on Unix, 2 on Windows)
+
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+  Locate the Central directory 64 of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto end of central directory record  the signature 
+  Open a Zip file. path contain the full pathname (by example,
+     on a Windows NT computer "c:\\test\\zlib114.zip" or on an Unix computer
+     "zlib/zlib114.zip".
+     If the zipfile cannot be opened (file doesn't exist or in not valid), the
+       return value is NULL.
+     Else, the return value is a unzFile Handle, usable with other function
+       of this unzip package.
+ number of the current dist, used for
+                                   spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                                   for spaning ZIP, unsupported, always 0 total number of entries in
+                                   the central dir
+                                   (same than number_entry on nospan)  the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+          starting disk number  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the
+            starting disk number  zipfile comment length 
+  Close a ZipFile opened with unzipOpen.
+  If there is files inside the .Zip opened with unzipOpenCurrentFile (see later),
+    these files MUST be closed with unzipCloseCurrentFile before call unzipClose.
+  return UNZ_OK if there is no problem. 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.  to do : check if number_entry is not truncated 
+   Translate date/time from Dos format to tm_unz (readable more easilty)
+
+  Get Info about the current file in the zipfile, with internal only info
+ we check the magic  relative offset of local header  Read extrafield  since lSeek now points to after the extra field we need to move back  ZIP64 extra fields  Relative Header offset  Disk Start Number 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.
+
+  Set the current file of the zipfile to the first file.
+  return UNZ_OK if there is no problem
+
+  Set the current file of the zipfile to the next file.
+  return UNZ_OK if there is no problem
+  return UNZ_END_OF_LIST_OF_FILE if the actual file was the latest.
+ 2^16 files overflow hack 
+  Try locate the file szFileName in the zipfile.
+  For the iCaseSensitivity signification, see unzipStringFileNameCompare
+
+  return value :
+  UNZ_OK if the file is found. It becomes the current file.
+  UNZ_END_OF_LIST_OF_FILE if the file is not found
+ We remember the 'current' position in the file so that we can jump
+     * back there if we fail.
+      Save the current state  We failed, so restore the state of the 'current file' to where we
+     * were.
+     
+///////////////////////////////////////////
+// Contributed by Ryan Haksi (mailto://cryogen@infoserve.net)
+// I need random access
+//
+// Further optimization could be realized by adding an ability
+// to cache the directory in memory. The goal being a single
+// comprehensive file read to put the file I need in a memory.
+
+typedef struct unz_file_pos_s
+{
+    ZPOS64_T pos_in_zip_directory;   // offset in file
+    ZPOS64_T num_of_file;            // # of file
+} unz_file_pos;
+ jump to the right spot  set the current file  return results  Unzip Helper Functions - should be here? ///////////////////////////////////////// 
+  Read the local header of the current zipfile
+  Check the coherency of the local header and info in the end of central
+        directory about this file
+  store in *piSizeVar the size of extra info in local header
+        (filename and size of extra field data)
+
+    else if ((err==UNZ_OK) && (uData!=s->cur_file_info.wVersion))
+        err=UNZ_BADZIPFILE;
+ #ifdef HAVE_BZIP2  #endif  date/time  crc  size compr  size uncompr 
+  Open for reading data the current file in the zipfile.
+  If there is no error and the file is opened, the return value is UNZ_OK.
+ offset of the local extra field  size of the local extra field  #ifdef HAVE_BZIP2  #endif  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END.
+         * In unzip, i don't wait absolutely Z_STREAM_END because I known the
+         * size of both compressed and uncompressed data
+         * Addition for GDAL : START UNZ_PARAMERROR; UNZ_PARAMERROR; * Addition for GDAL : END 
+  Read bytes from the current file.
+  buf contain buffer where data must be copied
+  len the size of buf.
+
+  return the number of byte copied if somes bytes are copied
+  return 0 if the end of file was reached
+  return <0 with error code if there is an error
+    (UNZ_ERRNO for IO error, or zLib error for uncompress error)
+ end Z_BZIP2ED 
+  Give the current position in uncompressed data
+
+  return 1 if the end of file was reached, 0 elsewhere
+
+Read extra field from the current file (opened by unzOpenCurrentFile)
+This is the local-header version of the extra field (sometimes, there is
+more info in the local-header version than in the central-header)
+
+  if buf==NULL, it return the size of the local extra field that can be read
+
+  if buf!=NULL, len is the size of the buffer, the extra header is copied in
+    buf.
+  the return value is the number of bytes copied in buf, or (if <0)
+    the error code
+
+  Close the file in zip opened with unzipOpenCurrentFile
+  Return UNZ_CRCERROR if all the file was read but the CRC is not good
+
+  Get the global comment string of the ZipFile, in the szComment buffer.
+  uSizeBuf is the size of the szComment buffer.
+  return the number of byte copied or an error code <0
+ Additions by RX '2004 UNZ_PARAMERROR; UNZ_PARAMERROR;  hack  unzip.c -- IO for uncompress .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications of Unzip for Zip64
+         Copyright (C) 2007-2008 Even Rouault
+
+         Modifications for Zip64 support on both zip and unzip
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         For more info read MiniZip_info.txt
+
+         Modifications for static code analysis report
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+  ------------------------------------------------------------------------------------
+  Decryption code comes from crypt.c by Info-ZIP but has been greatly reduced in terms of
+  compatibility with older software. The following is from the original crypt.c.
+  Code woven in by Terry Thorsen 1/2003.
+
+  Copyright (c) 1990-2000 Info-ZIP.  All rights reserved.
+
+  See the accompanying file LICENSE, version 2000-Apr-09 or later
+  (the contents of which are also included in zip.h) for terms of use.
+  If, for some reason, all these files are missing, the Info-ZIP license
+  also may be found at:  ftp://ftp.info-zip.org/pub/infozip/license.html
+
+        crypt.c (full version) by Info-ZIP.      Last revised:  [see minizip_crypt.h]
+
+  The encryption/decryption parts of this source code (as opposed to the
+  non-echoing password parts) were originally written in Europe.  The
+  whole source package can be freely distributed, including from the USA.
+  (Prior to January 2000, re-export from the US was a violation of US law.)
+
+        This encryption code is a direct transcription of the algorithm from
+  Roger Schlafly, described by Phil Katz in the file appnote.txt.  This
+  file (appnote.txt) is distributed with the PKZIP program (even in the
+  version without encryption capabilities).
+
+        ------------------------------------------------------------------------------------
+
+        Changes in unzip.c
+
+        2007-2008 - Even Rouault - Addition of cpl_unzGetCurrentFileZStreamPos
+  2007-2008 - Even Rouault - Decoration of symbol names unz* -> cpl_unz*
+  2007-2008 - Even Rouault - Remove old C style function prototypes
+  2007-2008 - Even Rouault - Add unzip support for ZIP64
+
+        Copyright (C) 2007-2008 Even Rouault
+
+
+        Oct-2009 - Mathias Svensson - Removed cpl_* from symbol names (Even Rouault added them but since this is now moved to a new project (minizip64) I renamed them again).
+  Oct-2009 - Mathias Svensson - Fixed problem if uncompressed size was > 4G and compressed size was <4G
+                                should only read the compressed/uncompressed size from the Zip64 format if
+                                the size from normal header was 0xFFFFFFFF
+  Oct-2009 - Mathias Svensson - Applied some bug fixes from paches recived from Gilles Vollant
+        Oct-2009 - Mathias Svensson - Applied support to unzip files with compression mathod BZIP2 (bzip2 lib is required)
+                                Patch created by Daniel Borca
+
+  Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+  Copyright (C) 1998 - 2010 Gilles Vollant, Even Rouault, Mathias Svensson
+
+ compile with -Dlocal if your debugger can't find static symbols  unz_file_info_interntal contain internal info about a file in zipfile relative offset of local header 8 bytes  file_in_zip_read_info_s contain internal information about a file in zipfile,
+    when reading and decompress it  internal buffer for compressed data  zLib stream structure for inflate  bzLib stream structure for bziped  position in byte on the zipfile, for fseek flag set if stream structure is initialised offset of the local extra field  size of the local extra field  position in the local extra field in read crc32 of all data uncompressed  crc32 we must obtain after decompress all  number of byte to be decompressed number of byte to be obtained after decomp io structore of the zipfile  compression method (0==store)  byte before the zipfile, (>0 for sfx) unz64_s contain internal information about the zipfile
+ io structore of the zipfile  public global information  byte before the zipfile, (>0 for sfx) number of the current file in the zipfile pos of the current file in the central dir flag about the usability of the current file position of the beginning of the central dir size of the central directory   offset of start of central directory with
+                                   respect to the starting disk number  public info about the current file in zip private info about it structure about the current
+                                        file if we are decompressing it  keys defining the pseudo-random sequence  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+ My own strcmpi / strcasecmp 
+   Compare two filename (fileName1,fileName2).
+   If iCaseSenisivity = 1, comparision is case sensitivity (like strcmp)
+   If iCaseSenisivity = 2, comparision is not case sensitivity (like strcmpi
+                                                                or strcasecmp)
+   If iCaseSenisivity = 0, case sensitivity is defaut of your operating system
+        (like 1 on Unix, 2 on Windows)
+
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+  Locate the Central directory 64 of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto end of central directory record  the signature 
+  Open a Zip file. path contain the full pathname (by example,
+     on a Windows NT computer "c:\\test\\zlib114.zip" or on an Unix computer
+     "zlib/zlib114.zip".
+     If the zipfile cannot be opened (file doesn't exist or in not valid), the
+       return value is NULL.
+     Else, the return value is a unzFile Handle, usable with other function
+       of this unzip package.
+ number of the current dist, used for
+                                   spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                                   for spaning ZIP, unsupported, always 0 total number of entries in
+                                   the central dir
+                                   (same than number_entry on nospan)  the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+          starting disk number  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the
+            starting disk number  zipfile comment length 
+  Close a ZipFile opened with unzipOpen.
+  If there is files inside the .Zip opened with unzipOpenCurrentFile (see later),
+    these files MUST be closed with unzipCloseCurrentFile before call unzipClose.
+  return UNZ_OK if there is no problem. 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.  to do : check if number_entry is not truncated 
+   Translate date/time from Dos format to tm_unz (readable more easilty)
+
+  Get Info about the current file in the zipfile, with internal only info
+ we check the magic  relative offset of local header  Read extrafield  since lSeek now points to after the extra field we need to move back  ZIP64 extra fields  Relative Header offset  Disk Start Number 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.
+
+  Set the current file of the zipfile to the first file.
+  return UNZ_OK if there is no problem
+
+  Set the current file of the zipfile to the next file.
+  return UNZ_OK if there is no problem
+  return UNZ_END_OF_LIST_OF_FILE if the actual file was the latest.
+ 2^16 files overflow hack 
+  Try locate the file szFileName in the zipfile.
+  For the iCaseSensitivity signification, see unzipStringFileNameCompare
+
+  return value :
+  UNZ_OK if the file is found. It becomes the current file.
+  UNZ_END_OF_LIST_OF_FILE if the file is not found
+ We remember the 'current' position in the file so that we can jump
+     * back there if we fail.
+      Save the current state  We failed, so restore the state of the 'current file' to where we
+     * were.
+     
+///////////////////////////////////////////
+// Contributed by Ryan Haksi (mailto://cryogen@infoserve.net)
+// I need random access
+//
+// Further optimization could be realized by adding an ability
+// to cache the directory in memory. The goal being a single
+// comprehensive file read to put the file I need in a memory.
+
+typedef struct unz_file_pos_s
+{
+    ZPOS64_T pos_in_zip_directory;   // offset in file
+    ZPOS64_T num_of_file;            // # of file
+} unz_file_pos;
+ jump to the right spot  set the current file  return results  Unzip Helper Functions - should be here? ///////////////////////////////////////// 
+  Read the local header of the current zipfile
+  Check the coherency of the local header and info in the end of central
+        directory about this file
+  store in *piSizeVar the size of extra info in local header
+        (filename and size of extra field data)
+
+    else if ((err==UNZ_OK) && (uData!=s->cur_file_info.wVersion))
+        err=UNZ_BADZIPFILE;
+ #ifdef HAVE_BZIP2  #endif  date/time  crc  size compr  size uncompr 
+  Open for reading data the current file in the zipfile.
+  If there is no error and the file is opened, the return value is UNZ_OK.
+ offset of the local extra field  size of the local extra field  #ifdef HAVE_BZIP2  #endif  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END.
+         * In unzip, i don't wait absolutely Z_STREAM_END because I known the
+         * size of both compressed and uncompressed data
+         * Addition for GDAL : START UNZ_PARAMERROR; UNZ_PARAMERROR; * Addition for GDAL : END 
+  Read bytes from the current file.
+  buf contain buffer where data must be copied
+  len the size of buf.
+
+  return the number of byte copied if somes bytes are copied
+  return 0 if the end of file was reached
+  return <0 with error code if there is an error
+    (UNZ_ERRNO for IO error, or zLib error for uncompress error)
+ end Z_BZIP2ED 
+  Give the current position in uncompressed data
+
+  return 1 if the end of file was reached, 0 elsewhere
+
+Read extra field from the current file (opened by unzOpenCurrentFile)
+This is the local-header version of the extra field (sometimes, there is
+more info in the local-header version than in the central-header)
+
+  if buf==NULL, it return the size of the local extra field that can be read
+
+  if buf!=NULL, len is the size of the buffer, the extra header is copied in
+    buf.
+  the return value is the number of bytes copied in buf, or (if <0)
+    the error code
+
+  Close the file in zip opened with unzipOpenCurrentFile
+  Return UNZ_CRCERROR if all the file was read but the CRC is not good
+
+  Get the global comment string of the ZipFile, in the szComment buffer.
+  uSizeBuf is the size of the szComment buffer.
+  return the number of byte copied or an error code <0
+ Additions by RX '2004 UNZ_PARAMERROR; UNZ_PARAMERROR;  hack  unzip.c -- IO for uncompress .zip files using zlib
+   Version 1.1, February 14h, 2010
+   part of the MiniZip project - ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Copyright (C) 1998-2010 Gilles Vollant (minizip) ( http://www.winimage.com/zLibDll/minizip.html )
+
+         Modifications of Unzip for Zip64
+         Copyright (C) 2007-2008 Even Rouault
+
+         Modifications for Zip64 support on both zip and unzip
+         Copyright (C) 2009-2010 Mathias Svensson ( http://result42.com )
+
+         Modifications for QIODevice support and other QuaZIP fixes
+         Copyright (C) 2005-2014 Sergey A. Tachenov
+
+         For more info read MiniZip_info.txt
+
+         Modifications for static code analysis report
+         Copyright (C) 2016 Intel Deutschland GmbH
+
+  ------------------------------------------------------------------------------------
+  Decryption code comes from crypt.c by Info-ZIP but has been greatly reduced in terms of
+  compatibility with older software. The following is from the original crypt.c.
+  Code woven in by Terry Thorsen 1/2003.
+
+  Copyright (c) 1990-2000 Info-ZIP.  All rights reserved.
+
+  See the accompanying file LICENSE, version 2000-Apr-09 or later
+  (the contents of which are also included in zip.h) for terms of use.
+  If, for some reason, all these files are missing, the Info-ZIP license
+  also may be found at:  ftp://ftp.info-zip.org/pub/infozip/license.html
+
+        crypt.c (full version) by Info-ZIP.      Last revised:  [see minizip_crypt.h]
+
+  The encryption/decryption parts of this source code (as opposed to the
+  non-echoing password parts) were originally written in Europe.  The
+  whole source package can be freely distributed, including from the USA.
+  (Prior to January 2000, re-export from the US was a violation of US law.)
+
+        This encryption code is a direct transcription of the algorithm from
+  Roger Schlafly, described by Phil Katz in the file appnote.txt.  This
+  file (appnote.txt) is distributed with the PKZIP program (even in the
+  version without encryption capabilities).
+
+        ------------------------------------------------------------------------------------
+
+        Changes in unzip.c
+
+        2007-2008 - Even Rouault - Addition of cpl_unzGetCurrentFileZStreamPos
+  2007-2008 - Even Rouault - Decoration of symbol names unz* -> cpl_unz*
+  2007-2008 - Even Rouault - Remove old C style function prototypes
+  2007-2008 - Even Rouault - Add unzip support for ZIP64
+
+        Copyright (C) 2007-2008 Even Rouault
+
+
+        Oct-2009 - Mathias Svensson - Removed cpl_* from symbol names (Even Rouault added them but since this is now moved to a new project (minizip64) I renamed them again).
+  Oct-2009 - Mathias Svensson - Fixed problem if uncompressed size was > 4G and compressed size was <4G
+                                should only read the compressed/uncompressed size from the Zip64 format if
+                                the size from normal header was 0xFFFFFFFF
+  Oct-2009 - Mathias Svensson - Applied some bug fixes from paches recived from Gilles Vollant
+        Oct-2009 - Mathias Svensson - Applied support to unzip files with compression mathod BZIP2 (bzip2 lib is required)
+                                Patch created by Daniel Borca
+
+  Jan-2010 - back to unzip and minizip 1.0 name scheme, with compatibility layer
+
+  Copyright (C) 1998 - 2010 Gilles Vollant, Even Rouault, Mathias Svensson
+
+ compile with -Dlocal if your debugger can't find static symbols  unz_file_info_interntal contain internal info about a file in zipfile relative offset of local header 8 bytes  file_in_zip_read_info_s contain internal information about a file in zipfile,
+    when reading and decompress it  internal buffer for compressed data  zLib stream structure for inflate  bzLib stream structure for bziped  position in byte on the zipfile, for fseek flag set if stream structure is initialised offset of the local extra field  size of the local extra field  position in the local extra field in read crc32 of all data uncompressed  crc32 we must obtain after decompress all  number of byte to be decompressed number of byte to be obtained after decomp io structore of the zipfile  compression method (0==store)  byte before the zipfile, (>0 for sfx) unz64_s contain internal information about the zipfile
+ io structore of the zipfile  public global information  byte before the zipfile, (>0 for sfx) number of the current file in the zipfile pos of the current file in the central dir flag about the usability of the current file position of the beginning of the central dir size of the central directory   offset of start of central directory with
+                                   respect to the starting disk number  public info about the current file in zip private info about it structure about the current
+                                        file if we are decompressing it  keys defining the pseudo-random sequence  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets
+ My own strcmpi / strcasecmp 
+   Compare two filename (fileName1,fileName2).
+   If iCaseSenisivity = 1, comparision is case sensitivity (like strcmp)
+   If iCaseSenisivity = 2, comparision is not case sensitivity (like strcmpi
+                                                                or strcasecmp)
+   If iCaseSenisivity = 0, case sensitivity is defaut of your operating system
+        (like 1 on Unix, 2 on Windows)
+
+
+  Locate the Central directory of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment 
+  Locate the Central directory 64 of a zipfile (at the end, just before
+    the global comment)
+ maximum size of global comment  Zip64 end of central directory locator  the signature, already checked  number of the disk with the start of the zip64 end of  central directory  relative offset of the zip64 end of central directory record  total number of disks  Goto end of central directory record  the signature 
+  Open a Zip file. path contain the full pathname (by example,
+     on a Windows NT computer "c:\\test\\zlib114.zip" or on an Unix computer
+     "zlib/zlib114.zip".
+     If the zipfile cannot be opened (file doesn't exist or in not valid), the
+       return value is NULL.
+     Else, the return value is a unzFile Handle, usable with other function
+       of this unzip package.
+ number of the current dist, used for
+                                   spaning ZIP, unsupported, always 0 number the the disk with central dir, used
+                                   for spaning ZIP, unsupported, always 0 total number of entries in
+                                   the central dir
+                                   (same than number_entry on nospan)  the signature, already checked  size of zip64 end of central directory record  version made by  version needed to extract  number of this disk  number of the disk with the start of the central directory  total number of entries in the central directory on this disk  total number of entries in the central directory  size of the central directory  offset of start of central directory with respect to the
+          starting disk number  the signature, already checked  number of this disk  number of the disk with the start of the central directory  total number of entries in the central dir on this disk  total number of entries in the central dir  size of the central directory  offset of start of central directory with respect to the
+            starting disk number  zipfile comment length 
+  Close a ZipFile opened with unzipOpen.
+  If there is files inside the .Zip opened with unzipOpenCurrentFile (see later),
+    these files MUST be closed with unzipCloseCurrentFile before call unzipClose.
+  return UNZ_OK if there is no problem. 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.  to do : check if number_entry is not truncated 
+   Translate date/time from Dos format to tm_unz (readable more easilty)
+
+  Get Info about the current file in the zipfile, with internal only info
+ we check the magic  relative offset of local header  Read extrafield  since lSeek now points to after the extra field we need to move back  ZIP64 extra fields  Relative Header offset  Disk Start Number 
+  Write info about the ZipFile in the *pglobal_info structure.
+  No preparation of the structure is needed
+  return UNZ_OK if there is no problem.
+
+  Set the current file of the zipfile to the first file.
+  return UNZ_OK if there is no problem
+
+  Set the current file of the zipfile to the next file.
+  return UNZ_OK if there is no problem
+  return UNZ_END_OF_LIST_OF_FILE if the actual file was the latest.
+ 2^16 files overflow hack 
+  Try locate the file szFileName in the zipfile.
+  For the iCaseSensitivity signification, see unzipStringFileNameCompare
+
+  return value :
+  UNZ_OK if the file is found. It becomes the current file.
+  UNZ_END_OF_LIST_OF_FILE if the file is not found
+ We remember the 'current' position in the file so that we can jump
+     * back there if we fail.
+      Save the current state  We failed, so restore the state of the 'current file' to where we
+     * were.
+     
+///////////////////////////////////////////
+// Contributed by Ryan Haksi (mailto://cryogen@infoserve.net)
+// I need random access
+//
+// Further optimization could be realized by adding an ability
+// to cache the directory in memory. The goal being a single
+// comprehensive file read to put the file I need in a memory.
+
+typedef struct unz_file_pos_s
+{
+    ZPOS64_T pos_in_zip_directory;   // offset in file
+    ZPOS64_T num_of_file;            // # of file
+} unz_file_pos;
+ jump to the right spot  set the current file  return results  Unzip Helper Functions - should be here? ///////////////////////////////////////// 
+  Read the local header of the current zipfile
+  Check the coherency of the local header and info in the end of central
+        directory about this file
+  store in *piSizeVar the size of extra info in local header
+        (filename and size of extra field data)
+
+    else if ((err==UNZ_OK) && (uData!=s->cur_file_info.wVersion))
+        err=UNZ_BADZIPFILE;
+ #ifdef HAVE_BZIP2  #endif  date/time  crc  size compr  size uncompr 
+  Open for reading data the current file in the zipfile.
+  If there is no error and the file is opened, the return value is UNZ_OK.
+ offset of the local extra field  size of the local extra field  #ifdef HAVE_BZIP2  #endif  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END.
+         * In unzip, i don't wait absolutely Z_STREAM_END because I known the
+         * size of both compressed and uncompressed data
+         * Addition for GDAL : START UNZ_PARAMERROR; UNZ_PARAMERROR; * Addition for GDAL : END 
+  Read bytes from the current file.
+  buf contain buffer where data must be copied
+  len the size of buf.
+
+  return the number of byte copied if somes bytes are copied
+  return 0 if the end of file was reached
+  return <0 with error code if there is an error
+    (UNZ_ERRNO for IO error, or zLib error for uncompress error)
+ end Z_BZIP2ED 
+  Give the current position in uncompressed data
+
+  return 1 if the end of file was reached, 0 elsewhere
+
+Read extra field from the current file (opened by unzOpenCurrentFile)
+This is the local-header version of the extra field (sometimes, there is
+more info in the local-header version than in the central-header)
+
+  if buf==NULL, it return the size of the local extra field that can be read
+
+  if buf!=NULL, len is the size of the buffer, the extra header is copied in
+    buf.
+  the return value is the number of bytes copied in buf, or (if <0)
+    the error code
+
+  Close the file in zip opened with unzipOpenCurrentFile
+  Return UNZ_CRCERROR if all the file was read but the CRC is not good
+
+  Get the global comment string of the ZipFile, in the szComment buffer.
+  uSizeBuf is the size of the szComment buffer.
+  return the number of byte copied or an error code <0
+ Additions by RX '2004 UNZ_PARAMERROR; UNZ_PARAMERROR;  hack 

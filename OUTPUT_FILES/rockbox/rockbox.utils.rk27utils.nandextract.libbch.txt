@@ -1,0 +1,673 @@
+
+ * Generic binary BCH encoding/decoding library
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 51
+ * Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Copyright © 2011 Parrot S.A.
+ *
+ * Author: Ivan Djelic <ivan.djelic@parrot.com>
+ *
+ * Description:
+ *
+ * This library provides runtime configurable encoding/decoding of binary
+ * Bose-Chaudhuri-Hocquenghem (BCH) codes.
+ *
+ * Call init_bch to get a pointer to a newly allocated bch_control structure for
+ * the given m (Galois field order), t (error correction capability) and
+ * (optional) primitive polynomial parameters.
+ *
+ * Call encode_bch to compute and store ecc parity bytes to a given buffer.
+ * Call decode_bch to detect and locate errors in received data.
+ *
+ * On systems supporting hw BCH features, intermediate results may be provided
+ * to decode_bch in order to skip certain steps. See decode_bch() documentation
+ * for details.
+ *
+ * Option CONFIG_BCH_CONST_PARAMS can be used to force fixed values of
+ * parameters m and t; thus allowing extra compiler optimizations and providing
+ * better (up to 2x) encoding performance. Using this option makes sense when
+ * (m,t) are fixed and known in advance, e.g. when using BCH error correction
+ * on a particular NAND flash device.
+ *
+ * Algorithmic details:
+ *
+ * Encoding is performed by processing 32 input bits in parallel, using 4
+ * remainder lookup tables.
+ *
+ * The final stage of decoding involves the following internal steps:
+ * a. Syndrome computation
+ * b. Error locator polynomial computation using Berlekamp-Massey algorithm
+ * c. Error locator root finding (by far the most expensive step)
+ *
+ * In this implementation, step c is not performed using the usual Chien search.
+ * Instead, an alternative approach described in [1] is used. It consists in
+ * factoring the error locator polynomial using the Berlekamp Trace algorithm
+ * (BTA) down to a certain degree (4), after which ad hoc low-degree polynomial
+ * solving techniques [2] are used. The resulting algorithm, called BTZ, yields
+ * much better performance than Chien search for usual (m,t) values (typically
+ * m >= 13, t < 32, see [1]).
+ *
+ * [1] B. Biswas, V. Herbert. Efficient root finding of polynomials over fields
+ * of characteristic 2, in: Western European Workshop on Research in Cryptology
+ * - WEWoRC 2009, Graz, Austria, LNCS, Springer, July 2009, to appear.
+ * [2] [Zin96] V.A. Zinoviev. On the solution of equations of degree 10 over
+ * finite fields GF(2^q). In Rapport de recherche INRIA no 2829, 1996.
+  glue code  end of glue code 
+ * same as encode_bch(), but process input data one byte at a time
+ 
+ * convert ecc bytes to aligned, zero-padded 32-bit ecc words
+ 
+ * convert 32-bit ecc words to ecc bytes
+ *
+ * encode_bch - calculate BCH ecc parity of data
+ * @bch:   BCH control structure
+ * @data:  data to encode
+ * @len:   data length in bytes
+ * @ecc:   ecc parity data, must be initialized by caller
+ *
+ * The @ecc parity array is used both as input and output parameter, in order to
+ * allow incremental computations. It should be of the size indicated by member
+ * @ecc_bytes of @bch, and should be initialized to 0 before the first call.
+ *
+ * The exact number of computed ecc parity bits is given by member @ecc_bits of
+ * @bch; it may be less than m*t for large values of t.
+  load ecc parity bytes into internal 32-bit buffer  process first unaligned data bytes  process 32-bit aligned data words 
+	 * split each 32-bit word into 4 polynomials of weight 8 as follows:
+	 *
+	 * 31 ...24  23 ...16  15 ... 8  7 ... 0
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt
+	 *                               tttttttt  mod g = r0 (precomputed)
+	 *                     zzzzzzzz  00000000  mod g = r1 (precomputed)
+	 *           yyyyyyyy  00000000  00000000  mod g = r2 (precomputed)
+	 * xxxxxxxx  00000000  00000000  00000000  mod g = r3 (precomputed)
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt  mod g = r0^r1^r2^r3
+	  input data is read in big-endian format  process last unaligned bytes  store ecc parity bytes into original parity buffer 
+ * shorter and faster modulo function, only works when v < 2N.
+  polynomial degree is the most-significant bit index 
+	 * public domain code snippet, lifted from
+	 * http://www-graphics.stanford.edu/~seander/bithacks.html
+	  Galois field basic operations: multiply, divide, inverse, etc. 
+ * compute 2t syndromes of ecc polynomial, i.e. ecc(a^j) for j=1..2t
+  make sure extra bits in last ecc word are cleared  compute v(a^j) for j=1 .. 2t-1  v(a^(2j)) = v(a^j)^2  use simplified binary Berlekamp-Massey algorithm  e[i+1](X) = e[i](X)+di*dp^-1*X^2(i-p)*e[p](X)  compute l[i+1] = max(l[i]->c[l[p]+2*(i-p])  di+1 = S(2i+3)+elp[i+1].1*S(2i+2)+...+elp[i+1].lS(2i+3-l) 
+ * solve a m x m linear system in GF(2) with an expected number of solutions,
+ * and return the number of found solutions
+  Gaussian elimination  find suitable row for elimination  perform elimination on remaining rows  elimination not needed, store defective row index  rewrite system, inserting fake parameter rows  system has no solution  unexpected number of solutions  set parameters for p-th solution  compute unique solution 
+ * this function builds and solves a linear system for finding roots of a degree
+ * 4 affine monic polynomial X^4+aX^2+bX+c over GF(2^m).
+  buid linear system to solve X^4+aX^2+bX+c = 0 
+	 * transpose 16x16 matrix before passing it to linear solver
+	 * warning: this code assumes m < 16
+	 
+ * compute root r of a degree 1 polynomial over GF(2^m) (returned as log(1/r))
+  poly[X] = bX+c with c!=0, root=c/b 
+ * compute roots of a degree 2 polynomial over GF(2^m)
+  using z=a/bX, transform aX^2+bX+c into z^2+z+u (u=ac/b^2) 
+		 * let u = sum(li.a^i) i=0..m-1; then compute r = sum(li.xi):
+		 * r^2+r = sum(li.(xi^2+xi)) = sum(li.(a^i+Tr(a^i).a^k)) =
+		 * u + sum(li.Tr(a^i).a^k) = u+a^k.Tr(sum(li.a^i)) = u+a^k.Tr(u)
+		 * i.e. r and r+1 are roots iff Tr(u)=0
+		  verify root  reverse z=a/bX transformation and compute log(1/r) 
+ * compute roots of a degree 3 polynomial over GF(2^m)
+  transform polynomial into monic X^3 + a2X^2 + b2X + c2  (X+a2)(X^3+a2X^2+b2X+c2) = X^4+aX^2+bX+c (affine)  c = a2c2       b = a2b2 + c2  a = a2^2 + b2  find the 4 roots of this affine polynomial  remove a2 from final list of roots 
+ * compute roots of a degree 4 polynomial over GF(2^m)
+  transform polynomial into monic X^4 + aX^3 + bX^2 + cX + d  use Y=1/X transformation to get an affine polynomial  first, eliminate cX by using z=X+e with ae^2+c=0  compute e such that e^2 = c/a 
+			 * use transformation z=X+e:
+			 * z^4+e^4 + a(z^3+ez^2+e^2z+e^3) + b(z^2+e^2) +cz+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + (ae^2+c)z+e^4+be^2+ae^3+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + e^4+be^2+d
+			 * z^4 + az^3 +     b'z^2 + d'
+			  now, use Y=1/X to get Y^4 + b/dY^2 + a/dY + 1/d  assume all roots have multiplicity 1  polynomial is already affine  find the 4 roots of this affine polynomial  post-process roots (reverse transformations) 
+ * build monic, log-based representation of a polynomial
+  represent 0 values with -1; warning, rep[d] is not set to 1 
+ * compute polynomial Euclidean division remainder in GF(2^m)[X]
+  reuse or compute log representation of denominator 
+ * compute polynomial Euclidean division quotient in GF(2^m)[X]
+  compute a mod b (modifies a)  quotient is stored in upper part of polynomial a 
+ * compute polynomial GCD (Greatest Common Divisor) in GF(2^m)[X]
+ 
+ * Given a polynomial f and an integer k, compute Tr(a^kX) mod f
+ * This is used in Berlekamp Trace algorithm for splitting polynomials
+  z contains z^2j mod f  compute f log representation only once  add a^(k*2^i)(z^(2^i) mod f) and compute (z^(2^i) mod f)^2  z^(2(i+1)) mod f = (z^(2^i) mod f)^2 mod f 
+ * factor a polynomial using Berlekamp Trace algorithm (BTA)
+  tk = Tr(a^k.X) mod f  compute g = gcd(f, tk) (destructive operation)  compute h=f/gcd(f,tk); this will modify f and q  store g and h in-place (clobbering f) 
+ * find roots of a polynomial, using BTZ algorithm; see the beginning of this
+ * file for details
+  handle low degree polynomials with ad hoc techniques  factor polynomial using Berlekamp Trace Algorithm (BTA) 
+ * exhaustive root search (Chien) implementation - not used, included only for
+ * reference/comparison tests
+  use a log-based representation of polynomial  compute elp(a^i)  USE_CHIEN_SEARCH *
+ * decode_bch - decode received codeword and find bit error locations
+ * @bch:      BCH control structure
+ * @data:     received data, ignored if @calc_ecc is provided
+ * @len:      data length in bytes, must always be provided
+ * @recv_ecc: received ecc, if NULL then assume it was XORed in @calc_ecc
+ * @calc_ecc: calculated ecc, if NULL then calc_ecc is computed from @data
+ * @syn:      hw computed syndrome data (if NULL, syndrome is calculated)
+ * @errloc:   output array of error locations
+ *
+ * Returns:
+ *  The number of errors found, or -EBADMSG if decoding failed, or -EINVAL if
+ *  invalid parameters were provided
+ *
+ * Depending on the available hw BCH support and the need to compute @calc_ecc
+ * separately (using encode_bch()), this function should be called with one of
+ * the following parameter configurations -
+ *
+ * by providing @data and @recv_ecc only:
+ *   decode_bch(@bch, @data, @len, @recv_ecc, NULL, NULL, @errloc)
+ *
+ * by providing @recv_ecc and @calc_ecc:
+ *   decode_bch(@bch, NULL, @len, @recv_ecc, @calc_ecc, NULL, @errloc)
+ *
+ * by providing ecc = recv_ecc XOR calc_ecc:
+ *   decode_bch(@bch, NULL, @len, NULL, ecc, NULL, @errloc)
+ *
+ * by providing syndrome results @syn:
+ *   decode_bch(@bch, NULL, @len, NULL, NULL, @syn, @errloc)
+ *
+ * Once decode_bch() has successfully returned with a positive value, error
+ * locations returned in array @errloc should be interpreted as follows -
+ *
+ * if (errloc[n] >= 8*len), then n-th error is located in ecc (no need for
+ * data correction)
+ *
+ * if (errloc[n] < 8*len), then n-th error is located in data and can be
+ * corrected with statement data[errloc[n]/8] ^= 1 << (errloc[n] % 8);
+ *
+ * Note that this function does not perform any data correction by itself, it
+ * merely indicates error locations.
+  sanity check: make sure data length can be handled  if caller does not provide syndromes, compute them  compute received data ecc into an internal buffer  load provided calculated ecc  load received ecc or assume it was XORed in calc_ecc  XOR received and calculated ecc  no error found  post-process raw error locations for easier correction 
+ * generate Galois field lookup tables
+  primitive polynomial must be of degree m  polynomial is not primitive (a^i=1 with 0<i<2^m-1) 
+ * compute generator polynomial remainder tables for fast encoding
+  p(X)=i is a small polynomial of weight <= 8  we want to compute (p(X).X^(8*b+deg(g))) mod g(X)  subtract X^d.g(X) from p(X).X^(8*b+deg(g)) 
+ * build a base for factoring degree 2 polynomials
+  find k s.t. Tr(a^k) = 1 and 0 <= k < m  find xi, i=0..m-1 such that xi^2+xi = a^i+Tr(a^i).a^k  should not happen but check anyway 
+ * compute generator polynomial for given (m,t) parameters.
+  enumerate all roots of g(X)  build generator polynomial g(X)  multiply g(X) by (X+root)  store left-justified binary representation of g(X) *
+ * init_bch - initialize a BCH encoder/decoder
+ * @m:          Galois field order, should be in the range 5-15
+ * @t:          maximum error correction capability, in bits
+ * @prim_poly:  user-provided primitive polynomial (or 0 to use default)
+ *
+ * Returns:
+ *  a newly allocated BCH control structure if successful, NULL otherwise
+ *
+ * This initialization can take some time, as lookup tables are built for fast
+ * encoding/decoding; make sure not to call this function from a time critical
+ * path. Usually, init_bch() should be called on module/driver init and
+ * free_bch() should be called to release memory on exit.
+ *
+ * You may provide your own primitive polynomial of degree @m in argument
+ * @prim_poly, or let init_bch() use its default polynomial.
+ *
+ * Once init_bch() has successfully returned a pointer to a newly allocated
+ * BCH control structure, ecc length in bytes is given by member @ecc_bytes of
+ * the structure.
+  default primitive polynomials 
+		 * values of m greater than 15 are not currently supported;
+		 * supporting m > 15 would require changing table base type
+		 * (uint16_t) and a small patch in matrix transposition
+		  sanity checks  invalid t value  select a primitive polynomial for generating GF(2^m)  use generator polynomial for computing encoding tables *
+ *  free_bch - free the BCH control structure
+ *  @bch:    BCH control structure to release
+ 
+ * Generic binary BCH encoding/decoding library
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 51
+ * Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Copyright © 2011 Parrot S.A.
+ *
+ * Author: Ivan Djelic <ivan.djelic@parrot.com>
+ *
+ * Description:
+ *
+ * This library provides runtime configurable encoding/decoding of binary
+ * Bose-Chaudhuri-Hocquenghem (BCH) codes.
+ *
+ * Call init_bch to get a pointer to a newly allocated bch_control structure for
+ * the given m (Galois field order), t (error correction capability) and
+ * (optional) primitive polynomial parameters.
+ *
+ * Call encode_bch to compute and store ecc parity bytes to a given buffer.
+ * Call decode_bch to detect and locate errors in received data.
+ *
+ * On systems supporting hw BCH features, intermediate results may be provided
+ * to decode_bch in order to skip certain steps. See decode_bch() documentation
+ * for details.
+ *
+ * Option CONFIG_BCH_CONST_PARAMS can be used to force fixed values of
+ * parameters m and t; thus allowing extra compiler optimizations and providing
+ * better (up to 2x) encoding performance. Using this option makes sense when
+ * (m,t) are fixed and known in advance, e.g. when using BCH error correction
+ * on a particular NAND flash device.
+ *
+ * Algorithmic details:
+ *
+ * Encoding is performed by processing 32 input bits in parallel, using 4
+ * remainder lookup tables.
+ *
+ * The final stage of decoding involves the following internal steps:
+ * a. Syndrome computation
+ * b. Error locator polynomial computation using Berlekamp-Massey algorithm
+ * c. Error locator root finding (by far the most expensive step)
+ *
+ * In this implementation, step c is not performed using the usual Chien search.
+ * Instead, an alternative approach described in [1] is used. It consists in
+ * factoring the error locator polynomial using the Berlekamp Trace algorithm
+ * (BTA) down to a certain degree (4), after which ad hoc low-degree polynomial
+ * solving techniques [2] are used. The resulting algorithm, called BTZ, yields
+ * much better performance than Chien search for usual (m,t) values (typically
+ * m >= 13, t < 32, see [1]).
+ *
+ * [1] B. Biswas, V. Herbert. Efficient root finding of polynomials over fields
+ * of characteristic 2, in: Western European Workshop on Research in Cryptology
+ * - WEWoRC 2009, Graz, Austria, LNCS, Springer, July 2009, to appear.
+ * [2] [Zin96] V.A. Zinoviev. On the solution of equations of degree 10 over
+ * finite fields GF(2^q). In Rapport de recherche INRIA no 2829, 1996.
+  glue code  end of glue code 
+ * same as encode_bch(), but process input data one byte at a time
+ 
+ * convert ecc bytes to aligned, zero-padded 32-bit ecc words
+ 
+ * convert 32-bit ecc words to ecc bytes
+ *
+ * encode_bch - calculate BCH ecc parity of data
+ * @bch:   BCH control structure
+ * @data:  data to encode
+ * @len:   data length in bytes
+ * @ecc:   ecc parity data, must be initialized by caller
+ *
+ * The @ecc parity array is used both as input and output parameter, in order to
+ * allow incremental computations. It should be of the size indicated by member
+ * @ecc_bytes of @bch, and should be initialized to 0 before the first call.
+ *
+ * The exact number of computed ecc parity bits is given by member @ecc_bits of
+ * @bch; it may be less than m*t for large values of t.
+  load ecc parity bytes into internal 32-bit buffer  process first unaligned data bytes  process 32-bit aligned data words 
+	 * split each 32-bit word into 4 polynomials of weight 8 as follows:
+	 *
+	 * 31 ...24  23 ...16  15 ... 8  7 ... 0
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt
+	 *                               tttttttt  mod g = r0 (precomputed)
+	 *                     zzzzzzzz  00000000  mod g = r1 (precomputed)
+	 *           yyyyyyyy  00000000  00000000  mod g = r2 (precomputed)
+	 * xxxxxxxx  00000000  00000000  00000000  mod g = r3 (precomputed)
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt  mod g = r0^r1^r2^r3
+	  input data is read in big-endian format  process last unaligned bytes  store ecc parity bytes into original parity buffer 
+ * shorter and faster modulo function, only works when v < 2N.
+  polynomial degree is the most-significant bit index 
+	 * public domain code snippet, lifted from
+	 * http://www-graphics.stanford.edu/~seander/bithacks.html
+	  Galois field basic operations: multiply, divide, inverse, etc. 
+ * compute 2t syndromes of ecc polynomial, i.e. ecc(a^j) for j=1..2t
+  make sure extra bits in last ecc word are cleared  compute v(a^j) for j=1 .. 2t-1  v(a^(2j)) = v(a^j)^2  use simplified binary Berlekamp-Massey algorithm  e[i+1](X) = e[i](X)+di*dp^-1*X^2(i-p)*e[p](X)  compute l[i+1] = max(l[i]->c[l[p]+2*(i-p])  di+1 = S(2i+3)+elp[i+1].1*S(2i+2)+...+elp[i+1].lS(2i+3-l) 
+ * solve a m x m linear system in GF(2) with an expected number of solutions,
+ * and return the number of found solutions
+  Gaussian elimination  find suitable row for elimination  perform elimination on remaining rows  elimination not needed, store defective row index  rewrite system, inserting fake parameter rows  system has no solution  unexpected number of solutions  set parameters for p-th solution  compute unique solution 
+ * this function builds and solves a linear system for finding roots of a degree
+ * 4 affine monic polynomial X^4+aX^2+bX+c over GF(2^m).
+  buid linear system to solve X^4+aX^2+bX+c = 0 
+	 * transpose 16x16 matrix before passing it to linear solver
+	 * warning: this code assumes m < 16
+	 
+ * compute root r of a degree 1 polynomial over GF(2^m) (returned as log(1/r))
+  poly[X] = bX+c with c!=0, root=c/b 
+ * compute roots of a degree 2 polynomial over GF(2^m)
+  using z=a/bX, transform aX^2+bX+c into z^2+z+u (u=ac/b^2) 
+		 * let u = sum(li.a^i) i=0..m-1; then compute r = sum(li.xi):
+		 * r^2+r = sum(li.(xi^2+xi)) = sum(li.(a^i+Tr(a^i).a^k)) =
+		 * u + sum(li.Tr(a^i).a^k) = u+a^k.Tr(sum(li.a^i)) = u+a^k.Tr(u)
+		 * i.e. r and r+1 are roots iff Tr(u)=0
+		  verify root  reverse z=a/bX transformation and compute log(1/r) 
+ * compute roots of a degree 3 polynomial over GF(2^m)
+  transform polynomial into monic X^3 + a2X^2 + b2X + c2  (X+a2)(X^3+a2X^2+b2X+c2) = X^4+aX^2+bX+c (affine)  c = a2c2       b = a2b2 + c2  a = a2^2 + b2  find the 4 roots of this affine polynomial  remove a2 from final list of roots 
+ * compute roots of a degree 4 polynomial over GF(2^m)
+  transform polynomial into monic X^4 + aX^3 + bX^2 + cX + d  use Y=1/X transformation to get an affine polynomial  first, eliminate cX by using z=X+e with ae^2+c=0  compute e such that e^2 = c/a 
+			 * use transformation z=X+e:
+			 * z^4+e^4 + a(z^3+ez^2+e^2z+e^3) + b(z^2+e^2) +cz+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + (ae^2+c)z+e^4+be^2+ae^3+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + e^4+be^2+d
+			 * z^4 + az^3 +     b'z^2 + d'
+			  now, use Y=1/X to get Y^4 + b/dY^2 + a/dY + 1/d  assume all roots have multiplicity 1  polynomial is already affine  find the 4 roots of this affine polynomial  post-process roots (reverse transformations) 
+ * build monic, log-based representation of a polynomial
+  represent 0 values with -1; warning, rep[d] is not set to 1 
+ * compute polynomial Euclidean division remainder in GF(2^m)[X]
+  reuse or compute log representation of denominator 
+ * compute polynomial Euclidean division quotient in GF(2^m)[X]
+  compute a mod b (modifies a)  quotient is stored in upper part of polynomial a 
+ * compute polynomial GCD (Greatest Common Divisor) in GF(2^m)[X]
+ 
+ * Given a polynomial f and an integer k, compute Tr(a^kX) mod f
+ * This is used in Berlekamp Trace algorithm for splitting polynomials
+  z contains z^2j mod f  compute f log representation only once  add a^(k*2^i)(z^(2^i) mod f) and compute (z^(2^i) mod f)^2  z^(2(i+1)) mod f = (z^(2^i) mod f)^2 mod f 
+ * factor a polynomial using Berlekamp Trace algorithm (BTA)
+  tk = Tr(a^k.X) mod f  compute g = gcd(f, tk) (destructive operation)  compute h=f/gcd(f,tk); this will modify f and q  store g and h in-place (clobbering f) 
+ * find roots of a polynomial, using BTZ algorithm; see the beginning of this
+ * file for details
+  handle low degree polynomials with ad hoc techniques  factor polynomial using Berlekamp Trace Algorithm (BTA) 
+ * exhaustive root search (Chien) implementation - not used, included only for
+ * reference/comparison tests
+  use a log-based representation of polynomial  compute elp(a^i)  USE_CHIEN_SEARCH *
+ * decode_bch - decode received codeword and find bit error locations
+ * @bch:      BCH control structure
+ * @data:     received data, ignored if @calc_ecc is provided
+ * @len:      data length in bytes, must always be provided
+ * @recv_ecc: received ecc, if NULL then assume it was XORed in @calc_ecc
+ * @calc_ecc: calculated ecc, if NULL then calc_ecc is computed from @data
+ * @syn:      hw computed syndrome data (if NULL, syndrome is calculated)
+ * @errloc:   output array of error locations
+ *
+ * Returns:
+ *  The number of errors found, or -EBADMSG if decoding failed, or -EINVAL if
+ *  invalid parameters were provided
+ *
+ * Depending on the available hw BCH support and the need to compute @calc_ecc
+ * separately (using encode_bch()), this function should be called with one of
+ * the following parameter configurations -
+ *
+ * by providing @data and @recv_ecc only:
+ *   decode_bch(@bch, @data, @len, @recv_ecc, NULL, NULL, @errloc)
+ *
+ * by providing @recv_ecc and @calc_ecc:
+ *   decode_bch(@bch, NULL, @len, @recv_ecc, @calc_ecc, NULL, @errloc)
+ *
+ * by providing ecc = recv_ecc XOR calc_ecc:
+ *   decode_bch(@bch, NULL, @len, NULL, ecc, NULL, @errloc)
+ *
+ * by providing syndrome results @syn:
+ *   decode_bch(@bch, NULL, @len, NULL, NULL, @syn, @errloc)
+ *
+ * Once decode_bch() has successfully returned with a positive value, error
+ * locations returned in array @errloc should be interpreted as follows -
+ *
+ * if (errloc[n] >= 8*len), then n-th error is located in ecc (no need for
+ * data correction)
+ *
+ * if (errloc[n] < 8*len), then n-th error is located in data and can be
+ * corrected with statement data[errloc[n]/8] ^= 1 << (errloc[n] % 8);
+ *
+ * Note that this function does not perform any data correction by itself, it
+ * merely indicates error locations.
+  sanity check: make sure data length can be handled  if caller does not provide syndromes, compute them  compute received data ecc into an internal buffer  load provided calculated ecc  load received ecc or assume it was XORed in calc_ecc  XOR received and calculated ecc  no error found  post-process raw error locations for easier correction 
+ * generate Galois field lookup tables
+  primitive polynomial must be of degree m  polynomial is not primitive (a^i=1 with 0<i<2^m-1) 
+ * compute generator polynomial remainder tables for fast encoding
+  p(X)=i is a small polynomial of weight <= 8  we want to compute (p(X).X^(8*b+deg(g))) mod g(X)  subtract X^d.g(X) from p(X).X^(8*b+deg(g)) 
+ * build a base for factoring degree 2 polynomials
+  find k s.t. Tr(a^k) = 1 and 0 <= k < m  find xi, i=0..m-1 such that xi^2+xi = a^i+Tr(a^i).a^k  should not happen but check anyway 
+ * compute generator polynomial for given (m,t) parameters.
+  enumerate all roots of g(X)  build generator polynomial g(X)  multiply g(X) by (X+root)  store left-justified binary representation of g(X) *
+ * init_bch - initialize a BCH encoder/decoder
+ * @m:          Galois field order, should be in the range 5-15
+ * @t:          maximum error correction capability, in bits
+ * @prim_poly:  user-provided primitive polynomial (or 0 to use default)
+ *
+ * Returns:
+ *  a newly allocated BCH control structure if successful, NULL otherwise
+ *
+ * This initialization can take some time, as lookup tables are built for fast
+ * encoding/decoding; make sure not to call this function from a time critical
+ * path. Usually, init_bch() should be called on module/driver init and
+ * free_bch() should be called to release memory on exit.
+ *
+ * You may provide your own primitive polynomial of degree @m in argument
+ * @prim_poly, or let init_bch() use its default polynomial.
+ *
+ * Once init_bch() has successfully returned a pointer to a newly allocated
+ * BCH control structure, ecc length in bytes is given by member @ecc_bytes of
+ * the structure.
+  default primitive polynomials 
+		 * values of m greater than 15 are not currently supported;
+		 * supporting m > 15 would require changing table base type
+		 * (uint16_t) and a small patch in matrix transposition
+		  sanity checks  invalid t value  select a primitive polynomial for generating GF(2^m)  use generator polynomial for computing encoding tables *
+ *  free_bch - free the BCH control structure
+ *  @bch:    BCH control structure to release
+ 
+ * Generic binary BCH encoding/decoding library
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 51
+ * Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Copyright © 2011 Parrot S.A.
+ *
+ * Author: Ivan Djelic <ivan.djelic@parrot.com>
+ *
+ * Description:
+ *
+ * This library provides runtime configurable encoding/decoding of binary
+ * Bose-Chaudhuri-Hocquenghem (BCH) codes.
+ *
+ * Call init_bch to get a pointer to a newly allocated bch_control structure for
+ * the given m (Galois field order), t (error correction capability) and
+ * (optional) primitive polynomial parameters.
+ *
+ * Call encode_bch to compute and store ecc parity bytes to a given buffer.
+ * Call decode_bch to detect and locate errors in received data.
+ *
+ * On systems supporting hw BCH features, intermediate results may be provided
+ * to decode_bch in order to skip certain steps. See decode_bch() documentation
+ * for details.
+ *
+ * Option CONFIG_BCH_CONST_PARAMS can be used to force fixed values of
+ * parameters m and t; thus allowing extra compiler optimizations and providing
+ * better (up to 2x) encoding performance. Using this option makes sense when
+ * (m,t) are fixed and known in advance, e.g. when using BCH error correction
+ * on a particular NAND flash device.
+ *
+ * Algorithmic details:
+ *
+ * Encoding is performed by processing 32 input bits in parallel, using 4
+ * remainder lookup tables.
+ *
+ * The final stage of decoding involves the following internal steps:
+ * a. Syndrome computation
+ * b. Error locator polynomial computation using Berlekamp-Massey algorithm
+ * c. Error locator root finding (by far the most expensive step)
+ *
+ * In this implementation, step c is not performed using the usual Chien search.
+ * Instead, an alternative approach described in [1] is used. It consists in
+ * factoring the error locator polynomial using the Berlekamp Trace algorithm
+ * (BTA) down to a certain degree (4), after which ad hoc low-degree polynomial
+ * solving techniques [2] are used. The resulting algorithm, called BTZ, yields
+ * much better performance than Chien search for usual (m,t) values (typically
+ * m >= 13, t < 32, see [1]).
+ *
+ * [1] B. Biswas, V. Herbert. Efficient root finding of polynomials over fields
+ * of characteristic 2, in: Western European Workshop on Research in Cryptology
+ * - WEWoRC 2009, Graz, Austria, LNCS, Springer, July 2009, to appear.
+ * [2] [Zin96] V.A. Zinoviev. On the solution of equations of degree 10 over
+ * finite fields GF(2^q). In Rapport de recherche INRIA no 2829, 1996.
+  glue code  end of glue code 
+ * same as encode_bch(), but process input data one byte at a time
+ 
+ * convert ecc bytes to aligned, zero-padded 32-bit ecc words
+ 
+ * convert 32-bit ecc words to ecc bytes
+ *
+ * encode_bch - calculate BCH ecc parity of data
+ * @bch:   BCH control structure
+ * @data:  data to encode
+ * @len:   data length in bytes
+ * @ecc:   ecc parity data, must be initialized by caller
+ *
+ * The @ecc parity array is used both as input and output parameter, in order to
+ * allow incremental computations. It should be of the size indicated by member
+ * @ecc_bytes of @bch, and should be initialized to 0 before the first call.
+ *
+ * The exact number of computed ecc parity bits is given by member @ecc_bits of
+ * @bch; it may be less than m*t for large values of t.
+  load ecc parity bytes into internal 32-bit buffer  process first unaligned data bytes  process 32-bit aligned data words 
+	 * split each 32-bit word into 4 polynomials of weight 8 as follows:
+	 *
+	 * 31 ...24  23 ...16  15 ... 8  7 ... 0
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt
+	 *                               tttttttt  mod g = r0 (precomputed)
+	 *                     zzzzzzzz  00000000  mod g = r1 (precomputed)
+	 *           yyyyyyyy  00000000  00000000  mod g = r2 (precomputed)
+	 * xxxxxxxx  00000000  00000000  00000000  mod g = r3 (precomputed)
+	 * xxxxxxxx  yyyyyyyy  zzzzzzzz  tttttttt  mod g = r0^r1^r2^r3
+	  input data is read in big-endian format  process last unaligned bytes  store ecc parity bytes into original parity buffer 
+ * shorter and faster modulo function, only works when v < 2N.
+  polynomial degree is the most-significant bit index 
+	 * public domain code snippet, lifted from
+	 * http://www-graphics.stanford.edu/~seander/bithacks.html
+	  Galois field basic operations: multiply, divide, inverse, etc. 
+ * compute 2t syndromes of ecc polynomial, i.e. ecc(a^j) for j=1..2t
+  make sure extra bits in last ecc word are cleared  compute v(a^j) for j=1 .. 2t-1  v(a^(2j)) = v(a^j)^2  use simplified binary Berlekamp-Massey algorithm  e[i+1](X) = e[i](X)+di*dp^-1*X^2(i-p)*e[p](X)  compute l[i+1] = max(l[i]->c[l[p]+2*(i-p])  di+1 = S(2i+3)+elp[i+1].1*S(2i+2)+...+elp[i+1].lS(2i+3-l) 
+ * solve a m x m linear system in GF(2) with an expected number of solutions,
+ * and return the number of found solutions
+  Gaussian elimination  find suitable row for elimination  perform elimination on remaining rows  elimination not needed, store defective row index  rewrite system, inserting fake parameter rows  system has no solution  unexpected number of solutions  set parameters for p-th solution  compute unique solution 
+ * this function builds and solves a linear system for finding roots of a degree
+ * 4 affine monic polynomial X^4+aX^2+bX+c over GF(2^m).
+  buid linear system to solve X^4+aX^2+bX+c = 0 
+	 * transpose 16x16 matrix before passing it to linear solver
+	 * warning: this code assumes m < 16
+	 
+ * compute root r of a degree 1 polynomial over GF(2^m) (returned as log(1/r))
+  poly[X] = bX+c with c!=0, root=c/b 
+ * compute roots of a degree 2 polynomial over GF(2^m)
+  using z=a/bX, transform aX^2+bX+c into z^2+z+u (u=ac/b^2) 
+		 * let u = sum(li.a^i) i=0..m-1; then compute r = sum(li.xi):
+		 * r^2+r = sum(li.(xi^2+xi)) = sum(li.(a^i+Tr(a^i).a^k)) =
+		 * u + sum(li.Tr(a^i).a^k) = u+a^k.Tr(sum(li.a^i)) = u+a^k.Tr(u)
+		 * i.e. r and r+1 are roots iff Tr(u)=0
+		  verify root  reverse z=a/bX transformation and compute log(1/r) 
+ * compute roots of a degree 3 polynomial over GF(2^m)
+  transform polynomial into monic X^3 + a2X^2 + b2X + c2  (X+a2)(X^3+a2X^2+b2X+c2) = X^4+aX^2+bX+c (affine)  c = a2c2       b = a2b2 + c2  a = a2^2 + b2  find the 4 roots of this affine polynomial  remove a2 from final list of roots 
+ * compute roots of a degree 4 polynomial over GF(2^m)
+  transform polynomial into monic X^4 + aX^3 + bX^2 + cX + d  use Y=1/X transformation to get an affine polynomial  first, eliminate cX by using z=X+e with ae^2+c=0  compute e such that e^2 = c/a 
+			 * use transformation z=X+e:
+			 * z^4+e^4 + a(z^3+ez^2+e^2z+e^3) + b(z^2+e^2) +cz+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + (ae^2+c)z+e^4+be^2+ae^3+ce+d
+			 * z^4 + az^3 + (ae+b)z^2 + e^4+be^2+d
+			 * z^4 + az^3 +     b'z^2 + d'
+			  now, use Y=1/X to get Y^4 + b/dY^2 + a/dY + 1/d  assume all roots have multiplicity 1  polynomial is already affine  find the 4 roots of this affine polynomial  post-process roots (reverse transformations) 
+ * build monic, log-based representation of a polynomial
+  represent 0 values with -1; warning, rep[d] is not set to 1 
+ * compute polynomial Euclidean division remainder in GF(2^m)[X]
+  reuse or compute log representation of denominator 
+ * compute polynomial Euclidean division quotient in GF(2^m)[X]
+  compute a mod b (modifies a)  quotient is stored in upper part of polynomial a 
+ * compute polynomial GCD (Greatest Common Divisor) in GF(2^m)[X]
+ 
+ * Given a polynomial f and an integer k, compute Tr(a^kX) mod f
+ * This is used in Berlekamp Trace algorithm for splitting polynomials
+  z contains z^2j mod f  compute f log representation only once  add a^(k*2^i)(z^(2^i) mod f) and compute (z^(2^i) mod f)^2  z^(2(i+1)) mod f = (z^(2^i) mod f)^2 mod f 
+ * factor a polynomial using Berlekamp Trace algorithm (BTA)
+  tk = Tr(a^k.X) mod f  compute g = gcd(f, tk) (destructive operation)  compute h=f/gcd(f,tk); this will modify f and q  store g and h in-place (clobbering f) 
+ * find roots of a polynomial, using BTZ algorithm; see the beginning of this
+ * file for details
+  handle low degree polynomials with ad hoc techniques  factor polynomial using Berlekamp Trace Algorithm (BTA) 
+ * exhaustive root search (Chien) implementation - not used, included only for
+ * reference/comparison tests
+  use a log-based representation of polynomial  compute elp(a^i)  USE_CHIEN_SEARCH *
+ * decode_bch - decode received codeword and find bit error locations
+ * @bch:      BCH control structure
+ * @data:     received data, ignored if @calc_ecc is provided
+ * @len:      data length in bytes, must always be provided
+ * @recv_ecc: received ecc, if NULL then assume it was XORed in @calc_ecc
+ * @calc_ecc: calculated ecc, if NULL then calc_ecc is computed from @data
+ * @syn:      hw computed syndrome data (if NULL, syndrome is calculated)
+ * @errloc:   output array of error locations
+ *
+ * Returns:
+ *  The number of errors found, or -EBADMSG if decoding failed, or -EINVAL if
+ *  invalid parameters were provided
+ *
+ * Depending on the available hw BCH support and the need to compute @calc_ecc
+ * separately (using encode_bch()), this function should be called with one of
+ * the following parameter configurations -
+ *
+ * by providing @data and @recv_ecc only:
+ *   decode_bch(@bch, @data, @len, @recv_ecc, NULL, NULL, @errloc)
+ *
+ * by providing @recv_ecc and @calc_ecc:
+ *   decode_bch(@bch, NULL, @len, @recv_ecc, @calc_ecc, NULL, @errloc)
+ *
+ * by providing ecc = recv_ecc XOR calc_ecc:
+ *   decode_bch(@bch, NULL, @len, NULL, ecc, NULL, @errloc)
+ *
+ * by providing syndrome results @syn:
+ *   decode_bch(@bch, NULL, @len, NULL, NULL, @syn, @errloc)
+ *
+ * Once decode_bch() has successfully returned with a positive value, error
+ * locations returned in array @errloc should be interpreted as follows -
+ *
+ * if (errloc[n] >= 8*len), then n-th error is located in ecc (no need for
+ * data correction)
+ *
+ * if (errloc[n] < 8*len), then n-th error is located in data and can be
+ * corrected with statement data[errloc[n]/8] ^= 1 << (errloc[n] % 8);
+ *
+ * Note that this function does not perform any data correction by itself, it
+ * merely indicates error locations.
+  sanity check: make sure data length can be handled  if caller does not provide syndromes, compute them  compute received data ecc into an internal buffer  load provided calculated ecc  load received ecc or assume it was XORed in calc_ecc  XOR received and calculated ecc  no error found  post-process raw error locations for easier correction 
+ * generate Galois field lookup tables
+  primitive polynomial must be of degree m  polynomial is not primitive (a^i=1 with 0<i<2^m-1) 
+ * compute generator polynomial remainder tables for fast encoding
+  p(X)=i is a small polynomial of weight <= 8  we want to compute (p(X).X^(8*b+deg(g))) mod g(X)  subtract X^d.g(X) from p(X).X^(8*b+deg(g)) 
+ * build a base for factoring degree 2 polynomials
+  find k s.t. Tr(a^k) = 1 and 0 <= k < m  find xi, i=0..m-1 such that xi^2+xi = a^i+Tr(a^i).a^k  should not happen but check anyway 
+ * compute generator polynomial for given (m,t) parameters.
+  enumerate all roots of g(X)  build generator polynomial g(X)  multiply g(X) by (X+root)  store left-justified binary representation of g(X) *
+ * init_bch - initialize a BCH encoder/decoder
+ * @m:          Galois field order, should be in the range 5-15
+ * @t:          maximum error correction capability, in bits
+ * @prim_poly:  user-provided primitive polynomial (or 0 to use default)
+ *
+ * Returns:
+ *  a newly allocated BCH control structure if successful, NULL otherwise
+ *
+ * This initialization can take some time, as lookup tables are built for fast
+ * encoding/decoding; make sure not to call this function from a time critical
+ * path. Usually, init_bch() should be called on module/driver init and
+ * free_bch() should be called to release memory on exit.
+ *
+ * You may provide your own primitive polynomial of degree @m in argument
+ * @prim_poly, or let init_bch() use its default polynomial.
+ *
+ * Once init_bch() has successfully returned a pointer to a newly allocated
+ * BCH control structure, ecc length in bytes is given by member @ecc_bytes of
+ * the structure.
+  default primitive polynomials 
+		 * values of m greater than 15 are not currently supported;
+		 * supporting m > 15 would require changing table base type
+		 * (uint16_t) and a small patch in matrix transposition
+		  sanity checks  invalid t value  select a primitive polynomial for generating GF(2^m)  use generator polynomial for computing encoding tables *
+ *  free_bch - free the BCH control structure
+ *  @bch:    BCH control structure to release
+ 

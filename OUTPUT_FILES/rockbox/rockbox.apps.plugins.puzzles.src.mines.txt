@@ -1,0 +1,1966 @@
+
+ * mines.c: Minesweeper clone with sophisticated grid generation.
+ * 
+ * Still TODO:
+ *
+ *  - think about configurably supporting question marks. Once,
+ *    that is, we've thought about configurability in general!
+ 
+     * This structure is shared between all the game_states for a
+     * given instance of the puzzle, so we reference-count it.
+     
+     * If we haven't yet actually generated the mine layout, here's
+     * all the data we will need to do so.
+      to give back the new game desc  real mine positions  player knowledge 
+     * Each item in the `grid' array is one of the following values:
+     * 
+     * 	- 0 to 8 mean the square is open and has a surrounding mine
+     * 	  count.
+     * 
+     *  - -1 means the square is marked as a mine.
+     * 
+     *  - -2 means the square is unknown.
+     * 
+     * 	- -3 means the square is marked with a question mark
+     * 	  (FIXME: do we even want to bother with this?).
+     * 
+     * 	- 64 means the square has had a mine revealed when the game
+     * 	  was lost.
+     * 
+     * 	- 65 means the square had a mine revealed and this was the
+     * 	  one the player hits.
+     * 
+     * 	- 66 means the square has a crossed-out mine because the
+     * 	  player had incorrectly marked it.
+      structure copy  skip any other gunk 
+     * Mine count is a generation-time parameter, since it can be
+     * deduced from the mine bitmap!
+     
+     * Lower limit on grid size: each dimension must be at least 3.
+     * 1 is theoretically workable if rather boring, but 2 is a
+     * real problem: there is often _no_ way to generate a uniquely
+     * solvable 2xn Mines grid. You either run into two mines
+     * blocking the way and no idea what's behind them, or one mine
+     * and no way to know which of the two rows it's in. If the
+     * mine count is even you can create a soluble grid by packing
+     * all the mines at one end (so what when you hit a two-mine
+     * wall there are only as many covered squares left as there
+     * are mines); but if it's odd, you are doomed, because you
+     * _have_ to have a gap somewhere which you can't determine the
+     * position of.
+     
+     * FIXME: Need more constraints here. Not sure what the
+     * sensible limits for Minesweeper actually are. The limits
+     * probably ought to change, however, depending on uniqueness.
+      ----------------------------------------------------------------------
+ * Minesweeper solver, used to ensure the generated grids are
+ * solvable without having to take risks.
+ 
+ * Count the bits in a word. Only needs to cope with 16 bits.
+ 
+ * We use a tree234 to store a large number of small localised
+ * sets, each with a mine count. We also keep some of those sets
+ * linked together into a to-do list.
+ 
+ * Take two input sets, in the form (x,y,mask). Munge the first by
+ * taking either its intersection with the second or its difference
+ * with the second. Return the new mask part of the first set.
+ 
+     * Adjust the second set so that it has the same x,y
+     * coordinates as the first.
+     
+     * Invert the second set if `diff' is set (we're after A &~ B
+     * rather than A & B).
+     
+     * Now all that's left is a logical AND.
+      already on it 
+     * Normalise so that x and y are genuinely the bounding
+     * rectangle.
+     
+     * Create a set structure and add it to the tree.
+     
+	 * This set already existed! Free it and return.
+	 
+     * We've added a new set to the tree, so put it on the todo
+     * list.
+     
+     * Remove s from the todo list.
+     
+     * Remove s from the tree.
+     
+     * Destroy the actual set structure.
+     
+ * Return a dynamically allocated list of all the sets which
+ * overlap a provided input set.
+ 
+	     * Find the first set with these top left coordinates.
+	     
+		     * This set potentially overlaps the input one.
+		     * Compute the intersection to see if they
+		     * really overlap, and add it to the list if
+		     * so.
+		     
+			 * There's an overlap.
+			 
+ * Get an element from the head of the set todo list.
+ 
+		 * It's possible that this square is _already_
+		 * known, in which case we don't try to add it to
+		 * the list twice.
+		  and don't open it!  *bang* 
+ * This is data returned from the `perturb' function. It details
+ * which squares have become mines and which have become clear. The
+ * solver is (of course) expected to honourably not use that
+ * knowledge directly, but to efficently adjust its internal data
+ * structures and proceed based on only the information it
+ * legitimately has.
+  +1 == become a mine; -1 == cleared 
+ * Main solver entry point. You give it a grid of existing
+ * knowledge (-1 for a square known to be a mine, 0-8 for empty
+ * squares with a given number of neighbours, -2 for completely
+ * unknown), plus a function which you can call to open new squares
+ * once you're confident of them. It fills in as much more of the
+ * grid as it can.
+ * 
+ * Return value is:
+ * 
+ *  - -1 means deduction stalled and nothing could be done
+ *  - 0 means deduction succeeded fully
+ *  - >0 means deduction succeeded but some number of perturbation
+ *    steps were required; the exact return value is the number of
+ *    perturb calls.
+ 
+     * Set up a linked list of squares with known contents, so that
+     * we can process them one by one.
+     
+     * Initialise that list with all known squares in the input
+     * grid.
+     
+     * Main deductive loop.
+     
+	 * If there are any known squares on the todo list, process
+	 * them and construct a set for each.
+	 
+		 * Empty square. Construct the set of non-known squares
+		 * around this one, and determine its mine count.
+		  ignore this one 
+	     * Now, whether the square is empty or full, we must
+	     * find any set which contains it and replace it with
+	     * one which does not.
+	     
+		     * Compute the mask for this set minus the
+		     * newly known square.
+		     
+		     * Compute the new mine count.
+		     
+		     * Insert the new set into the collection,
+		     * unless it's been whittled right down to
+		     * nothing.
+		     
+		     * Destroy the old one; it is actually obsolete.
+		     
+	     * Marking a fresh square as known certainly counts as
+	     * doing something.
+	     
+	 * Now pick a set off the to-do list and attempt deductions
+	 * based on it.
+	 
+	     * Firstly, see if this set has a mine count of zero or
+	     * of its own cardinality.
+	     
+		 * If so, we can immediately mark all the squares
+		 * in the set as known.
+		 
+		 * Having done that, we need do nothing further
+		 * with this set; marking all the squares in it as
+		 * known will eventually eliminate it, and will
+		 * also permit further deductions about anything
+		 * that overlaps it.
+		 
+	     * Failing that, we now search through all the sets
+	     * which overlap this one.
+	     
+		 * Find the non-overlapping parts s2-s and s-s2,
+		 * and their cardinalities.
+		 * 
+		 * I'm going to refer to these parts as `wings'
+		 * surrounding the central part common to both
+		 * sets. The `s wing' is s-s2; the `s2 wing' is
+		 * s2-s.
+		 
+		 * If one set has more mines than the other, and
+		 * the number of extra mines is equal to the
+		 * cardinality of that set's wing, then we can mark
+		 * every square in the wing as a known mine, and
+		 * every square in the other wing as known clear.
+		 
+		 * Failing that, see if one set is a subset of the
+		 * other. If so, we can divide up the mine count of
+		 * the larger set between the smaller set and its
+		 * complement, even if neither smaller set ends up
+		 * being immediately clearable.
+		  s is a subset of s2.  s2 is a subset of s. 
+	     * In this situation we have definitely done
+	     * _something_, even if it's only reducing the size of
+	     * our to-do list.
+	     
+	     * We have nothing left on our todo list, which means
+	     * all localised deductions have failed. Our next step
+	     * is to resort to global deduction based on the total
+	     * mine count. This is computationally expensive
+	     * compared to any of the above deductions, which is
+	     * why we only ever do it when all else fails, so that
+	     * hopefully it won't have to happen too often.
+	     * 
+	     * If you pass n<0 into this solver, that informs it
+	     * that you do not know the total mine count, so it
+	     * won't even attempt these deductions.
+	     
+	     * Start by scanning the current grid state to work out
+	     * how many unknown squares we still have, and how many
+	     * mines are to be placed in them.
+	     
+	     * If there _are_ no unknown squares, we have actually
+	     * finished.
+	     
+	     * First really simple case: if there are no more mines
+	     * left, or if there are exactly as many mines left as
+	     * squares to play them in, then it's all easy.
+	      now go back to main deductive loop 
+	     * Failing that, we have to do some _real_ work.
+	     * Ideally what we do here is to try every single
+	     * combination of the currently available sets, in an
+	     * attempt to find a disjoint union (i.e. a set of
+	     * squares with a known mine count between them) such
+	     * that the remaining unknown squares _not_ contained
+	     * in that union either contain no mines or are all
+	     * mines.
+	     * 
+	     * Actually enumerating all 2^n possibilities will get
+	     * a bit slow for large n, so I artificially cap this
+	     * recursion at n=10 to avoid too much pain.
+	     
+		 * Doing this with actual recursive function calls
+		 * would get fiddly because a load of local
+		 * variables from this function would have to be
+		 * passed down through the recursion. So instead
+		 * I'm going to use a virtual recursion within this
+		 * function. The way this works is:
+		 * 
+		 *  - we have an array `setused', such that setused[n]
+		 *    is true if set n is currently in the union we
+		 *    are considering.
+		 * 
+		 *  - we have a value `cursor' which indicates how
+		 *    much of `setused' we have so far filled in.
+		 *    It's conceptually the recursion depth.
+		 * 
+		 * We begin by setting `cursor' to zero. Then:
+		 * 
+		 *  - if cursor can advance, we advance it by one. We
+		 *    set the value in `setused' that it went past to
+		 *    true if that set is disjoint from anything else
+		 *    currently in `setused', or to false otherwise.
+		 * 
+		 *  - If cursor cannot advance because it has
+		 *    reached the end of the setused list, then we
+		 *    have a maximal disjoint union. Check to see
+		 *    whether its mine count has any useful
+		 *    properties. If so, mark all the squares not
+		 *    in the union as known and terminate.
+		 * 
+		 *  - If cursor has reached the end of setused and the
+		 *    algorithm _hasn't_ terminated, back cursor up to
+		 *    the nearest true entry, reset it to false, and
+		 *    advance cursor just past it.
+		 * 
+		 *  - If we attempt to back up to the nearest 1 and
+		 *    there isn't one at all, then we have gone
+		 *    through all disjoint unions of sets in the
+		 *    list and none of them has been helpful, so we
+		 *    give up.
+		  See if any existing set overlaps this one. 
+			     * We're adding this set to our union,
+			     * so adjust minesleft and squaresleft
+			     * appropriately.
+			      SOLVER_DIAGNOSTICS 
+			 * We've reached the end. See if we've got
+			 * anything interesting.
+			 
+			     * We have! There is at least one
+			     * square not contained within the set
+			     * union we've just found, and we can
+			     * deduce that either all such squares
+			     * are mines or all are not (depending
+			     * on whether minesleft==0). So now all
+			     * we have to do is actually go through
+			     * the grid, find those squares, and
+			     * mark them.
+			      return to main deductive loop 
+			 * If we reach here, then this union hasn't
+			 * done us any good, so move on to the
+			 * next. Backtrack cursor to the nearest 1,
+			 * change it to a 0 and continue.
+			 
+			     * We're removing this set from our
+			     * union, so re-increment minesleft and
+			     * squaresleft.
+			     
+			     * We've backtracked all the way to the
+			     * start without finding a single 1,
+			     * which means that our virtual
+			     * recursion is complete and nothing
+			     * helped.
+			     
+	 * Dump the current known state of the grid.
+	 
+	 * Now we really are at our wits' end as far as solving
+	 * this grid goes. Our only remaining option is to call
+	 * a perturb function and ask it to modify the grid to
+	 * make it easier.
+	 
+	     * Choose a set at random from the current selection,
+	     * and ask the perturb function to either fill or empty
+	     * it.
+	     * 
+	     * If we have no sets at all, we must give up.
+	      otherwise should have been NULL 
+		 * A number of squares have been fiddled with, and
+		 * the returned structure tells us which. Adjust
+		 * the mine count in any set which overlaps one of
+		 * those squares, and put them back on the to-do
+		 * list. Also, if the square itself is marked as a
+		 * known non-mine, put it back on the squares-to-do
+		 * list.
+		 
+		 * Now free the returned data.
+		 
+		 * Dump the current known state of the grid.
+		 
+		 * And now we can go back round the deductive loop.
+		 
+	 * If we get here, even that didn't work (either we didn't
+	 * have a perturb function or it returned failure), so we
+	 * give up entirely.
+	 
+     * See if we've got any unknown squares left.
+      failed to complete 
+     * Free the set list and square-todo list.
+      ----------------------------------------------------------------------
+ * Grid generator which uses the above solver.
+  *bang*  Structure used internally to mineperturb(). 
+ * Normally this function is passed an (x,y,mask) set description.
+ * On occasions, though, there is no _localised_ set being used,
+ * and the set being perturbed is supposed to be the entirety of
+ * the unreachable area. This is signified by the special case
+ * mask==0: in this case, anything labelled -2 in the grid is part
+ * of the set.
+ * 
+ * Allowing perturbation in this special case appears to make it
+ * guaranteeably possible to generate a workable grid for any mine
+ * density, but they tend to be a bit boring, with mines packed
+ * densely into far corners of the grid and the remainder being
+ * less dense than one might like. Therefore, to improve overall
+ * grid quality I disable this feature for the first few attempts,
+ * and fall back to it after no useful grid has been generated.
+ 
+     * Make a list of all the squares in the grid which we can
+     * possibly use. This list should be in preference order, which
+     * means
+     * 
+     *  - first, unknown squares on the boundary of known space
+     *  - next, unknown squares beyond that boundary
+     * 	- as a very last resort, known squares, but not within one
+     * 	  square of the starting position.
+     * 
+     * Each of these sections needs to be shuffled independently.
+     * We do this by preparing list of all squares and then sorting
+     * it with a random secondary key.
+     
+	     * If this square is too near the starting position,
+	     * don't put it on the list at all.
+	     
+	     * If this square is in the input set, also don't put
+	     * it on the list!
+	      known square 
+		 * Unknown square. Examine everything around it and
+		 * see if it borders on any known squares. If it
+		 * does, it's class 1, otherwise it's 2.
+		 
+	     * Finally, a random number to cause qsort to
+	     * shuffle within each group.
+	     
+     * Now count up the number of full and empty squares in the set
+     * we've been provided.
+     
+     * Now go through our sorted list until we find either `nfull'
+     * empty squares, or `nempty' full squares; these will be
+     * swapped with the appropriate squares in the set to either
+     * fill or empty the set while keeping the same number of mines
+     * overall.
+     
+     * If we haven't found enough empty squares outside the set to
+     * empty it into _or_ enough full squares outside it to fill it
+     * up with, we'll have to settle for doing only a partial job.
+     * In this case we choose to always _fill_ the set (because
+     * this case will tend to crop up when we're working with very
+     * high mine densities and the only way to get a solvable grid
+     * is going to be to pack most of the mines solidly around the
+     * edges). So now our job is to make a list of the empty
+     * squares in the set, and shuffle that list so that we fill a
+     * random selection of them.
+     
+	 * Now pick `ntoempty' items at random from the list.
+	 
+     * Now we're pretty much there. We need to either
+     * 	(a) put a mine in each of the empty squares in the set, and
+     * 	    take one out of each square in `toempty'
+     * 	(b) take a mine out of each of the full squares in the set,
+     * 	    and put one in each square in `tofill'
+     * depending on which one we've found enough squares to do.
+     * 
+     * So we start by constructing our list of changes to return to
+     * the solver, so that it can update its data structures
+     * efficiently rather than having to rescan the whole grid.
+     
+	 * (We also fall into this case if we've constructed a
+	 * setlist.)
+	  now i == ntodo 
+     * Having set up the precise list of changes we're going to
+     * make, we now simply make them and return.
+     
+	 * Check we're not trying to add an existing mine or remove
+	 * an absent one.
+	 
+	 * Actually make the change.
+	 
+	 * Update any numbers already present in the grid.
+	 
+			 * The square itself is marked as known in
+			 * the grid. Mark it as a mine if it's a
+			 * mine, or else work out its number.
+			 
+	 * Start by placing n mines, none of which is at x,y or within
+	 * one square of it.
+	 
+	     * Write down the list of possible mine locations.
+	     
+	     * Now pick n off the list at random.
+	     
+	 * Now set up a results grid to run the solver in, and a
+	 * context for the solver to open squares. Then run the solver
+	 * repeatedly; if the number of perturb steps ever goes up or
+	 * it ever returns -1, give up completely.
+	 *
+	 * We bypass this bit if we're not after a unique grid.
+          by deliberate arrangement 
+     * Set up the mine bitmap and obfuscate it.
+     
+     * Now encode the resulting bitmap in hex. We can work to
+     * nibble rather than byte granularity, since the obfuscation
+     * function guarantees to return a bit string of the same
+     * length as its input.
+      'm' == masked 
+	 * A few simple test vectors for the obfuscator.
+	 * 
+	 * First test: the 28-bit stream 1234567. This divides up
+	 * into 1234 and 567[0]. The SHA of 56 70 30 (appending
+	 * "0") is 15ce8ab946640340bbb99f3f48fd2c45d1a31d30. Thus,
+	 * we XOR the 16-bit string 15CE into the input 1234 to get
+	 * 07FA. Next, we SHA that with "0": the SHA of 07 FA 30 is
+	 * 3370135c5e3da4fed937adc004a79533962b6391. So we XOR the
+	 * 12-bit string 337 into the input 567 to get 650. Thus
+	 * our output is 07FA650.
+	 
+	 * Second test: a long string to make sure we switch from
+	 * one SHA to the next correctly. My input string this time
+	 * is simply fifty bytes of zeroes.
+	 
+	     * SHA of twenty-five zero bytes plus "0" is
+	     * b202c07b990c01f6ff2d544707f60e506019b671. SHA of
+	     * twenty-five zero bytes plus "1" is
+	     * fcb1d8b5a2f6b592fe6780b36aa9d65dd7aa6db9. Thus our
+	     * first half becomes
+	     * b202c07b990c01f6ff2d544707f60e506019b671fcb1d8b5a2.
+	     * 
+	     * SHA of that lot plus "0" is
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db. SHA of the
+	     * same string plus "1" is
+	     * 3d01d8df78e76d382b8106f480135a1bc751d725. So the
+	     * second half becomes
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db3d01d8df78.
+	     
+     * We generate the coordinates of an initial click even if they
+     * aren't actually used. This has the effect of harmonising the
+     * random number usage between interactive and batch use: if
+     * you use `mines --generate' with an explicit random seed, you
+     * should get exactly the same results as if you type the same
+     * random seed into the interactive game and click in the same
+     * initial location. (Of course you won't get the same grid if
+     * you click in a _different_ initial location, but there's
+     * nothing to be done about that.)
+     
+	 * For batch-generated grids, pre-open one square.
+	  skip over mine count  now ignore the rest  skip over x coordinate  eat comma  skip over y coordinate  eat comma  eat `m' for `masked' or `u' for `unmasked', if present  now just check length of remainder 
+	 * We have a preliminary game in which the mine layout
+	 * hasn't been generated yet. Generate it based on the
+	 * initial click location.
+	 
+	 * Find the trailing substring of the game description
+	 * corresponding to just the mine layout; we will use this
+	 * as our second `private' game ID for serialisation.
+	 
+	 * The player has landed on a mine. Bad luck. Expose the
+	 * mine that killed them, but not the rest (in case they
+	 * want to Undo and carry on playing).
+	 
+     * Otherwise, the player has opened a safe square. Mark it to-do.
+      `todo' value internal to this func 
+     * Now go through the grid finding all `todo' values and
+     * opening them. Every time one of them turns out to have no
+     * neighbouring mines, we add all its unopened neighbours to
+     * the list as well.
+     * 
+     * FIXME: We really ought to be able to do this better than
+     * using repeated N^2 scans of the grid.
+     
+     * Finally, scan the grid and see if exactly as many squares
+     * are still covered as there are mines. If so, set the `won'
+     * flag and fill in mine markers on all covered squares.
+      skip over mine count  eat comma  eat comma  skip over x coordinate  eat comma  skip over y coordinate  eat comma 
+	     * We permit game IDs to be entered by hand without the
+	     * masking transformation.
+	      validate_desc should have caught  for mouse-down highlights  *shrug* 
+     * The deaths counter and completion status need preserving
+     * across a serialisation.
+     
+     * Items in this `grid' array have all the same values as in
+     * the game_state grid, and in addition:
+     * 
+     * 	- -10 means the tile was drawn `specially' as a result of a
+     * 	  flash, so it will always need redrawing.
+     * 
+     * 	- -22 and -23 mean the tile is highlighted for a possible
+     * 	  click.
+      -1, -1 for no cursor displayed.  no further moves permitted  As for RIGHT_BUTTON; only works on covered square.  Otherwise, treat as LEFT_BUTTON, for a single square. 
+	 * Mouse-downs and mouse-drags just cause highlighting
+	 * updates.
+	 
+	 * Right-clicking only works on a covered square, and it
+	 * toggles between -1 (marked as mine) and -2 (not marked
+	 * as mine).
+	 *
+	 * FIXME: question marks.
+	 
+	 * At this stage we must never return NULL: we have adjusted
+	 * the ui, so at worst we return UI_UPDATE.
+	 
+	 * Left-clicking on a covered square opens a tile. Not
+	 * permitted if the tile is marked as a mine, for safety.
+	 * (Unmark it and _then_ open it.)
+	  Check if you've killed yourself. 
+	 * Left-clicking or middle-clicking on an uncovered tile:
+	 * first we check to see if the number of mine markers
+	 * surrounding the tile is equal to its mine count, and if
+	 * so then we open all other surrounding squares.
+	  Count mine markers. 
+		 * Now see if any of the squares we're clearing
+		 * contains a mine (which will happen iff you've
+		 * incorrectly marked the mines around the clicked
+		 * square). If so, we open _just_ those squares, to
+		 * reveal as little additional information as we
+		 * can.
+		 
+             * If the player is still alive at the moment of pressing
+             * Solve, expose the entire grid as if it were a completed
+             * solution.
+             
+             * If the player pressed Solve _after dying_, show a full
+             * corrections grid in the style of standard Minesweeper.
+             * Players who don't like Mines's behaviour on death of
+             * only showing the mine that killed you (so that in case
+             * of a typo you can undo and carry on without the rest of
+             * the grid being spoiled) can use this to get the display
+             * that ordinary Minesweeper would have given them.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Red tinge to a light colour, for the cursor.  not decided yet 
+	     * Omit the highlights in this case.
+	     
+	     * Draw highlights to indicate the square is covered.
+	     
+	     * Draw a flag.
+	     
+	     * Draw a question mark.
+	     
+	 * Clear the square to the background colour, and draw thin
+	 * grid lines along the top and left.
+	 * 
+	 * Exception is that for value 65 (mine we've just trodden
+	 * on), we clear the square to COL_BANG.
+	 
+	     * Mark a number.
+	     
+	     * Mark a mine.
+	     
+		 * Cross through the mine.
+		 
+         * Recessed area containing the whole puzzle.
+         
+     * Now draw the tiles. Also in this loop, count up the number
+     * of mines, mine markers, and closed squares.
+     
+                 * Count up the flags around this tile, and if
+                 * there are too _many_, highlight the tile.
+                  if cursor has moved, force redraw of curr and prev pos 
+     * Update the status bar.
+     
+                 * In the situation where there's a very small number
+                 * of _non_-mine squares left unopened, it's helpful
+                 * to mention that number in the status line, to save
+                 * the player from having to count it up
+                 * painstakingly. This is particularly important if
+                 * the player has turned up the mine density to the
+                 * point where game generation resorts to its weird
+                 * pathological fallback of a very dense mine area
+                 * with a clearing in the middle, because that often
+                 * leads to a deduction you can only make by knowing
+                 * that there is (say) exactly one non-mine square to
+                 * find, and it's a real pain to have to count up two
+                 * large numbers of squares and subtract them to get
+                 * that value of 1.
+                 *
+                 * The threshold value of 8 for displaying this
+                 * information is because that's the largest number of
+                 * non-mine squares that might conceivably fit around
+                 * a single central square, and the most likely way to
+                 * _use_ this information is to observe that if all
+                 * the remaining safe squares are adjacent to _this_
+                 * square then everything else can be immediately
+                 * flagged as a mine.
+                 
+     * We report the game as lost only if the player has used the
+     * Solve function to reveal all the mines. Otherwise, we assume
+     * they'll undo and continue play.
+      game_request_keys  wants_statusbar 
+ * Vaguely useful stand-alone program which translates between
+ * obfuscated and clear Mines game descriptions. Pass in a game
+ * description on the command line, and if it's clear it will be
+ * obfuscated and vice versa. The output text should also be a
+ * valid game ID describing the same game. Like this:
+ *
+ * $ ./mineobfusc 9x9:4,4,mb071b49fbd1cb6a0d5868
+ * 9x9:4,4,004000007c00010022080
+ * $ ./mineobfusc 9x9:4,4,004000007c00010022080
+ * 9x9:4,4,mb071b49fbd1cb6a0d5868
+  vim: set shiftwidth=4 tabstop=8: 
+ * mines.c: Minesweeper clone with sophisticated grid generation.
+ * 
+ * Still TODO:
+ *
+ *  - think about configurably supporting question marks. Once,
+ *    that is, we've thought about configurability in general!
+ 
+     * This structure is shared between all the game_states for a
+     * given instance of the puzzle, so we reference-count it.
+     
+     * If we haven't yet actually generated the mine layout, here's
+     * all the data we will need to do so.
+      to give back the new game desc  real mine positions  player knowledge 
+     * Each item in the `grid' array is one of the following values:
+     * 
+     * 	- 0 to 8 mean the square is open and has a surrounding mine
+     * 	  count.
+     * 
+     *  - -1 means the square is marked as a mine.
+     * 
+     *  - -2 means the square is unknown.
+     * 
+     * 	- -3 means the square is marked with a question mark
+     * 	  (FIXME: do we even want to bother with this?).
+     * 
+     * 	- 64 means the square has had a mine revealed when the game
+     * 	  was lost.
+     * 
+     * 	- 65 means the square had a mine revealed and this was the
+     * 	  one the player hits.
+     * 
+     * 	- 66 means the square has a crossed-out mine because the
+     * 	  player had incorrectly marked it.
+      structure copy  skip any other gunk 
+     * Mine count is a generation-time parameter, since it can be
+     * deduced from the mine bitmap!
+     
+     * Lower limit on grid size: each dimension must be at least 3.
+     * 1 is theoretically workable if rather boring, but 2 is a
+     * real problem: there is often _no_ way to generate a uniquely
+     * solvable 2xn Mines grid. You either run into two mines
+     * blocking the way and no idea what's behind them, or one mine
+     * and no way to know which of the two rows it's in. If the
+     * mine count is even you can create a soluble grid by packing
+     * all the mines at one end (so what when you hit a two-mine
+     * wall there are only as many covered squares left as there
+     * are mines); but if it's odd, you are doomed, because you
+     * _have_ to have a gap somewhere which you can't determine the
+     * position of.
+     
+     * FIXME: Need more constraints here. Not sure what the
+     * sensible limits for Minesweeper actually are. The limits
+     * probably ought to change, however, depending on uniqueness.
+      ----------------------------------------------------------------------
+ * Minesweeper solver, used to ensure the generated grids are
+ * solvable without having to take risks.
+ 
+ * Count the bits in a word. Only needs to cope with 16 bits.
+ 
+ * We use a tree234 to store a large number of small localised
+ * sets, each with a mine count. We also keep some of those sets
+ * linked together into a to-do list.
+ 
+ * Take two input sets, in the form (x,y,mask). Munge the first by
+ * taking either its intersection with the second or its difference
+ * with the second. Return the new mask part of the first set.
+ 
+     * Adjust the second set so that it has the same x,y
+     * coordinates as the first.
+     
+     * Invert the second set if `diff' is set (we're after A &~ B
+     * rather than A & B).
+     
+     * Now all that's left is a logical AND.
+      already on it 
+     * Normalise so that x and y are genuinely the bounding
+     * rectangle.
+     
+     * Create a set structure and add it to the tree.
+     
+	 * This set already existed! Free it and return.
+	 
+     * We've added a new set to the tree, so put it on the todo
+     * list.
+     
+     * Remove s from the todo list.
+     
+     * Remove s from the tree.
+     
+     * Destroy the actual set structure.
+     
+ * Return a dynamically allocated list of all the sets which
+ * overlap a provided input set.
+ 
+	     * Find the first set with these top left coordinates.
+	     
+		     * This set potentially overlaps the input one.
+		     * Compute the intersection to see if they
+		     * really overlap, and add it to the list if
+		     * so.
+		     
+			 * There's an overlap.
+			 
+ * Get an element from the head of the set todo list.
+ 
+		 * It's possible that this square is _already_
+		 * known, in which case we don't try to add it to
+		 * the list twice.
+		  and don't open it!  *bang* 
+ * This is data returned from the `perturb' function. It details
+ * which squares have become mines and which have become clear. The
+ * solver is (of course) expected to honourably not use that
+ * knowledge directly, but to efficently adjust its internal data
+ * structures and proceed based on only the information it
+ * legitimately has.
+  +1 == become a mine; -1 == cleared 
+ * Main solver entry point. You give it a grid of existing
+ * knowledge (-1 for a square known to be a mine, 0-8 for empty
+ * squares with a given number of neighbours, -2 for completely
+ * unknown), plus a function which you can call to open new squares
+ * once you're confident of them. It fills in as much more of the
+ * grid as it can.
+ * 
+ * Return value is:
+ * 
+ *  - -1 means deduction stalled and nothing could be done
+ *  - 0 means deduction succeeded fully
+ *  - >0 means deduction succeeded but some number of perturbation
+ *    steps were required; the exact return value is the number of
+ *    perturb calls.
+ 
+     * Set up a linked list of squares with known contents, so that
+     * we can process them one by one.
+     
+     * Initialise that list with all known squares in the input
+     * grid.
+     
+     * Main deductive loop.
+     
+	 * If there are any known squares on the todo list, process
+	 * them and construct a set for each.
+	 
+		 * Empty square. Construct the set of non-known squares
+		 * around this one, and determine its mine count.
+		  ignore this one 
+	     * Now, whether the square is empty or full, we must
+	     * find any set which contains it and replace it with
+	     * one which does not.
+	     
+		     * Compute the mask for this set minus the
+		     * newly known square.
+		     
+		     * Compute the new mine count.
+		     
+		     * Insert the new set into the collection,
+		     * unless it's been whittled right down to
+		     * nothing.
+		     
+		     * Destroy the old one; it is actually obsolete.
+		     
+	     * Marking a fresh square as known certainly counts as
+	     * doing something.
+	     
+	 * Now pick a set off the to-do list and attempt deductions
+	 * based on it.
+	 
+	     * Firstly, see if this set has a mine count of zero or
+	     * of its own cardinality.
+	     
+		 * If so, we can immediately mark all the squares
+		 * in the set as known.
+		 
+		 * Having done that, we need do nothing further
+		 * with this set; marking all the squares in it as
+		 * known will eventually eliminate it, and will
+		 * also permit further deductions about anything
+		 * that overlaps it.
+		 
+	     * Failing that, we now search through all the sets
+	     * which overlap this one.
+	     
+		 * Find the non-overlapping parts s2-s and s-s2,
+		 * and their cardinalities.
+		 * 
+		 * I'm going to refer to these parts as `wings'
+		 * surrounding the central part common to both
+		 * sets. The `s wing' is s-s2; the `s2 wing' is
+		 * s2-s.
+		 
+		 * If one set has more mines than the other, and
+		 * the number of extra mines is equal to the
+		 * cardinality of that set's wing, then we can mark
+		 * every square in the wing as a known mine, and
+		 * every square in the other wing as known clear.
+		 
+		 * Failing that, see if one set is a subset of the
+		 * other. If so, we can divide up the mine count of
+		 * the larger set between the smaller set and its
+		 * complement, even if neither smaller set ends up
+		 * being immediately clearable.
+		  s is a subset of s2.  s2 is a subset of s. 
+	     * In this situation we have definitely done
+	     * _something_, even if it's only reducing the size of
+	     * our to-do list.
+	     
+	     * We have nothing left on our todo list, which means
+	     * all localised deductions have failed. Our next step
+	     * is to resort to global deduction based on the total
+	     * mine count. This is computationally expensive
+	     * compared to any of the above deductions, which is
+	     * why we only ever do it when all else fails, so that
+	     * hopefully it won't have to happen too often.
+	     * 
+	     * If you pass n<0 into this solver, that informs it
+	     * that you do not know the total mine count, so it
+	     * won't even attempt these deductions.
+	     
+	     * Start by scanning the current grid state to work out
+	     * how many unknown squares we still have, and how many
+	     * mines are to be placed in them.
+	     
+	     * If there _are_ no unknown squares, we have actually
+	     * finished.
+	     
+	     * First really simple case: if there are no more mines
+	     * left, or if there are exactly as many mines left as
+	     * squares to play them in, then it's all easy.
+	      now go back to main deductive loop 
+	     * Failing that, we have to do some _real_ work.
+	     * Ideally what we do here is to try every single
+	     * combination of the currently available sets, in an
+	     * attempt to find a disjoint union (i.e. a set of
+	     * squares with a known mine count between them) such
+	     * that the remaining unknown squares _not_ contained
+	     * in that union either contain no mines or are all
+	     * mines.
+	     * 
+	     * Actually enumerating all 2^n possibilities will get
+	     * a bit slow for large n, so I artificially cap this
+	     * recursion at n=10 to avoid too much pain.
+	     
+		 * Doing this with actual recursive function calls
+		 * would get fiddly because a load of local
+		 * variables from this function would have to be
+		 * passed down through the recursion. So instead
+		 * I'm going to use a virtual recursion within this
+		 * function. The way this works is:
+		 * 
+		 *  - we have an array `setused', such that setused[n]
+		 *    is true if set n is currently in the union we
+		 *    are considering.
+		 * 
+		 *  - we have a value `cursor' which indicates how
+		 *    much of `setused' we have so far filled in.
+		 *    It's conceptually the recursion depth.
+		 * 
+		 * We begin by setting `cursor' to zero. Then:
+		 * 
+		 *  - if cursor can advance, we advance it by one. We
+		 *    set the value in `setused' that it went past to
+		 *    true if that set is disjoint from anything else
+		 *    currently in `setused', or to false otherwise.
+		 * 
+		 *  - If cursor cannot advance because it has
+		 *    reached the end of the setused list, then we
+		 *    have a maximal disjoint union. Check to see
+		 *    whether its mine count has any useful
+		 *    properties. If so, mark all the squares not
+		 *    in the union as known and terminate.
+		 * 
+		 *  - If cursor has reached the end of setused and the
+		 *    algorithm _hasn't_ terminated, back cursor up to
+		 *    the nearest true entry, reset it to false, and
+		 *    advance cursor just past it.
+		 * 
+		 *  - If we attempt to back up to the nearest 1 and
+		 *    there isn't one at all, then we have gone
+		 *    through all disjoint unions of sets in the
+		 *    list and none of them has been helpful, so we
+		 *    give up.
+		  See if any existing set overlaps this one. 
+			     * We're adding this set to our union,
+			     * so adjust minesleft and squaresleft
+			     * appropriately.
+			      SOLVER_DIAGNOSTICS 
+			 * We've reached the end. See if we've got
+			 * anything interesting.
+			 
+			     * We have! There is at least one
+			     * square not contained within the set
+			     * union we've just found, and we can
+			     * deduce that either all such squares
+			     * are mines or all are not (depending
+			     * on whether minesleft==0). So now all
+			     * we have to do is actually go through
+			     * the grid, find those squares, and
+			     * mark them.
+			      return to main deductive loop 
+			 * If we reach here, then this union hasn't
+			 * done us any good, so move on to the
+			 * next. Backtrack cursor to the nearest 1,
+			 * change it to a 0 and continue.
+			 
+			     * We're removing this set from our
+			     * union, so re-increment minesleft and
+			     * squaresleft.
+			     
+			     * We've backtracked all the way to the
+			     * start without finding a single 1,
+			     * which means that our virtual
+			     * recursion is complete and nothing
+			     * helped.
+			     
+	 * Dump the current known state of the grid.
+	 
+	 * Now we really are at our wits' end as far as solving
+	 * this grid goes. Our only remaining option is to call
+	 * a perturb function and ask it to modify the grid to
+	 * make it easier.
+	 
+	     * Choose a set at random from the current selection,
+	     * and ask the perturb function to either fill or empty
+	     * it.
+	     * 
+	     * If we have no sets at all, we must give up.
+	      otherwise should have been NULL 
+		 * A number of squares have been fiddled with, and
+		 * the returned structure tells us which. Adjust
+		 * the mine count in any set which overlaps one of
+		 * those squares, and put them back on the to-do
+		 * list. Also, if the square itself is marked as a
+		 * known non-mine, put it back on the squares-to-do
+		 * list.
+		 
+		 * Now free the returned data.
+		 
+		 * Dump the current known state of the grid.
+		 
+		 * And now we can go back round the deductive loop.
+		 
+	 * If we get here, even that didn't work (either we didn't
+	 * have a perturb function or it returned failure), so we
+	 * give up entirely.
+	 
+     * See if we've got any unknown squares left.
+      failed to complete 
+     * Free the set list and square-todo list.
+      ----------------------------------------------------------------------
+ * Grid generator which uses the above solver.
+  *bang*  Structure used internally to mineperturb(). 
+ * Normally this function is passed an (x,y,mask) set description.
+ * On occasions, though, there is no _localised_ set being used,
+ * and the set being perturbed is supposed to be the entirety of
+ * the unreachable area. This is signified by the special case
+ * mask==0: in this case, anything labelled -2 in the grid is part
+ * of the set.
+ * 
+ * Allowing perturbation in this special case appears to make it
+ * guaranteeably possible to generate a workable grid for any mine
+ * density, but they tend to be a bit boring, with mines packed
+ * densely into far corners of the grid and the remainder being
+ * less dense than one might like. Therefore, to improve overall
+ * grid quality I disable this feature for the first few attempts,
+ * and fall back to it after no useful grid has been generated.
+ 
+     * Make a list of all the squares in the grid which we can
+     * possibly use. This list should be in preference order, which
+     * means
+     * 
+     *  - first, unknown squares on the boundary of known space
+     *  - next, unknown squares beyond that boundary
+     * 	- as a very last resort, known squares, but not within one
+     * 	  square of the starting position.
+     * 
+     * Each of these sections needs to be shuffled independently.
+     * We do this by preparing list of all squares and then sorting
+     * it with a random secondary key.
+     
+	     * If this square is too near the starting position,
+	     * don't put it on the list at all.
+	     
+	     * If this square is in the input set, also don't put
+	     * it on the list!
+	      known square 
+		 * Unknown square. Examine everything around it and
+		 * see if it borders on any known squares. If it
+		 * does, it's class 1, otherwise it's 2.
+		 
+	     * Finally, a random number to cause qsort to
+	     * shuffle within each group.
+	     
+     * Now count up the number of full and empty squares in the set
+     * we've been provided.
+     
+     * Now go through our sorted list until we find either `nfull'
+     * empty squares, or `nempty' full squares; these will be
+     * swapped with the appropriate squares in the set to either
+     * fill or empty the set while keeping the same number of mines
+     * overall.
+     
+     * If we haven't found enough empty squares outside the set to
+     * empty it into _or_ enough full squares outside it to fill it
+     * up with, we'll have to settle for doing only a partial job.
+     * In this case we choose to always _fill_ the set (because
+     * this case will tend to crop up when we're working with very
+     * high mine densities and the only way to get a solvable grid
+     * is going to be to pack most of the mines solidly around the
+     * edges). So now our job is to make a list of the empty
+     * squares in the set, and shuffle that list so that we fill a
+     * random selection of them.
+     
+	 * Now pick `ntoempty' items at random from the list.
+	 
+     * Now we're pretty much there. We need to either
+     * 	(a) put a mine in each of the empty squares in the set, and
+     * 	    take one out of each square in `toempty'
+     * 	(b) take a mine out of each of the full squares in the set,
+     * 	    and put one in each square in `tofill'
+     * depending on which one we've found enough squares to do.
+     * 
+     * So we start by constructing our list of changes to return to
+     * the solver, so that it can update its data structures
+     * efficiently rather than having to rescan the whole grid.
+     
+	 * (We also fall into this case if we've constructed a
+	 * setlist.)
+	  now i == ntodo 
+     * Having set up the precise list of changes we're going to
+     * make, we now simply make them and return.
+     
+	 * Check we're not trying to add an existing mine or remove
+	 * an absent one.
+	 
+	 * Actually make the change.
+	 
+	 * Update any numbers already present in the grid.
+	 
+			 * The square itself is marked as known in
+			 * the grid. Mark it as a mine if it's a
+			 * mine, or else work out its number.
+			 
+	 * Start by placing n mines, none of which is at x,y or within
+	 * one square of it.
+	 
+	     * Write down the list of possible mine locations.
+	     
+	     * Now pick n off the list at random.
+	     
+	 * Now set up a results grid to run the solver in, and a
+	 * context for the solver to open squares. Then run the solver
+	 * repeatedly; if the number of perturb steps ever goes up or
+	 * it ever returns -1, give up completely.
+	 *
+	 * We bypass this bit if we're not after a unique grid.
+          by deliberate arrangement 
+     * Set up the mine bitmap and obfuscate it.
+     
+     * Now encode the resulting bitmap in hex. We can work to
+     * nibble rather than byte granularity, since the obfuscation
+     * function guarantees to return a bit string of the same
+     * length as its input.
+      'm' == masked 
+	 * A few simple test vectors for the obfuscator.
+	 * 
+	 * First test: the 28-bit stream 1234567. This divides up
+	 * into 1234 and 567[0]. The SHA of 56 70 30 (appending
+	 * "0") is 15ce8ab946640340bbb99f3f48fd2c45d1a31d30. Thus,
+	 * we XOR the 16-bit string 15CE into the input 1234 to get
+	 * 07FA. Next, we SHA that with "0": the SHA of 07 FA 30 is
+	 * 3370135c5e3da4fed937adc004a79533962b6391. So we XOR the
+	 * 12-bit string 337 into the input 567 to get 650. Thus
+	 * our output is 07FA650.
+	 
+	 * Second test: a long string to make sure we switch from
+	 * one SHA to the next correctly. My input string this time
+	 * is simply fifty bytes of zeroes.
+	 
+	     * SHA of twenty-five zero bytes plus "0" is
+	     * b202c07b990c01f6ff2d544707f60e506019b671. SHA of
+	     * twenty-five zero bytes plus "1" is
+	     * fcb1d8b5a2f6b592fe6780b36aa9d65dd7aa6db9. Thus our
+	     * first half becomes
+	     * b202c07b990c01f6ff2d544707f60e506019b671fcb1d8b5a2.
+	     * 
+	     * SHA of that lot plus "0" is
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db. SHA of the
+	     * same string plus "1" is
+	     * 3d01d8df78e76d382b8106f480135a1bc751d725. So the
+	     * second half becomes
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db3d01d8df78.
+	     
+     * We generate the coordinates of an initial click even if they
+     * aren't actually used. This has the effect of harmonising the
+     * random number usage between interactive and batch use: if
+     * you use `mines --generate' with an explicit random seed, you
+     * should get exactly the same results as if you type the same
+     * random seed into the interactive game and click in the same
+     * initial location. (Of course you won't get the same grid if
+     * you click in a _different_ initial location, but there's
+     * nothing to be done about that.)
+     
+	 * For batch-generated grids, pre-open one square.
+	  skip over mine count  now ignore the rest  skip over x coordinate  eat comma  skip over y coordinate  eat comma  eat `m' for `masked' or `u' for `unmasked', if present  now just check length of remainder 
+	 * We have a preliminary game in which the mine layout
+	 * hasn't been generated yet. Generate it based on the
+	 * initial click location.
+	 
+	 * Find the trailing substring of the game description
+	 * corresponding to just the mine layout; we will use this
+	 * as our second `private' game ID for serialisation.
+	 
+	 * The player has landed on a mine. Bad luck. Expose the
+	 * mine that killed them, but not the rest (in case they
+	 * want to Undo and carry on playing).
+	 
+     * Otherwise, the player has opened a safe square. Mark it to-do.
+      `todo' value internal to this func 
+     * Now go through the grid finding all `todo' values and
+     * opening them. Every time one of them turns out to have no
+     * neighbouring mines, we add all its unopened neighbours to
+     * the list as well.
+     * 
+     * FIXME: We really ought to be able to do this better than
+     * using repeated N^2 scans of the grid.
+     
+     * Finally, scan the grid and see if exactly as many squares
+     * are still covered as there are mines. If so, set the `won'
+     * flag and fill in mine markers on all covered squares.
+      skip over mine count  eat comma  eat comma  skip over x coordinate  eat comma  skip over y coordinate  eat comma 
+	     * We permit game IDs to be entered by hand without the
+	     * masking transformation.
+	      validate_desc should have caught  for mouse-down highlights  *shrug* 
+     * The deaths counter and completion status need preserving
+     * across a serialisation.
+     
+     * Items in this `grid' array have all the same values as in
+     * the game_state grid, and in addition:
+     * 
+     * 	- -10 means the tile was drawn `specially' as a result of a
+     * 	  flash, so it will always need redrawing.
+     * 
+     * 	- -22 and -23 mean the tile is highlighted for a possible
+     * 	  click.
+      -1, -1 for no cursor displayed.  no further moves permitted  As for RIGHT_BUTTON; only works on covered square.  Otherwise, treat as LEFT_BUTTON, for a single square. 
+	 * Mouse-downs and mouse-drags just cause highlighting
+	 * updates.
+	 
+	 * Right-clicking only works on a covered square, and it
+	 * toggles between -1 (marked as mine) and -2 (not marked
+	 * as mine).
+	 *
+	 * FIXME: question marks.
+	 
+	 * At this stage we must never return NULL: we have adjusted
+	 * the ui, so at worst we return UI_UPDATE.
+	 
+	 * Left-clicking on a covered square opens a tile. Not
+	 * permitted if the tile is marked as a mine, for safety.
+	 * (Unmark it and _then_ open it.)
+	  Check if you've killed yourself. 
+	 * Left-clicking or middle-clicking on an uncovered tile:
+	 * first we check to see if the number of mine markers
+	 * surrounding the tile is equal to its mine count, and if
+	 * so then we open all other surrounding squares.
+	  Count mine markers. 
+		 * Now see if any of the squares we're clearing
+		 * contains a mine (which will happen iff you've
+		 * incorrectly marked the mines around the clicked
+		 * square). If so, we open _just_ those squares, to
+		 * reveal as little additional information as we
+		 * can.
+		 
+             * If the player is still alive at the moment of pressing
+             * Solve, expose the entire grid as if it were a completed
+             * solution.
+             
+             * If the player pressed Solve _after dying_, show a full
+             * corrections grid in the style of standard Minesweeper.
+             * Players who don't like Mines's behaviour on death of
+             * only showing the mine that killed you (so that in case
+             * of a typo you can undo and carry on without the rest of
+             * the grid being spoiled) can use this to get the display
+             * that ordinary Minesweeper would have given them.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Red tinge to a light colour, for the cursor.  not decided yet 
+	     * Omit the highlights in this case.
+	     
+	     * Draw highlights to indicate the square is covered.
+	     
+	     * Draw a flag.
+	     
+	     * Draw a question mark.
+	     
+	 * Clear the square to the background colour, and draw thin
+	 * grid lines along the top and left.
+	 * 
+	 * Exception is that for value 65 (mine we've just trodden
+	 * on), we clear the square to COL_BANG.
+	 
+	     * Mark a number.
+	     
+	     * Mark a mine.
+	     
+		 * Cross through the mine.
+		 
+         * Recessed area containing the whole puzzle.
+         
+     * Now draw the tiles. Also in this loop, count up the number
+     * of mines, mine markers, and closed squares.
+     
+                 * Count up the flags around this tile, and if
+                 * there are too _many_, highlight the tile.
+                  if cursor has moved, force redraw of curr and prev pos 
+     * Update the status bar.
+     
+                 * In the situation where there's a very small number
+                 * of _non_-mine squares left unopened, it's helpful
+                 * to mention that number in the status line, to save
+                 * the player from having to count it up
+                 * painstakingly. This is particularly important if
+                 * the player has turned up the mine density to the
+                 * point where game generation resorts to its weird
+                 * pathological fallback of a very dense mine area
+                 * with a clearing in the middle, because that often
+                 * leads to a deduction you can only make by knowing
+                 * that there is (say) exactly one non-mine square to
+                 * find, and it's a real pain to have to count up two
+                 * large numbers of squares and subtract them to get
+                 * that value of 1.
+                 *
+                 * The threshold value of 8 for displaying this
+                 * information is because that's the largest number of
+                 * non-mine squares that might conceivably fit around
+                 * a single central square, and the most likely way to
+                 * _use_ this information is to observe that if all
+                 * the remaining safe squares are adjacent to _this_
+                 * square then everything else can be immediately
+                 * flagged as a mine.
+                 
+     * We report the game as lost only if the player has used the
+     * Solve function to reveal all the mines. Otherwise, we assume
+     * they'll undo and continue play.
+      game_request_keys  wants_statusbar 
+ * Vaguely useful stand-alone program which translates between
+ * obfuscated and clear Mines game descriptions. Pass in a game
+ * description on the command line, and if it's clear it will be
+ * obfuscated and vice versa. The output text should also be a
+ * valid game ID describing the same game. Like this:
+ *
+ * $ ./mineobfusc 9x9:4,4,mb071b49fbd1cb6a0d5868
+ * 9x9:4,4,004000007c00010022080
+ * $ ./mineobfusc 9x9:4,4,004000007c00010022080
+ * 9x9:4,4,mb071b49fbd1cb6a0d5868
+  vim: set shiftwidth=4 tabstop=8: 
+ * mines.c: Minesweeper clone with sophisticated grid generation.
+ * 
+ * Still TODO:
+ *
+ *  - think about configurably supporting question marks. Once,
+ *    that is, we've thought about configurability in general!
+ 
+     * This structure is shared between all the game_states for a
+     * given instance of the puzzle, so we reference-count it.
+     
+     * If we haven't yet actually generated the mine layout, here's
+     * all the data we will need to do so.
+      to give back the new game desc  real mine positions  player knowledge 
+     * Each item in the `grid' array is one of the following values:
+     * 
+     * 	- 0 to 8 mean the square is open and has a surrounding mine
+     * 	  count.
+     * 
+     *  - -1 means the square is marked as a mine.
+     * 
+     *  - -2 means the square is unknown.
+     * 
+     * 	- -3 means the square is marked with a question mark
+     * 	  (FIXME: do we even want to bother with this?).
+     * 
+     * 	- 64 means the square has had a mine revealed when the game
+     * 	  was lost.
+     * 
+     * 	- 65 means the square had a mine revealed and this was the
+     * 	  one the player hits.
+     * 
+     * 	- 66 means the square has a crossed-out mine because the
+     * 	  player had incorrectly marked it.
+      structure copy  skip any other gunk 
+     * Mine count is a generation-time parameter, since it can be
+     * deduced from the mine bitmap!
+     
+     * Lower limit on grid size: each dimension must be at least 3.
+     * 1 is theoretically workable if rather boring, but 2 is a
+     * real problem: there is often _no_ way to generate a uniquely
+     * solvable 2xn Mines grid. You either run into two mines
+     * blocking the way and no idea what's behind them, or one mine
+     * and no way to know which of the two rows it's in. If the
+     * mine count is even you can create a soluble grid by packing
+     * all the mines at one end (so what when you hit a two-mine
+     * wall there are only as many covered squares left as there
+     * are mines); but if it's odd, you are doomed, because you
+     * _have_ to have a gap somewhere which you can't determine the
+     * position of.
+     
+     * FIXME: Need more constraints here. Not sure what the
+     * sensible limits for Minesweeper actually are. The limits
+     * probably ought to change, however, depending on uniqueness.
+      ----------------------------------------------------------------------
+ * Minesweeper solver, used to ensure the generated grids are
+ * solvable without having to take risks.
+ 
+ * Count the bits in a word. Only needs to cope with 16 bits.
+ 
+ * We use a tree234 to store a large number of small localised
+ * sets, each with a mine count. We also keep some of those sets
+ * linked together into a to-do list.
+ 
+ * Take two input sets, in the form (x,y,mask). Munge the first by
+ * taking either its intersection with the second or its difference
+ * with the second. Return the new mask part of the first set.
+ 
+     * Adjust the second set so that it has the same x,y
+     * coordinates as the first.
+     
+     * Invert the second set if `diff' is set (we're after A &~ B
+     * rather than A & B).
+     
+     * Now all that's left is a logical AND.
+      already on it 
+     * Normalise so that x and y are genuinely the bounding
+     * rectangle.
+     
+     * Create a set structure and add it to the tree.
+     
+	 * This set already existed! Free it and return.
+	 
+     * We've added a new set to the tree, so put it on the todo
+     * list.
+     
+     * Remove s from the todo list.
+     
+     * Remove s from the tree.
+     
+     * Destroy the actual set structure.
+     
+ * Return a dynamically allocated list of all the sets which
+ * overlap a provided input set.
+ 
+	     * Find the first set with these top left coordinates.
+	     
+		     * This set potentially overlaps the input one.
+		     * Compute the intersection to see if they
+		     * really overlap, and add it to the list if
+		     * so.
+		     
+			 * There's an overlap.
+			 
+ * Get an element from the head of the set todo list.
+ 
+		 * It's possible that this square is _already_
+		 * known, in which case we don't try to add it to
+		 * the list twice.
+		  and don't open it!  *bang* 
+ * This is data returned from the `perturb' function. It details
+ * which squares have become mines and which have become clear. The
+ * solver is (of course) expected to honourably not use that
+ * knowledge directly, but to efficently adjust its internal data
+ * structures and proceed based on only the information it
+ * legitimately has.
+  +1 == become a mine; -1 == cleared 
+ * Main solver entry point. You give it a grid of existing
+ * knowledge (-1 for a square known to be a mine, 0-8 for empty
+ * squares with a given number of neighbours, -2 for completely
+ * unknown), plus a function which you can call to open new squares
+ * once you're confident of them. It fills in as much more of the
+ * grid as it can.
+ * 
+ * Return value is:
+ * 
+ *  - -1 means deduction stalled and nothing could be done
+ *  - 0 means deduction succeeded fully
+ *  - >0 means deduction succeeded but some number of perturbation
+ *    steps were required; the exact return value is the number of
+ *    perturb calls.
+ 
+     * Set up a linked list of squares with known contents, so that
+     * we can process them one by one.
+     
+     * Initialise that list with all known squares in the input
+     * grid.
+     
+     * Main deductive loop.
+     
+	 * If there are any known squares on the todo list, process
+	 * them and construct a set for each.
+	 
+		 * Empty square. Construct the set of non-known squares
+		 * around this one, and determine its mine count.
+		  ignore this one 
+	     * Now, whether the square is empty or full, we must
+	     * find any set which contains it and replace it with
+	     * one which does not.
+	     
+		     * Compute the mask for this set minus the
+		     * newly known square.
+		     
+		     * Compute the new mine count.
+		     
+		     * Insert the new set into the collection,
+		     * unless it's been whittled right down to
+		     * nothing.
+		     
+		     * Destroy the old one; it is actually obsolete.
+		     
+	     * Marking a fresh square as known certainly counts as
+	     * doing something.
+	     
+	 * Now pick a set off the to-do list and attempt deductions
+	 * based on it.
+	 
+	     * Firstly, see if this set has a mine count of zero or
+	     * of its own cardinality.
+	     
+		 * If so, we can immediately mark all the squares
+		 * in the set as known.
+		 
+		 * Having done that, we need do nothing further
+		 * with this set; marking all the squares in it as
+		 * known will eventually eliminate it, and will
+		 * also permit further deductions about anything
+		 * that overlaps it.
+		 
+	     * Failing that, we now search through all the sets
+	     * which overlap this one.
+	     
+		 * Find the non-overlapping parts s2-s and s-s2,
+		 * and their cardinalities.
+		 * 
+		 * I'm going to refer to these parts as `wings'
+		 * surrounding the central part common to both
+		 * sets. The `s wing' is s-s2; the `s2 wing' is
+		 * s2-s.
+		 
+		 * If one set has more mines than the other, and
+		 * the number of extra mines is equal to the
+		 * cardinality of that set's wing, then we can mark
+		 * every square in the wing as a known mine, and
+		 * every square in the other wing as known clear.
+		 
+		 * Failing that, see if one set is a subset of the
+		 * other. If so, we can divide up the mine count of
+		 * the larger set between the smaller set and its
+		 * complement, even if neither smaller set ends up
+		 * being immediately clearable.
+		  s is a subset of s2.  s2 is a subset of s. 
+	     * In this situation we have definitely done
+	     * _something_, even if it's only reducing the size of
+	     * our to-do list.
+	     
+	     * We have nothing left on our todo list, which means
+	     * all localised deductions have failed. Our next step
+	     * is to resort to global deduction based on the total
+	     * mine count. This is computationally expensive
+	     * compared to any of the above deductions, which is
+	     * why we only ever do it when all else fails, so that
+	     * hopefully it won't have to happen too often.
+	     * 
+	     * If you pass n<0 into this solver, that informs it
+	     * that you do not know the total mine count, so it
+	     * won't even attempt these deductions.
+	     
+	     * Start by scanning the current grid state to work out
+	     * how many unknown squares we still have, and how many
+	     * mines are to be placed in them.
+	     
+	     * If there _are_ no unknown squares, we have actually
+	     * finished.
+	     
+	     * First really simple case: if there are no more mines
+	     * left, or if there are exactly as many mines left as
+	     * squares to play them in, then it's all easy.
+	      now go back to main deductive loop 
+	     * Failing that, we have to do some _real_ work.
+	     * Ideally what we do here is to try every single
+	     * combination of the currently available sets, in an
+	     * attempt to find a disjoint union (i.e. a set of
+	     * squares with a known mine count between them) such
+	     * that the remaining unknown squares _not_ contained
+	     * in that union either contain no mines or are all
+	     * mines.
+	     * 
+	     * Actually enumerating all 2^n possibilities will get
+	     * a bit slow for large n, so I artificially cap this
+	     * recursion at n=10 to avoid too much pain.
+	     
+		 * Doing this with actual recursive function calls
+		 * would get fiddly because a load of local
+		 * variables from this function would have to be
+		 * passed down through the recursion. So instead
+		 * I'm going to use a virtual recursion within this
+		 * function. The way this works is:
+		 * 
+		 *  - we have an array `setused', such that setused[n]
+		 *    is true if set n is currently in the union we
+		 *    are considering.
+		 * 
+		 *  - we have a value `cursor' which indicates how
+		 *    much of `setused' we have so far filled in.
+		 *    It's conceptually the recursion depth.
+		 * 
+		 * We begin by setting `cursor' to zero. Then:
+		 * 
+		 *  - if cursor can advance, we advance it by one. We
+		 *    set the value in `setused' that it went past to
+		 *    true if that set is disjoint from anything else
+		 *    currently in `setused', or to false otherwise.
+		 * 
+		 *  - If cursor cannot advance because it has
+		 *    reached the end of the setused list, then we
+		 *    have a maximal disjoint union. Check to see
+		 *    whether its mine count has any useful
+		 *    properties. If so, mark all the squares not
+		 *    in the union as known and terminate.
+		 * 
+		 *  - If cursor has reached the end of setused and the
+		 *    algorithm _hasn't_ terminated, back cursor up to
+		 *    the nearest true entry, reset it to false, and
+		 *    advance cursor just past it.
+		 * 
+		 *  - If we attempt to back up to the nearest 1 and
+		 *    there isn't one at all, then we have gone
+		 *    through all disjoint unions of sets in the
+		 *    list and none of them has been helpful, so we
+		 *    give up.
+		  See if any existing set overlaps this one. 
+			     * We're adding this set to our union,
+			     * so adjust minesleft and squaresleft
+			     * appropriately.
+			      SOLVER_DIAGNOSTICS 
+			 * We've reached the end. See if we've got
+			 * anything interesting.
+			 
+			     * We have! There is at least one
+			     * square not contained within the set
+			     * union we've just found, and we can
+			     * deduce that either all such squares
+			     * are mines or all are not (depending
+			     * on whether minesleft==0). So now all
+			     * we have to do is actually go through
+			     * the grid, find those squares, and
+			     * mark them.
+			      return to main deductive loop 
+			 * If we reach here, then this union hasn't
+			 * done us any good, so move on to the
+			 * next. Backtrack cursor to the nearest 1,
+			 * change it to a 0 and continue.
+			 
+			     * We're removing this set from our
+			     * union, so re-increment minesleft and
+			     * squaresleft.
+			     
+			     * We've backtracked all the way to the
+			     * start without finding a single 1,
+			     * which means that our virtual
+			     * recursion is complete and nothing
+			     * helped.
+			     
+	 * Dump the current known state of the grid.
+	 
+	 * Now we really are at our wits' end as far as solving
+	 * this grid goes. Our only remaining option is to call
+	 * a perturb function and ask it to modify the grid to
+	 * make it easier.
+	 
+	     * Choose a set at random from the current selection,
+	     * and ask the perturb function to either fill or empty
+	     * it.
+	     * 
+	     * If we have no sets at all, we must give up.
+	      otherwise should have been NULL 
+		 * A number of squares have been fiddled with, and
+		 * the returned structure tells us which. Adjust
+		 * the mine count in any set which overlaps one of
+		 * those squares, and put them back on the to-do
+		 * list. Also, if the square itself is marked as a
+		 * known non-mine, put it back on the squares-to-do
+		 * list.
+		 
+		 * Now free the returned data.
+		 
+		 * Dump the current known state of the grid.
+		 
+		 * And now we can go back round the deductive loop.
+		 
+	 * If we get here, even that didn't work (either we didn't
+	 * have a perturb function or it returned failure), so we
+	 * give up entirely.
+	 
+     * See if we've got any unknown squares left.
+      failed to complete 
+     * Free the set list and square-todo list.
+      ----------------------------------------------------------------------
+ * Grid generator which uses the above solver.
+  *bang*  Structure used internally to mineperturb(). 
+ * Normally this function is passed an (x,y,mask) set description.
+ * On occasions, though, there is no _localised_ set being used,
+ * and the set being perturbed is supposed to be the entirety of
+ * the unreachable area. This is signified by the special case
+ * mask==0: in this case, anything labelled -2 in the grid is part
+ * of the set.
+ * 
+ * Allowing perturbation in this special case appears to make it
+ * guaranteeably possible to generate a workable grid for any mine
+ * density, but they tend to be a bit boring, with mines packed
+ * densely into far corners of the grid and the remainder being
+ * less dense than one might like. Therefore, to improve overall
+ * grid quality I disable this feature for the first few attempts,
+ * and fall back to it after no useful grid has been generated.
+ 
+     * Make a list of all the squares in the grid which we can
+     * possibly use. This list should be in preference order, which
+     * means
+     * 
+     *  - first, unknown squares on the boundary of known space
+     *  - next, unknown squares beyond that boundary
+     * 	- as a very last resort, known squares, but not within one
+     * 	  square of the starting position.
+     * 
+     * Each of these sections needs to be shuffled independently.
+     * We do this by preparing list of all squares and then sorting
+     * it with a random secondary key.
+     
+	     * If this square is too near the starting position,
+	     * don't put it on the list at all.
+	     
+	     * If this square is in the input set, also don't put
+	     * it on the list!
+	      known square 
+		 * Unknown square. Examine everything around it and
+		 * see if it borders on any known squares. If it
+		 * does, it's class 1, otherwise it's 2.
+		 
+	     * Finally, a random number to cause qsort to
+	     * shuffle within each group.
+	     
+     * Now count up the number of full and empty squares in the set
+     * we've been provided.
+     
+     * Now go through our sorted list until we find either `nfull'
+     * empty squares, or `nempty' full squares; these will be
+     * swapped with the appropriate squares in the set to either
+     * fill or empty the set while keeping the same number of mines
+     * overall.
+     
+     * If we haven't found enough empty squares outside the set to
+     * empty it into _or_ enough full squares outside it to fill it
+     * up with, we'll have to settle for doing only a partial job.
+     * In this case we choose to always _fill_ the set (because
+     * this case will tend to crop up when we're working with very
+     * high mine densities and the only way to get a solvable grid
+     * is going to be to pack most of the mines solidly around the
+     * edges). So now our job is to make a list of the empty
+     * squares in the set, and shuffle that list so that we fill a
+     * random selection of them.
+     
+	 * Now pick `ntoempty' items at random from the list.
+	 
+     * Now we're pretty much there. We need to either
+     * 	(a) put a mine in each of the empty squares in the set, and
+     * 	    take one out of each square in `toempty'
+     * 	(b) take a mine out of each of the full squares in the set,
+     * 	    and put one in each square in `tofill'
+     * depending on which one we've found enough squares to do.
+     * 
+     * So we start by constructing our list of changes to return to
+     * the solver, so that it can update its data structures
+     * efficiently rather than having to rescan the whole grid.
+     
+	 * (We also fall into this case if we've constructed a
+	 * setlist.)
+	  now i == ntodo 
+     * Having set up the precise list of changes we're going to
+     * make, we now simply make them and return.
+     
+	 * Check we're not trying to add an existing mine or remove
+	 * an absent one.
+	 
+	 * Actually make the change.
+	 
+	 * Update any numbers already present in the grid.
+	 
+			 * The square itself is marked as known in
+			 * the grid. Mark it as a mine if it's a
+			 * mine, or else work out its number.
+			 
+	 * Start by placing n mines, none of which is at x,y or within
+	 * one square of it.
+	 
+	     * Write down the list of possible mine locations.
+	     
+	     * Now pick n off the list at random.
+	     
+	 * Now set up a results grid to run the solver in, and a
+	 * context for the solver to open squares. Then run the solver
+	 * repeatedly; if the number of perturb steps ever goes up or
+	 * it ever returns -1, give up completely.
+	 *
+	 * We bypass this bit if we're not after a unique grid.
+          by deliberate arrangement 
+     * Set up the mine bitmap and obfuscate it.
+     
+     * Now encode the resulting bitmap in hex. We can work to
+     * nibble rather than byte granularity, since the obfuscation
+     * function guarantees to return a bit string of the same
+     * length as its input.
+      'm' == masked 
+	 * A few simple test vectors for the obfuscator.
+	 * 
+	 * First test: the 28-bit stream 1234567. This divides up
+	 * into 1234 and 567[0]. The SHA of 56 70 30 (appending
+	 * "0") is 15ce8ab946640340bbb99f3f48fd2c45d1a31d30. Thus,
+	 * we XOR the 16-bit string 15CE into the input 1234 to get
+	 * 07FA. Next, we SHA that with "0": the SHA of 07 FA 30 is
+	 * 3370135c5e3da4fed937adc004a79533962b6391. So we XOR the
+	 * 12-bit string 337 into the input 567 to get 650. Thus
+	 * our output is 07FA650.
+	 
+	 * Second test: a long string to make sure we switch from
+	 * one SHA to the next correctly. My input string this time
+	 * is simply fifty bytes of zeroes.
+	 
+	     * SHA of twenty-five zero bytes plus "0" is
+	     * b202c07b990c01f6ff2d544707f60e506019b671. SHA of
+	     * twenty-five zero bytes plus "1" is
+	     * fcb1d8b5a2f6b592fe6780b36aa9d65dd7aa6db9. Thus our
+	     * first half becomes
+	     * b202c07b990c01f6ff2d544707f60e506019b671fcb1d8b5a2.
+	     * 
+	     * SHA of that lot plus "0" is
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db. SHA of the
+	     * same string plus "1" is
+	     * 3d01d8df78e76d382b8106f480135a1bc751d725. So the
+	     * second half becomes
+	     * 10b0af913db85d37ca27f52a9f78bba3a80030db3d01d8df78.
+	     
+     * We generate the coordinates of an initial click even if they
+     * aren't actually used. This has the effect of harmonising the
+     * random number usage between interactive and batch use: if
+     * you use `mines --generate' with an explicit random seed, you
+     * should get exactly the same results as if you type the same
+     * random seed into the interactive game and click in the same
+     * initial location. (Of course you won't get the same grid if
+     * you click in a _different_ initial location, but there's
+     * nothing to be done about that.)
+     
+	 * For batch-generated grids, pre-open one square.
+	  skip over mine count  now ignore the rest  skip over x coordinate  eat comma  skip over y coordinate  eat comma  eat `m' for `masked' or `u' for `unmasked', if present  now just check length of remainder 
+	 * We have a preliminary game in which the mine layout
+	 * hasn't been generated yet. Generate it based on the
+	 * initial click location.
+	 
+	 * Find the trailing substring of the game description
+	 * corresponding to just the mine layout; we will use this
+	 * as our second `private' game ID for serialisation.
+	 
+	 * The player has landed on a mine. Bad luck. Expose the
+	 * mine that killed them, but not the rest (in case they
+	 * want to Undo and carry on playing).
+	 
+     * Otherwise, the player has opened a safe square. Mark it to-do.
+      `todo' value internal to this func 
+     * Now go through the grid finding all `todo' values and
+     * opening them. Every time one of them turns out to have no
+     * neighbouring mines, we add all its unopened neighbours to
+     * the list as well.
+     * 
+     * FIXME: We really ought to be able to do this better than
+     * using repeated N^2 scans of the grid.
+     
+     * Finally, scan the grid and see if exactly as many squares
+     * are still covered as there are mines. If so, set the `won'
+     * flag and fill in mine markers on all covered squares.
+      skip over mine count  eat comma  eat comma  skip over x coordinate  eat comma  skip over y coordinate  eat comma 
+	     * We permit game IDs to be entered by hand without the
+	     * masking transformation.
+	      validate_desc should have caught  for mouse-down highlights  *shrug* 
+     * The deaths counter and completion status need preserving
+     * across a serialisation.
+     
+     * Items in this `grid' array have all the same values as in
+     * the game_state grid, and in addition:
+     * 
+     * 	- -10 means the tile was drawn `specially' as a result of a
+     * 	  flash, so it will always need redrawing.
+     * 
+     * 	- -22 and -23 mean the tile is highlighted for a possible
+     * 	  click.
+      -1, -1 for no cursor displayed.  no further moves permitted  As for RIGHT_BUTTON; only works on covered square.  Otherwise, treat as LEFT_BUTTON, for a single square. 
+	 * Mouse-downs and mouse-drags just cause highlighting
+	 * updates.
+	 
+	 * Right-clicking only works on a covered square, and it
+	 * toggles between -1 (marked as mine) and -2 (not marked
+	 * as mine).
+	 *
+	 * FIXME: question marks.
+	 
+	 * At this stage we must never return NULL: we have adjusted
+	 * the ui, so at worst we return UI_UPDATE.
+	 
+	 * Left-clicking on a covered square opens a tile. Not
+	 * permitted if the tile is marked as a mine, for safety.
+	 * (Unmark it and _then_ open it.)
+	  Check if you've killed yourself. 
+	 * Left-clicking or middle-clicking on an uncovered tile:
+	 * first we check to see if the number of mine markers
+	 * surrounding the tile is equal to its mine count, and if
+	 * so then we open all other surrounding squares.
+	  Count mine markers. 
+		 * Now see if any of the squares we're clearing
+		 * contains a mine (which will happen iff you've
+		 * incorrectly marked the mines around the clicked
+		 * square). If so, we open _just_ those squares, to
+		 * reveal as little additional information as we
+		 * can.
+		 
+             * If the player is still alive at the moment of pressing
+             * Solve, expose the entire grid as if it were a completed
+             * solution.
+             
+             * If the player pressed Solve _after dying_, show a full
+             * corrections grid in the style of standard Minesweeper.
+             * Players who don't like Mines's behaviour on death of
+             * only showing the mine that killed you (so that in case
+             * of a typo you can undo and carry on without the rest of
+             * the grid being spoiled) can use this to get the display
+             * that ordinary Minesweeper would have given them.
+              ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Red tinge to a light colour, for the cursor.  not decided yet 
+	     * Omit the highlights in this case.
+	     
+	     * Draw highlights to indicate the square is covered.
+	     
+	     * Draw a flag.
+	     
+	     * Draw a question mark.
+	     
+	 * Clear the square to the background colour, and draw thin
+	 * grid lines along the top and left.
+	 * 
+	 * Exception is that for value 65 (mine we've just trodden
+	 * on), we clear the square to COL_BANG.
+	 
+	     * Mark a number.
+	     
+	     * Mark a mine.
+	     
+		 * Cross through the mine.
+		 
+         * Recessed area containing the whole puzzle.
+         
+     * Now draw the tiles. Also in this loop, count up the number
+     * of mines, mine markers, and closed squares.
+     
+                 * Count up the flags around this tile, and if
+                 * there are too _many_, highlight the tile.
+                  if cursor has moved, force redraw of curr and prev pos 
+     * Update the status bar.
+     
+                 * In the situation where there's a very small number
+                 * of _non_-mine squares left unopened, it's helpful
+                 * to mention that number in the status line, to save
+                 * the player from having to count it up
+                 * painstakingly. This is particularly important if
+                 * the player has turned up the mine density to the
+                 * point where game generation resorts to its weird
+                 * pathological fallback of a very dense mine area
+                 * with a clearing in the middle, because that often
+                 * leads to a deduction you can only make by knowing
+                 * that there is (say) exactly one non-mine square to
+                 * find, and it's a real pain to have to count up two
+                 * large numbers of squares and subtract them to get
+                 * that value of 1.
+                 *
+                 * The threshold value of 8 for displaying this
+                 * information is because that's the largest number of
+                 * non-mine squares that might conceivably fit around
+                 * a single central square, and the most likely way to
+                 * _use_ this information is to observe that if all
+                 * the remaining safe squares are adjacent to _this_
+                 * square then everything else can be immediately
+                 * flagged as a mine.
+                 
+     * We report the game as lost only if the player has used the
+     * Solve function to reveal all the mines. Otherwise, we assume
+     * they'll undo and continue play.
+      game_request_keys  wants_statusbar 
+ * Vaguely useful stand-alone program which translates between
+ * obfuscated and clear Mines game descriptions. Pass in a game
+ * description on the command line, and if it's clear it will be
+ * obfuscated and vice versa. The output text should also be a
+ * valid game ID describing the same game. Like this:
+ *
+ * $ ./mineobfusc 9x9:4,4,mb071b49fbd1cb6a0d5868
+ * 9x9:4,4,004000007c00010022080
+ * $ ./mineobfusc 9x9:4,4,004000007c00010022080
+ * 9x9:4,4,mb071b49fbd1cb6a0d5868
+  vim: set shiftwidth=4 tabstop=8: 

@@ -1,0 +1,208 @@
+ Copyright (C) 2003 Epic Games (written by Jean-Marc Valin)
+   Copyright (C) 2004-2006 Epic Games 
+   
+   File: preprocess.c
+   Preprocessor with denoising based on the algorithm by Ephraim and Malah
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   Recommended papers:
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   short-time spectral amplitude estimator". IEEE Transactions on Acoustics, 
+   Speech and Signal Processing, vol. ASSP-32, no. 6, pp. 1109-1121, 1984.
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   log-spectral amplitude estimator". IEEE Transactions on Acoustics, Speech and 
+   Signal Processing, vol. ASSP-33, no. 2, pp. 443-445, 1985.
+   
+   I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments".
+   Signal Processing, vol. 81, no. 2, pp. 2403-2418, 2001.
+
+   Stefan Gustafsson, Rainer Martin, Peter Jax, and Peter Vary. "A psychoacoustic 
+   approach to combined acoustic echo cancellation and noise reduction". IEEE 
+   Transactions on Speech and Audio Processing, 2002.
+   
+   J.-M. Valin, J. Rouat, and F. Michaud, "Microphone array post-filter for separation
+   of simultaneous non-stationary sources". In Proceedings IEEE International 
+   Conference on Acoustics, Speech, and Signal Processing, 2004.
+* Speex pre-processor state.  Basic info *< Number of samples processed each time *< Number of points in the power spectrum *< Sampling rate of the input/output  Parameters  DSP-related arrays *< Processing frame (2*ps_size) *< Processing frame in freq domain (2*ps_size) *< Current power spectrum *< Adjusted gains *< Minimum gain allowed *< Analysis/Synthesis window *< Noise estimate *< Estimate of reverb energy *< Power spectrum for last frame *< Ephraim Malah gain *< A-priori SNR *< A-posteriori SNR *< Smoothed power spectrum *< See Cohen paper *< See Cohen paper *< Probability of speech presence for noise update *< Smoothed a priori SNR  Misc *< Input buffer (overlapped analysis) *< Output buffer (for overlap and add)  AGC stuff, only for floating point for now *< Perceptual loudness curve *< Loudness estimate *< Current AGC gain *< Number of frames used for loudness adaptation so far *< Maximum gain allowed *< Maximum increase in gain from one frame to another *< Maximum decrease in gain from one frame to another *< Loudness of previous frame *< Current gain limit during initialisation *< Number of frames used for adaptation so far *< Number of frames processed so far *< Lookup table for the FFT  4 - x  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+   Input in Q11 format, output in Q15
+ Q13 table  Compute the gain floor based on different floors for the background noise and residual echo  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+ Compute the gain floor based on different floors for the background noise and residual echo  Round ps_size down to the nearest power of two st->loudness_weight[i] = .5f*(1.f/(1.f+ff/8000.f))+1.f*exp(-.5f*(ff-3800.f)*(ff-3800.f)/9e5f);st->loudness = pow(AMP_SCALE*st->agc_level,LOUDNESS_EXP); FIXME: The AGC doesn't work yet with fixed-pointif (loudness < 2*pow(st->loudness, 1.0/LOUDNESS_EXP) &&
+   loudness*2 > pow(st->loudness, 1.0/LOUDNESS_EXP))rate=2.0f*Pframe*Pframe/(1+st->nb_loudness_adapt);printf ("%f %f %f %f\n", Pframe, loudness, pow(st->loudness, 1.0f/LOUDNESS_EXP), st->loudness2);fprintf (stderr, "%f %f %f\n", loudness, (float)AMP_SCALE_1*pow(st->loudness, 1.0f/LOUDNESS_EXP), st->agc_gain); 'Build' input frame  Update inbuf  Windowing  Perform FFT  Power spectrum fprintf (stderr, "%f ", st->S[i]/st->Smin[i]);fprintf (stderr, "%f ", st->update_prob[i]); Deal with residual echo if provided  If there are NaNs or ridiculous values, it'll show up in the DC and we just reset everything to zero  Noise estimation always updated for the 10 first frames if (st->nb_adapt<10)
+   {
+      for (i=1;i<N-1;i++)
+         st->update_prob[i] = 0;
+   }
+    Update the noise estimate for the frequencies where it can be  Special case for first frame  Compute a posteriori SNR  Total noise estimate including residual echo and reverberation  A posteriori SNR = ps/noise - 1 Computing update gamma = .1 + .9*(old/(old+noise))^2  A priori SNR update = gamma*max(0,post) + (1-gamma)*old/noise print_vec(st->post, N+M, ""); Recursive average of the a priori SNR. A bit smoothed for the psd components  Speech probability of presence for the entire frame is based on the average filterbank a priori SNR  Compute Ephraim & Malah gain speech probability of presence for each critical band (Bark scale) 
+      Technically this is actually wrong because the EM gaim assumes a slightly different probability 
+      distribution  See EM and Cohen papers Gain from hypergeometric function  Weiner filter gain  a priority probability of speech presence based on Bark sub-band alone  Speech absence a priori probability (considering sub-band and frame)  Gain with bound  Save old Bark power spectrum Q8 Prevent overflows in the next lineQ8 Convert the EM gains and speech prob to linear frequency  Use 1 for linear gain resolution (best) or 0 for Bark gain resolution (faster)  Compute gain according to the Ephraim-Malah algorithm -- linear frequency  Wiener filter gain  Optimal estimator for loudness domain  EM gain with bound  Interpolated speech probability of presence  Constrain the gain to be close to the Bark scale gain  Save old power spectrum  Apply gain floor  Exponential decay model for reverberation (unused) st->reverb_estimate[i] = st->reverb_decay*st->reverb_estimate[i] + st->reverb_decay*st->reverb_level*st->gain[i]*st->gain[i]*st->ps[i]; Take into account speech probability of presence (loudness domain MMSE estimator)  gain2 = [p*sqrt(gain)+(1-p)*sqrt(gain _floor) ]^2  Use this if you want a log-domain MMSE estimator instead st->gain2[i] = pow(st->gain[i], p) * pow(st->gain_floor[i],1.f-p); If noise suppression is off, don't apply the gain (but then why call this in the first place!)  Apply computed gain FIXME: This *will* not work for fixed-point  Inverse FFT with 1/N scaling  Scale back to original (lower) amplitude FIXME: This *will* not work for fixed-point  Synthesis window (for WOLA)  Perform overlap and add  Update outbuf  FIXME: This VAD is a kludge  Save old power spectrum  #ifndef DISABLE_FLOAT_API  FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_level = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_level; FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_decay = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_decay; Copyright (C) 2003 Epic Games (written by Jean-Marc Valin)
+   Copyright (C) 2004-2006 Epic Games 
+   
+   File: preprocess.c
+   Preprocessor with denoising based on the algorithm by Ephraim and Malah
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   Recommended papers:
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   short-time spectral amplitude estimator". IEEE Transactions on Acoustics, 
+   Speech and Signal Processing, vol. ASSP-32, no. 6, pp. 1109-1121, 1984.
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   log-spectral amplitude estimator". IEEE Transactions on Acoustics, Speech and 
+   Signal Processing, vol. ASSP-33, no. 2, pp. 443-445, 1985.
+   
+   I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments".
+   Signal Processing, vol. 81, no. 2, pp. 2403-2418, 2001.
+
+   Stefan Gustafsson, Rainer Martin, Peter Jax, and Peter Vary. "A psychoacoustic 
+   approach to combined acoustic echo cancellation and noise reduction". IEEE 
+   Transactions on Speech and Audio Processing, 2002.
+   
+   J.-M. Valin, J. Rouat, and F. Michaud, "Microphone array post-filter for separation
+   of simultaneous non-stationary sources". In Proceedings IEEE International 
+   Conference on Acoustics, Speech, and Signal Processing, 2004.
+* Speex pre-processor state.  Basic info *< Number of samples processed each time *< Number of points in the power spectrum *< Sampling rate of the input/output  Parameters  DSP-related arrays *< Processing frame (2*ps_size) *< Processing frame in freq domain (2*ps_size) *< Current power spectrum *< Adjusted gains *< Minimum gain allowed *< Analysis/Synthesis window *< Noise estimate *< Estimate of reverb energy *< Power spectrum for last frame *< Ephraim Malah gain *< A-priori SNR *< A-posteriori SNR *< Smoothed power spectrum *< See Cohen paper *< See Cohen paper *< Probability of speech presence for noise update *< Smoothed a priori SNR  Misc *< Input buffer (overlapped analysis) *< Output buffer (for overlap and add)  AGC stuff, only for floating point for now *< Perceptual loudness curve *< Loudness estimate *< Current AGC gain *< Number of frames used for loudness adaptation so far *< Maximum gain allowed *< Maximum increase in gain from one frame to another *< Maximum decrease in gain from one frame to another *< Loudness of previous frame *< Current gain limit during initialisation *< Number of frames used for adaptation so far *< Number of frames processed so far *< Lookup table for the FFT  4 - x  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+   Input in Q11 format, output in Q15
+ Q13 table  Compute the gain floor based on different floors for the background noise and residual echo  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+ Compute the gain floor based on different floors for the background noise and residual echo  Round ps_size down to the nearest power of two st->loudness_weight[i] = .5f*(1.f/(1.f+ff/8000.f))+1.f*exp(-.5f*(ff-3800.f)*(ff-3800.f)/9e5f);st->loudness = pow(AMP_SCALE*st->agc_level,LOUDNESS_EXP); FIXME: The AGC doesn't work yet with fixed-pointif (loudness < 2*pow(st->loudness, 1.0/LOUDNESS_EXP) &&
+   loudness*2 > pow(st->loudness, 1.0/LOUDNESS_EXP))rate=2.0f*Pframe*Pframe/(1+st->nb_loudness_adapt);printf ("%f %f %f %f\n", Pframe, loudness, pow(st->loudness, 1.0f/LOUDNESS_EXP), st->loudness2);fprintf (stderr, "%f %f %f\n", loudness, (float)AMP_SCALE_1*pow(st->loudness, 1.0f/LOUDNESS_EXP), st->agc_gain); 'Build' input frame  Update inbuf  Windowing  Perform FFT  Power spectrum fprintf (stderr, "%f ", st->S[i]/st->Smin[i]);fprintf (stderr, "%f ", st->update_prob[i]); Deal with residual echo if provided  If there are NaNs or ridiculous values, it'll show up in the DC and we just reset everything to zero  Noise estimation always updated for the 10 first frames if (st->nb_adapt<10)
+   {
+      for (i=1;i<N-1;i++)
+         st->update_prob[i] = 0;
+   }
+    Update the noise estimate for the frequencies where it can be  Special case for first frame  Compute a posteriori SNR  Total noise estimate including residual echo and reverberation  A posteriori SNR = ps/noise - 1 Computing update gamma = .1 + .9*(old/(old+noise))^2  A priori SNR update = gamma*max(0,post) + (1-gamma)*old/noise print_vec(st->post, N+M, ""); Recursive average of the a priori SNR. A bit smoothed for the psd components  Speech probability of presence for the entire frame is based on the average filterbank a priori SNR  Compute Ephraim & Malah gain speech probability of presence for each critical band (Bark scale) 
+      Technically this is actually wrong because the EM gaim assumes a slightly different probability 
+      distribution  See EM and Cohen papers Gain from hypergeometric function  Weiner filter gain  a priority probability of speech presence based on Bark sub-band alone  Speech absence a priori probability (considering sub-band and frame)  Gain with bound  Save old Bark power spectrum Q8 Prevent overflows in the next lineQ8 Convert the EM gains and speech prob to linear frequency  Use 1 for linear gain resolution (best) or 0 for Bark gain resolution (faster)  Compute gain according to the Ephraim-Malah algorithm -- linear frequency  Wiener filter gain  Optimal estimator for loudness domain  EM gain with bound  Interpolated speech probability of presence  Constrain the gain to be close to the Bark scale gain  Save old power spectrum  Apply gain floor  Exponential decay model for reverberation (unused) st->reverb_estimate[i] = st->reverb_decay*st->reverb_estimate[i] + st->reverb_decay*st->reverb_level*st->gain[i]*st->gain[i]*st->ps[i]; Take into account speech probability of presence (loudness domain MMSE estimator)  gain2 = [p*sqrt(gain)+(1-p)*sqrt(gain _floor) ]^2  Use this if you want a log-domain MMSE estimator instead st->gain2[i] = pow(st->gain[i], p) * pow(st->gain_floor[i],1.f-p); If noise suppression is off, don't apply the gain (but then why call this in the first place!)  Apply computed gain FIXME: This *will* not work for fixed-point  Inverse FFT with 1/N scaling  Scale back to original (lower) amplitude FIXME: This *will* not work for fixed-point  Synthesis window (for WOLA)  Perform overlap and add  Update outbuf  FIXME: This VAD is a kludge  Save old power spectrum  #ifndef DISABLE_FLOAT_API  FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_level = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_level; FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_decay = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_decay; Copyright (C) 2003 Epic Games (written by Jean-Marc Valin)
+   Copyright (C) 2004-2006 Epic Games 
+   
+   File: preprocess.c
+   Preprocessor with denoising based on the algorithm by Ephraim and Malah
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   Recommended papers:
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   short-time spectral amplitude estimator". IEEE Transactions on Acoustics, 
+   Speech and Signal Processing, vol. ASSP-32, no. 6, pp. 1109-1121, 1984.
+   
+   Y. Ephraim and D. Malah, "Speech enhancement using minimum mean-square error
+   log-spectral amplitude estimator". IEEE Transactions on Acoustics, Speech and 
+   Signal Processing, vol. ASSP-33, no. 2, pp. 443-445, 1985.
+   
+   I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments".
+   Signal Processing, vol. 81, no. 2, pp. 2403-2418, 2001.
+
+   Stefan Gustafsson, Rainer Martin, Peter Jax, and Peter Vary. "A psychoacoustic 
+   approach to combined acoustic echo cancellation and noise reduction". IEEE 
+   Transactions on Speech and Audio Processing, 2002.
+   
+   J.-M. Valin, J. Rouat, and F. Michaud, "Microphone array post-filter for separation
+   of simultaneous non-stationary sources". In Proceedings IEEE International 
+   Conference on Acoustics, Speech, and Signal Processing, 2004.
+* Speex pre-processor state.  Basic info *< Number of samples processed each time *< Number of points in the power spectrum *< Sampling rate of the input/output  Parameters  DSP-related arrays *< Processing frame (2*ps_size) *< Processing frame in freq domain (2*ps_size) *< Current power spectrum *< Adjusted gains *< Minimum gain allowed *< Analysis/Synthesis window *< Noise estimate *< Estimate of reverb energy *< Power spectrum for last frame *< Ephraim Malah gain *< A-priori SNR *< A-posteriori SNR *< Smoothed power spectrum *< See Cohen paper *< See Cohen paper *< Probability of speech presence for noise update *< Smoothed a priori SNR  Misc *< Input buffer (overlapped analysis) *< Output buffer (for overlap and add)  AGC stuff, only for floating point for now *< Perceptual loudness curve *< Loudness estimate *< Current AGC gain *< Number of frames used for loudness adaptation so far *< Maximum gain allowed *< Maximum increase in gain from one frame to another *< Maximum decrease in gain from one frame to another *< Loudness of previous frame *< Current gain limit during initialisation *< Number of frames used for adaptation so far *< Number of frames processed so far *< Lookup table for the FFT  4 - x  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+   Input in Q11 format, output in Q15
+ Q13 table  Compute the gain floor based on different floors for the background noise and residual echo  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  gain_floor = sqrt [ (noise*noise_floor + echo*echo_floor) / (noise+echo) ]  This function approximates the gain function 
+   y = gamma(1.25)^2 * M(-.25;1;-x) / sqrt(x)  
+   which multiplied by xi/(1+xi) is the optimal gain
+   in the loudness domain ( sqrt[amplitude] )
+ Compute the gain floor based on different floors for the background noise and residual echo  Round ps_size down to the nearest power of two st->loudness_weight[i] = .5f*(1.f/(1.f+ff/8000.f))+1.f*exp(-.5f*(ff-3800.f)*(ff-3800.f)/9e5f);st->loudness = pow(AMP_SCALE*st->agc_level,LOUDNESS_EXP); FIXME: The AGC doesn't work yet with fixed-pointif (loudness < 2*pow(st->loudness, 1.0/LOUDNESS_EXP) &&
+   loudness*2 > pow(st->loudness, 1.0/LOUDNESS_EXP))rate=2.0f*Pframe*Pframe/(1+st->nb_loudness_adapt);printf ("%f %f %f %f\n", Pframe, loudness, pow(st->loudness, 1.0f/LOUDNESS_EXP), st->loudness2);fprintf (stderr, "%f %f %f\n", loudness, (float)AMP_SCALE_1*pow(st->loudness, 1.0f/LOUDNESS_EXP), st->agc_gain); 'Build' input frame  Update inbuf  Windowing  Perform FFT  Power spectrum fprintf (stderr, "%f ", st->S[i]/st->Smin[i]);fprintf (stderr, "%f ", st->update_prob[i]); Deal with residual echo if provided  If there are NaNs or ridiculous values, it'll show up in the DC and we just reset everything to zero  Noise estimation always updated for the 10 first frames if (st->nb_adapt<10)
+   {
+      for (i=1;i<N-1;i++)
+         st->update_prob[i] = 0;
+   }
+    Update the noise estimate for the frequencies where it can be  Special case for first frame  Compute a posteriori SNR  Total noise estimate including residual echo and reverberation  A posteriori SNR = ps/noise - 1 Computing update gamma = .1 + .9*(old/(old+noise))^2  A priori SNR update = gamma*max(0,post) + (1-gamma)*old/noise print_vec(st->post, N+M, ""); Recursive average of the a priori SNR. A bit smoothed for the psd components  Speech probability of presence for the entire frame is based on the average filterbank a priori SNR  Compute Ephraim & Malah gain speech probability of presence for each critical band (Bark scale) 
+      Technically this is actually wrong because the EM gaim assumes a slightly different probability 
+      distribution  See EM and Cohen papers Gain from hypergeometric function  Weiner filter gain  a priority probability of speech presence based on Bark sub-band alone  Speech absence a priori probability (considering sub-band and frame)  Gain with bound  Save old Bark power spectrum Q8 Prevent overflows in the next lineQ8 Convert the EM gains and speech prob to linear frequency  Use 1 for linear gain resolution (best) or 0 for Bark gain resolution (faster)  Compute gain according to the Ephraim-Malah algorithm -- linear frequency  Wiener filter gain  Optimal estimator for loudness domain  EM gain with bound  Interpolated speech probability of presence  Constrain the gain to be close to the Bark scale gain  Save old power spectrum  Apply gain floor  Exponential decay model for reverberation (unused) st->reverb_estimate[i] = st->reverb_decay*st->reverb_estimate[i] + st->reverb_decay*st->reverb_level*st->gain[i]*st->gain[i]*st->ps[i]; Take into account speech probability of presence (loudness domain MMSE estimator)  gain2 = [p*sqrt(gain)+(1-p)*sqrt(gain _floor) ]^2  Use this if you want a log-domain MMSE estimator instead st->gain2[i] = pow(st->gain[i], p) * pow(st->gain_floor[i],1.f-p); If noise suppression is off, don't apply the gain (but then why call this in the first place!)  Apply computed gain FIXME: This *will* not work for fixed-point  Inverse FFT with 1/N scaling  Scale back to original (lower) amplitude FIXME: This *will* not work for fixed-point  Synthesis window (for WOLA)  Perform overlap and add  Update outbuf  FIXME: This VAD is a kludge  Save old power spectrum  #ifndef DISABLE_FLOAT_API  FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_level = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_level; FIXME: Re-enable when de-reverberation is actually enabled again st->reverb_decay = (*(float*)ptr); FIXME: Re-enable when de-reverberation is actually enabled again (*(float*)ptr) = st->reverb_decay;

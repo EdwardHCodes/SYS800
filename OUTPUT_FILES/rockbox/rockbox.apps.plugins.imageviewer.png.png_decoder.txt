@@ -1,0 +1,766 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$id $
+ *
+ * Copyright (C) 2009 by Christophe Gouiran <bechris13250 -at- gmail -dot- com>
+ *
+ * Based on lodepng, a lightweight png decoder/encoder
+ * (c) 2005-2008 Lode Vandevenne
+ *
+ * Copyright (c) 2010 Marcin Bukat
+ *  - pixel format conversion & transparency handling
+ *  - adaptation of tinf (tiny inflate library)
+ *  - code refactoring & cleanups
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+LodePNG version 20080927
+
+Copyright (c) 2005-2008 Lode Vandevenne
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+
+    2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+    3. This notice may not be removed or altered from any source
+    distribution.
+
+The manual and changelog can be found in the header file "lodepng.h"
+You are free to name this file lodepng.cpp or lodepng.c depending on your usage.
+ supported chunk types:
+ * critical:
+ *     IHDR
+ *     PLTE
+ *     IDAT
+ *     IEND
+ *
+ * ancillary:
+ *     tRNS
+ *     bKGD
+ 272829303132333435363738394041424344454647484950515253545556575859606162636465666768697071727374
+The two functions below (LodePNG_decompress and LodePNG_compress) directly call the
+LodeZlib_decompress and LodeZlib_compress functions. The only purpose of the functions
+below, is to provide the ability to let LodePNG use a different Zlib encoder by only
+changing the two functions below, instead of changing it inside the vareous places
+in the other LodePNG functions.
+
+*out must be NULL and *outsize must be 0 initially, and after the function is done,
+*out must point to the decompressed data, *outsize must be the size of it, and must
+be the size of the useful data in bytes, not the alloc size.
+ //////////////////////////////////////////////////////////////////////////  / Reading and writing single bits and bytes from/to stream for LodePNG   /  //////////////////////////////////////////////////////////////////////////  the current bit in bitstream must be 0 for this to work
+     * earlier bit of huffman code is in a lesser significant bit
+     * of an earlier byte
+      the current bit in bitstream may be 0 or 1 for this to work  //////////////////////////////////////////////////////////////////////////  / PNG chunks                                                             /  //////////////////////////////////////////////////////////////////////////  get the length of the data of the chunk.
+ * Total chunk length has 12 bytes more.
+  check if the type is the given type  chunk type field: A 4-byte chunk type code. For convenience in 
+     * description and in examining PNG files, type codes are restricted
+     * to consist of uppercase and lowercase ASCII letters 
+     * (A-Z and a-z, or 65-90 and 97-122 decimal). However, encoders and
+     * decoders must treat the codes as fixed binary values, not character
+     * strings."
+      properties of PNG chunks gotten from capitalization of chunk type name,
+ * as defined by the standard
+ * 0: ancillary chunk
+ * 1: critical chunk type
+  0: public, 1: private  get pointer to the data of the chunk  returns 0 if the crc is correct, error code if it's incorrect  the CRC is taken of the data and the 4 chunk type letters,
+     * not the length
+      don't use on IEND chunk, as there is no next chunk then  //////////////////////////////////////////////////////////////////////////  / Color types and such                                                   /  //////////////////////////////////////////////////////////////////////////  return type is a LodePNG error code
+ * bd - bit depth
+ greyRGBpalettegrey + alphaRGBAallowed color type / bits combinationgreyRGBpalettegrey + alphaRGBAunexisting color type bits per pixel is amount of channels * bits per channel 
+ * Convert from every colortype to rockbox native pixel format (color targets) or
+ * greylib pixel format (grey targets)
+ bitpointer, used by less-than-8-bit color types line buffer for pixel format transformation greyscale color reset line buf  full transparent RGB color tRNs & bKGD indexed color (palette) reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color tRNS and bKGD RGB color tRNS and bKGD greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent  scale value from 0 to 255 indexed color (palette) tRNS and bKGD  greyscale targets  for rgb(a) -> greyscale conversion  for rgb background -> greyscale background greyscale color transparent color defined in tRNS chunk RGB color convert background rgb color to greyscale  tRNs & bKGD  rgb -> greyscale indexed color (palette) calculate grey value of rgb background  reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color specification states that we have to compare
+                     * colors for simple transparency in 16bits
+                     * even if we scale down to 8bits later
+                      tRNS and bKGD  we take upper 8bits RGB color tRNS and bKGD  we take only upper byte of 16bit value greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent scale value from 0 to 255indexed color (palette) tRNS and bKGD Paeth predicter, used by PNG filter type 4shared values used by multiple Adam7 related functionsx start valuesy start valuesx delta valuesy delta values the passstart values have 8 values: 
+     * the 8th one actually indicates the byte after the end 
+     * of the 7th (= last) pass
+     calculate width and height in pixels of each pass if passw[i] is 0, it's 0 bytes, not 1 (no filtertype-byte)  bits padded if needed to fill full byte at end of each scanline  only padded at end of reduced image  //////////////////////////////////////////////////////////////////////////  / PNG Decoder                                                            /  //////////////////////////////////////////////////////////////////////////  For PNG filter method 0
+     * unfilter a PNG image scanline by scanline. when the pixels are smaller
+     * than 1 byte, the filter works byte per byte (bytewidth = 1)
+     *
+     * precon is the previous unfiltered scanline, recon the result,
+     * scanline the current one
+     *
+     * the incoming scanlines do NOT include the filtertype byte, that one is
+     * given in the parameter filterType instead
+     *
+     * recon and scanline MAY be the same memory address! precon must be
+     * disjoint.
+      storage space for cached portion of scanline  ptr to second element of the cache  half way  for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+        for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+        for (i = bytewidth; i < length; i++)
+            recon[i] = scanline[i] + recon[i - bytewidth];
+         first pixel  length >> 9  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+        if (precon) for (i = 0; i < length; i++)
+            recon[i] = scanline[i] + precon[i];
+         for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i] + precon[i] / 2;
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + recon[i - bytewidth] / 2;
+             first pixel  length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(0, precon[i], 0));
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(recon[i - bytewidth],
+                                                    precon[i],
+                                                    precon[i - bytewidth]));
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] +
+                                     paethPredictor(recon[i - bytewidth],
+                                                    0, 0));
+             length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline error: unexisting filter type given For PNG filter method 0
+     * this function unfilters a single image (e.g. without interlacing this is
+     * called once, with Adam7 it's called 7 times)
+     *
+     * out must have enough bytes allocated already, in must have the
+     * scanlines + 1 filtertype byte per scanline
+     *
+     * w and h are image dimensions or dimensions of reduced image,
+     * bpp is bits per pixel
+     *
+     * in and out are allowed to be the same memory address!
+      bytewidth is used for filtering, is 1 when bpp < 8,
+     * number of bytes per pixel otherwise
+      the extra filterbyte added to each row  Note: this function works on image buffers WITHOUT padding bits at end
+     * of scanlines with non-multiple-of-8 bit amounts, only between reduced
+     * images is padding
+     * out must be big enough AND must be 0 everywhere if bpp < 8
+     * in the current implementation (because that's likely a little bit faster)
+     bpp < 8: Adam7 with pixels < 8 bit is a bit trickier: with bit pointersbit pointers (for out and in buffer) note that this function assumes the out buffer 
+                         * is completely 0, use setBitOfReversedStream
+                         * otherwise After filtering there are still padding bits if scanlines have
+     * non multiple of 8 bit amounts. They need to be removed 
+     * (except at last scanline of (Adam7-reduced) image) before working
+     * with pure image buffers for the Adam7 code, the color convert code
+     * and the output to the user.
+     *
+     * in and out are allowed to be the same buffer, in may also be higher
+     * but still overlapping; in must have >= ilinebits*h bits,
+     * out must have >= olinebits*h bits, olinebits must be <= ilinebits
+     * also used to move bits after earlier such operations happened, e.g.
+     * in a sequence of reduced images from Adam7
+     * only useful if (ilinebits - olinebits) is a value in the range 1..7
+     bit pointers out must be buffer big enough to contain full image,
+ * and in must contain the full decompressed data from the IDAT chunks
+ return value is error This function converts the filtered-padded-interlaced data into pure 2D
+    * image buffer with the PNG's colortype.
+    * Steps:
+    * I) if no Adam7:
+    *     1) unfilter
+    *     2) remove padding bits (= posible extra bits per scanline if bpp < 8)
+    * II) if adam7:
+    *     1) 7x unfilter
+    *     2) 7x remove padding bits 
+    *     3) Adam7_deinterlace
+    *
+    * NOTE: the in buffer will be overwritten with intermediate data!
+    error: invalid colortype we can immediatly filter into the out buffer,
+             * no other steps needed
+             interlaceMethod is 1 (Adam7) TODO: possible efficiency improvement: if in this reduced
+             * image the bits fit nicely in 1 scanline, move bytes instead
+             * of bits or move not at all
+              remove padding bits in scanlines; after this there still
+                 * may be padding bits between the different reduced images:
+                 * each reduced image still starts nicely at a byte
+                  read a PNG, the result will be in the same color type as the PNG
+ * (hence "generic")
+  chunk length the data in the chunk allocated buffer  for unknown chunk order  the given data is empty first byte of the first chunk after the header loop through the chunks, ignoring unknown chunks and stopping at IEND
+     *  chunk. IDAT data is put at the start of the in buffer
+      minimal size of chunk is 12 bytes  error: size of the in buffer too small to contain next chunk  length of the data of the chunk, excluding the length bytes,
+         * chunk type and CRC bytes
+         *
+         * data field of the chunk is restricted to 2^31-1 bytes in size
+          check if chunk fits in buffer  error: size of the in buffer too small to contain next chunk  IDAT chunk, containing compressed image data
+         * there may be more than 1 IDAT chunk, complete
+         * compressed stream is concatenation of consecutive
+         * chunks data
+          copy compressed data IEND chunkpalette chunk (PLTE)error: palette too bigRGBalphapalette transparency chunk (tRNS) error: more alpha values given than there are palette
+                     * entries
+                      copy alpha informations for palette colors  error: this chunk must be 2 bytes for greyscale image  transparent color definition  error: this chunk must be 6 bytes for RGB image  transparent color definition  error: tRNS chunk not allowed for other color models background color chunk (bKGD) error: this chunk must be 1 byte for indexed color image  error: this chunk must be 2 bytes for greyscale image  error: this chunk must be 6 bytes for greyscale image  it's not an implemented chunk type,
+             * so ignore it (unless it is critical)
+             * skip over the data
+              error: unknown critical chunk 
+                 * (5th bit of first byte of chunk type is 0)
+                 check CRC if wanted, only on known chunk types ptr to buffer just after concatenated IDATs  decompress with the Zlib decompressor
+         * decompressor updates scanlines_size to actual size
+         * of decompressed data
+          possible memory saving (at cost of memcpy)
+         * memcpy(decoder->buf - scanlines_size, 
+         *        scanlines,
+         *        scanlines_size * sizeof(uint8_t));
+         * this will free compressed IDATs and 
+         * will trash raw PNG file (it is trashed anyway
+          size of decoded image in bytes rounded up  at this time buffer contains:
+             * compressed IDATs
+             * decompressed IDATs
+             * png raw file at the end of the buffer (not needed any more )
+              ptr to decoded png image
+             * this will overwrite raw png file loaded into memory
+             * decoded image is put in the end of allocated buffer
+              clear memory as filters assume 0'ed memory  Public functions  read the information from the header and store it in the decoder
+ * context struct
+ * value is error
+  the given data is empty error: the data length is smaller than the length of the header when decoding a new PNG image, make sure all parameters created after
+     * previous decoding are reset
+      error: the first 8 bytes are not the correct PNG signature  error: it doesn't start with a IHDR chunk!  read the values given in the header  get the value from the chunk's crc field  calculate crc of the header chunk  error: only compression method 0 is allowed in the specification  error: only filter method 0 is allowed in the specification  error: only interlace methods 0 and 1 exist in the specification  check validity of colortype and bitdepth combination  parse header  Check memory available against worst case where
+     * we have to have decoded PNG image
+     * and converted to the native pixel format image
+     * in buffer at the same time (do we realy need that much?)
+      one line more as temp buffer for conversion  put decoded png data (pure 2D array of pixels in format
+     * defined by PNG header at the end of the allocated buffer
+      convert decoded png data into native rockbox
+     * pixel format (native LCD data for color
+     * or greylib pixel format for greyscale)
+     *
+     * converted image will be put at the begining
+     * of the allocated buffer
+      correct aspect ratio  scaler vars  recalc_dimensions vars  size of the image after correction  defined in apps/recorder/resize.c  calculate 'corrected' image size  check memory constraints
+         * do the correction only if there is enough
+         * free memory
+          scale the bitmap to correct physical
+             * pixel dimentions
+              update decoder struct  copy back corrected image to the begining of the buffer  (LCD_PIXEL_ASPECT_HEIGHT != 1 || LCD_PIXEL_ASPECT_WIDTH != 1) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$id $
+ *
+ * Copyright (C) 2009 by Christophe Gouiran <bechris13250 -at- gmail -dot- com>
+ *
+ * Based on lodepng, a lightweight png decoder/encoder
+ * (c) 2005-2008 Lode Vandevenne
+ *
+ * Copyright (c) 2010 Marcin Bukat
+ *  - pixel format conversion & transparency handling
+ *  - adaptation of tinf (tiny inflate library)
+ *  - code refactoring & cleanups
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+LodePNG version 20080927
+
+Copyright (c) 2005-2008 Lode Vandevenne
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+
+    2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+    3. This notice may not be removed or altered from any source
+    distribution.
+
+The manual and changelog can be found in the header file "lodepng.h"
+You are free to name this file lodepng.cpp or lodepng.c depending on your usage.
+ supported chunk types:
+ * critical:
+ *     IHDR
+ *     PLTE
+ *     IDAT
+ *     IEND
+ *
+ * ancillary:
+ *     tRNS
+ *     bKGD
+ 272829303132333435363738394041424344454647484950515253545556575859606162636465666768697071727374
+The two functions below (LodePNG_decompress and LodePNG_compress) directly call the
+LodeZlib_decompress and LodeZlib_compress functions. The only purpose of the functions
+below, is to provide the ability to let LodePNG use a different Zlib encoder by only
+changing the two functions below, instead of changing it inside the vareous places
+in the other LodePNG functions.
+
+*out must be NULL and *outsize must be 0 initially, and after the function is done,
+*out must point to the decompressed data, *outsize must be the size of it, and must
+be the size of the useful data in bytes, not the alloc size.
+ //////////////////////////////////////////////////////////////////////////  / Reading and writing single bits and bytes from/to stream for LodePNG   /  //////////////////////////////////////////////////////////////////////////  the current bit in bitstream must be 0 for this to work
+     * earlier bit of huffman code is in a lesser significant bit
+     * of an earlier byte
+      the current bit in bitstream may be 0 or 1 for this to work  //////////////////////////////////////////////////////////////////////////  / PNG chunks                                                             /  //////////////////////////////////////////////////////////////////////////  get the length of the data of the chunk.
+ * Total chunk length has 12 bytes more.
+  check if the type is the given type  chunk type field: A 4-byte chunk type code. For convenience in 
+     * description and in examining PNG files, type codes are restricted
+     * to consist of uppercase and lowercase ASCII letters 
+     * (A-Z and a-z, or 65-90 and 97-122 decimal). However, encoders and
+     * decoders must treat the codes as fixed binary values, not character
+     * strings."
+      properties of PNG chunks gotten from capitalization of chunk type name,
+ * as defined by the standard
+ * 0: ancillary chunk
+ * 1: critical chunk type
+  0: public, 1: private  get pointer to the data of the chunk  returns 0 if the crc is correct, error code if it's incorrect  the CRC is taken of the data and the 4 chunk type letters,
+     * not the length
+      don't use on IEND chunk, as there is no next chunk then  //////////////////////////////////////////////////////////////////////////  / Color types and such                                                   /  //////////////////////////////////////////////////////////////////////////  return type is a LodePNG error code
+ * bd - bit depth
+ greyRGBpalettegrey + alphaRGBAallowed color type / bits combinationgreyRGBpalettegrey + alphaRGBAunexisting color type bits per pixel is amount of channels * bits per channel 
+ * Convert from every colortype to rockbox native pixel format (color targets) or
+ * greylib pixel format (grey targets)
+ bitpointer, used by less-than-8-bit color types line buffer for pixel format transformation greyscale color reset line buf  full transparent RGB color tRNs & bKGD indexed color (palette) reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color tRNS and bKGD RGB color tRNS and bKGD greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent  scale value from 0 to 255 indexed color (palette) tRNS and bKGD  greyscale targets  for rgb(a) -> greyscale conversion  for rgb background -> greyscale background greyscale color transparent color defined in tRNS chunk RGB color convert background rgb color to greyscale  tRNs & bKGD  rgb -> greyscale indexed color (palette) calculate grey value of rgb background  reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color specification states that we have to compare
+                     * colors for simple transparency in 16bits
+                     * even if we scale down to 8bits later
+                      tRNS and bKGD  we take upper 8bits RGB color tRNS and bKGD  we take only upper byte of 16bit value greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent scale value from 0 to 255indexed color (palette) tRNS and bKGD Paeth predicter, used by PNG filter type 4shared values used by multiple Adam7 related functionsx start valuesy start valuesx delta valuesy delta values the passstart values have 8 values: 
+     * the 8th one actually indicates the byte after the end 
+     * of the 7th (= last) pass
+     calculate width and height in pixels of each pass if passw[i] is 0, it's 0 bytes, not 1 (no filtertype-byte)  bits padded if needed to fill full byte at end of each scanline  only padded at end of reduced image  //////////////////////////////////////////////////////////////////////////  / PNG Decoder                                                            /  //////////////////////////////////////////////////////////////////////////  For PNG filter method 0
+     * unfilter a PNG image scanline by scanline. when the pixels are smaller
+     * than 1 byte, the filter works byte per byte (bytewidth = 1)
+     *
+     * precon is the previous unfiltered scanline, recon the result,
+     * scanline the current one
+     *
+     * the incoming scanlines do NOT include the filtertype byte, that one is
+     * given in the parameter filterType instead
+     *
+     * recon and scanline MAY be the same memory address! precon must be
+     * disjoint.
+      storage space for cached portion of scanline  ptr to second element of the cache  half way  for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+        for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+        for (i = bytewidth; i < length; i++)
+            recon[i] = scanline[i] + recon[i - bytewidth];
+         first pixel  length >> 9  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+        if (precon) for (i = 0; i < length; i++)
+            recon[i] = scanline[i] + precon[i];
+         for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i] + precon[i] / 2;
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + recon[i - bytewidth] / 2;
+             first pixel  length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(0, precon[i], 0));
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(recon[i - bytewidth],
+                                                    precon[i],
+                                                    precon[i - bytewidth]));
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] +
+                                     paethPredictor(recon[i - bytewidth],
+                                                    0, 0));
+             length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline error: unexisting filter type given For PNG filter method 0
+     * this function unfilters a single image (e.g. without interlacing this is
+     * called once, with Adam7 it's called 7 times)
+     *
+     * out must have enough bytes allocated already, in must have the
+     * scanlines + 1 filtertype byte per scanline
+     *
+     * w and h are image dimensions or dimensions of reduced image,
+     * bpp is bits per pixel
+     *
+     * in and out are allowed to be the same memory address!
+      bytewidth is used for filtering, is 1 when bpp < 8,
+     * number of bytes per pixel otherwise
+      the extra filterbyte added to each row  Note: this function works on image buffers WITHOUT padding bits at end
+     * of scanlines with non-multiple-of-8 bit amounts, only between reduced
+     * images is padding
+     * out must be big enough AND must be 0 everywhere if bpp < 8
+     * in the current implementation (because that's likely a little bit faster)
+     bpp < 8: Adam7 with pixels < 8 bit is a bit trickier: with bit pointersbit pointers (for out and in buffer) note that this function assumes the out buffer 
+                         * is completely 0, use setBitOfReversedStream
+                         * otherwise After filtering there are still padding bits if scanlines have
+     * non multiple of 8 bit amounts. They need to be removed 
+     * (except at last scanline of (Adam7-reduced) image) before working
+     * with pure image buffers for the Adam7 code, the color convert code
+     * and the output to the user.
+     *
+     * in and out are allowed to be the same buffer, in may also be higher
+     * but still overlapping; in must have >= ilinebits*h bits,
+     * out must have >= olinebits*h bits, olinebits must be <= ilinebits
+     * also used to move bits after earlier such operations happened, e.g.
+     * in a sequence of reduced images from Adam7
+     * only useful if (ilinebits - olinebits) is a value in the range 1..7
+     bit pointers out must be buffer big enough to contain full image,
+ * and in must contain the full decompressed data from the IDAT chunks
+ return value is error This function converts the filtered-padded-interlaced data into pure 2D
+    * image buffer with the PNG's colortype.
+    * Steps:
+    * I) if no Adam7:
+    *     1) unfilter
+    *     2) remove padding bits (= posible extra bits per scanline if bpp < 8)
+    * II) if adam7:
+    *     1) 7x unfilter
+    *     2) 7x remove padding bits 
+    *     3) Adam7_deinterlace
+    *
+    * NOTE: the in buffer will be overwritten with intermediate data!
+    error: invalid colortype we can immediatly filter into the out buffer,
+             * no other steps needed
+             interlaceMethod is 1 (Adam7) TODO: possible efficiency improvement: if in this reduced
+             * image the bits fit nicely in 1 scanline, move bytes instead
+             * of bits or move not at all
+              remove padding bits in scanlines; after this there still
+                 * may be padding bits between the different reduced images:
+                 * each reduced image still starts nicely at a byte
+                  read a PNG, the result will be in the same color type as the PNG
+ * (hence "generic")
+  chunk length the data in the chunk allocated buffer  for unknown chunk order  the given data is empty first byte of the first chunk after the header loop through the chunks, ignoring unknown chunks and stopping at IEND
+     *  chunk. IDAT data is put at the start of the in buffer
+      minimal size of chunk is 12 bytes  error: size of the in buffer too small to contain next chunk  length of the data of the chunk, excluding the length bytes,
+         * chunk type and CRC bytes
+         *
+         * data field of the chunk is restricted to 2^31-1 bytes in size
+          check if chunk fits in buffer  error: size of the in buffer too small to contain next chunk  IDAT chunk, containing compressed image data
+         * there may be more than 1 IDAT chunk, complete
+         * compressed stream is concatenation of consecutive
+         * chunks data
+          copy compressed data IEND chunkpalette chunk (PLTE)error: palette too bigRGBalphapalette transparency chunk (tRNS) error: more alpha values given than there are palette
+                     * entries
+                      copy alpha informations for palette colors  error: this chunk must be 2 bytes for greyscale image  transparent color definition  error: this chunk must be 6 bytes for RGB image  transparent color definition  error: tRNS chunk not allowed for other color models background color chunk (bKGD) error: this chunk must be 1 byte for indexed color image  error: this chunk must be 2 bytes for greyscale image  error: this chunk must be 6 bytes for greyscale image  it's not an implemented chunk type,
+             * so ignore it (unless it is critical)
+             * skip over the data
+              error: unknown critical chunk 
+                 * (5th bit of first byte of chunk type is 0)
+                 check CRC if wanted, only on known chunk types ptr to buffer just after concatenated IDATs  decompress with the Zlib decompressor
+         * decompressor updates scanlines_size to actual size
+         * of decompressed data
+          possible memory saving (at cost of memcpy)
+         * memcpy(decoder->buf - scanlines_size, 
+         *        scanlines,
+         *        scanlines_size * sizeof(uint8_t));
+         * this will free compressed IDATs and 
+         * will trash raw PNG file (it is trashed anyway
+          size of decoded image in bytes rounded up  at this time buffer contains:
+             * compressed IDATs
+             * decompressed IDATs
+             * png raw file at the end of the buffer (not needed any more )
+              ptr to decoded png image
+             * this will overwrite raw png file loaded into memory
+             * decoded image is put in the end of allocated buffer
+              clear memory as filters assume 0'ed memory  Public functions  read the information from the header and store it in the decoder
+ * context struct
+ * value is error
+  the given data is empty error: the data length is smaller than the length of the header when decoding a new PNG image, make sure all parameters created after
+     * previous decoding are reset
+      error: the first 8 bytes are not the correct PNG signature  error: it doesn't start with a IHDR chunk!  read the values given in the header  get the value from the chunk's crc field  calculate crc of the header chunk  error: only compression method 0 is allowed in the specification  error: only filter method 0 is allowed in the specification  error: only interlace methods 0 and 1 exist in the specification  check validity of colortype and bitdepth combination  parse header  Check memory available against worst case where
+     * we have to have decoded PNG image
+     * and converted to the native pixel format image
+     * in buffer at the same time (do we realy need that much?)
+      one line more as temp buffer for conversion  put decoded png data (pure 2D array of pixels in format
+     * defined by PNG header at the end of the allocated buffer
+      convert decoded png data into native rockbox
+     * pixel format (native LCD data for color
+     * or greylib pixel format for greyscale)
+     *
+     * converted image will be put at the begining
+     * of the allocated buffer
+      correct aspect ratio  scaler vars  recalc_dimensions vars  size of the image after correction  defined in apps/recorder/resize.c  calculate 'corrected' image size  check memory constraints
+         * do the correction only if there is enough
+         * free memory
+          scale the bitmap to correct physical
+             * pixel dimentions
+              update decoder struct  copy back corrected image to the begining of the buffer  (LCD_PIXEL_ASPECT_HEIGHT != 1 || LCD_PIXEL_ASPECT_WIDTH != 1) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$id $
+ *
+ * Copyright (C) 2009 by Christophe Gouiran <bechris13250 -at- gmail -dot- com>
+ *
+ * Based on lodepng, a lightweight png decoder/encoder
+ * (c) 2005-2008 Lode Vandevenne
+ *
+ * Copyright (c) 2010 Marcin Bukat
+ *  - pixel format conversion & transparency handling
+ *  - adaptation of tinf (tiny inflate library)
+ *  - code refactoring & cleanups
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+LodePNG version 20080927
+
+Copyright (c) 2005-2008 Lode Vandevenne
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+
+    2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+    3. This notice may not be removed or altered from any source
+    distribution.
+
+The manual and changelog can be found in the header file "lodepng.h"
+You are free to name this file lodepng.cpp or lodepng.c depending on your usage.
+ supported chunk types:
+ * critical:
+ *     IHDR
+ *     PLTE
+ *     IDAT
+ *     IEND
+ *
+ * ancillary:
+ *     tRNS
+ *     bKGD
+ 272829303132333435363738394041424344454647484950515253545556575859606162636465666768697071727374
+The two functions below (LodePNG_decompress and LodePNG_compress) directly call the
+LodeZlib_decompress and LodeZlib_compress functions. The only purpose of the functions
+below, is to provide the ability to let LodePNG use a different Zlib encoder by only
+changing the two functions below, instead of changing it inside the vareous places
+in the other LodePNG functions.
+
+*out must be NULL and *outsize must be 0 initially, and after the function is done,
+*out must point to the decompressed data, *outsize must be the size of it, and must
+be the size of the useful data in bytes, not the alloc size.
+ //////////////////////////////////////////////////////////////////////////  / Reading and writing single bits and bytes from/to stream for LodePNG   /  //////////////////////////////////////////////////////////////////////////  the current bit in bitstream must be 0 for this to work
+     * earlier bit of huffman code is in a lesser significant bit
+     * of an earlier byte
+      the current bit in bitstream may be 0 or 1 for this to work  //////////////////////////////////////////////////////////////////////////  / PNG chunks                                                             /  //////////////////////////////////////////////////////////////////////////  get the length of the data of the chunk.
+ * Total chunk length has 12 bytes more.
+  check if the type is the given type  chunk type field: A 4-byte chunk type code. For convenience in 
+     * description and in examining PNG files, type codes are restricted
+     * to consist of uppercase and lowercase ASCII letters 
+     * (A-Z and a-z, or 65-90 and 97-122 decimal). However, encoders and
+     * decoders must treat the codes as fixed binary values, not character
+     * strings."
+      properties of PNG chunks gotten from capitalization of chunk type name,
+ * as defined by the standard
+ * 0: ancillary chunk
+ * 1: critical chunk type
+  0: public, 1: private  get pointer to the data of the chunk  returns 0 if the crc is correct, error code if it's incorrect  the CRC is taken of the data and the 4 chunk type letters,
+     * not the length
+      don't use on IEND chunk, as there is no next chunk then  //////////////////////////////////////////////////////////////////////////  / Color types and such                                                   /  //////////////////////////////////////////////////////////////////////////  return type is a LodePNG error code
+ * bd - bit depth
+ greyRGBpalettegrey + alphaRGBAallowed color type / bits combinationgreyRGBpalettegrey + alphaRGBAunexisting color type bits per pixel is amount of channels * bits per channel 
+ * Convert from every colortype to rockbox native pixel format (color targets) or
+ * greylib pixel format (grey targets)
+ bitpointer, used by less-than-8-bit color types line buffer for pixel format transformation greyscale color reset line buf  full transparent RGB color tRNs & bKGD indexed color (palette) reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color tRNS and bKGD RGB color tRNS and bKGD greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent  scale value from 0 to 255 indexed color (palette) tRNS and bKGD  greyscale targets  for rgb(a) -> greyscale conversion  for rgb background -> greyscale background greyscale color transparent color defined in tRNS chunk RGB color convert background rgb color to greyscale  tRNs & bKGD  rgb -> greyscale indexed color (palette) calculate grey value of rgb background  reset line buf  tRNS and bKGD greyscale with alphaRGB with alphagreyscale color specification states that we have to compare
+                     * colors for simple transparency in 16bits
+                     * even if we scale down to 8bits later
+                      tRNS and bKGD  we take upper 8bits RGB color tRNS and bKGD  we take only upper byte of 16bit value greyscale with alphaRGB with alphainfoIn->bitDepth is less than 8 bit per channelgreyscale color tRNS and bKGD  full transparent scale value from 0 to 255indexed color (palette) tRNS and bKGD Paeth predicter, used by PNG filter type 4shared values used by multiple Adam7 related functionsx start valuesy start valuesx delta valuesy delta values the passstart values have 8 values: 
+     * the 8th one actually indicates the byte after the end 
+     * of the 7th (= last) pass
+     calculate width and height in pixels of each pass if passw[i] is 0, it's 0 bytes, not 1 (no filtertype-byte)  bits padded if needed to fill full byte at end of each scanline  only padded at end of reduced image  //////////////////////////////////////////////////////////////////////////  / PNG Decoder                                                            /  //////////////////////////////////////////////////////////////////////////  For PNG filter method 0
+     * unfilter a PNG image scanline by scanline. when the pixels are smaller
+     * than 1 byte, the filter works byte per byte (bytewidth = 1)
+     *
+     * precon is the previous unfiltered scanline, recon the result,
+     * scanline the current one
+     *
+     * the incoming scanlines do NOT include the filtertype byte, that one is
+     * given in the parameter filterType instead
+     *
+     * recon and scanline MAY be the same memory address! precon must be
+     * disjoint.
+      storage space for cached portion of scanline  ptr to second element of the cache  half way  for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+        for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+        for (i = bytewidth; i < length; i++)
+            recon[i] = scanline[i] + recon[i - bytewidth];
+         first pixel  length >> 9  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+        if (precon) for (i = 0; i < length; i++)
+            recon[i] = scanline[i] + precon[i];
+         for(i = 0; i < length; i++) recon[i] = scanline[i]; 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i] + precon[i] / 2;
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + recon[i - bytewidth] / 2;
+             first pixel  length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(0, precon[i], 0));
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] + 
+                                     paethPredictor(recon[i - bytewidth],
+                                                    precon[i],
+                                                    precon[i - bytewidth]));
+             length/256  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline 
+            for(i =         0; i < bytewidth; i++) recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (uint8_t)(scanline[i] +
+                                     paethPredictor(recon[i - bytewidth],
+                                                    0, 0));
+             length/512  cache part of scanline  filtering  copy part of filtered scanline  adjust pointers  copy last pixel back to the begining of the cache  less than our cache size  cache last part of the scanline  filtering  copy remaining part of the filtered scanline error: unexisting filter type given For PNG filter method 0
+     * this function unfilters a single image (e.g. without interlacing this is
+     * called once, with Adam7 it's called 7 times)
+     *
+     * out must have enough bytes allocated already, in must have the
+     * scanlines + 1 filtertype byte per scanline
+     *
+     * w and h are image dimensions or dimensions of reduced image,
+     * bpp is bits per pixel
+     *
+     * in and out are allowed to be the same memory address!
+      bytewidth is used for filtering, is 1 when bpp < 8,
+     * number of bytes per pixel otherwise
+      the extra filterbyte added to each row  Note: this function works on image buffers WITHOUT padding bits at end
+     * of scanlines with non-multiple-of-8 bit amounts, only between reduced
+     * images is padding
+     * out must be big enough AND must be 0 everywhere if bpp < 8
+     * in the current implementation (because that's likely a little bit faster)
+     bpp < 8: Adam7 with pixels < 8 bit is a bit trickier: with bit pointersbit pointers (for out and in buffer) note that this function assumes the out buffer 
+                         * is completely 0, use setBitOfReversedStream
+                         * otherwise After filtering there are still padding bits if scanlines have
+     * non multiple of 8 bit amounts. They need to be removed 
+     * (except at last scanline of (Adam7-reduced) image) before working
+     * with pure image buffers for the Adam7 code, the color convert code
+     * and the output to the user.
+     *
+     * in and out are allowed to be the same buffer, in may also be higher
+     * but still overlapping; in must have >= ilinebits*h bits,
+     * out must have >= olinebits*h bits, olinebits must be <= ilinebits
+     * also used to move bits after earlier such operations happened, e.g.
+     * in a sequence of reduced images from Adam7
+     * only useful if (ilinebits - olinebits) is a value in the range 1..7
+     bit pointers out must be buffer big enough to contain full image,
+ * and in must contain the full decompressed data from the IDAT chunks
+ return value is error This function converts the filtered-padded-interlaced data into pure 2D
+    * image buffer with the PNG's colortype.
+    * Steps:
+    * I) if no Adam7:
+    *     1) unfilter
+    *     2) remove padding bits (= posible extra bits per scanline if bpp < 8)
+    * II) if adam7:
+    *     1) 7x unfilter
+    *     2) 7x remove padding bits 
+    *     3) Adam7_deinterlace
+    *
+    * NOTE: the in buffer will be overwritten with intermediate data!
+    error: invalid colortype we can immediatly filter into the out buffer,
+             * no other steps needed
+             interlaceMethod is 1 (Adam7) TODO: possible efficiency improvement: if in this reduced
+             * image the bits fit nicely in 1 scanline, move bytes instead
+             * of bits or move not at all
+              remove padding bits in scanlines; after this there still
+                 * may be padding bits between the different reduced images:
+                 * each reduced image still starts nicely at a byte
+                  read a PNG, the result will be in the same color type as the PNG
+ * (hence "generic")
+  chunk length the data in the chunk allocated buffer  for unknown chunk order  the given data is empty first byte of the first chunk after the header loop through the chunks, ignoring unknown chunks and stopping at IEND
+     *  chunk. IDAT data is put at the start of the in buffer
+      minimal size of chunk is 12 bytes  error: size of the in buffer too small to contain next chunk  length of the data of the chunk, excluding the length bytes,
+         * chunk type and CRC bytes
+         *
+         * data field of the chunk is restricted to 2^31-1 bytes in size
+          check if chunk fits in buffer  error: size of the in buffer too small to contain next chunk  IDAT chunk, containing compressed image data
+         * there may be more than 1 IDAT chunk, complete
+         * compressed stream is concatenation of consecutive
+         * chunks data
+          copy compressed data IEND chunkpalette chunk (PLTE)error: palette too bigRGBalphapalette transparency chunk (tRNS) error: more alpha values given than there are palette
+                     * entries
+                      copy alpha informations for palette colors  error: this chunk must be 2 bytes for greyscale image  transparent color definition  error: this chunk must be 6 bytes for RGB image  transparent color definition  error: tRNS chunk not allowed for other color models background color chunk (bKGD) error: this chunk must be 1 byte for indexed color image  error: this chunk must be 2 bytes for greyscale image  error: this chunk must be 6 bytes for greyscale image  it's not an implemented chunk type,
+             * so ignore it (unless it is critical)
+             * skip over the data
+              error: unknown critical chunk 
+                 * (5th bit of first byte of chunk type is 0)
+                 check CRC if wanted, only on known chunk types ptr to buffer just after concatenated IDATs  decompress with the Zlib decompressor
+         * decompressor updates scanlines_size to actual size
+         * of decompressed data
+          possible memory saving (at cost of memcpy)
+         * memcpy(decoder->buf - scanlines_size, 
+         *        scanlines,
+         *        scanlines_size * sizeof(uint8_t));
+         * this will free compressed IDATs and 
+         * will trash raw PNG file (it is trashed anyway
+          size of decoded image in bytes rounded up  at this time buffer contains:
+             * compressed IDATs
+             * decompressed IDATs
+             * png raw file at the end of the buffer (not needed any more )
+              ptr to decoded png image
+             * this will overwrite raw png file loaded into memory
+             * decoded image is put in the end of allocated buffer
+              clear memory as filters assume 0'ed memory  Public functions  read the information from the header and store it in the decoder
+ * context struct
+ * value is error
+  the given data is empty error: the data length is smaller than the length of the header when decoding a new PNG image, make sure all parameters created after
+     * previous decoding are reset
+      error: the first 8 bytes are not the correct PNG signature  error: it doesn't start with a IHDR chunk!  read the values given in the header  get the value from the chunk's crc field  calculate crc of the header chunk  error: only compression method 0 is allowed in the specification  error: only filter method 0 is allowed in the specification  error: only interlace methods 0 and 1 exist in the specification  check validity of colortype and bitdepth combination  parse header  Check memory available against worst case where
+     * we have to have decoded PNG image
+     * and converted to the native pixel format image
+     * in buffer at the same time (do we realy need that much?)
+      one line more as temp buffer for conversion  put decoded png data (pure 2D array of pixels in format
+     * defined by PNG header at the end of the allocated buffer
+      convert decoded png data into native rockbox
+     * pixel format (native LCD data for color
+     * or greylib pixel format for greyscale)
+     *
+     * converted image will be put at the begining
+     * of the allocated buffer
+      correct aspect ratio  scaler vars  recalc_dimensions vars  size of the image after correction  defined in apps/recorder/resize.c  calculate 'corrected' image size  check memory constraints
+         * do the correction only if there is enough
+         * free memory
+          scale the bitmap to correct physical
+             * pixel dimentions
+              update decoder struct  copy back corrected image to the begining of the buffer  (LCD_PIXEL_ASPECT_HEIGHT != 1 || LCD_PIXEL_ASPECT_WIDTH != 1) 

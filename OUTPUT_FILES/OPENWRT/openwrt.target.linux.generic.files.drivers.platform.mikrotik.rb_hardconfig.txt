@@ -130,4 +130,70 @@
  * is not the fastest way to do this, but since the data is rarely read (mainly
  * at boot time to load wlan caldata), this makes it possible to save memory for
  * the system.
+  Don't bother unpacking if the source is already too large  TODO allow override Check we have what we expect  Skip magic  Populate sysfs  Locate and publish all known tags  Account for skipped magic  Special case RB_ID_WLAN_DATA to prep and create the binary attribute  All other tags are published via standard attributes  SPDX-License-Identifier: GPL-2.0-only
+ * Driver for MikroTik RouterBoot hard config.
+ *
+ * Copyright (C) 2020 Thibaut VARÈNE <hacks+kernel@slashdirt.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
+ *
+ * This driver exposes the data encoded in the "hard_config" flash segment of
+ * MikroTik RouterBOARDs devices. It presents the data in a sysfs folder
+ * named "hard_config". The WLAN calibration data is available on demand via
+ * the 'wlan_data' sysfs file in that folder.
+ *
+ * This driver permanently allocates a chunk of RAM as large as the hard_config
+ * MTD partition, although it is technically possible to operate entirely from
+ * the MTD device without using a local buffer (except when requesting WLAN
+ * calibration data), at the cost of a performance penalty.
+ *
+ * Note: PAGE_SIZE is assumed to be >= 4K, hence the device attribute show
+ * routines need not check for output overflow.
+ *
+ * Some constant defines extracted from routerboot.{c,h} by Gabor Juhos
+ * <juhosg@openwrt.org>
+  ID values for hardware settings  Bit definitions for hardware options  ro buffer after init(): no locking required
+ * For LZOR style WLAN data unpacking.
+ * This binary blob is prepended to the data encoded on some devices as
+ * RB_ID_WLAN_DATA, the result is then first decompressed with LZO, and then
+ * finally RLE-decoded.
+ * This binary blob has been extracted from RouterOS by
+ * https://forum.openwrt.org/u/ius
+  Array of known hw_options bits with human-friendly parsing 
+ * The MAC is stored network-endian on all devices, in 2 32-bit segments:
+ * <XX:XX:XX:XX> <XX:XX:00:00>. Kernel print has us covered.
+ 
+ * Print HW options in a human readable way:
+ * The raw number and in decoded form
+  cpu-endian Array of known tags to publish in sysfs 
+ * If the RB_ID_WLAN_DATA payload starts with RB_MAGIC_ERD, then past
+ * that magic number the payload itself contains a routerboot tag node
+ * locating the LZO-compressed calibration data at id 0x1.
+  Find embedded tag  always id 1
+ * If the RB_ID_WLAN_DATA payload starts with RB_MAGIC_LZOR, then past
+ * that magic number is a payload that must be appended to the hc_lzor_prefix,
+ * the resulting blob is LZO-compressed. In the LZO decompression result,
+ * the RB_MAGIC_ERD magic number (aligned) must be located. Following that
+ * magic, there is a routerboot tag node (id 0x1) locating the RLE-encoded
+ * calibration data payload.
+  Temporary buffer same size as the outbuf  Concatenate into the outbuf  LZO-decompress lzo_len bytes of outbuf into the tempbuf 
+			 * The tag length appears to always be aligned (probably
+			 * because it is the "root" RB_ID_WLAN_DATA tag), thus
+			 * the LZO payload may be padded, which can trigger a
+			 * spurious error which we ignore here.
+			 
+	 * Post decompression we have a blob (possibly byproduct of the lzo
+	 * dictionary). We need to find RB_MAGIC_ERD. The magic number seems to
+	 * be 32bit-aligned in the decompression output.
+	  Past magic. Look for tag node  RLE-decode tempbuf from needle back into the outbuf  Caller ensure tlen > 0. tofs is aligned  Skip magic  Skip magic 
+		 * If the RB_ID_WLAN_DATA payload doesn't start with a
+		 * magic number, the payload itself is the raw RLE-encoded
+		 * calibration data.
+		 
+ * This function will allocate and free memory every time it is called. This
+ * is not the fastest way to do this, but since the data is rarely read (mainly
+ * at boot time to load wlan caldata), this makes it possible to save memory for
+ * the system.
   Don't bother unpacking if the source is already too large  TODO allow override Check we have what we expect  Skip magic  Populate sysfs  Locate and publish all known tags  Account for skipped magic  Special case RB_ID_WLAN_DATA to prep and create the binary attribute  All other tags are published via standard attributes 

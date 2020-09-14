@@ -1,0 +1,169 @@
+ Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Preparation of data for rendering,
+ *      generation of lookups, caching, retrieval by name.
+ *
+ *-----------------------------------------------------------------------------#include "lprintf.h"  // jff 08/03/98 - declaration of lprintf Graphics. DOOM graphics for walls and sprites is stored in vertical runs of opaque pixels (posts). A column is composed of zero or more posts, a patch or sprite is composed of zero or more columns. Texture definition. Each texture is composed of one or more patches, with patches being lumps stored in the WAD. The lumps are referenced by number, and patched into the rectangular texture space using origin and possibly other attributes. unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Boom Phase 2 A maptexturedef_t describes a rectangular texture, which is composed of one or more mappatch_t structures that arrange graphic patches. killough 4/17/98: make firstcolormaplump,lastcolormaplump external killough 4/17/98needed for texture pegging (and TFE fix - killough) for global animation needed for pre-rendering MAPTEXTURE_T CACHING When a texture is first needed,  it counts the number of composite columns  required in the texture and allocates space  for a column directory and any new columns. The directory will simply point inside other patches  if there is only one patch in a given column,  but any columns with multiple patches  will have new column_ts generated. R_DrawColumnInCache Clip and draw a column  from a patch into a cached post. Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: remember which cells in column have been drawn, so that column can later be converted into a series of posts, to fix the Medusa bug. R_GenerateComposite Using the texture definition,  the composite texture is created from the patches,  and each column is cached. Rewritten by Lee Killough for performance and to fix Medusa bug Composite the columns together. killough 4/9/98: make 32-bit killough 4/9/98: marks to identify transparent regions in merged textures cph Column has multiple patches? killough 1/25/98, 4/9/98: Fix medusa bug. cph - unlock the patch lump killough 4/9/98: Next, convert multipatched columns into true columns, to fix Medusa bug while still allowing for transparent regions. temporary column process only multipatched columns cached column save column in temporary so we can shuffle it around reconstruct the column by scanning transparency marks skip transparent cells if at end of column end-of-column marker starting offset of post count opaque cells copy opaque cells from the temporary back into the column next post free temporary column free transparency marks Now that the texture has been built in column cache, it is purgable from zone memory. R_GenerateLookup Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof CPhipps - moved allocing here killough 4/9/98: keep count of posts in addition to patches. Part of fix for medusa bug for multipatched 2s normals. killough 4/9/98: keep a count of the number of posts in column, to fix Medusa bug while allowing for transparent multipatches. Composited texture not created yet. Now count the number of columns  that are covered by more than one patch. Fill in the lump / offset, so columns  with only a single patch are all done. killough 4/9/98jff 8/3/98 use logical output routine killough 4/9/98 killough 1/25/98, 4/9/98: Fix Medusa bug, by adding room for column header and trailer bytes for each post in merged column. For now, just allocate conservatively 4 bytes per post per patch per column, since we don't yet know how many posts the merged column will require, and it's bounded above by this limit. mark lump as multipatched three header bytes in a column 1 stop byte plus 4 bytes per post height bytes of texture data killough 4/9/98 R_GetColumn cph - WARNING: must be after the above line cph - remember the last lump, so we can unlock it if no longer needed,  or reuse it if possible to reduce lump locking/unlocking cph - force equal cph - must change the cached lump R_InitTextures Initializes the texture list  with the textures from the world map. cph - new wad lump handling cph - const*'s Load the patch names from pnames.lmp. killough killough 4/17/98: Some wads use sprites as wall patches, so repeat check and look for sprites this time, but only if there were no wall patches found. This is the same as allowing for both, except that wall patches always win over sprites, even when they appear first in a wad. This is a kludgy solution to the wad lump namespace problem.jff 8/3/98 use logical output routine cph - release the lump Load the map texture definitions from textures.lmp. The data is contained in one or two lumps,  TEXTURE1 for shareware, plus TEXTURE2 for commercial. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof Start looking in second texture file. Mattias Engdegård emailed me of the following explenation of
+       * why memcpy doesnt work on some systems:
+       * "I suppose it is the mad unaligned allocation
+       * going on (and which gcc in some way manages to cope with
+       * through the __attribute__ ((packed))), and which it forgets
+       * when optimizing memcpy (to a single word move) since it appears
+       * to be aligned. Technically a gcc bug, but I can't blame it when
+       * it's stressed with that amount of
+       * non-standard nonsense."
+      * So in short the unaligned struct confuses gcc's optimizer so
+      * i took the memcpy out alltogether to avoid future problems-Jess
+        The above was #ifndef SPARC, but i got a mail from
+       * Putera Joseph F NPRI <PuteraJF@Npt.NUWC.Navy.Mil> containing:
+       *   I had to use the memcpy function on a sparc machine.  The
+       *   other one would give me a core dump.
+       * cph - I find it hard to believe that sparc memcpy is broken,
+       * but I don't believe the pointers to memcpy have to be aligned
+       * either. Use fast memcpy on other machines anyway.
+       
+        proff - I took this out, because Oli Kraus (olikraus@yahoo.com) told
+        me the memcpy produced a buserror. Since this function isn't time-
+        critical I'm using the for loop now.
+      
+      #ifndef GCC
+            memcpy(texture->name, mtexture->name, sizeof(texture->name));
+      #else
+       #endif jff 8/3/98 use logical output routine killough 4/17/98 killough cph - release the TEXTUREx lumps Precalculate whatever possible. cph - If in development mode, generate now so all errors are found at once Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof killough 1/31/98: Initialize texture hash table Prepend to chain R_InitFlats Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof R_InitSpriteLumps Finds the width and hoffset of all sprites in the wad, so the sprite does not need to be cached completely just for having the header info ready during rendering. killough 4/9/98: make columnd offsets 32-bit; clean up malloc-ing to use sizeof R_InitColormaps killough 3/20/98: rewritten to allow dynamic colormaps and to remove unnecessary 256-byte alignment killough 4/4/98: Add support for C_START/C_END markers cph - always lock killough 4/4/98: get colormap number from name killough 4/11/98: changed to return -1 for illegal names killough 4/17/98: changed to use ns_colormaps tag COLORMAP predefined to return 0 R_InitTranMap Initialize translucency filter map By Lee Killough 2/21/98 filter percent number of fixed point digits in filter percent  If a tranlucency filter map lump is present, use it Set a pointer to the translucency filter maps. killough 4/11/98 Compose a default transparent filter map based on PLAYPAL. killough 4/11/98 Use cached translucency filter if it's available killough 4/11/98 This was a bunch of static varibles, way too big for rockbox First, convert playpal into long int type, and transpose array, for fast inner-loop calculations. Precompute tot array. Next, compute all entries using minimum arithmetic.jff 8/3/98 use logical output routine Free this beast write out the cached translucency map CPhipps - leave close for a few lines... killough 11/98: fix filehandle leak R_InitData Locates all the lumps  that will be used by all views Must be called after W_Init. killough 3/1/98 R_FlatNumForName Retrieval, get a flat number for a flat name. killough 4/17/98: changed to use ns_flats namespace killough -- const added R_CheckTextureNumForName Check whether texture is available. Filter out NoTexture indicator. Rewritten by Lee Killough to use hash table for fast lookup. Considerably reduces the time needed to start new levels. See w_wad.c for comments on the hashing algorithm, which is also used for lump searches. killough 1/21/98, 1/31/98 "NoTexture" marker. R_TextureNumForName Calls R_CheckTextureNumForName,  aborts with error message. const added -- killough R_PrecacheLevel Preloads all relevant graphics for the level. Totally rewritten by Lee Killough to use less memory, to avoid using alloca(), and to improve performance. cph - new wad lump handling, calls cache functions but acquires no locks Structures from p_spec.c Used to fully cache animations in the level -> avoids stalls on Hard Drive Systems Precache flats. If flat is an animation, load those too Definately not the most efficient, but better then stalls in game Precache textures. If texture is an animation, load those too Definately not the most efficient, but better then stalls in game Sky texture is always present. Note that F_SKY1 is the name used to  indicate a sky floor/ceiling as a flat,  while the sky texture is stored like  a wall texture, with an episode dependend  name. Precache sprites. Proff - Added for OpenGL Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Preparation of data for rendering,
+ *      generation of lookups, caching, retrieval by name.
+ *
+ *-----------------------------------------------------------------------------#include "lprintf.h"  // jff 08/03/98 - declaration of lprintf Graphics. DOOM graphics for walls and sprites is stored in vertical runs of opaque pixels (posts). A column is composed of zero or more posts, a patch or sprite is composed of zero or more columns. Texture definition. Each texture is composed of one or more patches, with patches being lumps stored in the WAD. The lumps are referenced by number, and patched into the rectangular texture space using origin and possibly other attributes. unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Boom Phase 2 A maptexturedef_t describes a rectangular texture, which is composed of one or more mappatch_t structures that arrange graphic patches. killough 4/17/98: make firstcolormaplump,lastcolormaplump external killough 4/17/98needed for texture pegging (and TFE fix - killough) for global animation needed for pre-rendering MAPTEXTURE_T CACHING When a texture is first needed,  it counts the number of composite columns  required in the texture and allocates space  for a column directory and any new columns. The directory will simply point inside other patches  if there is only one patch in a given column,  but any columns with multiple patches  will have new column_ts generated. R_DrawColumnInCache Clip and draw a column  from a patch into a cached post. Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: remember which cells in column have been drawn, so that column can later be converted into a series of posts, to fix the Medusa bug. R_GenerateComposite Using the texture definition,  the composite texture is created from the patches,  and each column is cached. Rewritten by Lee Killough for performance and to fix Medusa bug Composite the columns together. killough 4/9/98: make 32-bit killough 4/9/98: marks to identify transparent regions in merged textures cph Column has multiple patches? killough 1/25/98, 4/9/98: Fix medusa bug. cph - unlock the patch lump killough 4/9/98: Next, convert multipatched columns into true columns, to fix Medusa bug while still allowing for transparent regions. temporary column process only multipatched columns cached column save column in temporary so we can shuffle it around reconstruct the column by scanning transparency marks skip transparent cells if at end of column end-of-column marker starting offset of post count opaque cells copy opaque cells from the temporary back into the column next post free temporary column free transparency marks Now that the texture has been built in column cache, it is purgable from zone memory. R_GenerateLookup Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof CPhipps - moved allocing here killough 4/9/98: keep count of posts in addition to patches. Part of fix for medusa bug for multipatched 2s normals. killough 4/9/98: keep a count of the number of posts in column, to fix Medusa bug while allowing for transparent multipatches. Composited texture not created yet. Now count the number of columns  that are covered by more than one patch. Fill in the lump / offset, so columns  with only a single patch are all done. killough 4/9/98jff 8/3/98 use logical output routine killough 4/9/98 killough 1/25/98, 4/9/98: Fix Medusa bug, by adding room for column header and trailer bytes for each post in merged column. For now, just allocate conservatively 4 bytes per post per patch per column, since we don't yet know how many posts the merged column will require, and it's bounded above by this limit. mark lump as multipatched three header bytes in a column 1 stop byte plus 4 bytes per post height bytes of texture data killough 4/9/98 R_GetColumn cph - WARNING: must be after the above line cph - remember the last lump, so we can unlock it if no longer needed,  or reuse it if possible to reduce lump locking/unlocking cph - force equal cph - must change the cached lump R_InitTextures Initializes the texture list  with the textures from the world map. cph - new wad lump handling cph - const*'s Load the patch names from pnames.lmp. killough killough 4/17/98: Some wads use sprites as wall patches, so repeat check and look for sprites this time, but only if there were no wall patches found. This is the same as allowing for both, except that wall patches always win over sprites, even when they appear first in a wad. This is a kludgy solution to the wad lump namespace problem.jff 8/3/98 use logical output routine cph - release the lump Load the map texture definitions from textures.lmp. The data is contained in one or two lumps,  TEXTURE1 for shareware, plus TEXTURE2 for commercial. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof Start looking in second texture file. Mattias Engdegård emailed me of the following explenation of
+       * why memcpy doesnt work on some systems:
+       * "I suppose it is the mad unaligned allocation
+       * going on (and which gcc in some way manages to cope with
+       * through the __attribute__ ((packed))), and which it forgets
+       * when optimizing memcpy (to a single word move) since it appears
+       * to be aligned. Technically a gcc bug, but I can't blame it when
+       * it's stressed with that amount of
+       * non-standard nonsense."
+      * So in short the unaligned struct confuses gcc's optimizer so
+      * i took the memcpy out alltogether to avoid future problems-Jess
+        The above was #ifndef SPARC, but i got a mail from
+       * Putera Joseph F NPRI <PuteraJF@Npt.NUWC.Navy.Mil> containing:
+       *   I had to use the memcpy function on a sparc machine.  The
+       *   other one would give me a core dump.
+       * cph - I find it hard to believe that sparc memcpy is broken,
+       * but I don't believe the pointers to memcpy have to be aligned
+       * either. Use fast memcpy on other machines anyway.
+       
+        proff - I took this out, because Oli Kraus (olikraus@yahoo.com) told
+        me the memcpy produced a buserror. Since this function isn't time-
+        critical I'm using the for loop now.
+      
+      #ifndef GCC
+            memcpy(texture->name, mtexture->name, sizeof(texture->name));
+      #else
+       #endif jff 8/3/98 use logical output routine killough 4/17/98 killough cph - release the TEXTUREx lumps Precalculate whatever possible. cph - If in development mode, generate now so all errors are found at once Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof killough 1/31/98: Initialize texture hash table Prepend to chain R_InitFlats Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof R_InitSpriteLumps Finds the width and hoffset of all sprites in the wad, so the sprite does not need to be cached completely just for having the header info ready during rendering. killough 4/9/98: make columnd offsets 32-bit; clean up malloc-ing to use sizeof R_InitColormaps killough 3/20/98: rewritten to allow dynamic colormaps and to remove unnecessary 256-byte alignment killough 4/4/98: Add support for C_START/C_END markers cph - always lock killough 4/4/98: get colormap number from name killough 4/11/98: changed to return -1 for illegal names killough 4/17/98: changed to use ns_colormaps tag COLORMAP predefined to return 0 R_InitTranMap Initialize translucency filter map By Lee Killough 2/21/98 filter percent number of fixed point digits in filter percent  If a tranlucency filter map lump is present, use it Set a pointer to the translucency filter maps. killough 4/11/98 Compose a default transparent filter map based on PLAYPAL. killough 4/11/98 Use cached translucency filter if it's available killough 4/11/98 This was a bunch of static varibles, way too big for rockbox First, convert playpal into long int type, and transpose array, for fast inner-loop calculations. Precompute tot array. Next, compute all entries using minimum arithmetic.jff 8/3/98 use logical output routine Free this beast write out the cached translucency map CPhipps - leave close for a few lines... killough 11/98: fix filehandle leak R_InitData Locates all the lumps  that will be used by all views Must be called after W_Init. killough 3/1/98 R_FlatNumForName Retrieval, get a flat number for a flat name. killough 4/17/98: changed to use ns_flats namespace killough -- const added R_CheckTextureNumForName Check whether texture is available. Filter out NoTexture indicator. Rewritten by Lee Killough to use hash table for fast lookup. Considerably reduces the time needed to start new levels. See w_wad.c for comments on the hashing algorithm, which is also used for lump searches. killough 1/21/98, 1/31/98 "NoTexture" marker. R_TextureNumForName Calls R_CheckTextureNumForName,  aborts with error message. const added -- killough R_PrecacheLevel Preloads all relevant graphics for the level. Totally rewritten by Lee Killough to use less memory, to avoid using alloca(), and to improve performance. cph - new wad lump handling, calls cache functions but acquires no locks Structures from p_spec.c Used to fully cache animations in the level -> avoids stalls on Hard Drive Systems Precache flats. If flat is an animation, load those too Definately not the most efficient, but better then stalls in game Precache textures. If texture is an animation, load those too Definately not the most efficient, but better then stalls in game Sky texture is always present. Note that F_SKY1 is the name used to  indicate a sky floor/ceiling as a flat,  while the sky texture is stored like  a wall texture, with an episode dependend  name. Precache sprites. Proff - Added for OpenGL Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *      Preparation of data for rendering,
+ *      generation of lookups, caching, retrieval by name.
+ *
+ *-----------------------------------------------------------------------------#include "lprintf.h"  // jff 08/03/98 - declaration of lprintf Graphics. DOOM graphics for walls and sprites is stored in vertical runs of opaque pixels (posts). A column is composed of zero or more posts, a patch or sprite is composed of zero or more columns. Texture definition. Each texture is composed of one or more patches, with patches being lumps stored in the WAD. The lumps are referenced by number, and patched into the rectangular texture space using origin and possibly other attributes. unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Phase 2 Boom unused in Doom but might be used in Boom Phase 2 A maptexturedef_t describes a rectangular texture, which is composed of one or more mappatch_t structures that arrange graphic patches. killough 4/17/98: make firstcolormaplump,lastcolormaplump external killough 4/17/98needed for texture pegging (and TFE fix - killough) for global animation needed for pre-rendering MAPTEXTURE_T CACHING When a texture is first needed,  it counts the number of composite columns  required in the texture and allocates space  for a column directory and any new columns. The directory will simply point inside other patches  if there is only one patch in a given column,  but any columns with multiple patches  will have new column_ts generated. R_DrawColumnInCache Clip and draw a column  from a patch into a cached post. Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: remember which cells in column have been drawn, so that column can later be converted into a series of posts, to fix the Medusa bug. R_GenerateComposite Using the texture definition,  the composite texture is created from the patches,  and each column is cached. Rewritten by Lee Killough for performance and to fix Medusa bug Composite the columns together. killough 4/9/98: make 32-bit killough 4/9/98: marks to identify transparent regions in merged textures cph Column has multiple patches? killough 1/25/98, 4/9/98: Fix medusa bug. cph - unlock the patch lump killough 4/9/98: Next, convert multipatched columns into true columns, to fix Medusa bug while still allowing for transparent regions. temporary column process only multipatched columns cached column save column in temporary so we can shuffle it around reconstruct the column by scanning transparency marks skip transparent cells if at end of column end-of-column marker starting offset of post count opaque cells copy opaque cells from the temporary back into the column next post free temporary column free transparency marks Now that the texture has been built in column cache, it is purgable from zone memory. R_GenerateLookup Rewritten by Lee Killough for performance and to fix Medusa bug killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof CPhipps - moved allocing here killough 4/9/98: keep count of posts in addition to patches. Part of fix for medusa bug for multipatched 2s normals. killough 4/9/98: keep a count of the number of posts in column, to fix Medusa bug while allowing for transparent multipatches. Composited texture not created yet. Now count the number of columns  that are covered by more than one patch. Fill in the lump / offset, so columns  with only a single patch are all done. killough 4/9/98jff 8/3/98 use logical output routine killough 4/9/98 killough 1/25/98, 4/9/98: Fix Medusa bug, by adding room for column header and trailer bytes for each post in merged column. For now, just allocate conservatively 4 bytes per post per patch per column, since we don't yet know how many posts the merged column will require, and it's bounded above by this limit. mark lump as multipatched three header bytes in a column 1 stop byte plus 4 bytes per post height bytes of texture data killough 4/9/98 R_GetColumn cph - WARNING: must be after the above line cph - remember the last lump, so we can unlock it if no longer needed,  or reuse it if possible to reduce lump locking/unlocking cph - force equal cph - must change the cached lump R_InitTextures Initializes the texture list  with the textures from the world map. cph - new wad lump handling cph - const*'s Load the patch names from pnames.lmp. killough killough 4/17/98: Some wads use sprites as wall patches, so repeat check and look for sprites this time, but only if there were no wall patches found. This is the same as allowing for both, except that wall patches always win over sprites, even when they appear first in a wad. This is a kludgy solution to the wad lump namespace problem.jff 8/3/98 use logical output routine cph - release the lump Load the map texture definitions from textures.lmp. The data is contained in one or two lumps,  TEXTURE1 for shareware, plus TEXTURE2 for commercial. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof Start looking in second texture file. Mattias Engdegård emailed me of the following explenation of
+       * why memcpy doesnt work on some systems:
+       * "I suppose it is the mad unaligned allocation
+       * going on (and which gcc in some way manages to cope with
+       * through the __attribute__ ((packed))), and which it forgets
+       * when optimizing memcpy (to a single word move) since it appears
+       * to be aligned. Technically a gcc bug, but I can't blame it when
+       * it's stressed with that amount of
+       * non-standard nonsense."
+      * So in short the unaligned struct confuses gcc's optimizer so
+      * i took the memcpy out alltogether to avoid future problems-Jess
+        The above was #ifndef SPARC, but i got a mail from
+       * Putera Joseph F NPRI <PuteraJF@Npt.NUWC.Navy.Mil> containing:
+       *   I had to use the memcpy function on a sparc machine.  The
+       *   other one would give me a core dump.
+       * cph - I find it hard to believe that sparc memcpy is broken,
+       * but I don't believe the pointers to memcpy have to be aligned
+       * either. Use fast memcpy on other machines anyway.
+       
+        proff - I took this out, because Oli Kraus (olikraus@yahoo.com) told
+        me the memcpy produced a buserror. Since this function isn't time-
+        critical I'm using the for loop now.
+      
+      #ifndef GCC
+            memcpy(texture->name, mtexture->name, sizeof(texture->name));
+      #else
+       #endif jff 8/3/98 use logical output routine killough 4/17/98 killough cph - release the TEXTUREx lumps Precalculate whatever possible. cph - If in development mode, generate now so all errors are found at once Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof killough 1/31/98: Initialize texture hash table Prepend to chain R_InitFlats Create translation table for global animation. killough 4/9/98: make column offsets 32-bit; clean up malloc-ing to use sizeof R_InitSpriteLumps Finds the width and hoffset of all sprites in the wad, so the sprite does not need to be cached completely just for having the header info ready during rendering. killough 4/9/98: make columnd offsets 32-bit; clean up malloc-ing to use sizeof R_InitColormaps killough 3/20/98: rewritten to allow dynamic colormaps and to remove unnecessary 256-byte alignment killough 4/4/98: Add support for C_START/C_END markers cph - always lock killough 4/4/98: get colormap number from name killough 4/11/98: changed to return -1 for illegal names killough 4/17/98: changed to use ns_colormaps tag COLORMAP predefined to return 0 R_InitTranMap Initialize translucency filter map By Lee Killough 2/21/98 filter percent number of fixed point digits in filter percent  If a tranlucency filter map lump is present, use it Set a pointer to the translucency filter maps. killough 4/11/98 Compose a default transparent filter map based on PLAYPAL. killough 4/11/98 Use cached translucency filter if it's available killough 4/11/98 This was a bunch of static varibles, way too big for rockbox First, convert playpal into long int type, and transpose array, for fast inner-loop calculations. Precompute tot array. Next, compute all entries using minimum arithmetic.jff 8/3/98 use logical output routine Free this beast write out the cached translucency map CPhipps - leave close for a few lines... killough 11/98: fix filehandle leak R_InitData Locates all the lumps  that will be used by all views Must be called after W_Init. killough 3/1/98 R_FlatNumForName Retrieval, get a flat number for a flat name. killough 4/17/98: changed to use ns_flats namespace killough -- const added R_CheckTextureNumForName Check whether texture is available. Filter out NoTexture indicator. Rewritten by Lee Killough to use hash table for fast lookup. Considerably reduces the time needed to start new levels. See w_wad.c for comments on the hashing algorithm, which is also used for lump searches. killough 1/21/98, 1/31/98 "NoTexture" marker. R_TextureNumForName Calls R_CheckTextureNumForName,  aborts with error message. const added -- killough R_PrecacheLevel Preloads all relevant graphics for the level. Totally rewritten by Lee Killough to use less memory, to avoid using alloca(), and to improve performance. cph - new wad lump handling, calls cache functions but acquires no locks Structures from p_spec.c Used to fully cache animations in the level -> avoids stalls on Hard Drive Systems Precache flats. If flat is an animation, load those too Definately not the most efficient, but better then stalls in game Precache textures. If texture is an animation, load those too Definately not the most efficient, but better then stalls in game Sky texture is always present. Note that F_SKY1 is the name used to  indicate a sky floor/ceiling as a flat,  while the sky texture is stored like  a wall texture, with an episode dependend  name. Precache sprites. Proff - Added for OpenGL

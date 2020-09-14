@@ -1,0 +1,304 @@
+
+ * guess.c: Mastermind clone.
+  must be COL_1 - 1  0 is 'empty'  may well be unused  length params->nguesses  from 0 to nguesses-1;
+                    if next_go == nguesses then they've lost.  +1 = win, -1 = lose, 0 = still playing  AFAIK this is the canonical Mastermind ruleset.  structure copy 
+     * get round annoying const issues
+      NB as well as the no. of colours we define, max(ncolours) must
+     * also fit in an unsigned char; see new_game_desc.  desc is just an (obfuscated) bitmap of the solution; check that
+     * it's the correct length and (when unobfuscated) contains only
+     * sensible colours.  half-finished current move  position of up-down colour picker cursor  position of left-right peg picker cursor  x and y are *center* of peg!  peg index, if dragged from a peg (from current guess), otherwise -1  label the colours with letters  structure copy 
+     * For this game it's worth storing the contents of the current
+     * guess, and the current set of holds.
+      NB: old versions didn't store holds  Implement holds, clear other pegs.
+     * This does something that is arguably the Right Thing even
+     * for undo.  Clean up cursor position  same size as state->guesses  only displayed if state->solved  length ncolours, not npegs  peg size (diameter), etc.  radius of peg, hint  origin of colours vertical bar  origin of guesses  origin of solution  no. of hint tiles we're wide per row  slight bit of cleverness: we have the following formula, from
+     * http://mathworld.wolfram.com/Mastermind.html that gives:
+     *
+     * nc_colour = sum(colours, min(#solution, #guess)) - nc_place
+     *
+     * I think this is due to Knuth.
+      Suggest the lexicographically first row consistent with all
+     * previous feedback.  This is not only a useful hint, but also
+     * a reasonable strategy if applied consistently.  If the user
+     * uses hints in every turn, they may be able to intuit this
+     * strategy, or one similar to it.  I (Jonas Kölker) came up
+     * with something close to it without seeing it in action.  Some performance characteristics: I want to ask for each n,
+     * how many solutions are guessed in exactly n guesses if you
+     * use the hint in each turn.
+     *
+     * With 4 pegs and 6 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     4 solutions
+     *  3 guesses:    25 solutions
+     *  4 guesses:   108 solutions
+     *  5 guesses:   305 solutions
+     *  6 guesses:   602 solutions
+     *  7 guesses:   196 solutions
+     *  8 guesses:    49 solutions
+     *  9 guesses:     6 solutions
+     * (note: the tenth guess is never necessary.)
+     *
+     * With 5 pegs and 8 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     5 solutions
+     *  3 guesses:    43 solutions
+     *  4 guesses:   278 solutions
+     *  5 guesses:  1240 solutions
+     *  6 guesses:  3515 solutions
+     *  7 guesses:  7564 solutions
+     *  8 guesses: 14086 solutions
+     *  9 guesses:  4614 solutions
+     * 10 guesses:  1239 solutions
+     * 11 guesses:   175 solutions
+     * 12 guesses:     7 solutions
+     * 13 guesses:     1 solution
+     *
+     * The solution which takes too many guesses is {8, 8, 5, 6, 7}.
+     * The game ID is c8p5g12Bm:4991e5e41a.  For large values of npegs and ncolours, the lexicographically
+     * next guess make take a while to find.  Finding upper and
+     * lower limits on which colours we have to consider will speed
+     * this up, as will caching our progress from one invocation to
+     * the next.  The latter strategy works, since if we have ruled
+     * out a candidate we will never reverse this judgment in the
+     * light of new information.  Removing information, i.e. undo,
+     * will require us to backtrack somehow.  We backtrack by fully
+     * forgetting our progress (and recomputing it if required).  a valid guess was found; install it and return  No solution is compatible with the given hints.  Impossible!  (hack new_game_desc to create invalid solutions to get here)  For some values of npegs and ncolours, the hinting function takes a
+     * long time to complete.  To visually indicate completion with failure,
+     * should it ever happen, update the ui in some trivial way.  This gives
+     * the user a sense of broken(ish)ness and futility.  one-indexed  zero-indexed  zero-indexed  zero-indexed 
+     * Enable or disable labels on colours.
+      mouse input  we use ths feedback in the game_ui to signify
+             * 'carry this peg to the next guess as well'.  NB this won't trigger if on the end of a drag; that's on
+         * purpose, in case you drop by mistake...  keyboard input  win!  lose, meaning we show the pegs.  ----------------------------------------------------------------------
+ * Drawing routines.
+  next three are multipliers for pegsz. It will look much nicer if
+ * (2*PEG_HINT) + PEG_GAP = 1.0 as the hints are formatted like that.  border  vertical colour bar  guess pegs  guess gaps  hint pegs  hint gaps  border  colour pegs  colour gaps  border  guesses plus solution  gaps plus gap above soln  radius of peg to fit in pegsz (which is 2r+1)  guesses  solution  border + colours  set_size is never called twice  red  yellow  green  blue  orange  purple  brown  light blue  light green  pink  We want to make sure we can distinguish COL_CORRECTCOLOUR
+     * (which we hard-code as white) from COL_BACKGROUND (which
+     * could default to white on some platforms).
+     * Code borrowed from fifteen.c.  We also want to be able to tell the difference between BACKGROUND
+     * and EMPTY, for similar distinguishing-hint reasons.  must round up 
+     * Some platforms antialias circles, which means we shouldn't
+     * overwrite a circle of one colour with a circle of another
+     * colour without erasing the background first. However, if the
+     * peg is the one being dragged, we don't erase the background
+     * because we _want_ it to alpha-blend nicely into whatever's
+     * behind it.
+     
+             * Hold marker.
+             
+     * Because of the possible presence of the cursor around this
+     * entire section, we redraw all or none of it but never part.
+      erase a large background rectangle  draw the colours  draw the guesses (so far) and the hints
+     * (in reverse order to avoid trampling holds, and postponing the
+     * next_go'th to not overrender the top of the circular cursor)  this info is stored in the game_state already  we've not got here yet; it's blank.  this is the one we're on; the (incomplete) guess is stored in
+	 * the game_ui.  draw the 'current move' and 'able to mark' sign.  draw the solution (or the big rectangle)  if ui->drag_col != 0, save the screen to the blitter,
+     * draw the peg where we saved, and set ds->drag_* == ui->drag_*. 
+     * We return nonzero whenever the solution has been revealed, even
+     * (on spoiler grounds) if it wasn't guessed correctly. The
+     * correct return value from this function is already in
+     * state->solved.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * guess.c: Mastermind clone.
+  must be COL_1 - 1  0 is 'empty'  may well be unused  length params->nguesses  from 0 to nguesses-1;
+                    if next_go == nguesses then they've lost.  +1 = win, -1 = lose, 0 = still playing  AFAIK this is the canonical Mastermind ruleset.  structure copy 
+     * get round annoying const issues
+      NB as well as the no. of colours we define, max(ncolours) must
+     * also fit in an unsigned char; see new_game_desc.  desc is just an (obfuscated) bitmap of the solution; check that
+     * it's the correct length and (when unobfuscated) contains only
+     * sensible colours.  half-finished current move  position of up-down colour picker cursor  position of left-right peg picker cursor  x and y are *center* of peg!  peg index, if dragged from a peg (from current guess), otherwise -1  label the colours with letters  structure copy 
+     * For this game it's worth storing the contents of the current
+     * guess, and the current set of holds.
+      NB: old versions didn't store holds  Implement holds, clear other pegs.
+     * This does something that is arguably the Right Thing even
+     * for undo.  Clean up cursor position  same size as state->guesses  only displayed if state->solved  length ncolours, not npegs  peg size (diameter), etc.  radius of peg, hint  origin of colours vertical bar  origin of guesses  origin of solution  no. of hint tiles we're wide per row  slight bit of cleverness: we have the following formula, from
+     * http://mathworld.wolfram.com/Mastermind.html that gives:
+     *
+     * nc_colour = sum(colours, min(#solution, #guess)) - nc_place
+     *
+     * I think this is due to Knuth.
+      Suggest the lexicographically first row consistent with all
+     * previous feedback.  This is not only a useful hint, but also
+     * a reasonable strategy if applied consistently.  If the user
+     * uses hints in every turn, they may be able to intuit this
+     * strategy, or one similar to it.  I (Jonas Kölker) came up
+     * with something close to it without seeing it in action.  Some performance characteristics: I want to ask for each n,
+     * how many solutions are guessed in exactly n guesses if you
+     * use the hint in each turn.
+     *
+     * With 4 pegs and 6 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     4 solutions
+     *  3 guesses:    25 solutions
+     *  4 guesses:   108 solutions
+     *  5 guesses:   305 solutions
+     *  6 guesses:   602 solutions
+     *  7 guesses:   196 solutions
+     *  8 guesses:    49 solutions
+     *  9 guesses:     6 solutions
+     * (note: the tenth guess is never necessary.)
+     *
+     * With 5 pegs and 8 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     5 solutions
+     *  3 guesses:    43 solutions
+     *  4 guesses:   278 solutions
+     *  5 guesses:  1240 solutions
+     *  6 guesses:  3515 solutions
+     *  7 guesses:  7564 solutions
+     *  8 guesses: 14086 solutions
+     *  9 guesses:  4614 solutions
+     * 10 guesses:  1239 solutions
+     * 11 guesses:   175 solutions
+     * 12 guesses:     7 solutions
+     * 13 guesses:     1 solution
+     *
+     * The solution which takes too many guesses is {8, 8, 5, 6, 7}.
+     * The game ID is c8p5g12Bm:4991e5e41a.  For large values of npegs and ncolours, the lexicographically
+     * next guess make take a while to find.  Finding upper and
+     * lower limits on which colours we have to consider will speed
+     * this up, as will caching our progress from one invocation to
+     * the next.  The latter strategy works, since if we have ruled
+     * out a candidate we will never reverse this judgment in the
+     * light of new information.  Removing information, i.e. undo,
+     * will require us to backtrack somehow.  We backtrack by fully
+     * forgetting our progress (and recomputing it if required).  a valid guess was found; install it and return  No solution is compatible with the given hints.  Impossible!  (hack new_game_desc to create invalid solutions to get here)  For some values of npegs and ncolours, the hinting function takes a
+     * long time to complete.  To visually indicate completion with failure,
+     * should it ever happen, update the ui in some trivial way.  This gives
+     * the user a sense of broken(ish)ness and futility.  one-indexed  zero-indexed  zero-indexed  zero-indexed 
+     * Enable or disable labels on colours.
+      mouse input  we use ths feedback in the game_ui to signify
+             * 'carry this peg to the next guess as well'.  NB this won't trigger if on the end of a drag; that's on
+         * purpose, in case you drop by mistake...  keyboard input  win!  lose, meaning we show the pegs.  ----------------------------------------------------------------------
+ * Drawing routines.
+  next three are multipliers for pegsz. It will look much nicer if
+ * (2*PEG_HINT) + PEG_GAP = 1.0 as the hints are formatted like that.  border  vertical colour bar  guess pegs  guess gaps  hint pegs  hint gaps  border  colour pegs  colour gaps  border  guesses plus solution  gaps plus gap above soln  radius of peg to fit in pegsz (which is 2r+1)  guesses  solution  border + colours  set_size is never called twice  red  yellow  green  blue  orange  purple  brown  light blue  light green  pink  We want to make sure we can distinguish COL_CORRECTCOLOUR
+     * (which we hard-code as white) from COL_BACKGROUND (which
+     * could default to white on some platforms).
+     * Code borrowed from fifteen.c.  We also want to be able to tell the difference between BACKGROUND
+     * and EMPTY, for similar distinguishing-hint reasons.  must round up 
+     * Some platforms antialias circles, which means we shouldn't
+     * overwrite a circle of one colour with a circle of another
+     * colour without erasing the background first. However, if the
+     * peg is the one being dragged, we don't erase the background
+     * because we _want_ it to alpha-blend nicely into whatever's
+     * behind it.
+     
+             * Hold marker.
+             
+     * Because of the possible presence of the cursor around this
+     * entire section, we redraw all or none of it but never part.
+      erase a large background rectangle  draw the colours  draw the guesses (so far) and the hints
+     * (in reverse order to avoid trampling holds, and postponing the
+     * next_go'th to not overrender the top of the circular cursor)  this info is stored in the game_state already  we've not got here yet; it's blank.  this is the one we're on; the (incomplete) guess is stored in
+	 * the game_ui.  draw the 'current move' and 'able to mark' sign.  draw the solution (or the big rectangle)  if ui->drag_col != 0, save the screen to the blitter,
+     * draw the peg where we saved, and set ds->drag_* == ui->drag_*. 
+     * We return nonzero whenever the solution has been revealed, even
+     * (on spoiler grounds) if it wasn't guessed correctly. The
+     * correct return value from this function is already in
+     * state->solved.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 
+ * guess.c: Mastermind clone.
+  must be COL_1 - 1  0 is 'empty'  may well be unused  length params->nguesses  from 0 to nguesses-1;
+                    if next_go == nguesses then they've lost.  +1 = win, -1 = lose, 0 = still playing  AFAIK this is the canonical Mastermind ruleset.  structure copy 
+     * get round annoying const issues
+      NB as well as the no. of colours we define, max(ncolours) must
+     * also fit in an unsigned char; see new_game_desc.  desc is just an (obfuscated) bitmap of the solution; check that
+     * it's the correct length and (when unobfuscated) contains only
+     * sensible colours.  half-finished current move  position of up-down colour picker cursor  position of left-right peg picker cursor  x and y are *center* of peg!  peg index, if dragged from a peg (from current guess), otherwise -1  label the colours with letters  structure copy 
+     * For this game it's worth storing the contents of the current
+     * guess, and the current set of holds.
+      NB: old versions didn't store holds  Implement holds, clear other pegs.
+     * This does something that is arguably the Right Thing even
+     * for undo.  Clean up cursor position  same size as state->guesses  only displayed if state->solved  length ncolours, not npegs  peg size (diameter), etc.  radius of peg, hint  origin of colours vertical bar  origin of guesses  origin of solution  no. of hint tiles we're wide per row  slight bit of cleverness: we have the following formula, from
+     * http://mathworld.wolfram.com/Mastermind.html that gives:
+     *
+     * nc_colour = sum(colours, min(#solution, #guess)) - nc_place
+     *
+     * I think this is due to Knuth.
+      Suggest the lexicographically first row consistent with all
+     * previous feedback.  This is not only a useful hint, but also
+     * a reasonable strategy if applied consistently.  If the user
+     * uses hints in every turn, they may be able to intuit this
+     * strategy, or one similar to it.  I (Jonas Kölker) came up
+     * with something close to it without seeing it in action.  Some performance characteristics: I want to ask for each n,
+     * how many solutions are guessed in exactly n guesses if you
+     * use the hint in each turn.
+     *
+     * With 4 pegs and 6 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     4 solutions
+     *  3 guesses:    25 solutions
+     *  4 guesses:   108 solutions
+     *  5 guesses:   305 solutions
+     *  6 guesses:   602 solutions
+     *  7 guesses:   196 solutions
+     *  8 guesses:    49 solutions
+     *  9 guesses:     6 solutions
+     * (note: the tenth guess is never necessary.)
+     *
+     * With 5 pegs and 8 colours you get the following histogram:
+     *
+     *  1 guesses:     1 solution
+     *  2 guesses:     5 solutions
+     *  3 guesses:    43 solutions
+     *  4 guesses:   278 solutions
+     *  5 guesses:  1240 solutions
+     *  6 guesses:  3515 solutions
+     *  7 guesses:  7564 solutions
+     *  8 guesses: 14086 solutions
+     *  9 guesses:  4614 solutions
+     * 10 guesses:  1239 solutions
+     * 11 guesses:   175 solutions
+     * 12 guesses:     7 solutions
+     * 13 guesses:     1 solution
+     *
+     * The solution which takes too many guesses is {8, 8, 5, 6, 7}.
+     * The game ID is c8p5g12Bm:4991e5e41a.  For large values of npegs and ncolours, the lexicographically
+     * next guess make take a while to find.  Finding upper and
+     * lower limits on which colours we have to consider will speed
+     * this up, as will caching our progress from one invocation to
+     * the next.  The latter strategy works, since if we have ruled
+     * out a candidate we will never reverse this judgment in the
+     * light of new information.  Removing information, i.e. undo,
+     * will require us to backtrack somehow.  We backtrack by fully
+     * forgetting our progress (and recomputing it if required).  a valid guess was found; install it and return  No solution is compatible with the given hints.  Impossible!  (hack new_game_desc to create invalid solutions to get here)  For some values of npegs and ncolours, the hinting function takes a
+     * long time to complete.  To visually indicate completion with failure,
+     * should it ever happen, update the ui in some trivial way.  This gives
+     * the user a sense of broken(ish)ness and futility.  one-indexed  zero-indexed  zero-indexed  zero-indexed 
+     * Enable or disable labels on colours.
+      mouse input  we use ths feedback in the game_ui to signify
+             * 'carry this peg to the next guess as well'.  NB this won't trigger if on the end of a drag; that's on
+         * purpose, in case you drop by mistake...  keyboard input  win!  lose, meaning we show the pegs.  ----------------------------------------------------------------------
+ * Drawing routines.
+  next three are multipliers for pegsz. It will look much nicer if
+ * (2*PEG_HINT) + PEG_GAP = 1.0 as the hints are formatted like that.  border  vertical colour bar  guess pegs  guess gaps  hint pegs  hint gaps  border  colour pegs  colour gaps  border  guesses plus solution  gaps plus gap above soln  radius of peg to fit in pegsz (which is 2r+1)  guesses  solution  border + colours  set_size is never called twice  red  yellow  green  blue  orange  purple  brown  light blue  light green  pink  We want to make sure we can distinguish COL_CORRECTCOLOUR
+     * (which we hard-code as white) from COL_BACKGROUND (which
+     * could default to white on some platforms).
+     * Code borrowed from fifteen.c.  We also want to be able to tell the difference between BACKGROUND
+     * and EMPTY, for similar distinguishing-hint reasons.  must round up 
+     * Some platforms antialias circles, which means we shouldn't
+     * overwrite a circle of one colour with a circle of another
+     * colour without erasing the background first. However, if the
+     * peg is the one being dragged, we don't erase the background
+     * because we _want_ it to alpha-blend nicely into whatever's
+     * behind it.
+     
+             * Hold marker.
+             
+     * Because of the possible presence of the cursor around this
+     * entire section, we redraw all or none of it but never part.
+      erase a large background rectangle  draw the colours  draw the guesses (so far) and the hints
+     * (in reverse order to avoid trampling holds, and postponing the
+     * next_go'th to not overrender the top of the circular cursor)  this info is stored in the game_state already  we've not got here yet; it's blank.  this is the one we're on; the (incomplete) guess is stored in
+	 * the game_ui.  draw the 'current move' and 'able to mark' sign.  draw the solution (or the big rectangle)  if ui->drag_col != 0, save the screen to the blitter,
+     * draw the peg where we saved, and set ds->drag_* == ui->drag_*. 
+     * We return nonzero whenever the solution has been revealed, even
+     * (on spoiler grounds) if it wasn't guessed correctly. The
+     * correct return value from this function is already in
+     * state->solved.
+      game_request_keys  wants_statusbar  flags  vim: set shiftwidth=4 tabstop=8: 

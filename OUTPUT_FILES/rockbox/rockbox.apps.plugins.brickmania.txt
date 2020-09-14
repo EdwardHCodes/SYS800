@@ -1,0 +1,565 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005, 2006 Ben Basha (Paprica)
+ * Copyright (C) 2009 Karl Kurbjun
+ *  check_lines is based off an explanation and expanded math presented by Paul
+ *   Bourke: http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** currently no transparency for non-colour 
+ *
+ * Keymaps
+ *
+  Continue text is used as a string later when the game is paused.  This allows
+ *  targets to specify their own text if needed.
+  targets without scroll wheel
+ *
+ * Geometric dimensions
+ *
+  If there are three fractional bits, the smallest screen size that will scale
+ * properly is 28x22.  If you have a smaller screen increase the fractional
+ * precision.  If you have a precision of 4 the smallest screen size would be
+ * 14x11.  Note though that this will decrease the maximum resolution due to
+ * the line intersection tests.  These defines are used for all of the fixed
+ * point calculations/conversions.
+ 
+ *
+ * Speeds
+ *
+  Brickmania was originally designed for the H300, other targets should scale
+ *  the speed up/down as needed based on the screen height.
+  These are all used as ball speeds depending on where the ball hit the
+ *  paddle.
+ *
+ * Note that all of these speeds (including pad, power, and fire)
+ *  could be made variable and could be raised to be much higher to add
+ *  additional difficulty to the game.  The line intersection tests allow this
+ *  to be drastically increased without the collision detection failing
+ *  (ideally).
+  This is used to determine the speed of the paddle  This defines the speed that the powerups drop  This defines the speed that the shot moves 
+ *
+ * Timings
+ *
+  The time ms for one iteration through the game loop - decrease this to speed
+ * up the game - note that current_tick is (currently) only accurate to 10ms.
+  ms  seconds 
+ *
+ * Scores
+ *
+ 
+ *
+ * Limits
+ *
+ 
+ *
+ * Files
+ *
+ 
+ *
+ * Game levels
+ *
+  change to however many levels there are, i.e. how many arrays there are total  change the first number in [ ] to however many levels there are  You can set up new levels with the level editor
+   ( http://plugbox.rockbox-lounge.com/brickmania.htm ).
+   With 0x1, it refers to the first brick in the bitmap, 0x2 would refer to the
+   second, ect., 0x0 leaves a empty space. If you add a 2 before the 2nd number,
+   it will take two hits to break, and 3 hits if you add a 3. That is 0x24, will
+   result with the fourth brick being displayed and having take 2 hits to break.
+   You could do the same with the 3, just replace the 2 with a 3 for it to take
+   three hits to break it apart.  level 1  level 2  level 3  level 4  level 5  level 6  level 7  level 8  level 9  level 10  level 11  level 12  levell13  level 14  level 15  level 16 (Rockbox) by ts-x  level 17 (Alien) by ts-x  level 18 (Tetris) by ts-x  level 19 (Stalactites) by ts-x  level 20 (Maze) by ts-x  level 21 (Dentist) by ts-x  level 22 (Spider) by ts-x  level 23 (Pool) by ts-x  level 24 (Vorbis Fish) by ts-x  level 25 (Rainbow) by ts-x  level 26 (Bowtie) by ts-x  level 27 (Frog) by ts-x  level 28 (DigDug) by ts-x  level 29 UK Flag by Seth Opgenorth  level 30 Win-Logo by Seth Opgenorth  level 31 Color wave/V by Seth Opgenorth  level 32 Sweedish Flag by Seth Opgenorth  level 33 Color Pyramid by Seth Opgenorth  level 34 Rhombus by Seth Opgenorth  level 35 PacMan Ghost by Seth Opgenorth  level 36 Star by Seth Opgenorth  level 37 It's 8-Bit by Seth Opgenorth  level 38 Linux by Seth Opgenorth  level 39 Colorful Squares by Seth Opgenorth TheEnd 
+ *
+ * Enums and structs
+ *
+  Increasing this value makes the game with less powerups  Is the brick still in play?  How many hits can this brick take?  pos_x and y store the current center position of the ball  tempx and tempy store an absolute position the ball should be in.  If
+     *  they are equal to 0, they are not used when positioning the ball.
+      speedx and speedy store the current speed of the ball  Is the ball stuck to the paddle?  This stores the fire y position, it is a fixed point num  This stores the fire x position, it is a whole number  This stores the powerup y position, it is a fixed point num  This stores the (middle of) powerup x position, it is a whole number  This stores the powerup type 
+ *
+ * Globals
+ *
+ 
+ *
+ * Functions
+ *
+ 
+ * check_lines:
+ * This is based off an explanation and expanded math presented by Paul Bourke:
+ * http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * It takes two lines as inputs and returns 1 if they intersect, 0 if they do
+ * not.  hitp returns the point where the two lines intersected.
+ *
+ * This function expects fixed point inputs with a precision of 3.  When a
+ * collision occurs hitp is updated with a fixed point location (precision 3)
+ * where the collision happened.  The internal calculations are fixed
+ * point with a 7 bit fractional precision.
+ *
+ * If you choose 10 bits of precision a screen size of about 640x480 is the
+ * largest this can go.  7 bits allows for an accurate intersection calculation
+ * with a line length of about 64 and a rougher line lenght of 128 which is
+ * larger than any target currently needs (the pad is the longest line and it
+ * only needs an accuracy of 2^4 at most to figure out which section of the pad
+ * the ball hit).  A precision of 7 gives breathing room for larger screens.
+ * Longer line sizes that need accurate intersection points will need more
+ * precision, but will decrease the maximum screen resolution.
+  Introduction:
+     * This code is based on the solution of these two input equations:
+     *  Pa = P1 + ua (P2-P1)
+     *  Pb = P3 + ub (P4-P3)
+     *
+     * Where line one is composed of points P1 and P2 and line two is composed
+     *  of points P3 and P4.
+     *
+     * ua/b is the fractional value you can multiply the x and y legs of the
+     *  triangle formed by each line to find a point on the line.
+     *
+     * The two equations can be expanded to their x/y components:
+     *  Pa.x = p1.x + ua(p2.x - p1.x)
+     *  Pa.y = p1.y + ua(p2.y - p1.y)
+     *
+     *  Pb.x = p3.x + ub(p4.x - p3.x)
+     *  Pb.y = p3.y + ub(p4.y - p3.y)
+     *
+     * When Pa.x == Pb.x and Pa.y == Pb.y the lines intersect so you can come
+     *  up with two equations (one for x and one for y):
+     *
+     * p1.x + ua(p2.x - p1.x) = p3.x + ub(p4.x - p3.x)
+     * p1.y + ua(p2.y - p1.y) = p3.y + ub(p4.y - p3.y)
+     *
+     * ua and ub can then be individually solved for.  This results in the
+     *  equations used in the following code.
+      Denominator for ua and ub are the same so store this calculation  n_a and n_b are calculated as seperate values for readability  Make sure there is not a division by zero - this also indicates that
+     * the lines are parallel.
+     *
+     * If n_a and n_b were both equal to zero the lines would be on top of each
+     * other (coincidental).  This check is not done because it is not
+     * necessary for this implementation (the parallel check accounts for this).
+      Calculate the intermediate fractional point that the lines potentially
+     *  intersect.
+      The fractional point will be between 0 and 1 inclusive if the lines
+     * intersect.  If the fractional calculation is larger than 1 or smaller
+     * than 0 the lines would need to be longer to intersect.
+      Test hit on all edges  add one life per achieved level  open game file  read in saved game  write out the game state to the save file  brickmania_sleep timer counting the score  Entering Menu, set the touchscreen to the global setting  if this is a crackable brick hits starts as
+     * greater than 0.
+      pad_rect used for powerup/ball checks  This is used for various lines that are checked (ball and powerup)  This stores the point that the two lines intersected in a test  Convert CYCLETIME (in ms) to HZ  write life num  hijack i  write level  continue game  draw the ball  Setup the pad line-later used in intersection test  move the fires  move and handle the powerups  power hit bottom  Use misc_line to check if the center of the powerup
+                         *  hit the paddle.
+                          Check if the powerup will hit the paddle  power hit paddle  Set the speed  Ball is not glued  draw the fires  draw the powerups  handle all of the bricks  The brick is a brick, but it may or may not be in use  Draw the brick  No transparent effect for greyscale lcds for now  Check if any balls collided with the brick  Setup the ball path to describe the current ball
+                             * position and the line it makes to its next
+                             * position.
+                              Check to see if the ball and the bottom hit. If
+                             *  the ball is moving down we don't want to
+                             *  include the bottom line intersection.
+                             *
+                             * The order that the sides are checked matters.
+                             *
+                             * Note that tempx/tempy store the next position
+                             *  that the ball should be drawn.
+                              Check the top, if the ball is moving up dont
+                             *  count it as a hit.
+                              Check the left side of the brick  Check the right side of the brick  for k  if(used)  for j  for i  draw the paddle according to the PAD_WIDTH  Normal width  Long Pad  Short pad  If the game is not paused continue  Loop through all of the balls in play  Describe the ball movement for the edge collision detection  Did the Ball hit the top of the screen?  the test for pos_y prevents the ball from bouncing back
+                     * from _over_ the top to infinity on some rare cases  Reverse the direction  Player missed the ball and hit bottom of screen  Player had balls to spare, so handle the removal  decrease number of balls in play  Replace removed ball with the last ball  Reset the last ball that was removed  Player lost a life  No lives left reset game  Check if the ball hit the left side  Reverse direction  Re-position ball in gameboard  Check if the ball hit the right side  Reverse direction  Re-position ball in gameboard  Did the ball hit the paddle? Depending on where the ball
+                         *  Hit set the x/y speed appropriately.
+                          Re-position ball based on collision  Calculate the ball position relative to the paddle width  If the ball hits the right half of paddle, x speed
+                             *  should be positive, if it hits the left half it
+                             *  should be negative.
+                              Comparisons are done with respect to 1/2 pad_width  flip the relative position  Ball hit the right half so X speed calculations
+                                 *  should be positive.
+                                  Figure out where the ball hit relative to 1/2 pad
+                             *  and in divisions of 4.
+                              Ball hit the outer edge of the paddle  Ball hit the next fourth of the paddle  Ball hit the third fourth of the paddle  Ball hit the fourth fourth of the paddle or dead
+                                     *  center.
+                                      Since this is the middle we don't want to
+                                     *  force the ball in a different direction.
+                                     *  Just keep it going in the same direction
+                                     *  with a specific speed.
+                                      X location should not be forced since that is moved with the paddle.  The Y
+                                 *  position should be forced to keep the ball at the paddle.
+                                  Update the ball position  for k  FIXME: Should probably check remote hold here  Initialize used balls starting speed  Add 1 for edge  Sub1 edge greyscale and mono  Game always needs to yield for other threads  Sleep for a bit if there is time to spare  this is the plugin entry point  Turn off backlight timeout  now go ahead and have fun!  Restore user's original backlight setting  Turn on backlight timeout (revert to settings) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005, 2006 Ben Basha (Paprica)
+ * Copyright (C) 2009 Karl Kurbjun
+ *  check_lines is based off an explanation and expanded math presented by Paul
+ *   Bourke: http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** currently no transparency for non-colour 
+ *
+ * Keymaps
+ *
+  Continue text is used as a string later when the game is paused.  This allows
+ *  targets to specify their own text if needed.
+  targets without scroll wheel
+ *
+ * Geometric dimensions
+ *
+  If there are three fractional bits, the smallest screen size that will scale
+ * properly is 28x22.  If you have a smaller screen increase the fractional
+ * precision.  If you have a precision of 4 the smallest screen size would be
+ * 14x11.  Note though that this will decrease the maximum resolution due to
+ * the line intersection tests.  These defines are used for all of the fixed
+ * point calculations/conversions.
+ 
+ *
+ * Speeds
+ *
+  Brickmania was originally designed for the H300, other targets should scale
+ *  the speed up/down as needed based on the screen height.
+  These are all used as ball speeds depending on where the ball hit the
+ *  paddle.
+ *
+ * Note that all of these speeds (including pad, power, and fire)
+ *  could be made variable and could be raised to be much higher to add
+ *  additional difficulty to the game.  The line intersection tests allow this
+ *  to be drastically increased without the collision detection failing
+ *  (ideally).
+  This is used to determine the speed of the paddle  This defines the speed that the powerups drop  This defines the speed that the shot moves 
+ *
+ * Timings
+ *
+  The time ms for one iteration through the game loop - decrease this to speed
+ * up the game - note that current_tick is (currently) only accurate to 10ms.
+  ms  seconds 
+ *
+ * Scores
+ *
+ 
+ *
+ * Limits
+ *
+ 
+ *
+ * Files
+ *
+ 
+ *
+ * Game levels
+ *
+  change to however many levels there are, i.e. how many arrays there are total  change the first number in [ ] to however many levels there are  You can set up new levels with the level editor
+   ( http://plugbox.rockbox-lounge.com/brickmania.htm ).
+   With 0x1, it refers to the first brick in the bitmap, 0x2 would refer to the
+   second, ect., 0x0 leaves a empty space. If you add a 2 before the 2nd number,
+   it will take two hits to break, and 3 hits if you add a 3. That is 0x24, will
+   result with the fourth brick being displayed and having take 2 hits to break.
+   You could do the same with the 3, just replace the 2 with a 3 for it to take
+   three hits to break it apart.  level 1  level 2  level 3  level 4  level 5  level 6  level 7  level 8  level 9  level 10  level 11  level 12  levell13  level 14  level 15  level 16 (Rockbox) by ts-x  level 17 (Alien) by ts-x  level 18 (Tetris) by ts-x  level 19 (Stalactites) by ts-x  level 20 (Maze) by ts-x  level 21 (Dentist) by ts-x  level 22 (Spider) by ts-x  level 23 (Pool) by ts-x  level 24 (Vorbis Fish) by ts-x  level 25 (Rainbow) by ts-x  level 26 (Bowtie) by ts-x  level 27 (Frog) by ts-x  level 28 (DigDug) by ts-x  level 29 UK Flag by Seth Opgenorth  level 30 Win-Logo by Seth Opgenorth  level 31 Color wave/V by Seth Opgenorth  level 32 Sweedish Flag by Seth Opgenorth  level 33 Color Pyramid by Seth Opgenorth  level 34 Rhombus by Seth Opgenorth  level 35 PacMan Ghost by Seth Opgenorth  level 36 Star by Seth Opgenorth  level 37 It's 8-Bit by Seth Opgenorth  level 38 Linux by Seth Opgenorth  level 39 Colorful Squares by Seth Opgenorth TheEnd 
+ *
+ * Enums and structs
+ *
+  Increasing this value makes the game with less powerups  Is the brick still in play?  How many hits can this brick take?  pos_x and y store the current center position of the ball  tempx and tempy store an absolute position the ball should be in.  If
+     *  they are equal to 0, they are not used when positioning the ball.
+      speedx and speedy store the current speed of the ball  Is the ball stuck to the paddle?  This stores the fire y position, it is a fixed point num  This stores the fire x position, it is a whole number  This stores the powerup y position, it is a fixed point num  This stores the (middle of) powerup x position, it is a whole number  This stores the powerup type 
+ *
+ * Globals
+ *
+ 
+ *
+ * Functions
+ *
+ 
+ * check_lines:
+ * This is based off an explanation and expanded math presented by Paul Bourke:
+ * http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * It takes two lines as inputs and returns 1 if they intersect, 0 if they do
+ * not.  hitp returns the point where the two lines intersected.
+ *
+ * This function expects fixed point inputs with a precision of 3.  When a
+ * collision occurs hitp is updated with a fixed point location (precision 3)
+ * where the collision happened.  The internal calculations are fixed
+ * point with a 7 bit fractional precision.
+ *
+ * If you choose 10 bits of precision a screen size of about 640x480 is the
+ * largest this can go.  7 bits allows for an accurate intersection calculation
+ * with a line length of about 64 and a rougher line lenght of 128 which is
+ * larger than any target currently needs (the pad is the longest line and it
+ * only needs an accuracy of 2^4 at most to figure out which section of the pad
+ * the ball hit).  A precision of 7 gives breathing room for larger screens.
+ * Longer line sizes that need accurate intersection points will need more
+ * precision, but will decrease the maximum screen resolution.
+  Introduction:
+     * This code is based on the solution of these two input equations:
+     *  Pa = P1 + ua (P2-P1)
+     *  Pb = P3 + ub (P4-P3)
+     *
+     * Where line one is composed of points P1 and P2 and line two is composed
+     *  of points P3 and P4.
+     *
+     * ua/b is the fractional value you can multiply the x and y legs of the
+     *  triangle formed by each line to find a point on the line.
+     *
+     * The two equations can be expanded to their x/y components:
+     *  Pa.x = p1.x + ua(p2.x - p1.x)
+     *  Pa.y = p1.y + ua(p2.y - p1.y)
+     *
+     *  Pb.x = p3.x + ub(p4.x - p3.x)
+     *  Pb.y = p3.y + ub(p4.y - p3.y)
+     *
+     * When Pa.x == Pb.x and Pa.y == Pb.y the lines intersect so you can come
+     *  up with two equations (one for x and one for y):
+     *
+     * p1.x + ua(p2.x - p1.x) = p3.x + ub(p4.x - p3.x)
+     * p1.y + ua(p2.y - p1.y) = p3.y + ub(p4.y - p3.y)
+     *
+     * ua and ub can then be individually solved for.  This results in the
+     *  equations used in the following code.
+      Denominator for ua and ub are the same so store this calculation  n_a and n_b are calculated as seperate values for readability  Make sure there is not a division by zero - this also indicates that
+     * the lines are parallel.
+     *
+     * If n_a and n_b were both equal to zero the lines would be on top of each
+     * other (coincidental).  This check is not done because it is not
+     * necessary for this implementation (the parallel check accounts for this).
+      Calculate the intermediate fractional point that the lines potentially
+     *  intersect.
+      The fractional point will be between 0 and 1 inclusive if the lines
+     * intersect.  If the fractional calculation is larger than 1 or smaller
+     * than 0 the lines would need to be longer to intersect.
+      Test hit on all edges  add one life per achieved level  open game file  read in saved game  write out the game state to the save file  brickmania_sleep timer counting the score  Entering Menu, set the touchscreen to the global setting  if this is a crackable brick hits starts as
+     * greater than 0.
+      pad_rect used for powerup/ball checks  This is used for various lines that are checked (ball and powerup)  This stores the point that the two lines intersected in a test  Convert CYCLETIME (in ms) to HZ  write life num  hijack i  write level  continue game  draw the ball  Setup the pad line-later used in intersection test  move the fires  move and handle the powerups  power hit bottom  Use misc_line to check if the center of the powerup
+                         *  hit the paddle.
+                          Check if the powerup will hit the paddle  power hit paddle  Set the speed  Ball is not glued  draw the fires  draw the powerups  handle all of the bricks  The brick is a brick, but it may or may not be in use  Draw the brick  No transparent effect for greyscale lcds for now  Check if any balls collided with the brick  Setup the ball path to describe the current ball
+                             * position and the line it makes to its next
+                             * position.
+                              Check to see if the ball and the bottom hit. If
+                             *  the ball is moving down we don't want to
+                             *  include the bottom line intersection.
+                             *
+                             * The order that the sides are checked matters.
+                             *
+                             * Note that tempx/tempy store the next position
+                             *  that the ball should be drawn.
+                              Check the top, if the ball is moving up dont
+                             *  count it as a hit.
+                              Check the left side of the brick  Check the right side of the brick  for k  if(used)  for j  for i  draw the paddle according to the PAD_WIDTH  Normal width  Long Pad  Short pad  If the game is not paused continue  Loop through all of the balls in play  Describe the ball movement for the edge collision detection  Did the Ball hit the top of the screen?  the test for pos_y prevents the ball from bouncing back
+                     * from _over_ the top to infinity on some rare cases  Reverse the direction  Player missed the ball and hit bottom of screen  Player had balls to spare, so handle the removal  decrease number of balls in play  Replace removed ball with the last ball  Reset the last ball that was removed  Player lost a life  No lives left reset game  Check if the ball hit the left side  Reverse direction  Re-position ball in gameboard  Check if the ball hit the right side  Reverse direction  Re-position ball in gameboard  Did the ball hit the paddle? Depending on where the ball
+                         *  Hit set the x/y speed appropriately.
+                          Re-position ball based on collision  Calculate the ball position relative to the paddle width  If the ball hits the right half of paddle, x speed
+                             *  should be positive, if it hits the left half it
+                             *  should be negative.
+                              Comparisons are done with respect to 1/2 pad_width  flip the relative position  Ball hit the right half so X speed calculations
+                                 *  should be positive.
+                                  Figure out where the ball hit relative to 1/2 pad
+                             *  and in divisions of 4.
+                              Ball hit the outer edge of the paddle  Ball hit the next fourth of the paddle  Ball hit the third fourth of the paddle  Ball hit the fourth fourth of the paddle or dead
+                                     *  center.
+                                      Since this is the middle we don't want to
+                                     *  force the ball in a different direction.
+                                     *  Just keep it going in the same direction
+                                     *  with a specific speed.
+                                      X location should not be forced since that is moved with the paddle.  The Y
+                                 *  position should be forced to keep the ball at the paddle.
+                                  Update the ball position  for k  FIXME: Should probably check remote hold here  Initialize used balls starting speed  Add 1 for edge  Sub1 edge greyscale and mono  Game always needs to yield for other threads  Sleep for a bit if there is time to spare  this is the plugin entry point  Turn off backlight timeout  now go ahead and have fun!  Restore user's original backlight setting  Turn on backlight timeout (revert to settings) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005, 2006 Ben Basha (Paprica)
+ * Copyright (C) 2009 Karl Kurbjun
+ *  check_lines is based off an explanation and expanded math presented by Paul
+ *   Bourke: http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** currently no transparency for non-colour 
+ *
+ * Keymaps
+ *
+  Continue text is used as a string later when the game is paused.  This allows
+ *  targets to specify their own text if needed.
+  targets without scroll wheel
+ *
+ * Geometric dimensions
+ *
+  If there are three fractional bits, the smallest screen size that will scale
+ * properly is 28x22.  If you have a smaller screen increase the fractional
+ * precision.  If you have a precision of 4 the smallest screen size would be
+ * 14x11.  Note though that this will decrease the maximum resolution due to
+ * the line intersection tests.  These defines are used for all of the fixed
+ * point calculations/conversions.
+ 
+ *
+ * Speeds
+ *
+  Brickmania was originally designed for the H300, other targets should scale
+ *  the speed up/down as needed based on the screen height.
+  These are all used as ball speeds depending on where the ball hit the
+ *  paddle.
+ *
+ * Note that all of these speeds (including pad, power, and fire)
+ *  could be made variable and could be raised to be much higher to add
+ *  additional difficulty to the game.  The line intersection tests allow this
+ *  to be drastically increased without the collision detection failing
+ *  (ideally).
+  This is used to determine the speed of the paddle  This defines the speed that the powerups drop  This defines the speed that the shot moves 
+ *
+ * Timings
+ *
+  The time ms for one iteration through the game loop - decrease this to speed
+ * up the game - note that current_tick is (currently) only accurate to 10ms.
+  ms  seconds 
+ *
+ * Scores
+ *
+ 
+ *
+ * Limits
+ *
+ 
+ *
+ * Files
+ *
+ 
+ *
+ * Game levels
+ *
+  change to however many levels there are, i.e. how many arrays there are total  change the first number in [ ] to however many levels there are  You can set up new levels with the level editor
+   ( http://plugbox.rockbox-lounge.com/brickmania.htm ).
+   With 0x1, it refers to the first brick in the bitmap, 0x2 would refer to the
+   second, ect., 0x0 leaves a empty space. If you add a 2 before the 2nd number,
+   it will take two hits to break, and 3 hits if you add a 3. That is 0x24, will
+   result with the fourth brick being displayed and having take 2 hits to break.
+   You could do the same with the 3, just replace the 2 with a 3 for it to take
+   three hits to break it apart.  level 1  level 2  level 3  level 4  level 5  level 6  level 7  level 8  level 9  level 10  level 11  level 12  levell13  level 14  level 15  level 16 (Rockbox) by ts-x  level 17 (Alien) by ts-x  level 18 (Tetris) by ts-x  level 19 (Stalactites) by ts-x  level 20 (Maze) by ts-x  level 21 (Dentist) by ts-x  level 22 (Spider) by ts-x  level 23 (Pool) by ts-x  level 24 (Vorbis Fish) by ts-x  level 25 (Rainbow) by ts-x  level 26 (Bowtie) by ts-x  level 27 (Frog) by ts-x  level 28 (DigDug) by ts-x  level 29 UK Flag by Seth Opgenorth  level 30 Win-Logo by Seth Opgenorth  level 31 Color wave/V by Seth Opgenorth  level 32 Sweedish Flag by Seth Opgenorth  level 33 Color Pyramid by Seth Opgenorth  level 34 Rhombus by Seth Opgenorth  level 35 PacMan Ghost by Seth Opgenorth  level 36 Star by Seth Opgenorth  level 37 It's 8-Bit by Seth Opgenorth  level 38 Linux by Seth Opgenorth  level 39 Colorful Squares by Seth Opgenorth TheEnd 
+ *
+ * Enums and structs
+ *
+  Increasing this value makes the game with less powerups  Is the brick still in play?  How many hits can this brick take?  pos_x and y store the current center position of the ball  tempx and tempy store an absolute position the ball should be in.  If
+     *  they are equal to 0, they are not used when positioning the ball.
+      speedx and speedy store the current speed of the ball  Is the ball stuck to the paddle?  This stores the fire y position, it is a fixed point num  This stores the fire x position, it is a whole number  This stores the powerup y position, it is a fixed point num  This stores the (middle of) powerup x position, it is a whole number  This stores the powerup type 
+ *
+ * Globals
+ *
+ 
+ *
+ * Functions
+ *
+ 
+ * check_lines:
+ * This is based off an explanation and expanded math presented by Paul Bourke:
+ * http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
+ *
+ * It takes two lines as inputs and returns 1 if they intersect, 0 if they do
+ * not.  hitp returns the point where the two lines intersected.
+ *
+ * This function expects fixed point inputs with a precision of 3.  When a
+ * collision occurs hitp is updated with a fixed point location (precision 3)
+ * where the collision happened.  The internal calculations are fixed
+ * point with a 7 bit fractional precision.
+ *
+ * If you choose 10 bits of precision a screen size of about 640x480 is the
+ * largest this can go.  7 bits allows for an accurate intersection calculation
+ * with a line length of about 64 and a rougher line lenght of 128 which is
+ * larger than any target currently needs (the pad is the longest line and it
+ * only needs an accuracy of 2^4 at most to figure out which section of the pad
+ * the ball hit).  A precision of 7 gives breathing room for larger screens.
+ * Longer line sizes that need accurate intersection points will need more
+ * precision, but will decrease the maximum screen resolution.
+  Introduction:
+     * This code is based on the solution of these two input equations:
+     *  Pa = P1 + ua (P2-P1)
+     *  Pb = P3 + ub (P4-P3)
+     *
+     * Where line one is composed of points P1 and P2 and line two is composed
+     *  of points P3 and P4.
+     *
+     * ua/b is the fractional value you can multiply the x and y legs of the
+     *  triangle formed by each line to find a point on the line.
+     *
+     * The two equations can be expanded to their x/y components:
+     *  Pa.x = p1.x + ua(p2.x - p1.x)
+     *  Pa.y = p1.y + ua(p2.y - p1.y)
+     *
+     *  Pb.x = p3.x + ub(p4.x - p3.x)
+     *  Pb.y = p3.y + ub(p4.y - p3.y)
+     *
+     * When Pa.x == Pb.x and Pa.y == Pb.y the lines intersect so you can come
+     *  up with two equations (one for x and one for y):
+     *
+     * p1.x + ua(p2.x - p1.x) = p3.x + ub(p4.x - p3.x)
+     * p1.y + ua(p2.y - p1.y) = p3.y + ub(p4.y - p3.y)
+     *
+     * ua and ub can then be individually solved for.  This results in the
+     *  equations used in the following code.
+      Denominator for ua and ub are the same so store this calculation  n_a and n_b are calculated as seperate values for readability  Make sure there is not a division by zero - this also indicates that
+     * the lines are parallel.
+     *
+     * If n_a and n_b were both equal to zero the lines would be on top of each
+     * other (coincidental).  This check is not done because it is not
+     * necessary for this implementation (the parallel check accounts for this).
+      Calculate the intermediate fractional point that the lines potentially
+     *  intersect.
+      The fractional point will be between 0 and 1 inclusive if the lines
+     * intersect.  If the fractional calculation is larger than 1 or smaller
+     * than 0 the lines would need to be longer to intersect.
+      Test hit on all edges  add one life per achieved level  open game file  read in saved game  write out the game state to the save file  brickmania_sleep timer counting the score  Entering Menu, set the touchscreen to the global setting  if this is a crackable brick hits starts as
+     * greater than 0.
+      pad_rect used for powerup/ball checks  This is used for various lines that are checked (ball and powerup)  This stores the point that the two lines intersected in a test  Convert CYCLETIME (in ms) to HZ  write life num  hijack i  write level  continue game  draw the ball  Setup the pad line-later used in intersection test  move the fires  move and handle the powerups  power hit bottom  Use misc_line to check if the center of the powerup
+                         *  hit the paddle.
+                          Check if the powerup will hit the paddle  power hit paddle  Set the speed  Ball is not glued  draw the fires  draw the powerups  handle all of the bricks  The brick is a brick, but it may or may not be in use  Draw the brick  No transparent effect for greyscale lcds for now  Check if any balls collided with the brick  Setup the ball path to describe the current ball
+                             * position and the line it makes to its next
+                             * position.
+                              Check to see if the ball and the bottom hit. If
+                             *  the ball is moving down we don't want to
+                             *  include the bottom line intersection.
+                             *
+                             * The order that the sides are checked matters.
+                             *
+                             * Note that tempx/tempy store the next position
+                             *  that the ball should be drawn.
+                              Check the top, if the ball is moving up dont
+                             *  count it as a hit.
+                              Check the left side of the brick  Check the right side of the brick  for k  if(used)  for j  for i  draw the paddle according to the PAD_WIDTH  Normal width  Long Pad  Short pad  If the game is not paused continue  Loop through all of the balls in play  Describe the ball movement for the edge collision detection  Did the Ball hit the top of the screen?  the test for pos_y prevents the ball from bouncing back
+                     * from _over_ the top to infinity on some rare cases  Reverse the direction  Player missed the ball and hit bottom of screen  Player had balls to spare, so handle the removal  decrease number of balls in play  Replace removed ball with the last ball  Reset the last ball that was removed  Player lost a life  No lives left reset game  Check if the ball hit the left side  Reverse direction  Re-position ball in gameboard  Check if the ball hit the right side  Reverse direction  Re-position ball in gameboard  Did the ball hit the paddle? Depending on where the ball
+                         *  Hit set the x/y speed appropriately.
+                          Re-position ball based on collision  Calculate the ball position relative to the paddle width  If the ball hits the right half of paddle, x speed
+                             *  should be positive, if it hits the left half it
+                             *  should be negative.
+                              Comparisons are done with respect to 1/2 pad_width  flip the relative position  Ball hit the right half so X speed calculations
+                                 *  should be positive.
+                                  Figure out where the ball hit relative to 1/2 pad
+                             *  and in divisions of 4.
+                              Ball hit the outer edge of the paddle  Ball hit the next fourth of the paddle  Ball hit the third fourth of the paddle  Ball hit the fourth fourth of the paddle or dead
+                                     *  center.
+                                      Since this is the middle we don't want to
+                                     *  force the ball in a different direction.
+                                     *  Just keep it going in the same direction
+                                     *  with a specific speed.
+                                      X location should not be forced since that is moved with the paddle.  The Y
+                                 *  position should be forced to keep the ball at the paddle.
+                                  Update the ball position  for k  FIXME: Should probably check remote hold here  Initialize used balls starting speed  Add 1 for edge  Sub1 edge greyscale and mono  Game always needs to yield for other threads  Sleep for a bit if there is time to spare  this is the plugin entry point  Turn off backlight timeout  now go ahead and have fun!  Restore user's original backlight setting  Turn on backlight timeout (revert to settings) 

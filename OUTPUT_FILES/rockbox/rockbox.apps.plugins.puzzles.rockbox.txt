@@ -1,0 +1,448 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016-2020 Franklin Wei
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ************************************************************************** rockbox frontend for puzzles  This file contains the majority of the rockbox-specific code for
+ * the sgt-puzzles port. It implements a set of functions for the
+ * backend to call to actually run the games, as well as rockbox UI
+ * code (menus, input, etc). For a good overview of the rest of the
+ * puzzles code, see:
+ *
+ * <https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/>.
+  how many ticks between timer callbacks  Disable some features if we're memory constrained (c200v2)  background color (mimicking from the JS frontend)  very light gray  used for invalid config value message  subtract two to allow for the fixed and UI fonts  font bundle size range (in pixels)  max length of C_STRING config vals  attempt to increment a numeric config value up to this much  max font table line  Sorry.  magnification factor  distance to pan per click (in pixels)  utility macros  fixed-point stuff (for antialiased lines)  the "debug menu" is hidden by default in order to avoid the
+ * naturally ensuing complaints from users  clipping stuff  defined in rbmalloc.c  dynamically allocated  some games can run in a separate thread for a larger stack (only
+ * Solo for now)  how to process the input (custom, per-game)  send spacebar event on long-press of select  send events upon button release, not initial press  ignore repeated button events (currently in all games but Untangle)  if in mouse mode, send right-click on long-press of select  repurpose select to activate a numerical chooser  last timer call  debug settings  ...did I mention there's a secret debug menu?  used in menu titles - make sure to initialize!
+ * These are re-implementations of many rockbox drawing functions, adapted to
+ * draw into a custom framebuffer (used for the zoom feature):
+  I hate these  copied straight from xlcd_draw.c  This format is pretty crazy: each byte holds the states of 8 pixels
+ * in a column, with bit 0 being the topmost pixel. Who needs cache
+ * efficiency? 
+ * Rockbox's alpha format is actually pretty sane: each byte holds
+ * alpha values for two horizontally adjacent pixels. Low half is
+ * leftmost pixel. See lcd-16bit-common.c for more info.
+  how many 4-bit nibbles we've read (read new when even)  in reverse order  correct order now, still 0-F  so 0xF -> 0xFF, 0x1 -> 0x11, etc. 
+ * Font management routines
+ *
+ * Many puzzles need a dynamic font size, especially when zooming
+ * in. Rockbox's default font set does not provide the consistency we
+ * need across different sizes, so instead we ship a custom font pack
+ * for sgt-puzzles, available from [1] or through Rockbox Utility.
+ *
+ * The font pack consists of 3 small-size fonts, and the Deja Vu
+ * Sans/Mono fonts, rasterized in sizes from 10px to BUNDLE_MAX
+ * (currently 36).
+ *
+ * The font loading code below tries to be smart about loading fonts:
+ * when games are saved, the set of fonts that were loaded during
+ * execution is written to a "font table" on disk. On subsequent
+ * loads, the fonts in this table are precached while the game is
+ * loaded (and the disk is spinning, on hard drive devices). We also
+ * have a form of LRU caching implemented to dynamically evict fonts
+ * from Rockbox's in-memory cache, which is of limited size.
+ *
+ * [1]: http://download.rockbox.org/useful/sgt-fonts.zip
+ 
+      * -3 = never tried loading, or unloaded,
+      * -2 = failed to load,
+      * [-1,): loaded successfully (FONT_SYSFIXED = -1)
+       monospace are first, then proportional  called on exit and before entering help viewer (workaround for a
+   possible bug in simple_viewer)  don't unload FONT_UI  Deja Vu only goes down to 10px, below that it's a giant blob  we're not going to force anyone to read 05-Tiny :P  we also don't care about monospace/proportional at this point 
+     * First, clamp to range. No puzzle should ever need this large of
+     * a font, anyways.
+      no teeny-tiny fonts  assume monospace for 7-9px fonts  never loaded  unload an old font ** Drawing API (normal, no zoom) ** clipping is implemented through viewports and offsetting
+ * coordinates  size will be clamped if too large  we need to access the font bitmap directly  still only reads 1 byte  straight from lcd-bitmap-common.c  lcd_alpha_bitmap_part isn't exported directly. However,
+                 * we can create a null bitmap struct with only an alpha
+                 * channel to make lcd_bmp_part call it for us.  TODO: clipping  a goes from 0-255, with a = 255 being fully opaque and a = 0 transparent  This is really quite possibly the least efficient way of doing
+       this. A better way would be in draw_antialiased_line(), but the
+       problem with that is that the algorithms I investigated at
+       least were incorrect at least part of the time and didn't make
+       drawing much faster overall.  speed benchmark: 34392 lines/sec vs 112687 non-antialiased
+ * lines/sec at full optimization on ipod6g  expects UN-OFFSET coordinates, directly access framebuffer  fixed-point Wu's algorithm, modified for integer-only endpoints  passed to plot() to avoid re-calculation  bail out  main loop  draw_antialiased_line uses rb->lcd_get_foreground() to get
+         * the color 
+ * draw filled polygon
+ * originally by Sebastian Leonhardt (ulmutul)
+ * 'count' : number of coordinate pairs
+ * 'pxy': array of coordinates. pxy[0]=x0,pxy[1]=y0,...
+ * note: provide space for one extra coordinate, because the starting point
+ * will automatically be inserted as end point.
+ 
+ * helper function:
+ * find points of intersection between polygon and scanline
+ intersections of every line with scanline (y-coord) add starting point as ending point  skip if line is outside of scanline calculate x-coord of intersection omit double intersections, if both lines lead in the same direction sort points of intersection draw two extra elements at end of pxy needed  find min and max y coords I'm a horrible person: this was copy-pasta'd straight from
+ * xlcd_draw.c  sort the given coordinates by increasing x value  x2 < x3 < x1  x3 < x1 < x2  x3 <= x2 <= x1  x2 < x1 <= x3  x1 <= x3 < x2  else already sorted  draw a filled triangle, using horizontal lines for speed  draw  first part  second part  Should probably refactor this  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  debug code  copy points, offsetted  draw outlines last so they're not covered by the fill  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  draw outlines last so they're not covered by the fill  blitters allow the game code to save/restore a piece of the
+ * framebuffer  originally from emcc.c 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  copy a section of the framebuffer  no viewport offset  copy line-by-line 
+     * It seems that the puzzles use a different definition of
+     * "updating" the display than Rockbox does; by calling this
+     * function, it tells us that it has either already drawn to the
+     * updated area (as rockbox assumes), or that it WILL draw to the
+     * said area in the future (in which case we will draw
+     * nothing). Because we don't know which of these is the case, we
+     * simply remember a rectangle that contains all the updated
+     * regions and update it at the very end.
+      adapted from gtk.c  ... mumble mumble ... not ... reentrant ... mumble mumble ...  we ignore the backend's redraw requests and just
+     * unconditionally update everything  stubbed  quick hack  save area being covered (will be restored elsewhere)  doesn't work, disabled (can't find a good mechanism to check if a
+ * glyph exists in a font)  See: https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/drawing.html#drawing-text-fallback  shouldn't get here  printing functions  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  fall back to ASCII * utility functions exported to puzzles code ** frontend code -- mostly UI stuff * the key has already been sent to the game, just return  This function handles most user input. It has specific workarounds
+ * and fixes for certain games to allow them to work well on
+ * Rockbox. It will either return a positive value that can be passed
+ * to the midend, or a negative flag value. `do_pausemenu' sets how
+ * this function will handle BUTTON_PAUSE: if true, it will handle it
+ * all, otherwise it will simply return -1 and let the caller do the
+ * work (this is used for zoom mode).  about to block for button input  weird stuff  See if the button is a long-press.  Ignore repeated long presses.  simulate right-click  These games want a spacebar in the event of a long press.  quick hack to preserve the clipping state  Mouse movement (if enabled). This goes here since none of the
+     * following code is needed for mouse mode.  acceleration  clamp  The % operator with negative operands is messy; this is much
+         * simpler.  clicking/dragging  rclick on hold requires that we fire left-click on a
+         * release, otherwise it's impossible to distinguish the
+         * two.  right-click is handled earlier  no buttons are sent to the midend in mouse mode  These games require, for one reason or another, that events
+     * fire upon buttons being released rather than when they are
+     * pressed. For Inertia, it is because it needs to be able to
+     * sense multiple simultaneous keypresses (to move diagonally),
+     * and the others require a long press to map to a secondary
+     * "action" key.  Ignore repeats in all games which are not Untangle.  start accepting input again after a release  ignore repeats (in mouse mode, only ignore repeats of BTN_FIRE)  handle diagonals (mainly for Inertia)  quick hack to preserve the clipping state  hint  get cursor bounding rectangle  no cursor  check if either of the top-left and bottom-right corners are
+     * off-screen  if so, recenter  This function handles zoom mode, where the user can either pan
+ * around a zoomed-in image or play a zoomed-in version of the game.  Allocating the framebuffer will mostly likely grab the
+     * audiobuffer, which will make impossible to load new fonts, and
+     * lead to zoomed puzzles being drawn with the default fallback
+     * fonts. As a semi-workaround, we go ahead and load the biggest available
+     * monospace and proportional fonts.  set position  first run  draws go to the zoom framebuffer  false since we don't want to use more screen space than we need.  Here's how this works: pressing select (or the target's
+     * equivalent, it's whatever BTN_FIRE is) while in viewing mode
+     * will toggle the mode to interaction mode. In interaction mode,
+     * the buttons will behave as normal and be sent to the puzzle,
+     * except for the pause/quit (BTN_PAUSE) button, which will return
+     * to view mode. Finally, when in view mode, pause/quit will
+     * return to the pause menu.  pan around the image  clamped later  clamped later  clamped later  clamped later  state change to interaction mode  goes to zoom_fb  The cursor is always in screenspace coordinates; when
+             * zoomed, this means the mouse is always restricted to
+             * the bounds of the physical display, not the virtual
+             * zoom framebuffer.  basically a copy-pasta'd main loop  blit * settings/preset code  we can't rely on being called in any particular order  config is already set  clear any error message  failure  bright, annoying red  reset value  return value is only meaningful when type == C_STRING, where it
+ * indicates whether cfg->sval has been freed or otherwise altered  we now free the original string and give int_chooser()
+             * a clean buffer to work with  seems to reset backdrop  count  display a list  store the initial state  restore old state  success, and we duplicated the old string when
+                     * we didn't need to, so free it now  main worker function  returns the index of the selected item on success, -1 on failure  display a list  recurse  select first one  Let user choose from game presets. Returns true if the user chooses
+ * one (in which case the caller should start a new game.  figure out the index of the current preset
+     * if it's in a submenu, give up and default to the first item  The help text is stored in compressed format in the help_text[]
+     * array. display_text wants an array of pointers to
+     * null-terminated words, so we create that here.  create the word_ptrs array to pass to display_text  newline  Useless debug code. Mostly a waste of space.  not seeded, who cares?  Make a new game, but tell the user through a splash so they don't
+ * think we're locked up. Also performs new-game initialization
+ * specific to Rockbox.  0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 points to pluginbuf, used by rbmalloc.c  useless side note: originally giant_buffer was a statically
+ * allocated giant array (4096KB IIRC), hence its name.  set on start  reset tlsf by nuking the signature  will make any already-allocated memory point to garbage  convert them to packed RGB  list is terminated with NULL  this function sets game-specific input settings  these get a spacebar on long click - you must also add to the
+     * falling_edge list below!  wait until a key is released to send an action  For want_spacebar to work, events must be sent on the falling
+     * edge  ignore repeated keypresses in all games but untangle (mouse
+     * mode overrides this no matter what)  set to false if you want dragging to be possible  try loading the fonts indicated in the on-disk font table  nothing to do  loop through each bit of the mask and try loading the
+       corresponding font  remember which fonts were loaded  first assemble the bitmask  try loading if we attempted to load  font table format is as follows:
+         * [GAME NAME]:[32-halves of bit mask in decimal][newline]
+          copy line if not matching  matching, remember the old mask  expects a totally free me* pointer  seek to beginning  success  clean up, even on failure  save game  our main menu expects a ready-to-use midend  must be done before any menu needs to be displayed  about to go to menu or button block  0 1 2 3 4 5 6 7 8 Loaded. Run the game!  Failed to load (so midend is already initialized
+                 * with new game)  Otherwise we need to generate a new game.  fall through  we don't care about freeing anything because tlsf will
+             * be wiped out the next time around  special codes are < 0  new game  quit without saving  save and quit  we have a game input  will draw to fb  Blit mouse but immediately clear it.  boost for init  Solo needs a big stack  word alignment **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016-2020 Franklin Wei
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ************************************************************************** rockbox frontend for puzzles  This file contains the majority of the rockbox-specific code for
+ * the sgt-puzzles port. It implements a set of functions for the
+ * backend to call to actually run the games, as well as rockbox UI
+ * code (menus, input, etc). For a good overview of the rest of the
+ * puzzles code, see:
+ *
+ * <https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/>.
+  how many ticks between timer callbacks  Disable some features if we're memory constrained (c200v2)  background color (mimicking from the JS frontend)  very light gray  used for invalid config value message  subtract two to allow for the fixed and UI fonts  font bundle size range (in pixels)  max length of C_STRING config vals  attempt to increment a numeric config value up to this much  max font table line  Sorry.  magnification factor  distance to pan per click (in pixels)  utility macros  fixed-point stuff (for antialiased lines)  the "debug menu" is hidden by default in order to avoid the
+ * naturally ensuing complaints from users  clipping stuff  defined in rbmalloc.c  dynamically allocated  some games can run in a separate thread for a larger stack (only
+ * Solo for now)  how to process the input (custom, per-game)  send spacebar event on long-press of select  send events upon button release, not initial press  ignore repeated button events (currently in all games but Untangle)  if in mouse mode, send right-click on long-press of select  repurpose select to activate a numerical chooser  last timer call  debug settings  ...did I mention there's a secret debug menu?  used in menu titles - make sure to initialize!
+ * These are re-implementations of many rockbox drawing functions, adapted to
+ * draw into a custom framebuffer (used for the zoom feature):
+  I hate these  copied straight from xlcd_draw.c  This format is pretty crazy: each byte holds the states of 8 pixels
+ * in a column, with bit 0 being the topmost pixel. Who needs cache
+ * efficiency? 
+ * Rockbox's alpha format is actually pretty sane: each byte holds
+ * alpha values for two horizontally adjacent pixels. Low half is
+ * leftmost pixel. See lcd-16bit-common.c for more info.
+  how many 4-bit nibbles we've read (read new when even)  in reverse order  correct order now, still 0-F  so 0xF -> 0xFF, 0x1 -> 0x11, etc. 
+ * Font management routines
+ *
+ * Many puzzles need a dynamic font size, especially when zooming
+ * in. Rockbox's default font set does not provide the consistency we
+ * need across different sizes, so instead we ship a custom font pack
+ * for sgt-puzzles, available from [1] or through Rockbox Utility.
+ *
+ * The font pack consists of 3 small-size fonts, and the Deja Vu
+ * Sans/Mono fonts, rasterized in sizes from 10px to BUNDLE_MAX
+ * (currently 36).
+ *
+ * The font loading code below tries to be smart about loading fonts:
+ * when games are saved, the set of fonts that were loaded during
+ * execution is written to a "font table" on disk. On subsequent
+ * loads, the fonts in this table are precached while the game is
+ * loaded (and the disk is spinning, on hard drive devices). We also
+ * have a form of LRU caching implemented to dynamically evict fonts
+ * from Rockbox's in-memory cache, which is of limited size.
+ *
+ * [1]: http://download.rockbox.org/useful/sgt-fonts.zip
+ 
+      * -3 = never tried loading, or unloaded,
+      * -2 = failed to load,
+      * [-1,): loaded successfully (FONT_SYSFIXED = -1)
+       monospace are first, then proportional  called on exit and before entering help viewer (workaround for a
+   possible bug in simple_viewer)  don't unload FONT_UI  Deja Vu only goes down to 10px, below that it's a giant blob  we're not going to force anyone to read 05-Tiny :P  we also don't care about monospace/proportional at this point 
+     * First, clamp to range. No puzzle should ever need this large of
+     * a font, anyways.
+      no teeny-tiny fonts  assume monospace for 7-9px fonts  never loaded  unload an old font ** Drawing API (normal, no zoom) ** clipping is implemented through viewports and offsetting
+ * coordinates  size will be clamped if too large  we need to access the font bitmap directly  still only reads 1 byte  straight from lcd-bitmap-common.c  lcd_alpha_bitmap_part isn't exported directly. However,
+                 * we can create a null bitmap struct with only an alpha
+                 * channel to make lcd_bmp_part call it for us.  TODO: clipping  a goes from 0-255, with a = 255 being fully opaque and a = 0 transparent  This is really quite possibly the least efficient way of doing
+       this. A better way would be in draw_antialiased_line(), but the
+       problem with that is that the algorithms I investigated at
+       least were incorrect at least part of the time and didn't make
+       drawing much faster overall.  speed benchmark: 34392 lines/sec vs 112687 non-antialiased
+ * lines/sec at full optimization on ipod6g  expects UN-OFFSET coordinates, directly access framebuffer  fixed-point Wu's algorithm, modified for integer-only endpoints  passed to plot() to avoid re-calculation  bail out  main loop  draw_antialiased_line uses rb->lcd_get_foreground() to get
+         * the color 
+ * draw filled polygon
+ * originally by Sebastian Leonhardt (ulmutul)
+ * 'count' : number of coordinate pairs
+ * 'pxy': array of coordinates. pxy[0]=x0,pxy[1]=y0,...
+ * note: provide space for one extra coordinate, because the starting point
+ * will automatically be inserted as end point.
+ 
+ * helper function:
+ * find points of intersection between polygon and scanline
+ intersections of every line with scanline (y-coord) add starting point as ending point  skip if line is outside of scanline calculate x-coord of intersection omit double intersections, if both lines lead in the same direction sort points of intersection draw two extra elements at end of pxy needed  find min and max y coords I'm a horrible person: this was copy-pasta'd straight from
+ * xlcd_draw.c  sort the given coordinates by increasing x value  x2 < x3 < x1  x3 < x1 < x2  x3 <= x2 <= x1  x2 < x1 <= x3  x1 <= x3 < x2  else already sorted  draw a filled triangle, using horizontal lines for speed  draw  first part  second part  Should probably refactor this  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  debug code  copy points, offsetted  draw outlines last so they're not covered by the fill  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  draw outlines last so they're not covered by the fill  blitters allow the game code to save/restore a piece of the
+ * framebuffer  originally from emcc.c 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  copy a section of the framebuffer  no viewport offset  copy line-by-line 
+     * It seems that the puzzles use a different definition of
+     * "updating" the display than Rockbox does; by calling this
+     * function, it tells us that it has either already drawn to the
+     * updated area (as rockbox assumes), or that it WILL draw to the
+     * said area in the future (in which case we will draw
+     * nothing). Because we don't know which of these is the case, we
+     * simply remember a rectangle that contains all the updated
+     * regions and update it at the very end.
+      adapted from gtk.c  ... mumble mumble ... not ... reentrant ... mumble mumble ...  we ignore the backend's redraw requests and just
+     * unconditionally update everything  stubbed  quick hack  save area being covered (will be restored elsewhere)  doesn't work, disabled (can't find a good mechanism to check if a
+ * glyph exists in a font)  See: https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/drawing.html#drawing-text-fallback  shouldn't get here  printing functions  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  fall back to ASCII * utility functions exported to puzzles code ** frontend code -- mostly UI stuff * the key has already been sent to the game, just return  This function handles most user input. It has specific workarounds
+ * and fixes for certain games to allow them to work well on
+ * Rockbox. It will either return a positive value that can be passed
+ * to the midend, or a negative flag value. `do_pausemenu' sets how
+ * this function will handle BUTTON_PAUSE: if true, it will handle it
+ * all, otherwise it will simply return -1 and let the caller do the
+ * work (this is used for zoom mode).  about to block for button input  weird stuff  See if the button is a long-press.  Ignore repeated long presses.  simulate right-click  These games want a spacebar in the event of a long press.  quick hack to preserve the clipping state  Mouse movement (if enabled). This goes here since none of the
+     * following code is needed for mouse mode.  acceleration  clamp  The % operator with negative operands is messy; this is much
+         * simpler.  clicking/dragging  rclick on hold requires that we fire left-click on a
+         * release, otherwise it's impossible to distinguish the
+         * two.  right-click is handled earlier  no buttons are sent to the midend in mouse mode  These games require, for one reason or another, that events
+     * fire upon buttons being released rather than when they are
+     * pressed. For Inertia, it is because it needs to be able to
+     * sense multiple simultaneous keypresses (to move diagonally),
+     * and the others require a long press to map to a secondary
+     * "action" key.  Ignore repeats in all games which are not Untangle.  start accepting input again after a release  ignore repeats (in mouse mode, only ignore repeats of BTN_FIRE)  handle diagonals (mainly for Inertia)  quick hack to preserve the clipping state  hint  get cursor bounding rectangle  no cursor  check if either of the top-left and bottom-right corners are
+     * off-screen  if so, recenter  This function handles zoom mode, where the user can either pan
+ * around a zoomed-in image or play a zoomed-in version of the game.  Allocating the framebuffer will mostly likely grab the
+     * audiobuffer, which will make impossible to load new fonts, and
+     * lead to zoomed puzzles being drawn with the default fallback
+     * fonts. As a semi-workaround, we go ahead and load the biggest available
+     * monospace and proportional fonts.  set position  first run  draws go to the zoom framebuffer  false since we don't want to use more screen space than we need.  Here's how this works: pressing select (or the target's
+     * equivalent, it's whatever BTN_FIRE is) while in viewing mode
+     * will toggle the mode to interaction mode. In interaction mode,
+     * the buttons will behave as normal and be sent to the puzzle,
+     * except for the pause/quit (BTN_PAUSE) button, which will return
+     * to view mode. Finally, when in view mode, pause/quit will
+     * return to the pause menu.  pan around the image  clamped later  clamped later  clamped later  clamped later  state change to interaction mode  goes to zoom_fb  The cursor is always in screenspace coordinates; when
+             * zoomed, this means the mouse is always restricted to
+             * the bounds of the physical display, not the virtual
+             * zoom framebuffer.  basically a copy-pasta'd main loop  blit * settings/preset code  we can't rely on being called in any particular order  config is already set  clear any error message  failure  bright, annoying red  reset value  return value is only meaningful when type == C_STRING, where it
+ * indicates whether cfg->sval has been freed or otherwise altered  we now free the original string and give int_chooser()
+             * a clean buffer to work with  seems to reset backdrop  count  display a list  store the initial state  restore old state  success, and we duplicated the old string when
+                     * we didn't need to, so free it now  main worker function  returns the index of the selected item on success, -1 on failure  display a list  recurse  select first one  Let user choose from game presets. Returns true if the user chooses
+ * one (in which case the caller should start a new game.  figure out the index of the current preset
+     * if it's in a submenu, give up and default to the first item  The help text is stored in compressed format in the help_text[]
+     * array. display_text wants an array of pointers to
+     * null-terminated words, so we create that here.  create the word_ptrs array to pass to display_text  newline  Useless debug code. Mostly a waste of space.  not seeded, who cares?  Make a new game, but tell the user through a splash so they don't
+ * think we're locked up. Also performs new-game initialization
+ * specific to Rockbox.  0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 points to pluginbuf, used by rbmalloc.c  useless side note: originally giant_buffer was a statically
+ * allocated giant array (4096KB IIRC), hence its name.  set on start  reset tlsf by nuking the signature  will make any already-allocated memory point to garbage  convert them to packed RGB  list is terminated with NULL  this function sets game-specific input settings  these get a spacebar on long click - you must also add to the
+     * falling_edge list below!  wait until a key is released to send an action  For want_spacebar to work, events must be sent on the falling
+     * edge  ignore repeated keypresses in all games but untangle (mouse
+     * mode overrides this no matter what)  set to false if you want dragging to be possible  try loading the fonts indicated in the on-disk font table  nothing to do  loop through each bit of the mask and try loading the
+       corresponding font  remember which fonts were loaded  first assemble the bitmask  try loading if we attempted to load  font table format is as follows:
+         * [GAME NAME]:[32-halves of bit mask in decimal][newline]
+          copy line if not matching  matching, remember the old mask  expects a totally free me* pointer  seek to beginning  success  clean up, even on failure  save game  our main menu expects a ready-to-use midend  must be done before any menu needs to be displayed  about to go to menu or button block  0 1 2 3 4 5 6 7 8 Loaded. Run the game!  Failed to load (so midend is already initialized
+                 * with new game)  Otherwise we need to generate a new game.  fall through  we don't care about freeing anything because tlsf will
+             * be wiped out the next time around  special codes are < 0  new game  quit without saving  save and quit  we have a game input  will draw to fb  Blit mouse but immediately clear it.  boost for init  Solo needs a big stack  word alignment **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016-2020 Franklin Wei
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ************************************************************************** rockbox frontend for puzzles  This file contains the majority of the rockbox-specific code for
+ * the sgt-puzzles port. It implements a set of functions for the
+ * backend to call to actually run the games, as well as rockbox UI
+ * code (menus, input, etc). For a good overview of the rest of the
+ * puzzles code, see:
+ *
+ * <https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/>.
+  how many ticks between timer callbacks  Disable some features if we're memory constrained (c200v2)  background color (mimicking from the JS frontend)  very light gray  used for invalid config value message  subtract two to allow for the fixed and UI fonts  font bundle size range (in pixels)  max length of C_STRING config vals  attempt to increment a numeric config value up to this much  max font table line  Sorry.  magnification factor  distance to pan per click (in pixels)  utility macros  fixed-point stuff (for antialiased lines)  the "debug menu" is hidden by default in order to avoid the
+ * naturally ensuing complaints from users  clipping stuff  defined in rbmalloc.c  dynamically allocated  some games can run in a separate thread for a larger stack (only
+ * Solo for now)  how to process the input (custom, per-game)  send spacebar event on long-press of select  send events upon button release, not initial press  ignore repeated button events (currently in all games but Untangle)  if in mouse mode, send right-click on long-press of select  repurpose select to activate a numerical chooser  last timer call  debug settings  ...did I mention there's a secret debug menu?  used in menu titles - make sure to initialize!
+ * These are re-implementations of many rockbox drawing functions, adapted to
+ * draw into a custom framebuffer (used for the zoom feature):
+  I hate these  copied straight from xlcd_draw.c  This format is pretty crazy: each byte holds the states of 8 pixels
+ * in a column, with bit 0 being the topmost pixel. Who needs cache
+ * efficiency? 
+ * Rockbox's alpha format is actually pretty sane: each byte holds
+ * alpha values for two horizontally adjacent pixels. Low half is
+ * leftmost pixel. See lcd-16bit-common.c for more info.
+  how many 4-bit nibbles we've read (read new when even)  in reverse order  correct order now, still 0-F  so 0xF -> 0xFF, 0x1 -> 0x11, etc. 
+ * Font management routines
+ *
+ * Many puzzles need a dynamic font size, especially when zooming
+ * in. Rockbox's default font set does not provide the consistency we
+ * need across different sizes, so instead we ship a custom font pack
+ * for sgt-puzzles, available from [1] or through Rockbox Utility.
+ *
+ * The font pack consists of 3 small-size fonts, and the Deja Vu
+ * Sans/Mono fonts, rasterized in sizes from 10px to BUNDLE_MAX
+ * (currently 36).
+ *
+ * The font loading code below tries to be smart about loading fonts:
+ * when games are saved, the set of fonts that were loaded during
+ * execution is written to a "font table" on disk. On subsequent
+ * loads, the fonts in this table are precached while the game is
+ * loaded (and the disk is spinning, on hard drive devices). We also
+ * have a form of LRU caching implemented to dynamically evict fonts
+ * from Rockbox's in-memory cache, which is of limited size.
+ *
+ * [1]: http://download.rockbox.org/useful/sgt-fonts.zip
+ 
+      * -3 = never tried loading, or unloaded,
+      * -2 = failed to load,
+      * [-1,): loaded successfully (FONT_SYSFIXED = -1)
+       monospace are first, then proportional  called on exit and before entering help viewer (workaround for a
+   possible bug in simple_viewer)  don't unload FONT_UI  Deja Vu only goes down to 10px, below that it's a giant blob  we're not going to force anyone to read 05-Tiny :P  we also don't care about monospace/proportional at this point 
+     * First, clamp to range. No puzzle should ever need this large of
+     * a font, anyways.
+      no teeny-tiny fonts  assume monospace for 7-9px fonts  never loaded  unload an old font ** Drawing API (normal, no zoom) ** clipping is implemented through viewports and offsetting
+ * coordinates  size will be clamped if too large  we need to access the font bitmap directly  still only reads 1 byte  straight from lcd-bitmap-common.c  lcd_alpha_bitmap_part isn't exported directly. However,
+                 * we can create a null bitmap struct with only an alpha
+                 * channel to make lcd_bmp_part call it for us.  TODO: clipping  a goes from 0-255, with a = 255 being fully opaque and a = 0 transparent  This is really quite possibly the least efficient way of doing
+       this. A better way would be in draw_antialiased_line(), but the
+       problem with that is that the algorithms I investigated at
+       least were incorrect at least part of the time and didn't make
+       drawing much faster overall.  speed benchmark: 34392 lines/sec vs 112687 non-antialiased
+ * lines/sec at full optimization on ipod6g  expects UN-OFFSET coordinates, directly access framebuffer  fixed-point Wu's algorithm, modified for integer-only endpoints  passed to plot() to avoid re-calculation  bail out  main loop  draw_antialiased_line uses rb->lcd_get_foreground() to get
+         * the color 
+ * draw filled polygon
+ * originally by Sebastian Leonhardt (ulmutul)
+ * 'count' : number of coordinate pairs
+ * 'pxy': array of coordinates. pxy[0]=x0,pxy[1]=y0,...
+ * note: provide space for one extra coordinate, because the starting point
+ * will automatically be inserted as end point.
+ 
+ * helper function:
+ * find points of intersection between polygon and scanline
+ intersections of every line with scanline (y-coord) add starting point as ending point  skip if line is outside of scanline calculate x-coord of intersection omit double intersections, if both lines lead in the same direction sort points of intersection draw two extra elements at end of pxy needed  find min and max y coords I'm a horrible person: this was copy-pasta'd straight from
+ * xlcd_draw.c  sort the given coordinates by increasing x value  x2 < x3 < x1  x3 < x1 < x2  x3 <= x2 <= x1  x2 < x1 <= x3  x1 <= x3 < x2  else already sorted  draw a filled triangle, using horizontal lines for speed  draw  first part  second part  Should probably refactor this  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  debug code  copy points, offsetted  draw outlines last so they're not covered by the fill  serious hack: draw a bunch of triangles between adjacent points  this generally works, even with some concave polygons  draw outlines last so they're not covered by the fill  blitters allow the game code to save/restore a piece of the
+ * framebuffer  originally from emcc.c 
+     * Reduce the size of the copied rectangle to stop it going
+     * outside the bounds of the canvas.
+      Transform from x,y,w,h form into coordinates of all edges  Clip each coordinate at both extremes of the canvas  Transform back into x,y,w,h to return  copy a section of the framebuffer  no viewport offset  copy line-by-line 
+     * It seems that the puzzles use a different definition of
+     * "updating" the display than Rockbox does; by calling this
+     * function, it tells us that it has either already drawn to the
+     * updated area (as rockbox assumes), or that it WILL draw to the
+     * said area in the future (in which case we will draw
+     * nothing). Because we don't know which of these is the case, we
+     * simply remember a rectangle that contains all the updated
+     * regions and update it at the very end.
+      adapted from gtk.c  ... mumble mumble ... not ... reentrant ... mumble mumble ...  we ignore the backend's redraw requests and just
+     * unconditionally update everything  stubbed  quick hack  save area being covered (will be restored elsewhere)  doesn't work, disabled (can't find a good mechanism to check if a
+ * glyph exists in a font)  See: https://www.chiark.greenend.org.uk/~sgtatham/puzzles/devel/drawing.html#drawing-text-fallback  shouldn't get here  printing functions  {begin,end}_{doc,page,puzzle}  line_width, line_dotted  fall back to ASCII * utility functions exported to puzzles code ** frontend code -- mostly UI stuff * the key has already been sent to the game, just return  This function handles most user input. It has specific workarounds
+ * and fixes for certain games to allow them to work well on
+ * Rockbox. It will either return a positive value that can be passed
+ * to the midend, or a negative flag value. `do_pausemenu' sets how
+ * this function will handle BUTTON_PAUSE: if true, it will handle it
+ * all, otherwise it will simply return -1 and let the caller do the
+ * work (this is used for zoom mode).  about to block for button input  weird stuff  See if the button is a long-press.  Ignore repeated long presses.  simulate right-click  These games want a spacebar in the event of a long press.  quick hack to preserve the clipping state  Mouse movement (if enabled). This goes here since none of the
+     * following code is needed for mouse mode.  acceleration  clamp  The % operator with negative operands is messy; this is much
+         * simpler.  clicking/dragging  rclick on hold requires that we fire left-click on a
+         * release, otherwise it's impossible to distinguish the
+         * two.  right-click is handled earlier  no buttons are sent to the midend in mouse mode  These games require, for one reason or another, that events
+     * fire upon buttons being released rather than when they are
+     * pressed. For Inertia, it is because it needs to be able to
+     * sense multiple simultaneous keypresses (to move diagonally),
+     * and the others require a long press to map to a secondary
+     * "action" key.  Ignore repeats in all games which are not Untangle.  start accepting input again after a release  ignore repeats (in mouse mode, only ignore repeats of BTN_FIRE)  handle diagonals (mainly for Inertia)  quick hack to preserve the clipping state  hint  get cursor bounding rectangle  no cursor  check if either of the top-left and bottom-right corners are
+     * off-screen  if so, recenter  This function handles zoom mode, where the user can either pan
+ * around a zoomed-in image or play a zoomed-in version of the game.  Allocating the framebuffer will mostly likely grab the
+     * audiobuffer, which will make impossible to load new fonts, and
+     * lead to zoomed puzzles being drawn with the default fallback
+     * fonts. As a semi-workaround, we go ahead and load the biggest available
+     * monospace and proportional fonts.  set position  first run  draws go to the zoom framebuffer  false since we don't want to use more screen space than we need.  Here's how this works: pressing select (or the target's
+     * equivalent, it's whatever BTN_FIRE is) while in viewing mode
+     * will toggle the mode to interaction mode. In interaction mode,
+     * the buttons will behave as normal and be sent to the puzzle,
+     * except for the pause/quit (BTN_PAUSE) button, which will return
+     * to view mode. Finally, when in view mode, pause/quit will
+     * return to the pause menu.  pan around the image  clamped later  clamped later  clamped later  clamped later  state change to interaction mode  goes to zoom_fb  The cursor is always in screenspace coordinates; when
+             * zoomed, this means the mouse is always restricted to
+             * the bounds of the physical display, not the virtual
+             * zoom framebuffer.  basically a copy-pasta'd main loop  blit * settings/preset code  we can't rely on being called in any particular order  config is already set  clear any error message  failure  bright, annoying red  reset value  return value is only meaningful when type == C_STRING, where it
+ * indicates whether cfg->sval has been freed or otherwise altered  we now free the original string and give int_chooser()
+             * a clean buffer to work with  seems to reset backdrop  count  display a list  store the initial state  restore old state  success, and we duplicated the old string when
+                     * we didn't need to, so free it now  main worker function  returns the index of the selected item on success, -1 on failure  display a list  recurse  select first one  Let user choose from game presets. Returns true if the user chooses
+ * one (in which case the caller should start a new game.  figure out the index of the current preset
+     * if it's in a submenu, give up and default to the first item  The help text is stored in compressed format in the help_text[]
+     * array. display_text wants an array of pointers to
+     * null-terminated words, so we create that here.  create the word_ptrs array to pass to display_text  newline  Useless debug code. Mostly a waste of space.  not seeded, who cares?  Make a new game, but tell the user through a splash so they don't
+ * think we're locked up. Also performs new-game initialization
+ * specific to Rockbox.  0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 points to pluginbuf, used by rbmalloc.c  useless side note: originally giant_buffer was a statically
+ * allocated giant array (4096KB IIRC), hence its name.  set on start  reset tlsf by nuking the signature  will make any already-allocated memory point to garbage  convert them to packed RGB  list is terminated with NULL  this function sets game-specific input settings  these get a spacebar on long click - you must also add to the
+     * falling_edge list below!  wait until a key is released to send an action  For want_spacebar to work, events must be sent on the falling
+     * edge  ignore repeated keypresses in all games but untangle (mouse
+     * mode overrides this no matter what)  set to false if you want dragging to be possible  try loading the fonts indicated in the on-disk font table  nothing to do  loop through each bit of the mask and try loading the
+       corresponding font  remember which fonts were loaded  first assemble the bitmask  try loading if we attempted to load  font table format is as follows:
+         * [GAME NAME]:[32-halves of bit mask in decimal][newline]
+          copy line if not matching  matching, remember the old mask  expects a totally free me* pointer  seek to beginning  success  clean up, even on failure  save game  our main menu expects a ready-to-use midend  must be done before any menu needs to be displayed  about to go to menu or button block  0 1 2 3 4 5 6 7 8 Loaded. Run the game!  Failed to load (so midend is already initialized
+                 * with new game)  Otherwise we need to generate a new game.  fall through  we don't care about freeing anything because tlsf will
+             * be wiped out the next time around  special codes are < 0  new game  quit without saving  save and quit  we have a game input  will draw to fb  Blit mouse but immediately clear it.  boost for init  Solo needs a big stack  word alignment 

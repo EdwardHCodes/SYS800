@@ -1,0 +1,256 @@
+ Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.    These routines build a copy of the DSP portion of a graph, which is
+    then sorted into a linear list of DSP operations which are added to
+    the DSP duty cycle called by the scheduler.  Once that's been done,
+    we delete the copy.  The DSP objects are represented by "ugenbox"
+    structures which are parallel to the DSP objects in the graph and
+    have vectors of siginlets and sigoutlets which record their
+    interconnections.
+ hacked to run subpatches with different samplerates
+ * only samplerates that are a power_of_2-multiple of the 
+ *
+ * mfg.gfd.uil
+ * IOhannes
+ *
+ * edited lines are marked with "IOhannes"
+ *
+  ROCKBOX  ROCKBOX  IOhannes  IOhannes  IOhannes  zero out a vector  ---------------------------- block~ -----------------------------  The "block~ object maintains the containing canvas's DSP computation,
+calling it at a super- or sub-multiple of the containing canvas's
+calling frequency.  The block~'s creation arguments specify block size
+and overlap.  Block~ does no "dsp" computation in its own right, but it
+adds prolog and epilog code before and after the canvas's unit generators.
+
+A subcanvas need not have a block~ at all; if there's none, its
+ugens are simply put on the list without any prolog or epilog code.
+
+Block~ may be invoked as switch~, in which case it also acts to switch the
+subcanvas on and off.  The overall order of scheduling for a subcanvas
+is thus,
+
+    inlet and outlet prologue code (1)
+    block prologue (2)
+    the objects in the subcanvas, including inlets and outlets
+    block epilogue (2)
+    outlet epilogue code (2)
+
+where (1) means, "if reblocked" and  (2) means, "if reblocked or switched".
+
+If we're reblocked, the inlet prolog and outlet epilog code takes care of
+overlapping and buffering to deal with vector size changes.  If we're switched
+but not reblocked, the inlet prolog is not needed, and the output epilog is
+ONLY run when the block is switched off; in this case the epilog code simply
+copies zeros to all signal outlets.
+ from 0 to period-1; when zero we run the block  submultiple of containing canvas  supermultiple of comtaining canvas  length of dspchain for this block  length of epilog  true if we're acting as a a switch  true if we're switched on  true if inlets and outlets are reblocking  IOhannes: upsampling-factor  IOhannes: downsampling-factor  IOhannes  IOhannes  this means we'll get it from parent later.  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes  IOhannes  if we're switched off, jump past the epilog code  skip block; jump past epilog  beginning of block is next ugen  go to ugen after prolog  do nothing here  ------------------ DSP call list -----------------------  at Guenter's suggestion, here's a vectorized version  ---------------- signals ----------------------------  list of signals which can be reused, sorted by buffer size  list of reusable "borrowed" signals (which don't own sample buffers)  list of all signals allocated (not including "borrowed" ones)  call this when DSP is stopped to free all the signals  mark the signal "reusable."  if the signal is borrowed, decrement the borrowed-from signal's
+	    	reference count, possibly marking it reusable too  if it's a real signal (not borrowed), put it on the free list
+	    	so we can reuse it.  reclaim or make an audio signal.  If n is zero, return a "borrowed"
+    signal whose buffer and size will be obtained later via
+    signal_setborrowed().  first try to reclaim one from the free list  LATER figure out what to do for out-of-space here!  ------------------ ugen ("unit generator") sorting -----------------  true if "iosigs" is invalid.  true if we have to reblock inlets/outlets  true if we're switched  start building the graph for a canvas  first the canvas calls this to create all the boxes...  and then this to make all the connections.  add a new connection to the outlet's list  update inlet and outlet counts   get the index of a ugenbox or -1 if it's not on the list  put a ugenbox on the chain, recursively putting any others on that
+    this one might uncover.  suppress creating new signals for the outputs of signal
+	inlets and subpatchs; except in the case we're an inlet and "blocking"
+	is set.  We don't yet know if a subcanvas will be "blocking" so there
+	we delay new signal creation, which will be handled by calling
+	signal_setborrowed in the ugen_done_graph routine below.  when we encounter a subcanvas or a signal outlet, suppress freeing
+	the input signals as they may be "borrowed" for the super or sub
+	patch; same exception as above, but also if we're "switched" we
+	have to do a copy rather than a borrow.   post("%s: unconnected signal inlet set to zero",
+    	    	class_getname(u->u_obj->ob_pd));  if the reference count went to zero, we free the signal now,
+	    unless it's a subcanvas or outlet; these might keep the
+	    signal around to send to objects connected to them.  In this
+	    case we increment the reference count; the corresponding decrement
+	    is in sig_makereusable().  similarly, for outlets of subcanvases we delay creating
+	    them; instead we create "borrowed" ones so that the refcount
+	    is known.  The subcanvas replaces the fake signal with one showing
+	    where the output data actually is, to avoid having to copy it.
+	    For any other object, we just allocate a new output vector;
+	    since we've already freed the inputs the objects might get called
+	    "in place."  now call the DSP scheduling routine for the ugen.  This
+	routine must fill in "borrowed" signal outputs in case it's either
+	a subcanvas or a signal inlet.  if any output signals aren't connected to anyone, free them
+	now; otherwise they'll either get freed when the reference count
+	goes back to zero, or even later as explained above.  pass it on and trip anyone whose last inlet was filled  if there's already someone here, sum the two  if we didn't fill this inlet don't bother yet  if there's more than one, check them all  so now we can schedule the ugen.   once the DSP graph is built, we call this routine to sort it.
+    This routine also deletes the graph; later we might want to leave the
+    graph around, in case the user is editing the DSP network, to save having
+    to recreate it all the time.  But not today.   phase,  DSP chain onset before block prolog code  and after block epilog code  and after signal outlet epilog  IOhannes  debugging printout  search for an object of class "block~"  figure out block size, calling frequency, sample rate  IOhannes {  } IOhannes phase = blk->x_phase;  IOhannes  IOhannes  IOhannes  phase = 0;  if we're reblocking or switched, we now have to create output
+	signals to fill in for the "borrowed" ones we have now.  This
+	is also possibly true even if we're not blocked/switched, in
+	the case that there was a signal loop.  But we don't know this
+	yet.   schedule prologs for inlets and outlets.  If the "reblock" flag
+	is set, an inlet will put code on the DSP chain to copy its input
+	into an internal buffer here, before any unit generators' DSP code
+	gets scheduled.  If we don't "reblock", inlets will need to get
+	pointers to their corresponding inlets/outlets on the box we're inside,
+	if any.  Outlets will also need pointers, unless we're switched, in
+	which case outlet epilog code will kick in.  IOhannes  IOhannes  add the block DSP prolog  Initialize for sorting  Do the sort  check that we have no connected signal inlets  check for a DSP loop, which is evidenced here by the presence
+	of ugens not yet scheduled.  this might imply that we have unfilled "borrowed" outputs
+		which we'd better fill in now.  don't need to keep looking.  add block DSP epilog  add epilogs for outlets.   IOhannes  now delete everything.  -------------------- setup routine --------------------------  really just block_setup IOhannesIOhannes Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.    These routines build a copy of the DSP portion of a graph, which is
+    then sorted into a linear list of DSP operations which are added to
+    the DSP duty cycle called by the scheduler.  Once that's been done,
+    we delete the copy.  The DSP objects are represented by "ugenbox"
+    structures which are parallel to the DSP objects in the graph and
+    have vectors of siginlets and sigoutlets which record their
+    interconnections.
+ hacked to run subpatches with different samplerates
+ * only samplerates that are a power_of_2-multiple of the 
+ *
+ * mfg.gfd.uil
+ * IOhannes
+ *
+ * edited lines are marked with "IOhannes"
+ *
+  ROCKBOX  ROCKBOX  IOhannes  IOhannes  IOhannes  zero out a vector  ---------------------------- block~ -----------------------------  The "block~ object maintains the containing canvas's DSP computation,
+calling it at a super- or sub-multiple of the containing canvas's
+calling frequency.  The block~'s creation arguments specify block size
+and overlap.  Block~ does no "dsp" computation in its own right, but it
+adds prolog and epilog code before and after the canvas's unit generators.
+
+A subcanvas need not have a block~ at all; if there's none, its
+ugens are simply put on the list without any prolog or epilog code.
+
+Block~ may be invoked as switch~, in which case it also acts to switch the
+subcanvas on and off.  The overall order of scheduling for a subcanvas
+is thus,
+
+    inlet and outlet prologue code (1)
+    block prologue (2)
+    the objects in the subcanvas, including inlets and outlets
+    block epilogue (2)
+    outlet epilogue code (2)
+
+where (1) means, "if reblocked" and  (2) means, "if reblocked or switched".
+
+If we're reblocked, the inlet prolog and outlet epilog code takes care of
+overlapping and buffering to deal with vector size changes.  If we're switched
+but not reblocked, the inlet prolog is not needed, and the output epilog is
+ONLY run when the block is switched off; in this case the epilog code simply
+copies zeros to all signal outlets.
+ from 0 to period-1; when zero we run the block  submultiple of containing canvas  supermultiple of comtaining canvas  length of dspchain for this block  length of epilog  true if we're acting as a a switch  true if we're switched on  true if inlets and outlets are reblocking  IOhannes: upsampling-factor  IOhannes: downsampling-factor  IOhannes  IOhannes  this means we'll get it from parent later.  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes  IOhannes  if we're switched off, jump past the epilog code  skip block; jump past epilog  beginning of block is next ugen  go to ugen after prolog  do nothing here  ------------------ DSP call list -----------------------  at Guenter's suggestion, here's a vectorized version  ---------------- signals ----------------------------  list of signals which can be reused, sorted by buffer size  list of reusable "borrowed" signals (which don't own sample buffers)  list of all signals allocated (not including "borrowed" ones)  call this when DSP is stopped to free all the signals  mark the signal "reusable."  if the signal is borrowed, decrement the borrowed-from signal's
+	    	reference count, possibly marking it reusable too  if it's a real signal (not borrowed), put it on the free list
+	    	so we can reuse it.  reclaim or make an audio signal.  If n is zero, return a "borrowed"
+    signal whose buffer and size will be obtained later via
+    signal_setborrowed().  first try to reclaim one from the free list  LATER figure out what to do for out-of-space here!  ------------------ ugen ("unit generator") sorting -----------------  true if "iosigs" is invalid.  true if we have to reblock inlets/outlets  true if we're switched  start building the graph for a canvas  first the canvas calls this to create all the boxes...  and then this to make all the connections.  add a new connection to the outlet's list  update inlet and outlet counts   get the index of a ugenbox or -1 if it's not on the list  put a ugenbox on the chain, recursively putting any others on that
+    this one might uncover.  suppress creating new signals for the outputs of signal
+	inlets and subpatchs; except in the case we're an inlet and "blocking"
+	is set.  We don't yet know if a subcanvas will be "blocking" so there
+	we delay new signal creation, which will be handled by calling
+	signal_setborrowed in the ugen_done_graph routine below.  when we encounter a subcanvas or a signal outlet, suppress freeing
+	the input signals as they may be "borrowed" for the super or sub
+	patch; same exception as above, but also if we're "switched" we
+	have to do a copy rather than a borrow.   post("%s: unconnected signal inlet set to zero",
+    	    	class_getname(u->u_obj->ob_pd));  if the reference count went to zero, we free the signal now,
+	    unless it's a subcanvas or outlet; these might keep the
+	    signal around to send to objects connected to them.  In this
+	    case we increment the reference count; the corresponding decrement
+	    is in sig_makereusable().  similarly, for outlets of subcanvases we delay creating
+	    them; instead we create "borrowed" ones so that the refcount
+	    is known.  The subcanvas replaces the fake signal with one showing
+	    where the output data actually is, to avoid having to copy it.
+	    For any other object, we just allocate a new output vector;
+	    since we've already freed the inputs the objects might get called
+	    "in place."  now call the DSP scheduling routine for the ugen.  This
+	routine must fill in "borrowed" signal outputs in case it's either
+	a subcanvas or a signal inlet.  if any output signals aren't connected to anyone, free them
+	now; otherwise they'll either get freed when the reference count
+	goes back to zero, or even later as explained above.  pass it on and trip anyone whose last inlet was filled  if there's already someone here, sum the two  if we didn't fill this inlet don't bother yet  if there's more than one, check them all  so now we can schedule the ugen.   once the DSP graph is built, we call this routine to sort it.
+    This routine also deletes the graph; later we might want to leave the
+    graph around, in case the user is editing the DSP network, to save having
+    to recreate it all the time.  But not today.   phase,  DSP chain onset before block prolog code  and after block epilog code  and after signal outlet epilog  IOhannes  debugging printout  search for an object of class "block~"  figure out block size, calling frequency, sample rate  IOhannes {  } IOhannes phase = blk->x_phase;  IOhannes  IOhannes  IOhannes  phase = 0;  if we're reblocking or switched, we now have to create output
+	signals to fill in for the "borrowed" ones we have now.  This
+	is also possibly true even if we're not blocked/switched, in
+	the case that there was a signal loop.  But we don't know this
+	yet.   schedule prologs for inlets and outlets.  If the "reblock" flag
+	is set, an inlet will put code on the DSP chain to copy its input
+	into an internal buffer here, before any unit generators' DSP code
+	gets scheduled.  If we don't "reblock", inlets will need to get
+	pointers to their corresponding inlets/outlets on the box we're inside,
+	if any.  Outlets will also need pointers, unless we're switched, in
+	which case outlet epilog code will kick in.  IOhannes  IOhannes  add the block DSP prolog  Initialize for sorting  Do the sort  check that we have no connected signal inlets  check for a DSP loop, which is evidenced here by the presence
+	of ugens not yet scheduled.  this might imply that we have unfilled "borrowed" outputs
+		which we'd better fill in now.  don't need to keep looking.  add block DSP epilog  add epilogs for outlets.   IOhannes  now delete everything.  -------------------- setup routine --------------------------  really just block_setup IOhannesIOhannes Copyright (c) 1997-1999 Miller Puckette.
+* For information on usage and redistribution, and for a DISCLAIMER OF ALL
+* WARRANTIES, see the file, "LICENSE.txt," in this distribution.    These routines build a copy of the DSP portion of a graph, which is
+    then sorted into a linear list of DSP operations which are added to
+    the DSP duty cycle called by the scheduler.  Once that's been done,
+    we delete the copy.  The DSP objects are represented by "ugenbox"
+    structures which are parallel to the DSP objects in the graph and
+    have vectors of siginlets and sigoutlets which record their
+    interconnections.
+ hacked to run subpatches with different samplerates
+ * only samplerates that are a power_of_2-multiple of the 
+ *
+ * mfg.gfd.uil
+ * IOhannes
+ *
+ * edited lines are marked with "IOhannes"
+ *
+  ROCKBOX  ROCKBOX  IOhannes  IOhannes  IOhannes  zero out a vector  ---------------------------- block~ -----------------------------  The "block~ object maintains the containing canvas's DSP computation,
+calling it at a super- or sub-multiple of the containing canvas's
+calling frequency.  The block~'s creation arguments specify block size
+and overlap.  Block~ does no "dsp" computation in its own right, but it
+adds prolog and epilog code before and after the canvas's unit generators.
+
+A subcanvas need not have a block~ at all; if there's none, its
+ugens are simply put on the list without any prolog or epilog code.
+
+Block~ may be invoked as switch~, in which case it also acts to switch the
+subcanvas on and off.  The overall order of scheduling for a subcanvas
+is thus,
+
+    inlet and outlet prologue code (1)
+    block prologue (2)
+    the objects in the subcanvas, including inlets and outlets
+    block epilogue (2)
+    outlet epilogue code (2)
+
+where (1) means, "if reblocked" and  (2) means, "if reblocked or switched".
+
+If we're reblocked, the inlet prolog and outlet epilog code takes care of
+overlapping and buffering to deal with vector size changes.  If we're switched
+but not reblocked, the inlet prolog is not needed, and the output epilog is
+ONLY run when the block is switched off; in this case the epilog code simply
+copies zeros to all signal outlets.
+ from 0 to period-1; when zero we run the block  submultiple of containing canvas  supermultiple of comtaining canvas  length of dspchain for this block  length of epilog  true if we're acting as a a switch  true if we're switched on  true if inlets and outlets are reblocking  IOhannes: upsampling-factor  IOhannes: downsampling-factor  IOhannes  IOhannes  this means we'll get it from parent later.  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes {  } IOhannes  IOhannes  IOhannes  if we're switched off, jump past the epilog code  skip block; jump past epilog  beginning of block is next ugen  go to ugen after prolog  do nothing here  ------------------ DSP call list -----------------------  at Guenter's suggestion, here's a vectorized version  ---------------- signals ----------------------------  list of signals which can be reused, sorted by buffer size  list of reusable "borrowed" signals (which don't own sample buffers)  list of all signals allocated (not including "borrowed" ones)  call this when DSP is stopped to free all the signals  mark the signal "reusable."  if the signal is borrowed, decrement the borrowed-from signal's
+	    	reference count, possibly marking it reusable too  if it's a real signal (not borrowed), put it on the free list
+	    	so we can reuse it.  reclaim or make an audio signal.  If n is zero, return a "borrowed"
+    signal whose buffer and size will be obtained later via
+    signal_setborrowed().  first try to reclaim one from the free list  LATER figure out what to do for out-of-space here!  ------------------ ugen ("unit generator") sorting -----------------  true if "iosigs" is invalid.  true if we have to reblock inlets/outlets  true if we're switched  start building the graph for a canvas  first the canvas calls this to create all the boxes...  and then this to make all the connections.  add a new connection to the outlet's list  update inlet and outlet counts   get the index of a ugenbox or -1 if it's not on the list  put a ugenbox on the chain, recursively putting any others on that
+    this one might uncover.  suppress creating new signals for the outputs of signal
+	inlets and subpatchs; except in the case we're an inlet and "blocking"
+	is set.  We don't yet know if a subcanvas will be "blocking" so there
+	we delay new signal creation, which will be handled by calling
+	signal_setborrowed in the ugen_done_graph routine below.  when we encounter a subcanvas or a signal outlet, suppress freeing
+	the input signals as they may be "borrowed" for the super or sub
+	patch; same exception as above, but also if we're "switched" we
+	have to do a copy rather than a borrow.   post("%s: unconnected signal inlet set to zero",
+    	    	class_getname(u->u_obj->ob_pd));  if the reference count went to zero, we free the signal now,
+	    unless it's a subcanvas or outlet; these might keep the
+	    signal around to send to objects connected to them.  In this
+	    case we increment the reference count; the corresponding decrement
+	    is in sig_makereusable().  similarly, for outlets of subcanvases we delay creating
+	    them; instead we create "borrowed" ones so that the refcount
+	    is known.  The subcanvas replaces the fake signal with one showing
+	    where the output data actually is, to avoid having to copy it.
+	    For any other object, we just allocate a new output vector;
+	    since we've already freed the inputs the objects might get called
+	    "in place."  now call the DSP scheduling routine for the ugen.  This
+	routine must fill in "borrowed" signal outputs in case it's either
+	a subcanvas or a signal inlet.  if any output signals aren't connected to anyone, free them
+	now; otherwise they'll either get freed when the reference count
+	goes back to zero, or even later as explained above.  pass it on and trip anyone whose last inlet was filled  if there's already someone here, sum the two  if we didn't fill this inlet don't bother yet  if there's more than one, check them all  so now we can schedule the ugen.   once the DSP graph is built, we call this routine to sort it.
+    This routine also deletes the graph; later we might want to leave the
+    graph around, in case the user is editing the DSP network, to save having
+    to recreate it all the time.  But not today.   phase,  DSP chain onset before block prolog code  and after block epilog code  and after signal outlet epilog  IOhannes  debugging printout  search for an object of class "block~"  figure out block size, calling frequency, sample rate  IOhannes {  } IOhannes phase = blk->x_phase;  IOhannes  IOhannes  IOhannes  phase = 0;  if we're reblocking or switched, we now have to create output
+	signals to fill in for the "borrowed" ones we have now.  This
+	is also possibly true even if we're not blocked/switched, in
+	the case that there was a signal loop.  But we don't know this
+	yet.   schedule prologs for inlets and outlets.  If the "reblock" flag
+	is set, an inlet will put code on the DSP chain to copy its input
+	into an internal buffer here, before any unit generators' DSP code
+	gets scheduled.  If we don't "reblock", inlets will need to get
+	pointers to their corresponding inlets/outlets on the box we're inside,
+	if any.  Outlets will also need pointers, unless we're switched, in
+	which case outlet epilog code will kick in.  IOhannes  IOhannes  add the block DSP prolog  Initialize for sorting  Do the sort  check that we have no connected signal inlets  check for a DSP loop, which is evidenced here by the presence
+	of ugens not yet scheduled.  this might imply that we have unfilled "borrowed" outputs
+		which we'd better fill in now.  don't need to keep looking.  add block DSP epilog  add epilogs for outlets.   IOhannes  now delete everything.  -------------------- setup routine --------------------------  really just block_setup IOhannesIOhannes

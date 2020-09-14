@@ -1,0 +1,265 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (c) 2016 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This driver handle the Sony linux audio drivers: despite using many differents
+ * codecs, it appears that they all share a common interface and common controls.  This is the alsa mixer interface exposed by Sony:
+numid=3,iface=MIXER,name='Capture Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'None'
+  ; Item #1 'Line'
+  ; Item #2 'Fm'
+  ; Item #3 'Mic'
+  : values=0
+numid=2,iface=MIXER,name='Playback Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=7
+  ; Item #0 'None'
+  ; Item #1 'Music'
+  ; Item #2 'Video'
+  ; Item #3 'Tv'
+  ; Item #4 'Fm'
+  ; Item #5 'Line'
+  ; Item #6 'Mic'
+  : values=1
+numid=1,iface=MIXER,name='Playback Volume'
+  ; type=INTEGER,access=rw------,values=2,min=0,max=100,step=1
+  : values=5,5
+numid=7,iface=MIXER,name='CODEC Acoustic Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=8,iface=MIXER,name='CODEC Cue/Rev Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=9,iface=MIXER,name='CODEC Fade In Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=6,iface=MIXER,name='CODEC Mute Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=5,iface=MIXER,name='CODEC Power Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=10,iface=MIXER,name='CODEC Stanby Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=4,iface=MIXER,name='Output Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'Headphone'
+  ; Item #1 'LineVariable'
+  ; Item #2 'LineFixed'
+  ; Item #3 'Speaker'
+  : values=0
+numid=6,iface=MIXER,name='Sampling Rate'
+  ; type=ENUMERATED,access=rw------,values=1,items=6
+  ; Item #0 '44100'
+  ; Item #1 '48000'
+  ; Item #2 '88200'
+  ; Item #3 '96000'
+  ; Item #4 '176400'
+  ; Item #5 '192000'
+  : values=0
+ List of various codecs used by Sony  Description of the volume curve implemented by the kernel driver  number of levels  levels in tenth-dB, level[0] is always mute  file descriptor of the icx_noican device  file descriptor of the hardware sound device  Codec  does the code support setting the sample rate?  Most Sonys seem to follow the convention of 3dB/step then 2dB/step then 1dB/step  3dB/step  2dB/step  1dB/step  1.5dB then 2dB  there are 32 levels but the last two are the same so in fact it
+             * is the same curve as the cxd3774gf_d  return the safest curve (only 31 levels)  some targets don't have noise cancelling so silently fail  Set NC switch  Get NC switch  Get HP status  Set HP type  Get HP type  Set gain  Get gain  Set filter  Get filter  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+ * what the intention of these modes are and the OF does not seem to use
+ * them by default  turn on codec  mute  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+     * what the intention of these modes are and the OF does not seem to use
+     * them by default  select playback source  use headphone output  unmute  sample rate  init noican  dump configuration, for debug purposes  make sure we start in a clean state  init hw  volume must be driver unit  the driver expects percent, convert from centibel in range 0...x  on some recent players like A10, Sony decided to merge left/right volume
+     * into one, thus we need to make sure we write the correct number of values  volume is in tenth-dB  FIXME at the moment we don't support balance and just average left and right.
+     * But this could be implemented using pcm alsa digital volume  the Sony drivers expect vol_l = vol_r  min/max for pcm volume  On some codecs (like cs47L01), Sony clear overdrives the DAC which produces
+     * massive clipping at any level (since they fix the DAC volume at around +6dB
+     * and then adjust HP volume in negative at the top of range !!). The only
+     * solution around this problem is to use the digital volume first so that
+     * very quickly the digital volume compensate for the DAC overdrive and we
+     * avoid clipping.  any volume above this will cause massive clipping the DAC  to avoid the clipping problem, virtually decrease requested volume by the
+     * clipping threshold, so that we will compensate in digital later by
+     * at least this amount if possibly  pick driver level just above request volume  now remove the artifical volume change  now adjust digital volume  digital cannot do <43dB  mute  digital cannot do >0dB  it's slightly annoying that Sony put the value in an enum with strings... **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (c) 2016 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This driver handle the Sony linux audio drivers: despite using many differents
+ * codecs, it appears that they all share a common interface and common controls.  This is the alsa mixer interface exposed by Sony:
+numid=3,iface=MIXER,name='Capture Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'None'
+  ; Item #1 'Line'
+  ; Item #2 'Fm'
+  ; Item #3 'Mic'
+  : values=0
+numid=2,iface=MIXER,name='Playback Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=7
+  ; Item #0 'None'
+  ; Item #1 'Music'
+  ; Item #2 'Video'
+  ; Item #3 'Tv'
+  ; Item #4 'Fm'
+  ; Item #5 'Line'
+  ; Item #6 'Mic'
+  : values=1
+numid=1,iface=MIXER,name='Playback Volume'
+  ; type=INTEGER,access=rw------,values=2,min=0,max=100,step=1
+  : values=5,5
+numid=7,iface=MIXER,name='CODEC Acoustic Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=8,iface=MIXER,name='CODEC Cue/Rev Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=9,iface=MIXER,name='CODEC Fade In Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=6,iface=MIXER,name='CODEC Mute Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=5,iface=MIXER,name='CODEC Power Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=10,iface=MIXER,name='CODEC Stanby Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=4,iface=MIXER,name='Output Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'Headphone'
+  ; Item #1 'LineVariable'
+  ; Item #2 'LineFixed'
+  ; Item #3 'Speaker'
+  : values=0
+numid=6,iface=MIXER,name='Sampling Rate'
+  ; type=ENUMERATED,access=rw------,values=1,items=6
+  ; Item #0 '44100'
+  ; Item #1 '48000'
+  ; Item #2 '88200'
+  ; Item #3 '96000'
+  ; Item #4 '176400'
+  ; Item #5 '192000'
+  : values=0
+ List of various codecs used by Sony  Description of the volume curve implemented by the kernel driver  number of levels  levels in tenth-dB, level[0] is always mute  file descriptor of the icx_noican device  file descriptor of the hardware sound device  Codec  does the code support setting the sample rate?  Most Sonys seem to follow the convention of 3dB/step then 2dB/step then 1dB/step  3dB/step  2dB/step  1dB/step  1.5dB then 2dB  there are 32 levels but the last two are the same so in fact it
+             * is the same curve as the cxd3774gf_d  return the safest curve (only 31 levels)  some targets don't have noise cancelling so silently fail  Set NC switch  Get NC switch  Get HP status  Set HP type  Get HP type  Set gain  Get gain  Set filter  Get filter  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+ * what the intention of these modes are and the OF does not seem to use
+ * them by default  turn on codec  mute  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+     * what the intention of these modes are and the OF does not seem to use
+     * them by default  select playback source  use headphone output  unmute  sample rate  init noican  dump configuration, for debug purposes  make sure we start in a clean state  init hw  volume must be driver unit  the driver expects percent, convert from centibel in range 0...x  on some recent players like A10, Sony decided to merge left/right volume
+     * into one, thus we need to make sure we write the correct number of values  volume is in tenth-dB  FIXME at the moment we don't support balance and just average left and right.
+     * But this could be implemented using pcm alsa digital volume  the Sony drivers expect vol_l = vol_r  min/max for pcm volume  On some codecs (like cs47L01), Sony clear overdrives the DAC which produces
+     * massive clipping at any level (since they fix the DAC volume at around +6dB
+     * and then adjust HP volume in negative at the top of range !!). The only
+     * solution around this problem is to use the digital volume first so that
+     * very quickly the digital volume compensate for the DAC overdrive and we
+     * avoid clipping.  any volume above this will cause massive clipping the DAC  to avoid the clipping problem, virtually decrease requested volume by the
+     * clipping threshold, so that we will compensate in digital later by
+     * at least this amount if possibly  pick driver level just above request volume  now remove the artifical volume change  now adjust digital volume  digital cannot do <43dB  mute  digital cannot do >0dB  it's slightly annoying that Sony put the value in an enum with strings... **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ *
+ * Copyright (c) 2016 Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This driver handle the Sony linux audio drivers: despite using many differents
+ * codecs, it appears that they all share a common interface and common controls.  This is the alsa mixer interface exposed by Sony:
+numid=3,iface=MIXER,name='Capture Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'None'
+  ; Item #1 'Line'
+  ; Item #2 'Fm'
+  ; Item #3 'Mic'
+  : values=0
+numid=2,iface=MIXER,name='Playback Src Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=7
+  ; Item #0 'None'
+  ; Item #1 'Music'
+  ; Item #2 'Video'
+  ; Item #3 'Tv'
+  ; Item #4 'Fm'
+  ; Item #5 'Line'
+  ; Item #6 'Mic'
+  : values=1
+numid=1,iface=MIXER,name='Playback Volume'
+  ; type=INTEGER,access=rw------,values=2,min=0,max=100,step=1
+  : values=5,5
+numid=7,iface=MIXER,name='CODEC Acoustic Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=8,iface=MIXER,name='CODEC Cue/Rev Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=9,iface=MIXER,name='CODEC Fade In Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=6,iface=MIXER,name='CODEC Mute Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=5,iface=MIXER,name='CODEC Power Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
+numid=10,iface=MIXER,name='CODEC Stanby Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=off
+numid=4,iface=MIXER,name='Output Switch'
+  ; type=ENUMERATED,access=rw------,values=1,items=4
+  ; Item #0 'Headphone'
+  ; Item #1 'LineVariable'
+  ; Item #2 'LineFixed'
+  ; Item #3 'Speaker'
+  : values=0
+numid=6,iface=MIXER,name='Sampling Rate'
+  ; type=ENUMERATED,access=rw------,values=1,items=6
+  ; Item #0 '44100'
+  ; Item #1 '48000'
+  ; Item #2 '88200'
+  ; Item #3 '96000'
+  ; Item #4 '176400'
+  ; Item #5 '192000'
+  : values=0
+ List of various codecs used by Sony  Description of the volume curve implemented by the kernel driver  number of levels  levels in tenth-dB, level[0] is always mute  file descriptor of the icx_noican device  file descriptor of the hardware sound device  Codec  does the code support setting the sample rate?  Most Sonys seem to follow the convention of 3dB/step then 2dB/step then 1dB/step  3dB/step  2dB/step  1dB/step  1.5dB then 2dB  there are 32 levels but the last two are the same so in fact it
+             * is the same curve as the cxd3774gf_d  return the safest curve (only 31 levels)  some targets don't have noise cancelling so silently fail  Set NC switch  Get NC switch  Get HP status  Set HP type  Get HP type  Set gain  Get gain  Set filter  Get filter  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+ * what the intention of these modes are and the OF does not seem to use
+ * them by default  turn on codec  mute  Acoustic and Cue/Rev control how the volume curve, but it is not clear
+     * what the intention of these modes are and the OF does not seem to use
+     * them by default  select playback source  use headphone output  unmute  sample rate  init noican  dump configuration, for debug purposes  make sure we start in a clean state  init hw  volume must be driver unit  the driver expects percent, convert from centibel in range 0...x  on some recent players like A10, Sony decided to merge left/right volume
+     * into one, thus we need to make sure we write the correct number of values  volume is in tenth-dB  FIXME at the moment we don't support balance and just average left and right.
+     * But this could be implemented using pcm alsa digital volume  the Sony drivers expect vol_l = vol_r  min/max for pcm volume  On some codecs (like cs47L01), Sony clear overdrives the DAC which produces
+     * massive clipping at any level (since they fix the DAC volume at around +6dB
+     * and then adjust HP volume in negative at the top of range !!). The only
+     * solution around this problem is to use the digital volume first so that
+     * very quickly the digital volume compensate for the DAC overdrive and we
+     * avoid clipping.  any volume above this will cause massive clipping the DAC  to avoid the clipping problem, virtually decrease requested volume by the
+     * clipping threshold, so that we will compensate in digital later by
+     * at least this amount if possibly  pick driver level just above request volume  now remove the artifical volume change  now adjust digital volume  digital cannot do <43dB  mute  digital cannot do >0dB  it's slightly annoying that Sony put the value in an enum with strings... 

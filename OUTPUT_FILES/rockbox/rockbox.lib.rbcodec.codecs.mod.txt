@@ -1,0 +1,268 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * MOD Codec for rockbox
+ *
+ * Written from scratch by Rainer Sinsch
+ *         exclusivly for Rockbox in February 2008
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************************
+  * This version supports large files directly from internal memory management.
+  * There is a drawback however: It may happen that a song is not completely
+  * loaded when the internal rockbox-ringbuffer (approx. 28MB) is filled up
+  * As a workaround make sure you don't have directories with mods larger
+  * than a total of 28MB
+  ************ This codec supports MOD Files:
+ *
+  The sample buffer  Instrument Data  Sample name / description char description[22]; Sample length in bytes  Sample finetuning (-8 - +7)  Sample volume (0 - 64)  Sample Repeat Position  Sample Repeat Length   Offset to sample data  Song Data  Song name / title description char szTitle[20]; No. of channels in song  No. of instruments used (either 15 or 31)  How many patterns are beeing played?  Where to jump after the song end?  Pointer to the Pattern Order Table  Pointer to the pattern data   Pointer to the sample buffer  Instrument data   Current Volume  Current Offset to period in PeriodTable of notebeeing played
+       (can be temporarily negative)  Current Period beeing played  Current effect  Current parameters of effect  Current Instrument beeing played  Current Vibrato Speed  Current Vibrato Depth  Current Position for Vibrato in SinTable  Current Tremolo Speed  Current Tremolo Depth  Current Position for Tremolo in SinTable  Current Speed of Effect "Slide Note up"  Current Speed of Effect "Slide Note down"  Current Speed of the "Slide to Note" effect  Current Period of the "Slide to Note" effect  Ticks per Line  Beats per Minute  Position of the Song in the Pattern Table (0-127)  Current Line (may be temporarily < 0)  Current Tick  How many samples are required to calculate for each tick?  Information about the channels  The Amiga Period Table  The sinus table [-255,255]  Is the glissando effect enabled?  Is the Amiga Filter enabled?  The pattern-line where the loop is carried out (set with e6 command)  Number of times to loop  Panning (0 = left, 16 = right)  Sample frequency of the channel  Position of the sample currently played  Fractual Position of the sample currently player  Loop Sample  Loop Position Start  Loop Position End  Is The channel beeing played?  The Volume (0..64)  The last sampledata beeing played (required for interpolation)  The channels  The Song  The Module Player  The Amiga Period Table (+1 because we use index 0 for period 0 = no new note)  The sin table  Remember the instrument  Just to make sure we don't devide by zero
+     * amigaperiod shouldn't 0 anyway - if it is the case
+     * then something terribly went wrong  Initialize the MOD Player with default values and precalc tables  As the calculation of periodtable and sintable uses float and double 
+     * rockbox uses two predefined tables. This reduces the codesize by
+     * several KB.  Calculate Amiga Period Values
+     * Start with Period 907 (= C-1 with Finetune -8) and work upwards  Index 0 stands for no note (and therefore no period)  = pow(2.0f, 1.0f/(12.0f*8.0f)); 
+     * This is a more accurate but also time more consuming approach
+     * to calculate the amiga period table
+     * Commented out for speed purposes
+    const int finetuning = 8;
+    const int octaves = 3;
+    for (int halftone=0;halftone<=finetuning*octaves*12+7;halftone++)
+        {
+            float e = pow(2.0f, halftone/(12.0f*8.0f));
+            float f = 906.55f/e;
+            modplayer.periodtable[halfetone+1] = (int)(f+0.5f);
+        }
+     Calculate Protracker Vibrato sine table
+     * The routine makes use of the Harmonical Oscillator Approach
+     * for calculating sine tables
+     * (see http://membres.lycos.fr/amycoders/tutorials/sintables.html)
+     * The routine presented here calculates a complete sine wave
+     * with 64 values in range [-255,255]
+      = 2*PI/64  Point to the predefined tables  Set Default Player Values  Disable glissando  Disable the Amiga Filter  Default Panning Values  Set Default Panning  Reset channels in the MOD Player  Don't play anything  Load the MOD File from memory  We don't support PowerPacker 2.0 Files  Get the File Format Tag  Find out how many channels and instruments are used  The file has no format tag, so most likely soundtracker  Get the Song title
+     * Skipped here
+     * strncpy(modsong.szTitle, (char*)pMODFile, 20);  Get the Instrument information strncpy(instrument->description, (char*)p, 22);  Treat finetuning as signed nibble  Get the pattern information  Find out how many patterns are used within this song  use 'restartposition' (historically set to 127) which is not used here
+       as a marker that periods have already been converted  Get the pattern data; ST doesn't have fileformattag, so 4 bytes less  Convert the period values in the mod file to offsets
+     * in our periodtable (but only, if we haven't done this yet)  Find the offset of the current period  Write back the period offset  Remember that we already converted the periods,
+         * in case the file gets reloaded by rewinding 
+         * with 0xfe (arbitary magic value > 127)  Get the samples
+     * Calculation: The Samples come after the pattern data
+     * We know that there are nMaxPatterns and each pattern requires
+     * 4 bytes per note and per channel.
+     * And of course there are always lines in each channel  Apply vibrato to channel  Apply Vibrato
+     * >> 7 is used in the original protracker source code  Foward in Sine Table  Apply tremolo to channel
+ * (same as vibrato, but only apply on volume instead of pitch)  Apply Tremolo
+     * >> 6 is used in the original protracker source code  Foward in Sine Table  Apply Slide to Note effect to channel  If there hasn't been any slide-to note set up, then return  Slide note up  Slide note down  Apply Slide to Note effect on channel,
+ * but this time with glissando enabled  Slide note up  Slide note down  Apply Volume Slide  If both X and Y Parameters are non-zero, then the y value is ignored  Play the current line (at tick 0)  Get pointer to the current pattern  Only allow one Patternbreak Commando per Line  Remember Instrument and set Volume if new Instrument triggered  And trigger new sample, if new instrument was set  Advance the new sample to the same offset
+                 * the old sample was beeing played  Remember last played instrument on channel  Set Volume to standard instrument volume,
+             * if not overwritten by volume effect  Trigger new sample if note available  Restart instrument only when new sample triggered  Set the new amiga period
+             * (but only, if there is no slide to note effect)  Apply finetuning to sample  When a new note is played without slide to note setup,
+                 * then disable slide to note  Effect 0: Arpeggio  Set the base period on tick 0  Slide up (Portamento up)  Slide down (Portamento down)  Slide to Note  Get the slide to note directly from the pattern buffer  If glissando is enabled apply the effect directly here  Set Vibrato  Effect 0x06: Slide to note  Get the slide to note directly from the pattern buffer  Effect 0x06 is "Continue Effects"  It is not processed on tick 0  Set Tremolo  Set fine panning  Internal panning goes from 0..15
+                 * Scale the fine panning value to that range  Set Sample Offset  Forward the new offset to the mixer  Effect 0x0a (Volume slide) is not processed on tick 0  Position Jump  Set Volume  Pattern break  Extended Effects  Set Filter  Fineslide up  Find out the new offset in the period table  Fineslide down  Set glissando on/off  Set Vibrato waveform  Currently not implemented  Set Finetune value  Treat as signed nibble  Pattern loop  Set Tremolo waveform  Not yet implemented  Enhanced Effect 8 is not used  Retrigger sample  Only processed on subsequent ticks  Fine volume slide up  Fine volume slide down  Cut sample  Continue sample  Note delay (Usage: $ED + ticks to delay note.)  We stop the sample here on tick 0
+                         * and restart it later in the effect  Set Speed  Play the current effect of the note (ticks 1..speed)  If there is no note active then there are no effects to play  Effect 0: Arpeggio  Effect 1: Slide Up  Find out the new offset in the period table  Make sure we don't go out of range  Effect 2: Slide Down  Find out the new offset in the period table  Make sure we don't go out of range  Effect 3: Slide to Note  Apply smooth sliding, if no glissando is enabled  Effect 4: Vibrato  Effect 5: Continue effect 3:'Slide to note',
+             *           but also do Volume slide  Effect 6: Continue effect 4:'Vibrato',
+             *           but also do Volume slide  Effect 7: Tremolo  Effect 8 (Set fine panning) is only processed at tick 0  Effect 9 (Set sample offset) is only processed at tick 0  Effect A: Volume slide  Effect B (Position jump) is only processed at tick 0  Effect C (Set Volume) is only processed at tick 0  Effect D (Pattern Preak) is only processed at tick 0  Effect E (Enhanced Effect)  Retrigger sample ($E9 + Tick to Retrig note at)  Don't device by zero  Apply retrig  Cut note (Usage: $EC + Tick to Cut note at)  Delay note (Usage: $ED + ticks to delay note)  If this is the correct tick,
+                         * we start playing the sample now  Effect F (Set Speed) is only processed at tick 0  125bpm equals to 50Hz (= 0.02s)
+     * => one tick = mixingrate/50,
+     * samples passing in one tick:
+     * mixingrate/(bpm/2.5) = 2.5*mixingrate/bpm  int in rockbox  New Tick?  This is for Noise Tracker
+                         * modplayer.patterntableposition =
+                         *    modsong.songendjumpposition;
+                         * More compatible approach is restart from 0  Mix buffers from here
+         * Walk through all channels  If song has not stopped playing  Loop through all channels  Only mix the sample,
+                 * if channel there is something played on the channel  Loop the sample, if requested?  If the sample has stopped playing don't mix it  Get the sample  Interpolate if the sample-frequency is lower
+                 * than the mixing rate
+                 * If you don't want interpolation simply skip this part  Low precision linear interpolation
+                     * (fast integer based)  Save the last played sample for interpolation purposes  Pan the sample  Advance sample  If we have more than 4 channels
+         * we have to make sure that we apply clipping  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load MOD file  The main decoder loop  Needs to be a bit more elaborate or critical stuff is missed  New time is ready in param **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * MOD Codec for rockbox
+ *
+ * Written from scratch by Rainer Sinsch
+ *         exclusivly for Rockbox in February 2008
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************************
+  * This version supports large files directly from internal memory management.
+  * There is a drawback however: It may happen that a song is not completely
+  * loaded when the internal rockbox-ringbuffer (approx. 28MB) is filled up
+  * As a workaround make sure you don't have directories with mods larger
+  * than a total of 28MB
+  ************ This codec supports MOD Files:
+ *
+  The sample buffer  Instrument Data  Sample name / description char description[22]; Sample length in bytes  Sample finetuning (-8 - +7)  Sample volume (0 - 64)  Sample Repeat Position  Sample Repeat Length   Offset to sample data  Song Data  Song name / title description char szTitle[20]; No. of channels in song  No. of instruments used (either 15 or 31)  How many patterns are beeing played?  Where to jump after the song end?  Pointer to the Pattern Order Table  Pointer to the pattern data   Pointer to the sample buffer  Instrument data   Current Volume  Current Offset to period in PeriodTable of notebeeing played
+       (can be temporarily negative)  Current Period beeing played  Current effect  Current parameters of effect  Current Instrument beeing played  Current Vibrato Speed  Current Vibrato Depth  Current Position for Vibrato in SinTable  Current Tremolo Speed  Current Tremolo Depth  Current Position for Tremolo in SinTable  Current Speed of Effect "Slide Note up"  Current Speed of Effect "Slide Note down"  Current Speed of the "Slide to Note" effect  Current Period of the "Slide to Note" effect  Ticks per Line  Beats per Minute  Position of the Song in the Pattern Table (0-127)  Current Line (may be temporarily < 0)  Current Tick  How many samples are required to calculate for each tick?  Information about the channels  The Amiga Period Table  The sinus table [-255,255]  Is the glissando effect enabled?  Is the Amiga Filter enabled?  The pattern-line where the loop is carried out (set with e6 command)  Number of times to loop  Panning (0 = left, 16 = right)  Sample frequency of the channel  Position of the sample currently played  Fractual Position of the sample currently player  Loop Sample  Loop Position Start  Loop Position End  Is The channel beeing played?  The Volume (0..64)  The last sampledata beeing played (required for interpolation)  The channels  The Song  The Module Player  The Amiga Period Table (+1 because we use index 0 for period 0 = no new note)  The sin table  Remember the instrument  Just to make sure we don't devide by zero
+     * amigaperiod shouldn't 0 anyway - if it is the case
+     * then something terribly went wrong  Initialize the MOD Player with default values and precalc tables  As the calculation of periodtable and sintable uses float and double 
+     * rockbox uses two predefined tables. This reduces the codesize by
+     * several KB.  Calculate Amiga Period Values
+     * Start with Period 907 (= C-1 with Finetune -8) and work upwards  Index 0 stands for no note (and therefore no period)  = pow(2.0f, 1.0f/(12.0f*8.0f)); 
+     * This is a more accurate but also time more consuming approach
+     * to calculate the amiga period table
+     * Commented out for speed purposes
+    const int finetuning = 8;
+    const int octaves = 3;
+    for (int halftone=0;halftone<=finetuning*octaves*12+7;halftone++)
+        {
+            float e = pow(2.0f, halftone/(12.0f*8.0f));
+            float f = 906.55f/e;
+            modplayer.periodtable[halfetone+1] = (int)(f+0.5f);
+        }
+     Calculate Protracker Vibrato sine table
+     * The routine makes use of the Harmonical Oscillator Approach
+     * for calculating sine tables
+     * (see http://membres.lycos.fr/amycoders/tutorials/sintables.html)
+     * The routine presented here calculates a complete sine wave
+     * with 64 values in range [-255,255]
+      = 2*PI/64  Point to the predefined tables  Set Default Player Values  Disable glissando  Disable the Amiga Filter  Default Panning Values  Set Default Panning  Reset channels in the MOD Player  Don't play anything  Load the MOD File from memory  We don't support PowerPacker 2.0 Files  Get the File Format Tag  Find out how many channels and instruments are used  The file has no format tag, so most likely soundtracker  Get the Song title
+     * Skipped here
+     * strncpy(modsong.szTitle, (char*)pMODFile, 20);  Get the Instrument information strncpy(instrument->description, (char*)p, 22);  Treat finetuning as signed nibble  Get the pattern information  Find out how many patterns are used within this song  use 'restartposition' (historically set to 127) which is not used here
+       as a marker that periods have already been converted  Get the pattern data; ST doesn't have fileformattag, so 4 bytes less  Convert the period values in the mod file to offsets
+     * in our periodtable (but only, if we haven't done this yet)  Find the offset of the current period  Write back the period offset  Remember that we already converted the periods,
+         * in case the file gets reloaded by rewinding 
+         * with 0xfe (arbitary magic value > 127)  Get the samples
+     * Calculation: The Samples come after the pattern data
+     * We know that there are nMaxPatterns and each pattern requires
+     * 4 bytes per note and per channel.
+     * And of course there are always lines in each channel  Apply vibrato to channel  Apply Vibrato
+     * >> 7 is used in the original protracker source code  Foward in Sine Table  Apply tremolo to channel
+ * (same as vibrato, but only apply on volume instead of pitch)  Apply Tremolo
+     * >> 6 is used in the original protracker source code  Foward in Sine Table  Apply Slide to Note effect to channel  If there hasn't been any slide-to note set up, then return  Slide note up  Slide note down  Apply Slide to Note effect on channel,
+ * but this time with glissando enabled  Slide note up  Slide note down  Apply Volume Slide  If both X and Y Parameters are non-zero, then the y value is ignored  Play the current line (at tick 0)  Get pointer to the current pattern  Only allow one Patternbreak Commando per Line  Remember Instrument and set Volume if new Instrument triggered  And trigger new sample, if new instrument was set  Advance the new sample to the same offset
+                 * the old sample was beeing played  Remember last played instrument on channel  Set Volume to standard instrument volume,
+             * if not overwritten by volume effect  Trigger new sample if note available  Restart instrument only when new sample triggered  Set the new amiga period
+             * (but only, if there is no slide to note effect)  Apply finetuning to sample  When a new note is played without slide to note setup,
+                 * then disable slide to note  Effect 0: Arpeggio  Set the base period on tick 0  Slide up (Portamento up)  Slide down (Portamento down)  Slide to Note  Get the slide to note directly from the pattern buffer  If glissando is enabled apply the effect directly here  Set Vibrato  Effect 0x06: Slide to note  Get the slide to note directly from the pattern buffer  Effect 0x06 is "Continue Effects"  It is not processed on tick 0  Set Tremolo  Set fine panning  Internal panning goes from 0..15
+                 * Scale the fine panning value to that range  Set Sample Offset  Forward the new offset to the mixer  Effect 0x0a (Volume slide) is not processed on tick 0  Position Jump  Set Volume  Pattern break  Extended Effects  Set Filter  Fineslide up  Find out the new offset in the period table  Fineslide down  Set glissando on/off  Set Vibrato waveform  Currently not implemented  Set Finetune value  Treat as signed nibble  Pattern loop  Set Tremolo waveform  Not yet implemented  Enhanced Effect 8 is not used  Retrigger sample  Only processed on subsequent ticks  Fine volume slide up  Fine volume slide down  Cut sample  Continue sample  Note delay (Usage: $ED + ticks to delay note.)  We stop the sample here on tick 0
+                         * and restart it later in the effect  Set Speed  Play the current effect of the note (ticks 1..speed)  If there is no note active then there are no effects to play  Effect 0: Arpeggio  Effect 1: Slide Up  Find out the new offset in the period table  Make sure we don't go out of range  Effect 2: Slide Down  Find out the new offset in the period table  Make sure we don't go out of range  Effect 3: Slide to Note  Apply smooth sliding, if no glissando is enabled  Effect 4: Vibrato  Effect 5: Continue effect 3:'Slide to note',
+             *           but also do Volume slide  Effect 6: Continue effect 4:'Vibrato',
+             *           but also do Volume slide  Effect 7: Tremolo  Effect 8 (Set fine panning) is only processed at tick 0  Effect 9 (Set sample offset) is only processed at tick 0  Effect A: Volume slide  Effect B (Position jump) is only processed at tick 0  Effect C (Set Volume) is only processed at tick 0  Effect D (Pattern Preak) is only processed at tick 0  Effect E (Enhanced Effect)  Retrigger sample ($E9 + Tick to Retrig note at)  Don't device by zero  Apply retrig  Cut note (Usage: $EC + Tick to Cut note at)  Delay note (Usage: $ED + ticks to delay note)  If this is the correct tick,
+                         * we start playing the sample now  Effect F (Set Speed) is only processed at tick 0  125bpm equals to 50Hz (= 0.02s)
+     * => one tick = mixingrate/50,
+     * samples passing in one tick:
+     * mixingrate/(bpm/2.5) = 2.5*mixingrate/bpm  int in rockbox  New Tick?  This is for Noise Tracker
+                         * modplayer.patterntableposition =
+                         *    modsong.songendjumpposition;
+                         * More compatible approach is restart from 0  Mix buffers from here
+         * Walk through all channels  If song has not stopped playing  Loop through all channels  Only mix the sample,
+                 * if channel there is something played on the channel  Loop the sample, if requested?  If the sample has stopped playing don't mix it  Get the sample  Interpolate if the sample-frequency is lower
+                 * than the mixing rate
+                 * If you don't want interpolation simply skip this part  Low precision linear interpolation
+                     * (fast integer based)  Save the last played sample for interpolation purposes  Pan the sample  Advance sample  If we have more than 4 channels
+         * we have to make sure that we apply clipping  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load MOD file  The main decoder loop  Needs to be a bit more elaborate or critical stuff is missed  New time is ready in param **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * MOD Codec for rockbox
+ *
+ * Written from scratch by Rainer Sinsch
+ *         exclusivly for Rockbox in February 2008
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************************
+  * This version supports large files directly from internal memory management.
+  * There is a drawback however: It may happen that a song is not completely
+  * loaded when the internal rockbox-ringbuffer (approx. 28MB) is filled up
+  * As a workaround make sure you don't have directories with mods larger
+  * than a total of 28MB
+  ************ This codec supports MOD Files:
+ *
+  The sample buffer  Instrument Data  Sample name / description char description[22]; Sample length in bytes  Sample finetuning (-8 - +7)  Sample volume (0 - 64)  Sample Repeat Position  Sample Repeat Length   Offset to sample data  Song Data  Song name / title description char szTitle[20]; No. of channels in song  No. of instruments used (either 15 or 31)  How many patterns are beeing played?  Where to jump after the song end?  Pointer to the Pattern Order Table  Pointer to the pattern data   Pointer to the sample buffer  Instrument data   Current Volume  Current Offset to period in PeriodTable of notebeeing played
+       (can be temporarily negative)  Current Period beeing played  Current effect  Current parameters of effect  Current Instrument beeing played  Current Vibrato Speed  Current Vibrato Depth  Current Position for Vibrato in SinTable  Current Tremolo Speed  Current Tremolo Depth  Current Position for Tremolo in SinTable  Current Speed of Effect "Slide Note up"  Current Speed of Effect "Slide Note down"  Current Speed of the "Slide to Note" effect  Current Period of the "Slide to Note" effect  Ticks per Line  Beats per Minute  Position of the Song in the Pattern Table (0-127)  Current Line (may be temporarily < 0)  Current Tick  How many samples are required to calculate for each tick?  Information about the channels  The Amiga Period Table  The sinus table [-255,255]  Is the glissando effect enabled?  Is the Amiga Filter enabled?  The pattern-line where the loop is carried out (set with e6 command)  Number of times to loop  Panning (0 = left, 16 = right)  Sample frequency of the channel  Position of the sample currently played  Fractual Position of the sample currently player  Loop Sample  Loop Position Start  Loop Position End  Is The channel beeing played?  The Volume (0..64)  The last sampledata beeing played (required for interpolation)  The channels  The Song  The Module Player  The Amiga Period Table (+1 because we use index 0 for period 0 = no new note)  The sin table  Remember the instrument  Just to make sure we don't devide by zero
+     * amigaperiod shouldn't 0 anyway - if it is the case
+     * then something terribly went wrong  Initialize the MOD Player with default values and precalc tables  As the calculation of periodtable and sintable uses float and double 
+     * rockbox uses two predefined tables. This reduces the codesize by
+     * several KB.  Calculate Amiga Period Values
+     * Start with Period 907 (= C-1 with Finetune -8) and work upwards  Index 0 stands for no note (and therefore no period)  = pow(2.0f, 1.0f/(12.0f*8.0f)); 
+     * This is a more accurate but also time more consuming approach
+     * to calculate the amiga period table
+     * Commented out for speed purposes
+    const int finetuning = 8;
+    const int octaves = 3;
+    for (int halftone=0;halftone<=finetuning*octaves*12+7;halftone++)
+        {
+            float e = pow(2.0f, halftone/(12.0f*8.0f));
+            float f = 906.55f/e;
+            modplayer.periodtable[halfetone+1] = (int)(f+0.5f);
+        }
+     Calculate Protracker Vibrato sine table
+     * The routine makes use of the Harmonical Oscillator Approach
+     * for calculating sine tables
+     * (see http://membres.lycos.fr/amycoders/tutorials/sintables.html)
+     * The routine presented here calculates a complete sine wave
+     * with 64 values in range [-255,255]
+      = 2*PI/64  Point to the predefined tables  Set Default Player Values  Disable glissando  Disable the Amiga Filter  Default Panning Values  Set Default Panning  Reset channels in the MOD Player  Don't play anything  Load the MOD File from memory  We don't support PowerPacker 2.0 Files  Get the File Format Tag  Find out how many channels and instruments are used  The file has no format tag, so most likely soundtracker  Get the Song title
+     * Skipped here
+     * strncpy(modsong.szTitle, (char*)pMODFile, 20);  Get the Instrument information strncpy(instrument->description, (char*)p, 22);  Treat finetuning as signed nibble  Get the pattern information  Find out how many patterns are used within this song  use 'restartposition' (historically set to 127) which is not used here
+       as a marker that periods have already been converted  Get the pattern data; ST doesn't have fileformattag, so 4 bytes less  Convert the period values in the mod file to offsets
+     * in our periodtable (but only, if we haven't done this yet)  Find the offset of the current period  Write back the period offset  Remember that we already converted the periods,
+         * in case the file gets reloaded by rewinding 
+         * with 0xfe (arbitary magic value > 127)  Get the samples
+     * Calculation: The Samples come after the pattern data
+     * We know that there are nMaxPatterns and each pattern requires
+     * 4 bytes per note and per channel.
+     * And of course there are always lines in each channel  Apply vibrato to channel  Apply Vibrato
+     * >> 7 is used in the original protracker source code  Foward in Sine Table  Apply tremolo to channel
+ * (same as vibrato, but only apply on volume instead of pitch)  Apply Tremolo
+     * >> 6 is used in the original protracker source code  Foward in Sine Table  Apply Slide to Note effect to channel  If there hasn't been any slide-to note set up, then return  Slide note up  Slide note down  Apply Slide to Note effect on channel,
+ * but this time with glissando enabled  Slide note up  Slide note down  Apply Volume Slide  If both X and Y Parameters are non-zero, then the y value is ignored  Play the current line (at tick 0)  Get pointer to the current pattern  Only allow one Patternbreak Commando per Line  Remember Instrument and set Volume if new Instrument triggered  And trigger new sample, if new instrument was set  Advance the new sample to the same offset
+                 * the old sample was beeing played  Remember last played instrument on channel  Set Volume to standard instrument volume,
+             * if not overwritten by volume effect  Trigger new sample if note available  Restart instrument only when new sample triggered  Set the new amiga period
+             * (but only, if there is no slide to note effect)  Apply finetuning to sample  When a new note is played without slide to note setup,
+                 * then disable slide to note  Effect 0: Arpeggio  Set the base period on tick 0  Slide up (Portamento up)  Slide down (Portamento down)  Slide to Note  Get the slide to note directly from the pattern buffer  If glissando is enabled apply the effect directly here  Set Vibrato  Effect 0x06: Slide to note  Get the slide to note directly from the pattern buffer  Effect 0x06 is "Continue Effects"  It is not processed on tick 0  Set Tremolo  Set fine panning  Internal panning goes from 0..15
+                 * Scale the fine panning value to that range  Set Sample Offset  Forward the new offset to the mixer  Effect 0x0a (Volume slide) is not processed on tick 0  Position Jump  Set Volume  Pattern break  Extended Effects  Set Filter  Fineslide up  Find out the new offset in the period table  Fineslide down  Set glissando on/off  Set Vibrato waveform  Currently not implemented  Set Finetune value  Treat as signed nibble  Pattern loop  Set Tremolo waveform  Not yet implemented  Enhanced Effect 8 is not used  Retrigger sample  Only processed on subsequent ticks  Fine volume slide up  Fine volume slide down  Cut sample  Continue sample  Note delay (Usage: $ED + ticks to delay note.)  We stop the sample here on tick 0
+                         * and restart it later in the effect  Set Speed  Play the current effect of the note (ticks 1..speed)  If there is no note active then there are no effects to play  Effect 0: Arpeggio  Effect 1: Slide Up  Find out the new offset in the period table  Make sure we don't go out of range  Effect 2: Slide Down  Find out the new offset in the period table  Make sure we don't go out of range  Effect 3: Slide to Note  Apply smooth sliding, if no glissando is enabled  Effect 4: Vibrato  Effect 5: Continue effect 3:'Slide to note',
+             *           but also do Volume slide  Effect 6: Continue effect 4:'Vibrato',
+             *           but also do Volume slide  Effect 7: Tremolo  Effect 8 (Set fine panning) is only processed at tick 0  Effect 9 (Set sample offset) is only processed at tick 0  Effect A: Volume slide  Effect B (Position jump) is only processed at tick 0  Effect C (Set Volume) is only processed at tick 0  Effect D (Pattern Preak) is only processed at tick 0  Effect E (Enhanced Effect)  Retrigger sample ($E9 + Tick to Retrig note at)  Don't device by zero  Apply retrig  Cut note (Usage: $EC + Tick to Cut note at)  Delay note (Usage: $ED + ticks to delay note)  If this is the correct tick,
+                         * we start playing the sample now  Effect F (Set Speed) is only processed at tick 0  125bpm equals to 50Hz (= 0.02s)
+     * => one tick = mixingrate/50,
+     * samples passing in one tick:
+     * mixingrate/(bpm/2.5) = 2.5*mixingrate/bpm  int in rockbox  New Tick?  This is for Noise Tracker
+                         * modplayer.patterntableposition =
+                         *    modsong.songendjumpposition;
+                         * More compatible approach is restart from 0  Mix buffers from here
+         * Walk through all channels  If song has not stopped playing  Loop through all channels  Only mix the sample,
+                 * if channel there is something played on the channel  Loop the sample, if requested?  If the sample has stopped playing don't mix it  Get the sample  Interpolate if the sample-frequency is lower
+                 * than the mixing rate
+                 * If you don't want interpolation simply skip this part  Low precision linear interpolation
+                     * (fast integer based)  Save the last played sample for interpolation purposes  Pan the sample  Advance sample  If we have more than 4 channels
+         * we have to make sure that we apply clipping  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load MOD file  The main decoder loop  Needs to be a bit more elaborate or critical stuff is missed  New time is ready in param 

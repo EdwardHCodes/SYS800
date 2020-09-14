@@ -1,0 +1,271 @@
+**************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* JPEG image viewer
+* (This is a real mess if it has to be coded in one single C file)
+*
+* File scrolling addition (C) 2005 Alexander Spyridakis
+* Copyright (C) 2004 Jörg Hohensohn aka [IDC]Dragon
+* Heavily borrowed from the IJG implementation (C) Thomas G. Lane
+* Small & fast downscaling IDCT (C) 2002 by Guido Vollbeding  JPEGclub.org
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for portability of below JPEG code  only for poor little endian machines *************** begin JPEG code ******************* Note: Uses knowledge that only the low byte of the result is used  value += 128;  overflow?  no: return value  yes: set low byte to appropriate boundary  outputs  Note: Uses knowledge that only the low byte of the result is used  value += 128  out of range 0..255?  yes: set all bits to ~(sign_bit)  outputs  IDCT implementation  Some C compilers fail to reduce "FIX(constant)" at compile time, thus
+* causing a lot of useless floating-point operations at run time.
+* To get around this we use the following pre-calculated constants.
+* If you change CONST_BITS you may want to add appropriate values.
+* (With a reasonable C compiler, you can just rely on the FIX() macro...)
+ FIX(0.298631336)  FIX(0.390180644)  FIX(0.541196100)  FIX(0.765366865)  FIX(0.899976223)  FIX(1.175875602)  FIX(1.501321110)  FIX(1.847759065)  FIX(1.961570560)  FIX(2.053119869)  FIX(2.562915447)  FIX(3.072711026)  Multiply an long variable by an long constant to yield an long result.
+* For 8-bit samples with the recommended scaling, all the variable
+* and constant values involved are no more than 16 bits wide, so a
+* 16x16->32 bit multiply can be used instead of a full 32x32 multiply.
+* For 12-bit samples, a full 32-bit multiplication will be needed.
+ Dequantize a coefficient by multiplying it by the multiplier-table
+* entry; produce an int result.  In this module, both inputs and result
+* are 16 bits or less, so either int or short multiply will work.
+ #define DEQUANTIZE(coef,quantval)  (((int) (coef)) * (quantval))  Descale and correctly round an int value that's scaled by N bits.
+* We assume RIGHT_SHIFT rounds towards minus infinity, so adding
+* the fudge factor is correct for either sign of X.
+
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 1x1 output block.
+ unused 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 2x2 output block.
+ Pass 1: process columns from input, store into work array.  Column 0  Column 1  Pass 2: process 2 rows, store into output array.  Row 0  Row 1 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 4x4 output block.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  Pass 2: process 4 rows from work array, store into output array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  advance pointer to next row 
+* Perform dequantization and inverse DCT on one block of coefficients.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Note results are scaled up by sqrt(8) compared to a true IDCT;  furthermore, we scale the results by 2**PASS1_BITS.  Due to quantization, we will usually find that many of the input
+    * coefficients are zero, especially the AC terms.  We can exploit this
+    * by short-circuiting the IDCT calculation for any column in which all
+    * the AC terms are zero.  In that case each output is equal to the
+    * DC coefficient (with scale factor as needed).
+    * With typical images and quantization tables, half or more of the
+    * column DCT calculations can be simplified this way.
+     AC terms all zero  advance pointers to next column  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+           transpose is its inverse.  i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointers to next column  Pass 2: process rows from work array, store into output array.  Note that we must descale the results by a factor of 8 == 2**3,  and also undo the PASS1_BITS scaling.  Rows of zeroes can be exploited in the same way as we did with columns.
+        * However, the column calculation has created many nonzero AC terms, so
+        * the simplification applies less often (typically 5% to 10% of the time).
+        * On machines with very fast multiplication, it's possible that the
+        * test takes more time than it's worth.  In that case this section
+        * may be commented out.
+         AC terms all zero  advance pointer to next row  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+        * transpose is its inverse. i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointer to next row  JPEG decoder implementation  Preprocess the JPEG JFIF file  variable length of marker segment  returned flags  no marker?  discard  Previous FF was fill byte  This FF could be start of a marker  Zero stuffed byte - discard  SOF Huff  - Baseline DCT  Highbyte  Lowbyte  sample precision (= 8 or 12)  Unsupported sample precision  Highbyte  Lowbyte  Highbyte  Lowbyte  Unsupported SOF0 component specification  Component info  Unsupported SOF0 subsampling  SOF Huff  - Extended sequential DCT SOF Huff  - Progressive DCT SOF Huff  - Spatial (sequential) lossless SOF Huff  - Differential sequential DCT SOF Huff  - Differential progressive DCT SOF Huff  - Differential spatial SOF Arith - Reserved for JPEG extensions SOF Arith - Extended sequential DCT SOF Arith - Progressive DCT SOF Arith - Spatial (sequential) lossless SOF Arith - Differential sequential DCT SOF Arith - Differential progressive DCT SOF Arith - Differential spatial other DCT model than baseline not implemented  Define Huffman Table(s)  Highbyte  Lowbyte  another table  table index  Huffman table index out of range  AC table  longer than allowed  DC table  longer than allowed  while  skip possible residue  Define Arithmetic coding conditioning(s)  Arithmetic coding not supported  Start of Image  End of Image  for temp private use arith code  skip parameterless marker  Start of Scan  Highbyte  Lowbyte  Unsupported SOS component specification  skip spectral information  exit while loop  Define quantization Table(s)  Highbyte  Lowbyte  # of tables  ID  Unsupported quantization table  Read Quantisation table:  Define Restart Interval  Highbyte  Lowbyte  Highbyte  Lowbyte  skip segment  Define Number of Lines  Define Hierarchical progression  Expand Reference Component(s)  Application Field 0 Application Field 1 Application Field 2 Application Field 3 Application Field 4 Application Field 5 Application Field 6 Application Field 7 Application Field 8 Application Field 9 Application Field 10 Application Field 11 Application Field 12 Application Field 13 Application Field 14 Application Field 15 Comment  Highbyte  Lowbyte  skip segment  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved  Unknown marker  switch  while  return flags with seen markers  Compute the derived values for a Huffman table  fill in back link  Figure C.1: make table of Huffman code length for each symbol  Note that this is in code-length order.  all possible code length  all codes per length  Figure C.2: generate the codes themselves  Note that this is in code-length order.  Figure F.15: generate decoding tables for bit-sequential decoding  huffval[] index of 1st symbol of code length l  minimum code of length l  maximum code of length l  -1 if no codes of this length  ensures huff_DECODE terminates  Compute lookahead tables to speed up decoding.
+    * First we set all the table entries to 0, indicating "too long";
+    * then we iterate through the Huffman codes that are short enough and
+    * fill in all the entries that correspond to bit sequences starting
+    * with that code.
+     l = current code's length, p = its index in huffcode[] & huffval[].  Generate left-justified code followed by all possible bit sequences  zag[i] is the natural-order position of the i'th element of zigzag order.
+ * If the incoming data is corrupted, decode_mcu could attempt to
+ * reference values beyond the end of the array.  To avoid a wild store,
+ * we put some extra zeroes after the real entries.
+  extra entries in case k>63 below  build the dequantization tables for the IDCT (De-ZiZagged)  default ordering  assignments for the decoding of blocks  4:2:2  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:2 vertically subsampled  block positions are mirrored  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:0  4:4:4  don't overwrite p_jpeg->blocks  error 
+* These functions/macros provide the in-line portion of bit fetching.
+* Use check_bit_buffer to ensure there are N bits in get_buffer
+* before using get_bits, peek_bits, or drop_bits.
+*  check_bit_buffer(state,n,action);
+*    Ensure there are N bits in get_buffer; if suspend, take action.
+*  val = get_bits(n);
+*    Fetch next N bits.
+*  val = peek_bits(n);
+*    Fetch next N bits without removing them from the buffer.
+*  drop_bits(n);
+*    Discard next N bits.
+* The value N should be a simple variable, not an expression, because it
+* is evaluated multiple times.
+ nbits is <= 16, so I can always refill 2 bytes in this case  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  re-synchronize to entropy data (skip restart marker)  we may have overread it, taking 2 bytes  search for a non-byte-padding marker, has to be RSTm or EOS  Figure F.12: extend sign bit.  entry n is 2**(n-1)  entry n is (-1 << n) + 1  Decode a single value   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode  JPEG decoder variant for YUV decoding, into 3 different planes   Note: it keeps the original color subsampling, even if resized.  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  or 128 for chroma?  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  calculate some strides  prepare offsets about where to store the different blocks  to the right  below  r+b  scan line init  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  Y component needs to bother about block store  chroma  for blkn  unrolled for (i=0; i<3; i++) loop  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR  a JPEG decoder specialized in decoding only the luminance (b&w)  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  prepare offsets about where to store the different blocks  to the right  below  r+b  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  only for Y component  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  only for Y component  for blkn  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR *************** end JPEG code *********************************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* JPEG image viewer
+* (This is a real mess if it has to be coded in one single C file)
+*
+* File scrolling addition (C) 2005 Alexander Spyridakis
+* Copyright (C) 2004 Jörg Hohensohn aka [IDC]Dragon
+* Heavily borrowed from the IJG implementation (C) Thomas G. Lane
+* Small & fast downscaling IDCT (C) 2002 by Guido Vollbeding  JPEGclub.org
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for portability of below JPEG code  only for poor little endian machines *************** begin JPEG code ******************* Note: Uses knowledge that only the low byte of the result is used  value += 128;  overflow?  no: return value  yes: set low byte to appropriate boundary  outputs  Note: Uses knowledge that only the low byte of the result is used  value += 128  out of range 0..255?  yes: set all bits to ~(sign_bit)  outputs  IDCT implementation  Some C compilers fail to reduce "FIX(constant)" at compile time, thus
+* causing a lot of useless floating-point operations at run time.
+* To get around this we use the following pre-calculated constants.
+* If you change CONST_BITS you may want to add appropriate values.
+* (With a reasonable C compiler, you can just rely on the FIX() macro...)
+ FIX(0.298631336)  FIX(0.390180644)  FIX(0.541196100)  FIX(0.765366865)  FIX(0.899976223)  FIX(1.175875602)  FIX(1.501321110)  FIX(1.847759065)  FIX(1.961570560)  FIX(2.053119869)  FIX(2.562915447)  FIX(3.072711026)  Multiply an long variable by an long constant to yield an long result.
+* For 8-bit samples with the recommended scaling, all the variable
+* and constant values involved are no more than 16 bits wide, so a
+* 16x16->32 bit multiply can be used instead of a full 32x32 multiply.
+* For 12-bit samples, a full 32-bit multiplication will be needed.
+ Dequantize a coefficient by multiplying it by the multiplier-table
+* entry; produce an int result.  In this module, both inputs and result
+* are 16 bits or less, so either int or short multiply will work.
+ #define DEQUANTIZE(coef,quantval)  (((int) (coef)) * (quantval))  Descale and correctly round an int value that's scaled by N bits.
+* We assume RIGHT_SHIFT rounds towards minus infinity, so adding
+* the fudge factor is correct for either sign of X.
+
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 1x1 output block.
+ unused 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 2x2 output block.
+ Pass 1: process columns from input, store into work array.  Column 0  Column 1  Pass 2: process 2 rows, store into output array.  Row 0  Row 1 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 4x4 output block.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  Pass 2: process 4 rows from work array, store into output array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  advance pointer to next row 
+* Perform dequantization and inverse DCT on one block of coefficients.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Note results are scaled up by sqrt(8) compared to a true IDCT;  furthermore, we scale the results by 2**PASS1_BITS.  Due to quantization, we will usually find that many of the input
+    * coefficients are zero, especially the AC terms.  We can exploit this
+    * by short-circuiting the IDCT calculation for any column in which all
+    * the AC terms are zero.  In that case each output is equal to the
+    * DC coefficient (with scale factor as needed).
+    * With typical images and quantization tables, half or more of the
+    * column DCT calculations can be simplified this way.
+     AC terms all zero  advance pointers to next column  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+           transpose is its inverse.  i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointers to next column  Pass 2: process rows from work array, store into output array.  Note that we must descale the results by a factor of 8 == 2**3,  and also undo the PASS1_BITS scaling.  Rows of zeroes can be exploited in the same way as we did with columns.
+        * However, the column calculation has created many nonzero AC terms, so
+        * the simplification applies less often (typically 5% to 10% of the time).
+        * On machines with very fast multiplication, it's possible that the
+        * test takes more time than it's worth.  In that case this section
+        * may be commented out.
+         AC terms all zero  advance pointer to next row  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+        * transpose is its inverse. i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointer to next row  JPEG decoder implementation  Preprocess the JPEG JFIF file  variable length of marker segment  returned flags  no marker?  discard  Previous FF was fill byte  This FF could be start of a marker  Zero stuffed byte - discard  SOF Huff  - Baseline DCT  Highbyte  Lowbyte  sample precision (= 8 or 12)  Unsupported sample precision  Highbyte  Lowbyte  Highbyte  Lowbyte  Unsupported SOF0 component specification  Component info  Unsupported SOF0 subsampling  SOF Huff  - Extended sequential DCT SOF Huff  - Progressive DCT SOF Huff  - Spatial (sequential) lossless SOF Huff  - Differential sequential DCT SOF Huff  - Differential progressive DCT SOF Huff  - Differential spatial SOF Arith - Reserved for JPEG extensions SOF Arith - Extended sequential DCT SOF Arith - Progressive DCT SOF Arith - Spatial (sequential) lossless SOF Arith - Differential sequential DCT SOF Arith - Differential progressive DCT SOF Arith - Differential spatial other DCT model than baseline not implemented  Define Huffman Table(s)  Highbyte  Lowbyte  another table  table index  Huffman table index out of range  AC table  longer than allowed  DC table  longer than allowed  while  skip possible residue  Define Arithmetic coding conditioning(s)  Arithmetic coding not supported  Start of Image  End of Image  for temp private use arith code  skip parameterless marker  Start of Scan  Highbyte  Lowbyte  Unsupported SOS component specification  skip spectral information  exit while loop  Define quantization Table(s)  Highbyte  Lowbyte  # of tables  ID  Unsupported quantization table  Read Quantisation table:  Define Restart Interval  Highbyte  Lowbyte  Highbyte  Lowbyte  skip segment  Define Number of Lines  Define Hierarchical progression  Expand Reference Component(s)  Application Field 0 Application Field 1 Application Field 2 Application Field 3 Application Field 4 Application Field 5 Application Field 6 Application Field 7 Application Field 8 Application Field 9 Application Field 10 Application Field 11 Application Field 12 Application Field 13 Application Field 14 Application Field 15 Comment  Highbyte  Lowbyte  skip segment  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved  Unknown marker  switch  while  return flags with seen markers  Compute the derived values for a Huffman table  fill in back link  Figure C.1: make table of Huffman code length for each symbol  Note that this is in code-length order.  all possible code length  all codes per length  Figure C.2: generate the codes themselves  Note that this is in code-length order.  Figure F.15: generate decoding tables for bit-sequential decoding  huffval[] index of 1st symbol of code length l  minimum code of length l  maximum code of length l  -1 if no codes of this length  ensures huff_DECODE terminates  Compute lookahead tables to speed up decoding.
+    * First we set all the table entries to 0, indicating "too long";
+    * then we iterate through the Huffman codes that are short enough and
+    * fill in all the entries that correspond to bit sequences starting
+    * with that code.
+     l = current code's length, p = its index in huffcode[] & huffval[].  Generate left-justified code followed by all possible bit sequences  zag[i] is the natural-order position of the i'th element of zigzag order.
+ * If the incoming data is corrupted, decode_mcu could attempt to
+ * reference values beyond the end of the array.  To avoid a wild store,
+ * we put some extra zeroes after the real entries.
+  extra entries in case k>63 below  build the dequantization tables for the IDCT (De-ZiZagged)  default ordering  assignments for the decoding of blocks  4:2:2  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:2 vertically subsampled  block positions are mirrored  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:0  4:4:4  don't overwrite p_jpeg->blocks  error 
+* These functions/macros provide the in-line portion of bit fetching.
+* Use check_bit_buffer to ensure there are N bits in get_buffer
+* before using get_bits, peek_bits, or drop_bits.
+*  check_bit_buffer(state,n,action);
+*    Ensure there are N bits in get_buffer; if suspend, take action.
+*  val = get_bits(n);
+*    Fetch next N bits.
+*  val = peek_bits(n);
+*    Fetch next N bits without removing them from the buffer.
+*  drop_bits(n);
+*    Discard next N bits.
+* The value N should be a simple variable, not an expression, because it
+* is evaluated multiple times.
+ nbits is <= 16, so I can always refill 2 bytes in this case  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  re-synchronize to entropy data (skip restart marker)  we may have overread it, taking 2 bytes  search for a non-byte-padding marker, has to be RSTm or EOS  Figure F.12: extend sign bit.  entry n is 2**(n-1)  entry n is (-1 << n) + 1  Decode a single value   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode  JPEG decoder variant for YUV decoding, into 3 different planes   Note: it keeps the original color subsampling, even if resized.  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  or 128 for chroma?  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  calculate some strides  prepare offsets about where to store the different blocks  to the right  below  r+b  scan line init  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  Y component needs to bother about block store  chroma  for blkn  unrolled for (i=0; i<3; i++) loop  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR  a JPEG decoder specialized in decoding only the luminance (b&w)  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  prepare offsets about where to store the different blocks  to the right  below  r+b  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  only for Y component  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  only for Y component  for blkn  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR *************** end JPEG code *********************************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* JPEG image viewer
+* (This is a real mess if it has to be coded in one single C file)
+*
+* File scrolling addition (C) 2005 Alexander Spyridakis
+* Copyright (C) 2004 Jörg Hohensohn aka [IDC]Dragon
+* Heavily borrowed from the IJG implementation (C) Thomas G. Lane
+* Small & fast downscaling IDCT (C) 2002 by Guido Vollbeding  JPEGclub.org
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+*************************************************************************** for portability of below JPEG code  only for poor little endian machines *************** begin JPEG code ******************* Note: Uses knowledge that only the low byte of the result is used  value += 128;  overflow?  no: return value  yes: set low byte to appropriate boundary  outputs  Note: Uses knowledge that only the low byte of the result is used  value += 128  out of range 0..255?  yes: set all bits to ~(sign_bit)  outputs  IDCT implementation  Some C compilers fail to reduce "FIX(constant)" at compile time, thus
+* causing a lot of useless floating-point operations at run time.
+* To get around this we use the following pre-calculated constants.
+* If you change CONST_BITS you may want to add appropriate values.
+* (With a reasonable C compiler, you can just rely on the FIX() macro...)
+ FIX(0.298631336)  FIX(0.390180644)  FIX(0.541196100)  FIX(0.765366865)  FIX(0.899976223)  FIX(1.175875602)  FIX(1.501321110)  FIX(1.847759065)  FIX(1.961570560)  FIX(2.053119869)  FIX(2.562915447)  FIX(3.072711026)  Multiply an long variable by an long constant to yield an long result.
+* For 8-bit samples with the recommended scaling, all the variable
+* and constant values involved are no more than 16 bits wide, so a
+* 16x16->32 bit multiply can be used instead of a full 32x32 multiply.
+* For 12-bit samples, a full 32-bit multiplication will be needed.
+ Dequantize a coefficient by multiplying it by the multiplier-table
+* entry; produce an int result.  In this module, both inputs and result
+* are 16 bits or less, so either int or short multiply will work.
+ #define DEQUANTIZE(coef,quantval)  (((int) (coef)) * (quantval))  Descale and correctly round an int value that's scaled by N bits.
+* We assume RIGHT_SHIFT rounds towards minus infinity, so adding
+* the fudge factor is correct for either sign of X.
+
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 1x1 output block.
+ unused 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 2x2 output block.
+ Pass 1: process columns from input, store into work array.  Column 0  Column 1  Pass 2: process 2 rows, store into output array.  Row 0  Row 1 
+* Perform dequantization and inverse DCT on one block of coefficients,
+* producing a reduced-size 4x4 output block.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  Pass 2: process 4 rows from work array, store into output array.  Even part  Odd part  Same rotation as in the even part of the 8x8 LL&M IDCT  Final output stage  advance pointer to next row 
+* Perform dequantization and inverse DCT on one block of coefficients.
+ buffers data between passes  Pass 1: process columns from input, store into work array.  Note results are scaled up by sqrt(8) compared to a true IDCT;  furthermore, we scale the results by 2**PASS1_BITS.  Due to quantization, we will usually find that many of the input
+    * coefficients are zero, especially the AC terms.  We can exploit this
+    * by short-circuiting the IDCT calculation for any column in which all
+    * the AC terms are zero.  In that case each output is equal to the
+    * DC coefficient (with scale factor as needed).
+    * With typical images and quantization tables, half or more of the
+    * column DCT calculations can be simplified this way.
+     AC terms all zero  advance pointers to next column  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+           transpose is its inverse.  i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointers to next column  Pass 2: process rows from work array, store into output array.  Note that we must descale the results by a factor of 8 == 2**3,  and also undo the PASS1_BITS scaling.  Rows of zeroes can be exploited in the same way as we did with columns.
+        * However, the column calculation has created many nonzero AC terms, so
+        * the simplification applies less often (typically 5% to 10% of the time).
+        * On machines with very fast multiplication, it's possible that the
+        * test takes more time than it's worth.  In that case this section
+        * may be commented out.
+         AC terms all zero  advance pointer to next row  Even part: reverse the even part of the forward DCT.  The rotator is sqrt(2)*c(-6).  Odd part per figure 8; the matrix is unitary and hence its
+        * transpose is its inverse. i0..i3 are y7,y5,y3,y1 respectively.  sqrt(2) * c3  sqrt(2) * (-c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5+c7)  sqrt(2) * ( c1+c3+c5-c7)  sqrt(2) * ( c1+c3-c5-c7)  sqrt(2) * (c7-c3)  sqrt(2) * (-c1-c3)  sqrt(2) * (-c3-c5)  sqrt(2) * (c5-c3)  Final output stage: inputs are tmp10..tmp13, tmp0..tmp3  advance pointer to next row  JPEG decoder implementation  Preprocess the JPEG JFIF file  variable length of marker segment  returned flags  no marker?  discard  Previous FF was fill byte  This FF could be start of a marker  Zero stuffed byte - discard  SOF Huff  - Baseline DCT  Highbyte  Lowbyte  sample precision (= 8 or 12)  Unsupported sample precision  Highbyte  Lowbyte  Highbyte  Lowbyte  Unsupported SOF0 component specification  Component info  Unsupported SOF0 subsampling  SOF Huff  - Extended sequential DCT SOF Huff  - Progressive DCT SOF Huff  - Spatial (sequential) lossless SOF Huff  - Differential sequential DCT SOF Huff  - Differential progressive DCT SOF Huff  - Differential spatial SOF Arith - Reserved for JPEG extensions SOF Arith - Extended sequential DCT SOF Arith - Progressive DCT SOF Arith - Spatial (sequential) lossless SOF Arith - Differential sequential DCT SOF Arith - Differential progressive DCT SOF Arith - Differential spatial other DCT model than baseline not implemented  Define Huffman Table(s)  Highbyte  Lowbyte  another table  table index  Huffman table index out of range  AC table  longer than allowed  DC table  longer than allowed  while  skip possible residue  Define Arithmetic coding conditioning(s)  Arithmetic coding not supported  Start of Image  End of Image  for temp private use arith code  skip parameterless marker  Start of Scan  Highbyte  Lowbyte  Unsupported SOS component specification  skip spectral information  exit while loop  Define quantization Table(s)  Highbyte  Lowbyte  # of tables  ID  Unsupported quantization table  Read Quantisation table:  Define Restart Interval  Highbyte  Lowbyte  Highbyte  Lowbyte  skip segment  Define Number of Lines  Define Hierarchical progression  Expand Reference Component(s)  Application Field 0 Application Field 1 Application Field 2 Application Field 3 Application Field 4 Application Field 5 Application Field 6 Application Field 7 Application Field 8 Application Field 9 Application Field 10 Application Field 11 Application Field 12 Application Field 13 Application Field 14 Application Field 15 Comment  Highbyte  Lowbyte  skip segment  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved for JPEG extensions  Reserved  Unknown marker  switch  while  return flags with seen markers  Compute the derived values for a Huffman table  fill in back link  Figure C.1: make table of Huffman code length for each symbol  Note that this is in code-length order.  all possible code length  all codes per length  Figure C.2: generate the codes themselves  Note that this is in code-length order.  Figure F.15: generate decoding tables for bit-sequential decoding  huffval[] index of 1st symbol of code length l  minimum code of length l  maximum code of length l  -1 if no codes of this length  ensures huff_DECODE terminates  Compute lookahead tables to speed up decoding.
+    * First we set all the table entries to 0, indicating "too long";
+    * then we iterate through the Huffman codes that are short enough and
+    * fill in all the entries that correspond to bit sequences starting
+    * with that code.
+     l = current code's length, p = its index in huffcode[] & huffval[].  Generate left-justified code followed by all possible bit sequences  zag[i] is the natural-order position of the i'th element of zigzag order.
+ * If the incoming data is corrupted, decode_mcu could attempt to
+ * reference values beyond the end of the array.  To avoid a wild store,
+ * we put some extra zeroes after the real entries.
+  extra entries in case k>63 below  build the dequantization tables for the IDCT (De-ZiZagged)  default ordering  assignments for the decoding of blocks  4:2:2  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:2 vertically subsampled  block positions are mirrored  Y1=Y2=0, U=1, V=2  DC, DC, AC, AC  4:2:0  4:4:4  don't overwrite p_jpeg->blocks  error 
+* These functions/macros provide the in-line portion of bit fetching.
+* Use check_bit_buffer to ensure there are N bits in get_buffer
+* before using get_bits, peek_bits, or drop_bits.
+*  check_bit_buffer(state,n,action);
+*    Ensure there are N bits in get_buffer; if suspend, take action.
+*  val = get_bits(n);
+*    Fetch next N bits.
+*  val = peek_bits(n);
+*    Fetch next N bits without removing them from the buffer.
+*  drop_bits(n);
+*    Discard next N bits.
+* The value N should be a simple variable, not an expression, because it
+* is evaluated multiple times.
+ nbits is <= 16, so I can always refill 2 bytes in this case  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  legal marker can be byte stuffing or RSTm  simplification: just skip the (one-byte) marker code  re-synchronize to entropy data (skip restart marker)  we may have overread it, taking 2 bytes  search for a non-byte-padding marker, has to be RSTm or EOS  Figure F.12: extend sign bit.  entry n is 2**(n-1)  entry n is (-1 << n) + 1  Decode a single value   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode   slow_DECODE(s, HUFF_LOOKAHEAD+1)) < 0);  error in Huffman  fake a zero, this is most safe  end slow decode  JPEG decoder variant for YUV decoding, into 3 different planes   Note: it keeps the original color subsampling, even if resized.  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  or 128 for chroma?  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  calculate some strides  prepare offsets about where to store the different blocks  to the right  below  r+b  scan line init  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  Y component needs to bother about block store  chroma  for blkn  unrolled for (i=0; i<3; i++) loop  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR  a JPEG decoder specialized in decoding only the luminance (b&w)  bitstream "object"  decoded DCT coefficients  bytes from one line to the next (skip_line)  bytes to next DCT row / column  loop counter  bitmap pointer  selected IDCT  AC coefficients needed up to here  init the block with this many zeros  memory offsets: order of Y11 Y12 Y21 Y22 U V  MCUs until restart marker  pick the IDCT we want, determine how to work with coefs  all  all  this far in zig-zag to cover 4*4  clear this far in linear order  this far in zig-zag to cover 2*2  clear this far in linear order  no AC, not needed  no AC, not needed  not supported  init bitstream, fake a restart to make it start  prepare offsets about where to store the different blocks  to the right  below  r+b  Outer loop handles each block in the MCU  Decode a single block's worth of coefficients  coefficient index  huffman values  component index  table index  Section F.2.2.1: decode the DC coefficient difference  only for Y component  output it (assumes zag[0] = 0)  coefficient buffer must be cleared  Section F.2.2.2: decode the AC coefficients  for k  In this path we just discard the values  for k  only for Y component  for blkn  if a restart marker is due:  count again  align the bitstream  reset decoder  for x  notify about decoding progress  for y  success  !HAVE_LCD_COLOR *************** end JPEG code *******************

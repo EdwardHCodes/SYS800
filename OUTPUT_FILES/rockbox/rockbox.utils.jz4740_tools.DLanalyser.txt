@@ -1,0 +1,445 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Jin Le
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * dl_analyser.c ONDA VX767 DL file analyser
+ *
+ * Copyright (C) 2008 - JinLe
+ *
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, 
+ * Boston, MA  02110-1301  USA
+
+    The DL file can not find any entry point,
+    so I think it just a dynamic library
+    not executable.
+    
+    IN THE FILE
+    +--------------------------
+    +      block_header_t
+    +--------------------------
+    +      block_impt_header_t
+    +--------------------------
+    +      block_expt_header_t
+    +--------------------------
+    +      block_raw_header_t
+    +--------------------------
+    +      import symbol
+    +--------------------------
+    +      export symbol
+    +--------------------------
+    +      padding
+    +-------------------------- <-----(raw->offset)
+    +
+    +      raw code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->offset + raw->size)(bss start)
+    
+    IN THE MEMORY
+    +-------------------------- <-----(raw->mem2)
+    +
+    +      code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->mem2 + raw->size)(bss start)
+    +
+    +      BSS(Not in file)
+    +
+    +-------------------------- <-----(raw->mem2 + raw->memsize)(bss end)
+    
+    HOW TO disassemble (Ex: VX767_V1.0.dl)
+    
+    STEP 1:
+    ./dl_analyser VX767_V1.0.dl
+
+    =======================HEADER=====================
+    File magic: CCDL
+    File Type : 0x00010000
+    Offset    : 0x00020001
+    Size      : 0x00000004
+    BuildDate : 2008/03/26 09:59:19
+    PaddindSum: 0x0
+    =====================IMPT HEADER==================
+    Header magic   : IMPT
+    Header Type    : 0x00000008
+    Offset         : 0x000000a0
+    Size           : 0x0000007c
+    PaddindSum     : 0x0
+    =====================EXPT HEADER==================
+    Header magic   : EXPT
+    Header Type    : 0x00000009
+    Offset         : 0x00000120
+    Size           : 0x00000108
+    PaddindSum     : 0x0
+    =====================RAWD HEADER==================
+    Header magic    : RAWD
+    Header Type     : 0x00000001
+    Offset          : 0x00000230
+    Size            : 0x000058a0
+    Paddind1        : 0x0
+    BSS Clear Code  : 0x80f82714 start at file 0x2944
+    mem_place_start : 0x80f80000 start at file 0x230
+    memsize         : 0x5a58
+    mem_end(BSS end): 0x80f85a58
+    Paddind2Sum     : 0x0
+    =====================IMPORT SYMBOL==================
+    number symbols  : 0x4
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f82750 name: printf
+    Sym[01] offset 0x0008 padding 0x0 flag 0x20000 address 0x80f82758 name: udelay
+    Sym[02] offset 0x0010 padding 0x0 flag 0x20000 address 0x80f82760 name: delay_ms
+    Sym[03] offset 0x001c padding 0x0 flag 0x20000 address 0x80f82768 name: get_rgb_lcd_buf
+    =====================EXPORT SYMBOL==================
+    number symbols  : 0x7
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f826dc name: init_lcd_register
+    Sym[01] offset 0x0014 padding 0x0 flag 0x20000 address 0x80f80160 name: get_ccpmp_config
+    Sym[02] offset 0x0028 padding 0x0 flag 0x20000 address 0x80f82690 name: get_bklight_config
+    Sym[03] offset 0x003c padding 0x0 flag 0x20000 address 0x80f81120 name: init_lcd_gpio
+    Sym[04] offset 0x004c padding 0x0 flag 0x20000 address 0x80f804d0 name: rgb_user_init
+    Sym[05] offset 0x005c padding 0x0 flag 0x20000 address 0x80f806a4 name: get_rgb_frame_buf
+    Sym[06] offset 0x0070 padding 0x0 flag 0x20000 address 0x80f8269c name: lcd_set_direction_mode
+
+    STEP 2:
+    mips-linux-objdump -bbinary -mmips -D VX767_V1.0.dl > 767.as
+    
+    STEP 3:
+    for function lcd_set_direction_mode(address 0x80f8269c)
+    we translate that address into 'file address'
+    file address = 0x80f8269c - 0x80f80000 + 0x230 = 0x28CC
+    
+    STEP 4:
+    Find code in 767.as use this 'file address'
+    
+    2008.10.20 6:23PM
+******************************HEADER**********************************************************SYMBOL****************************Read tableOffsetPaddingFlagAddressRead nameSet seek startget length of nameReset seek startRead nameRead HeaderRead Import headerRead Export headerRead Raw data headerread import symbolnumberpaddingread export symbolnumberpadding**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Jin Le
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * dl_analyser.c ONDA VX767 DL file analyser
+ *
+ * Copyright (C) 2008 - JinLe
+ *
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, 
+ * Boston, MA  02110-1301  USA
+
+    The DL file can not find any entry point,
+    so I think it just a dynamic library
+    not executable.
+    
+    IN THE FILE
+    +--------------------------
+    +      block_header_t
+    +--------------------------
+    +      block_impt_header_t
+    +--------------------------
+    +      block_expt_header_t
+    +--------------------------
+    +      block_raw_header_t
+    +--------------------------
+    +      import symbol
+    +--------------------------
+    +      export symbol
+    +--------------------------
+    +      padding
+    +-------------------------- <-----(raw->offset)
+    +
+    +      raw code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->offset + raw->size)(bss start)
+    
+    IN THE MEMORY
+    +-------------------------- <-----(raw->mem2)
+    +
+    +      code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->mem2 + raw->size)(bss start)
+    +
+    +      BSS(Not in file)
+    +
+    +-------------------------- <-----(raw->mem2 + raw->memsize)(bss end)
+    
+    HOW TO disassemble (Ex: VX767_V1.0.dl)
+    
+    STEP 1:
+    ./dl_analyser VX767_V1.0.dl
+
+    =======================HEADER=====================
+    File magic: CCDL
+    File Type : 0x00010000
+    Offset    : 0x00020001
+    Size      : 0x00000004
+    BuildDate : 2008/03/26 09:59:19
+    PaddindSum: 0x0
+    =====================IMPT HEADER==================
+    Header magic   : IMPT
+    Header Type    : 0x00000008
+    Offset         : 0x000000a0
+    Size           : 0x0000007c
+    PaddindSum     : 0x0
+    =====================EXPT HEADER==================
+    Header magic   : EXPT
+    Header Type    : 0x00000009
+    Offset         : 0x00000120
+    Size           : 0x00000108
+    PaddindSum     : 0x0
+    =====================RAWD HEADER==================
+    Header magic    : RAWD
+    Header Type     : 0x00000001
+    Offset          : 0x00000230
+    Size            : 0x000058a0
+    Paddind1        : 0x0
+    BSS Clear Code  : 0x80f82714 start at file 0x2944
+    mem_place_start : 0x80f80000 start at file 0x230
+    memsize         : 0x5a58
+    mem_end(BSS end): 0x80f85a58
+    Paddind2Sum     : 0x0
+    =====================IMPORT SYMBOL==================
+    number symbols  : 0x4
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f82750 name: printf
+    Sym[01] offset 0x0008 padding 0x0 flag 0x20000 address 0x80f82758 name: udelay
+    Sym[02] offset 0x0010 padding 0x0 flag 0x20000 address 0x80f82760 name: delay_ms
+    Sym[03] offset 0x001c padding 0x0 flag 0x20000 address 0x80f82768 name: get_rgb_lcd_buf
+    =====================EXPORT SYMBOL==================
+    number symbols  : 0x7
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f826dc name: init_lcd_register
+    Sym[01] offset 0x0014 padding 0x0 flag 0x20000 address 0x80f80160 name: get_ccpmp_config
+    Sym[02] offset 0x0028 padding 0x0 flag 0x20000 address 0x80f82690 name: get_bklight_config
+    Sym[03] offset 0x003c padding 0x0 flag 0x20000 address 0x80f81120 name: init_lcd_gpio
+    Sym[04] offset 0x004c padding 0x0 flag 0x20000 address 0x80f804d0 name: rgb_user_init
+    Sym[05] offset 0x005c padding 0x0 flag 0x20000 address 0x80f806a4 name: get_rgb_frame_buf
+    Sym[06] offset 0x0070 padding 0x0 flag 0x20000 address 0x80f8269c name: lcd_set_direction_mode
+
+    STEP 2:
+    mips-linux-objdump -bbinary -mmips -D VX767_V1.0.dl > 767.as
+    
+    STEP 3:
+    for function lcd_set_direction_mode(address 0x80f8269c)
+    we translate that address into 'file address'
+    file address = 0x80f8269c - 0x80f80000 + 0x230 = 0x28CC
+    
+    STEP 4:
+    Find code in 767.as use this 'file address'
+    
+    2008.10.20 6:23PM
+******************************HEADER**********************************************************SYMBOL****************************Read tableOffsetPaddingFlagAddressRead nameSet seek startget length of nameReset seek startRead nameRead HeaderRead Import headerRead Export headerRead Raw data headerread import symbolnumberpaddingread export symbolnumberpadding**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Jin Le
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * dl_analyser.c ONDA VX767 DL file analyser
+ *
+ * Copyright (C) 2008 - JinLe
+ *
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, 
+ * Boston, MA  02110-1301  USA
+
+    The DL file can not find any entry point,
+    so I think it just a dynamic library
+    not executable.
+    
+    IN THE FILE
+    +--------------------------
+    +      block_header_t
+    +--------------------------
+    +      block_impt_header_t
+    +--------------------------
+    +      block_expt_header_t
+    +--------------------------
+    +      block_raw_header_t
+    +--------------------------
+    +      import symbol
+    +--------------------------
+    +      export symbol
+    +--------------------------
+    +      padding
+    +-------------------------- <-----(raw->offset)
+    +
+    +      raw code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->offset + raw->size)(bss start)
+    
+    IN THE MEMORY
+    +-------------------------- <-----(raw->mem2)
+    +
+    +      code seg
+    +
+    +--------------------------
+    +
+    +      inited mem seg
+    +
+    +-------------------------- <-----(raw->mem2 + raw->size)(bss start)
+    +
+    +      BSS(Not in file)
+    +
+    +-------------------------- <-----(raw->mem2 + raw->memsize)(bss end)
+    
+    HOW TO disassemble (Ex: VX767_V1.0.dl)
+    
+    STEP 1:
+    ./dl_analyser VX767_V1.0.dl
+
+    =======================HEADER=====================
+    File magic: CCDL
+    File Type : 0x00010000
+    Offset    : 0x00020001
+    Size      : 0x00000004
+    BuildDate : 2008/03/26 09:59:19
+    PaddindSum: 0x0
+    =====================IMPT HEADER==================
+    Header magic   : IMPT
+    Header Type    : 0x00000008
+    Offset         : 0x000000a0
+    Size           : 0x0000007c
+    PaddindSum     : 0x0
+    =====================EXPT HEADER==================
+    Header magic   : EXPT
+    Header Type    : 0x00000009
+    Offset         : 0x00000120
+    Size           : 0x00000108
+    PaddindSum     : 0x0
+    =====================RAWD HEADER==================
+    Header magic    : RAWD
+    Header Type     : 0x00000001
+    Offset          : 0x00000230
+    Size            : 0x000058a0
+    Paddind1        : 0x0
+    BSS Clear Code  : 0x80f82714 start at file 0x2944
+    mem_place_start : 0x80f80000 start at file 0x230
+    memsize         : 0x5a58
+    mem_end(BSS end): 0x80f85a58
+    Paddind2Sum     : 0x0
+    =====================IMPORT SYMBOL==================
+    number symbols  : 0x4
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f82750 name: printf
+    Sym[01] offset 0x0008 padding 0x0 flag 0x20000 address 0x80f82758 name: udelay
+    Sym[02] offset 0x0010 padding 0x0 flag 0x20000 address 0x80f82760 name: delay_ms
+    Sym[03] offset 0x001c padding 0x0 flag 0x20000 address 0x80f82768 name: get_rgb_lcd_buf
+    =====================EXPORT SYMBOL==================
+    number symbols  : 0x7
+    PaddindSum      : 0x0
+    Sym[00] offset 0x0000 padding 0x0 flag 0x20000 address 0x80f826dc name: init_lcd_register
+    Sym[01] offset 0x0014 padding 0x0 flag 0x20000 address 0x80f80160 name: get_ccpmp_config
+    Sym[02] offset 0x0028 padding 0x0 flag 0x20000 address 0x80f82690 name: get_bklight_config
+    Sym[03] offset 0x003c padding 0x0 flag 0x20000 address 0x80f81120 name: init_lcd_gpio
+    Sym[04] offset 0x004c padding 0x0 flag 0x20000 address 0x80f804d0 name: rgb_user_init
+    Sym[05] offset 0x005c padding 0x0 flag 0x20000 address 0x80f806a4 name: get_rgb_frame_buf
+    Sym[06] offset 0x0070 padding 0x0 flag 0x20000 address 0x80f8269c name: lcd_set_direction_mode
+
+    STEP 2:
+    mips-linux-objdump -bbinary -mmips -D VX767_V1.0.dl > 767.as
+    
+    STEP 3:
+    for function lcd_set_direction_mode(address 0x80f8269c)
+    we translate that address into 'file address'
+    file address = 0x80f8269c - 0x80f80000 + 0x230 = 0x28CC
+    
+    STEP 4:
+    Find code in 767.as use this 'file address'
+    
+    2008.10.20 6:23PM
+******************************HEADER**********************************************************SYMBOL****************************Read tableOffsetPaddingFlagAddressRead nameSet seek startget length of nameReset seek startRead nameRead HeaderRead Import headerRead Export headerRead Raw data headerread import symbolnumberpaddingread export symbolnumberpadding

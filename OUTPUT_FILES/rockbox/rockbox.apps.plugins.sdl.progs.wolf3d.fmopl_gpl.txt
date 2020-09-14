@@ -1,0 +1,526 @@
+
+ * Rockbox notes:
+ *
+ * This file is originally from the MAME project, from after their
+ * GPLv2 relicense. I (Franklin Wei) have made some modifications
+ * since then to make it work with the Wolf4SDL source. Notably, I
+ * corrected the behavior of YM3812Write() to write directly to the
+ * registers. Additionally, I fixed an unaligned write in OPL_CALC_CH
+ * which caused terrible output on ARM.
+  license:GPL-2.0+ copyright-holders:Jarek Burczynski,Tatsuyuki Satoh
+**
+** File: fmopl.c - software implementation of FM sound generator
+**                                            types OPL and OPL2
+**
+** Copyright Jarek Burczynski (bujar at mame dot net)
+** Copyright Tatsuyuki Satoh , MultiArcadeMachineEmulator development
+**
+** Version 0.72
+**
+
+Revision History:
+
+04-08-2003 Jarek Burczynski:
+- removed BFRDY hack. BFRDY is busy flag, and it should be 0 only when the chip
+handles memory read/write or during the adpcm synthesis when the chip
+requests another byte of ADPCM data.
+
+24-07-2003 Jarek Burczynski:
+- added a small hack for Y8950 status BFRDY flag (bit 3 should be set after
+some (unknown) delay). Right now it's always set.
+
+14-06-2003 Jarek Burczynski:
+- implemented all of the status register flags in Y8950 emulation
+- renamed y8950_set_delta_t_memory() parameters from _rom_ to _mem_ since
+they can be either RAM or ROM
+
+08-10-2002 Jarek Burczynski (thanks to Dox for the YM3526 chip)
+- corrected ym3526_read() to always set bit 2 and bit 1
+to HIGH state - identical to ym3812_read (verified on real YM3526)
+
+04-28-2002 Jarek Burczynski:
+- binary exact Envelope Generator (verified on real YM3812);
+compared to YM2151: the EG clock is equal to internal_clock,
+rates are 2 times slower and volume resolution is one bit less
+- modified interface functions (they no longer return pointer -
+that's internal to the emulator now):
+- new wrapper functions for OPLCreate: ym3526_init(), ym3812_init() and y8950_init()
+- corrected 'off by one' error in feedback calculations (when feedback is off)
+- enabled waveform usage (credit goes to Vlad Romascanu and zazzal22)
+- speeded up noise generator calculations (Nicola Salmoria)
+
+03-24-2002 Jarek Burczynski (thanks to Dox for the YM3812 chip)
+Complete rewrite (all verified on real YM3812):
+- corrected sin_tab and tl_tab data
+- corrected operator output calculations
+- corrected waveform_select_enable register;
+simply: ignore all writes to waveform_select register when
+waveform_select_enable == 0 and do not change the waveform previously selected.
+- corrected KSR handling
+- corrected Envelope Generator: attack shape, Sustain mode and
+Percussive/Non-percussive modes handling
+- Envelope Generator rates are two times slower now
+- LFO amplitude (tremolo) and phase modulation (vibrato)
+- rhythm sounds phase generation
+- white noise generator (big thanks to Olivier Galibert for mentioning Berlekamp-Massey algorithm)
+- corrected key on/off handling (the 'key' signal is ORed from three sources: FM, rhythm and CSM)
+- funky details (like ignoring output of operator 1 in BD rhythm sound when connect == 1)
+
+12-28-2001 Acho A. Tang
+- reflected Delta-T EOS status on Y8950 status port.
+- fixed subscription range of attack/decay tables
+
+
+To do:
+add delay before key off in CSM mode (see CSMKeyControll)
+verify volume of the FM part on the Y8950
+ Don't pack structs in here. This causes dangerous things on ARM regarding alignment. output final shift  16.16 fixed point (frequency calculations)  16.16 fixed point (EG timing)                8.24 fixed point (LFO calculations)        16.16 fixed point (timers calculations)     envelope output entries 511 sinwave entries  8 bits addressing (real chip)  register number to channel number , slot offset  Envelope Generator phases  save output as raw 16-bit sample #define SAVE_SAMPLEelse value < 0save to MONO file save to STEREO file  waveform select      DELTA-T ADPCM unit   keyboard interface   I/O port             ---------- Generic interface section ----------  attack rate: AR<<2            decay rate:  DR<<2            release rate:RR<<2            key scale rate                keyscale level                key scale rate: kcode>>KSR    multiple: mul_tab[ML]         Phase Generator  frequency counter             frequency counter step        feedback shift value          slot1 output pointer          slot1 output for feedback     connection (algorithm) type   Envelope Generator  percussive/non-percussive mode  phase type                    total level: TL << 2          adjusted now TL               envelope counter              sustain level: sl_tab[SL]     (attack state)                (attack state)                (decay state)                 (decay state)                 (release state)               (release state)               0 = KEY OFF, >0 = KEY ON      LFO  LFO Amplitude Modulation enable mask  LFO Phase Modulation enable flag (active high) waveform select  phase generator state  block+fnum                    Freq. Increment base          KeyScaleLevel Base step       key code (for key scaling)    OPL state  FM channel slots  OPL/OPL2 chips have 9 channels global envelope generator counter     global envelope generator counter works at frequency = chipclock/72  step of eg_timer                      envelope generator timer overlfows every 1 sample (on real chip)  Rhythm mode                   fnumber->increment counter    LFO  23 bit noise shift register   current noise 'phase'         current noise period          waveform select enable flag   timer counters                timer enable                  Delta-T ADPCM unit (Y8950)  Keyboard and I/O ports interface  external event callback handlers  TIMER handler                 TIMER parameter               IRQ handler                   IRQ parameter                 stream update handler         stream update parameter       chip type                     address register              status flag                   status mask                   Reg.08 : CSM,notesel,etc.     master clock  (Hz)            sampling rate (Hz)            frequency base                Timer base time (==sampling time) phase modulation input (SLOT 2)  for Y8950 DELTA-T, chip is mono, that 4 here is just for safety  mapping of register number (offset) to slot number used by the emulator  key scale level  table is 3dB/octave , DV converts this into 6dB/octave  0.1875 is bit 0 weight of the envelope counter (volume) expressed in the 'decibel' scale  OCT 0  OCT 1  OCT 2  OCT 3  OCT 4  OCT 5  OCT 6  OCT 7  0 / 3.0 / 1.5 / 6.0 dB/OCT  sustain level table (3dB per step)  0 - 15: 0, 3, 6, 9,12,15,18,21,24,27,30,33,36,39,42,93 (dB)cycle:0 1  2 3  4 5  6 7 0  rates 00..12 0 (increment by 0 or 1)  1  rates 00..12 1  2  rates 00..12 2  3  rates 00..12 3  4  rate 13 0 (increment by 1)  5  rate 13 1  6  rate 13 2  7  rate 13 3  8  rate 14 0 (increment by 2)  9  rate 14 1 10  rate 14 2 11  rate 14 3 12  rates 15 0, 15 1, 15 2, 15 3 (increment by 4) 13  rates 15 2, 15 3 for attack 14  infinity rates for attack and decay(s) note that there is no O(13) in this table - it's directly in the code  Envelope Generator rates (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3) rate  0,    1,    2,    3,   4,   5,   6,  7,  8,  9,  10, 11, 12, 13, 14, 15 shift 12,   11,   10,   9,   8,   7,   6,  5,  4,  3,  2,  1,  0,  0,  0,  0  mask  4095, 2047, 1023, 511, 255, 127, 63, 31, 15, 7,  3,  1,  0,  0,  0,  0   Envelope Generator counter shifts (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3)  multiple table  1/2, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,10,12,12,15,15   TL_TAB_LEN is calculated as:
+ *   12 - sinus amplitude bits     (Y axis)
+ *   2  - sinus sign bit           (Y axis)
+ *   TL_RES_LEN - sinus resolution (X axis)
+  sin waveform table in 'decibel' scale  four waveforms on OPL2 type chips  LFO Amplitude Modulation table (verified on real YM3812)
+   27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples
+
+   Length: 210 elements.
+
+   Each of the elements has to be repeated
+   exactly 64 times (on 64 consecutive samples).
+   The whole table takes: 64 * 210 = 13440 samples.
+
+   When AM = 1 data is used directly
+   When AM = 0 data is divided by 4 before being used (losing precision is important)
+ LFO Phase Modulation table (verified on real YM3812)  FNUM2/FNUM = 00 0xxxxxxx (0x0000) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 00 1xxxxxxx (0x0080) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 0xxxxxxx (0x0100) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 1xxxxxxx (0x0180) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 0xxxxxxx (0x0200) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 1xxxxxxx (0x0280) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 0xxxxxxx (0x0300) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 1xxxxxxx (0x0380) LFO PM depth = 0LFO PM depth = 1 lock level of common table  status set and IRQ handling  set status flag  IRQ on  callback user interrupt handler (IRQ is OFF to ON)  status reset and IRQ handling  reset status flag  callback user interrupt handler (IRQ is ON to OFF)  IRQ mask set  IRQ handling check  advance LFO to next sample  LFO 	if (OPL->lfo_am_cnt >= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH) )  /* lfo_am_table is 210 elements long */		OPL->lfo_am_cnt -= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH); lfo_am_table is 210 elements long  advance to next sample  Envelope Generator  attack phase  decay phase  sustain phase  this is important behaviour:
+                   one can change percusive/non-percussive modes on the fly and
+                   the chip will remain in sustain phase - verified on real YM3812  non-percussive mode  do nothing  percussive mode  during sustain phase chip adds Release Rate (in percussive mode)  else do nothing in sustain phase  release phase  Phase Generator  LFO phase modulation active  LFO phase modulation  = zero  LFO phase modulation disabled for this operator   The Noise Generator of the YM3812 is 23-bit shift register.
+     *   Period is equal to 2^23-2 samples.
+     *   Register works at sampling frequency of the chip, so output
+     *   can change on every sample.
+     *
+     *   Output of the register and input to the bit 22 is:
+     *   bit0 XOR bit14 XOR bit15 XOR bit22
+     *
+     *   Simply use bit 22 as the noise output.
+      number of events (shifts of the shift register) 
+          UINT32 j;
+          j = ( (OPL->noise_rng) ^ (OPL->noise_rng>>14) ^ (OPL->noise_rng>>15) ^ (OPL->noise_rng>>22) ) & 1;
+          OPL->noise_rng = (j<<22) | (OPL->noise_rng>>1);
+        
+          Instead of doing all the logic operations above, we
+          use a trick here (and use bit 0 as the noise output).
+          The difference is only that the noise bit changes one
+          step ahead. This doesn't matter since we don't know
+          what is real state of the noise_rng after the reset.
+         calculate output  SLOT 1 INT32 a;memcpy(&a, SLOT->connect1, sizeof(a));a += SLOT->op1_out[0];memcpy(SLOT->connect1, &a, sizeof(a)); alignment issue on arm SLOT 2 
+  operators used in the rhythm sounds generation process:
+
+  Envelope Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    TL ARDR SLRR Wave Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        50  70   90   f0  +
+  6 / 1   15        53  73   93   f3  +
+  7 / 0   13        51  71   91   f1        +
+  7 / 1   16        54  74   94   f4              +
+  8 / 0   14        52  72   92   f2                    +
+  8 / 1   17        55  75   95   f5                          +
+
+  Phase Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    MULTIPLE          Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        30                +
+  6 / 1   15        33                +
+  7 / 0   13        31                      +     +           +
+  7 / 1   16        34                -----  n o t  u s e d -----
+  8 / 0   14        32                                  +
+  8 / 1   17        35                      +                 +
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  number   number    BLK/FNUM2 FNUM    Drum  Hat   Drum  Tom  Cymbal
+  6     12,15     B6        A6      +
+
+  7     13,16     B7        A7            +     +           +
+
+  8     14,17     B8        A8            +           +     +
+
+ calculate rhythm  Bass Drum (verified on real YM3812):
+       - depends on the channel 6 'connect' register:
+       when connect = 0 it works the same as in normal (non-rhythm) mode (op1->op2->out)
+       when connect = 1 _only_ operator 2 is present on output (op2->out), operator 1 is ignored
+       - output sample always is multiplied by 2
+     SLOT 1  else ignore output of operator 1  SLOT 2  Phase generation is based on:  HH  (13) channel 7->slot 1 combined with channel 8->slot 2 (same combination as TOP CYMBAL but different output phases)  SD  (16) channel 7->slot 1  TOM (14) channel 8->slot 1  TOP (17) channel 7->slot 1 combined with channel 8->slot 2 (same combination as HIGH HAT but different output phases)  Envelope generation based on:  HH  channel 7->slot1  SD  channel 7->slot2  TOM channel 8->slot1  TOP channel 8->slot2  The following formulas can be well optimized.
+       I leave them in direct form for now (in case I've missed something).
+     High Hat (verified on real YM3812)  high hat phase generation:
+           phase = d0 or 234 (based on frequency only)
+           phase = 34 or 2d0 (based on noise)
+         base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0xd0;  when res1 = 1 phase = 0x200 | (0xd0>>2);  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | (0xd0>>2);  when phase & 0x200 is set and noise=1 then phase = 0x200|0xd0  when phase & 0x200 is set and noise=0 then phase = 0x200|(0xd0>>2), ie no change  when phase & 0x200 is clear and noise=1 then phase = 0xd0>>2  when phase & 0x200 is clear and noise=0 then phase = 0xd0, ie no change  Snare Drum (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when bit8 = 0 phase = 0x100;  when bit8 = 1 phase = 0x200;  Noise bit XOR'es phase by 0x100  when noisebit = 0 pass the phase from calculation above  when noisebit = 1 phase ^= 0x100;  in other words: phase ^= (noisebit<<8);  Tom Tom (verified on real YM3812)  Top Cymbal (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0x100;  when res1 = 1 phase = 0x200 | 0x100;  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | 0x100;  generic table initialize  we never reach (1<<16) here due to the (x+1)  result fits within 16 bits at maximum  16 bits here  12 bits here  round to nearest  11 bits here (rounded)  12 bits here (as in real chip) +1logerror("FMOPL.C: TL_TAB_LEN = %i elements (%i bytes)\n",TL_TAB_LEN, (int)sizeof(tl_tab)); non-standard sinus  checked against the real chip  we never reach zero here due to ((i*2)+1)  convert to 'decibels'  convert to 'decibels'  round to nearest logerror("FMOPL.C: sin [%4i (hex=%03x)]= %4i (tl_tab value=%5i)\n", i, i, sin_tab[i], tl_tab[sin_tab[i]] ); waveform 1:  __      __                  /  \____/  \____ output only first half of the sinus waveform (positive one)  waveform 2:  __  __  __  __              /  \/  \/  \/  \ abs(sin)  waveform 3:  _   _   _   _               / |_/ |_/ |_/ |_ abs(output only first quarter of the sinus waveform) logerror("FMOPL.C: sin1[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[1*SIN_LEN+i], tl_tab[sin_tab[1*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin2[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[2*SIN_LEN+i], tl_tab[sin_tab[2*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin3[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[3*SIN_LEN+i], tl_tab[sin_tab[3*SIN_LEN+i]] );logerror("FMOPL.C: ENV_QUIET= %08x (dec*8=%i)\n", ENV_QUIET, ENV_QUIET*8 ); frequency base logerror("freqbase=%f\n", OPL->freqbase); Timer base time  make fnumber -> increment counter table  opn phase increment counter = 20bit  -10 because chip works with 10.10 fixed point, while we use 16.16  Amplitude modulation: 27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples  One entry from LFO_AM_TABLE lasts for 64 samples  Vibrato: 8 output levels (triangle waveform); 1 level takes 1024 samples logerror ("OPL->lfo_am_inc = %8x ; OPL->lfo_pm_inc = %8x\n", OPL->lfo_am_inc, OPL->lfo_pm_inc); Noise generator: a step takes 1 sample logerror("OPLinit eg_timer_add=%8x eg_timer_overflow=%8x\n", OPL->eg_timer_add, OPL->eg_timer_overflow); restart Phase Generator  phase -> Attack  phase -> Release  update phase increment counter of operator (also update the EG rates if necessary)  (frequency) phase increment counter  calculate envelope generator rates  set multi,am,vib,EG-TYP,KSR,mul  set ksl & tl  7 bits TL (bit 6 = always 0)  0 / 1.5 / 3.0 / 6.0 dB/OCT  7 bits TL (bit 6 = always 0)  set attack rate & decay rate   set sustain level & release rate  write a value v to register r on OPL chip  adjust bus to 8 bits  00-1f:control  waveform select enable  do not change the waveform previously selected  Timer 1  Timer 2  IRQ clear / mask and Timer enable  IRQ flag clear  don't reset BFRDY flag or we will have to call deltat module to set the flag  set IRQ mask ,timer enable IRQRST,T1MSK,t2MSK,EOSMSK,BRMSK,x,ST2,ST1  timer 2 double period = st2 ? (OPL->TimerBase * OPL->T[1]) : 0; timer 1 double period = st1 ? (OPL->TimerBase * OPL->T[0]) : 0; Key Board OUT OPL->device->logerror("Y8950: write unmapped KEYBOARD port\n"); DELTA-T control 1 : START,REC,MEMDATA,REPT,SPOFF,x,x,RST  MODE,DELTA-T control 2 : CSM,NOTESEL,x,x,smpl,da/ad,64k,rom  mask 4 LSBs in register 08 for DELTA-T unit  START ADD  STOP ADD   PRESCALE    ADPCM data write  DELTA-N     DELTA-N     ADPCM volume  DAC data high 8 bits (F7,F6...F2)  DAC data low 2 bits (F1, F0 in bits 7,6)  DAC data shift (S2,S1,S0 in bits 2,1,0) OPL->device->logerror("FMOPL.C: DAC data register written, but not implemented reg=%02x val=%02x\n",r,v); I/O CTRL (Direction)  I/O DATA OPL->device->logerror("FMOPL.C: write to unknown register: %02x\n",r); am ON, vib ON, ksr, eg_type, mul  am depth, vibrato depth, r,bd,sd,tom,tc,hh  BD key on/off  HH key on/off  SD key on/off  TOM key on/off  TOP-CY key on/off  BD key off  HH key off  SD key off  TOM key off  TOP-CY off  keyon,block,fnum  a0-a8  b0-b8  update  BLK 2,1,0 bits -> bits 3,2,1 of kcode  the info below is actually opposite to what is stated in the Manuals (verifed on real YM3812)  if notesel == 0 -> lsb of kcode is bit 10 (MSB) of fnum   if notesel == 1 -> lsb of kcode is bit 9 (MSB-1) of fnum  notesel == 1  notesel == 0  refresh Total Level in both SLOTs of this channel  refresh frequency counter in both SLOTs of this channel  FB,C  waveform select  simply ignore write to the waveform select register if selecting not enabled in test register fputc( (unsigned char)0, cymfile ); lock/unlock for common table  first time  allocate total level table (128kb space) device->machine().scheduler().timer_pulse ( double::from_hz(110), FUNC(cymfile_callback)); /*110 Hz pulse timer*/device->logerror("Could not create file 3812_.cym\n"); last time  noise shift register  normal mode  reset with register write  wavesel disable  Timer1  Timer2  IRQ mask clear  reset operator parameters  wave table  Look up key scale level  Calculate key scale rate  Calculate attack, decay and release rates  Calculate phase increment  Total level  Connect output  We really should call the postlod function for the YM_DELTAT, but it's hard without registers (see the way the YM2610 does it)YM_DELTAT_postload(OPL->deltat, REGS); Register savestate for a virtual YM3812/YM3526Y8950  Create one of virtual YM3812/YM3526/Y8950  'clock' is chip clock in Hz   'rate'  is sampling rate   calculate OPL state size  allocate memory block  GCC behaves weirdly... check that it's not acting up  init global tables  Destroy one of virtual YM3812  Optional handlers  address port  data port  status port  Y8950  OPL and OPL2  data port  KeyBoard IN  ADPCM-DATA  logerror("Y8950: read ADPCM value read=%02x\n",val); I/O DATA     PCM-DATA     2's complement PCM data - result from A/D convertion  CSM Key Controll  The key off should happen exactly one sample later - not implemented correctly yet  Timer B  Timer A  CSM mode key,TL controll  CSM mode total level latch and auto key on  reload timer  emulator create  emulator shutdown  technically correct, but breaks Wolf4SDL - FW19return OPLWrite(YM3812, a, v); YM3812 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3812's
+**
+** 'which' is the virtual YM3812 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part lt >>= FINAL_SH; limit check  store to sound buffer buf[i] = lt; stereo version BUILD_YM3812  Rockbox: we don't care about the rest. emulator create  emulator shutdown  YM3526 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3526's
+**
+** 'which' is the virtual YM3526 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part  limit check  store to sound buffer  BUILD_YM3526  emulator create  status flag: set bit4 on End Of Sample  status flag: set bit3 on BRDY (End Of: ADPCM analysis/synthesis, memory reading/writing) Y8950->deltat->write_time = 10.0 / clock; a single byte write takes 10 cycles of main clock Y8950->deltat->read_time  = 8.0 / clock; a single byte read takes 8 cycles of main clock  reset  emulator shutdown 
+** Generate samples for one of the Y8950's
+**
+** 'which' is the virtual Y8950 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ deltaT ADPCM  FM part  Rhythm part  limit check  store to sound buffer 
+ * Rockbox notes:
+ *
+ * This file is originally from the MAME project, from after their
+ * GPLv2 relicense. I (Franklin Wei) have made some modifications
+ * since then to make it work with the Wolf4SDL source. Notably, I
+ * corrected the behavior of YM3812Write() to write directly to the
+ * registers. Additionally, I fixed an unaligned write in OPL_CALC_CH
+ * which caused terrible output on ARM.
+  license:GPL-2.0+ copyright-holders:Jarek Burczynski,Tatsuyuki Satoh
+**
+** File: fmopl.c - software implementation of FM sound generator
+**                                            types OPL and OPL2
+**
+** Copyright Jarek Burczynski (bujar at mame dot net)
+** Copyright Tatsuyuki Satoh , MultiArcadeMachineEmulator development
+**
+** Version 0.72
+**
+
+Revision History:
+
+04-08-2003 Jarek Burczynski:
+- removed BFRDY hack. BFRDY is busy flag, and it should be 0 only when the chip
+handles memory read/write or during the adpcm synthesis when the chip
+requests another byte of ADPCM data.
+
+24-07-2003 Jarek Burczynski:
+- added a small hack for Y8950 status BFRDY flag (bit 3 should be set after
+some (unknown) delay). Right now it's always set.
+
+14-06-2003 Jarek Burczynski:
+- implemented all of the status register flags in Y8950 emulation
+- renamed y8950_set_delta_t_memory() parameters from _rom_ to _mem_ since
+they can be either RAM or ROM
+
+08-10-2002 Jarek Burczynski (thanks to Dox for the YM3526 chip)
+- corrected ym3526_read() to always set bit 2 and bit 1
+to HIGH state - identical to ym3812_read (verified on real YM3526)
+
+04-28-2002 Jarek Burczynski:
+- binary exact Envelope Generator (verified on real YM3812);
+compared to YM2151: the EG clock is equal to internal_clock,
+rates are 2 times slower and volume resolution is one bit less
+- modified interface functions (they no longer return pointer -
+that's internal to the emulator now):
+- new wrapper functions for OPLCreate: ym3526_init(), ym3812_init() and y8950_init()
+- corrected 'off by one' error in feedback calculations (when feedback is off)
+- enabled waveform usage (credit goes to Vlad Romascanu and zazzal22)
+- speeded up noise generator calculations (Nicola Salmoria)
+
+03-24-2002 Jarek Burczynski (thanks to Dox for the YM3812 chip)
+Complete rewrite (all verified on real YM3812):
+- corrected sin_tab and tl_tab data
+- corrected operator output calculations
+- corrected waveform_select_enable register;
+simply: ignore all writes to waveform_select register when
+waveform_select_enable == 0 and do not change the waveform previously selected.
+- corrected KSR handling
+- corrected Envelope Generator: attack shape, Sustain mode and
+Percussive/Non-percussive modes handling
+- Envelope Generator rates are two times slower now
+- LFO amplitude (tremolo) and phase modulation (vibrato)
+- rhythm sounds phase generation
+- white noise generator (big thanks to Olivier Galibert for mentioning Berlekamp-Massey algorithm)
+- corrected key on/off handling (the 'key' signal is ORed from three sources: FM, rhythm and CSM)
+- funky details (like ignoring output of operator 1 in BD rhythm sound when connect == 1)
+
+12-28-2001 Acho A. Tang
+- reflected Delta-T EOS status on Y8950 status port.
+- fixed subscription range of attack/decay tables
+
+
+To do:
+add delay before key off in CSM mode (see CSMKeyControll)
+verify volume of the FM part on the Y8950
+ Don't pack structs in here. This causes dangerous things on ARM regarding alignment. output final shift  16.16 fixed point (frequency calculations)  16.16 fixed point (EG timing)                8.24 fixed point (LFO calculations)        16.16 fixed point (timers calculations)     envelope output entries 511 sinwave entries  8 bits addressing (real chip)  register number to channel number , slot offset  Envelope Generator phases  save output as raw 16-bit sample #define SAVE_SAMPLEelse value < 0save to MONO file save to STEREO file  waveform select      DELTA-T ADPCM unit   keyboard interface   I/O port             ---------- Generic interface section ----------  attack rate: AR<<2            decay rate:  DR<<2            release rate:RR<<2            key scale rate                keyscale level                key scale rate: kcode>>KSR    multiple: mul_tab[ML]         Phase Generator  frequency counter             frequency counter step        feedback shift value          slot1 output pointer          slot1 output for feedback     connection (algorithm) type   Envelope Generator  percussive/non-percussive mode  phase type                    total level: TL << 2          adjusted now TL               envelope counter              sustain level: sl_tab[SL]     (attack state)                (attack state)                (decay state)                 (decay state)                 (release state)               (release state)               0 = KEY OFF, >0 = KEY ON      LFO  LFO Amplitude Modulation enable mask  LFO Phase Modulation enable flag (active high) waveform select  phase generator state  block+fnum                    Freq. Increment base          KeyScaleLevel Base step       key code (for key scaling)    OPL state  FM channel slots  OPL/OPL2 chips have 9 channels global envelope generator counter     global envelope generator counter works at frequency = chipclock/72  step of eg_timer                      envelope generator timer overlfows every 1 sample (on real chip)  Rhythm mode                   fnumber->increment counter    LFO  23 bit noise shift register   current noise 'phase'         current noise period          waveform select enable flag   timer counters                timer enable                  Delta-T ADPCM unit (Y8950)  Keyboard and I/O ports interface  external event callback handlers  TIMER handler                 TIMER parameter               IRQ handler                   IRQ parameter                 stream update handler         stream update parameter       chip type                     address register              status flag                   status mask                   Reg.08 : CSM,notesel,etc.     master clock  (Hz)            sampling rate (Hz)            frequency base                Timer base time (==sampling time) phase modulation input (SLOT 2)  for Y8950 DELTA-T, chip is mono, that 4 here is just for safety  mapping of register number (offset) to slot number used by the emulator  key scale level  table is 3dB/octave , DV converts this into 6dB/octave  0.1875 is bit 0 weight of the envelope counter (volume) expressed in the 'decibel' scale  OCT 0  OCT 1  OCT 2  OCT 3  OCT 4  OCT 5  OCT 6  OCT 7  0 / 3.0 / 1.5 / 6.0 dB/OCT  sustain level table (3dB per step)  0 - 15: 0, 3, 6, 9,12,15,18,21,24,27,30,33,36,39,42,93 (dB)cycle:0 1  2 3  4 5  6 7 0  rates 00..12 0 (increment by 0 or 1)  1  rates 00..12 1  2  rates 00..12 2  3  rates 00..12 3  4  rate 13 0 (increment by 1)  5  rate 13 1  6  rate 13 2  7  rate 13 3  8  rate 14 0 (increment by 2)  9  rate 14 1 10  rate 14 2 11  rate 14 3 12  rates 15 0, 15 1, 15 2, 15 3 (increment by 4) 13  rates 15 2, 15 3 for attack 14  infinity rates for attack and decay(s) note that there is no O(13) in this table - it's directly in the code  Envelope Generator rates (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3) rate  0,    1,    2,    3,   4,   5,   6,  7,  8,  9,  10, 11, 12, 13, 14, 15 shift 12,   11,   10,   9,   8,   7,   6,  5,  4,  3,  2,  1,  0,  0,  0,  0  mask  4095, 2047, 1023, 511, 255, 127, 63, 31, 15, 7,  3,  1,  0,  0,  0,  0   Envelope Generator counter shifts (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3)  multiple table  1/2, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,10,12,12,15,15   TL_TAB_LEN is calculated as:
+ *   12 - sinus amplitude bits     (Y axis)
+ *   2  - sinus sign bit           (Y axis)
+ *   TL_RES_LEN - sinus resolution (X axis)
+  sin waveform table in 'decibel' scale  four waveforms on OPL2 type chips  LFO Amplitude Modulation table (verified on real YM3812)
+   27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples
+
+   Length: 210 elements.
+
+   Each of the elements has to be repeated
+   exactly 64 times (on 64 consecutive samples).
+   The whole table takes: 64 * 210 = 13440 samples.
+
+   When AM = 1 data is used directly
+   When AM = 0 data is divided by 4 before being used (losing precision is important)
+ LFO Phase Modulation table (verified on real YM3812)  FNUM2/FNUM = 00 0xxxxxxx (0x0000) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 00 1xxxxxxx (0x0080) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 0xxxxxxx (0x0100) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 1xxxxxxx (0x0180) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 0xxxxxxx (0x0200) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 1xxxxxxx (0x0280) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 0xxxxxxx (0x0300) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 1xxxxxxx (0x0380) LFO PM depth = 0LFO PM depth = 1 lock level of common table  status set and IRQ handling  set status flag  IRQ on  callback user interrupt handler (IRQ is OFF to ON)  status reset and IRQ handling  reset status flag  callback user interrupt handler (IRQ is ON to OFF)  IRQ mask set  IRQ handling check  advance LFO to next sample  LFO 	if (OPL->lfo_am_cnt >= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH) )  /* lfo_am_table is 210 elements long */		OPL->lfo_am_cnt -= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH); lfo_am_table is 210 elements long  advance to next sample  Envelope Generator  attack phase  decay phase  sustain phase  this is important behaviour:
+                   one can change percusive/non-percussive modes on the fly and
+                   the chip will remain in sustain phase - verified on real YM3812  non-percussive mode  do nothing  percussive mode  during sustain phase chip adds Release Rate (in percussive mode)  else do nothing in sustain phase  release phase  Phase Generator  LFO phase modulation active  LFO phase modulation  = zero  LFO phase modulation disabled for this operator   The Noise Generator of the YM3812 is 23-bit shift register.
+     *   Period is equal to 2^23-2 samples.
+     *   Register works at sampling frequency of the chip, so output
+     *   can change on every sample.
+     *
+     *   Output of the register and input to the bit 22 is:
+     *   bit0 XOR bit14 XOR bit15 XOR bit22
+     *
+     *   Simply use bit 22 as the noise output.
+      number of events (shifts of the shift register) 
+          UINT32 j;
+          j = ( (OPL->noise_rng) ^ (OPL->noise_rng>>14) ^ (OPL->noise_rng>>15) ^ (OPL->noise_rng>>22) ) & 1;
+          OPL->noise_rng = (j<<22) | (OPL->noise_rng>>1);
+        
+          Instead of doing all the logic operations above, we
+          use a trick here (and use bit 0 as the noise output).
+          The difference is only that the noise bit changes one
+          step ahead. This doesn't matter since we don't know
+          what is real state of the noise_rng after the reset.
+         calculate output  SLOT 1 INT32 a;memcpy(&a, SLOT->connect1, sizeof(a));a += SLOT->op1_out[0];memcpy(SLOT->connect1, &a, sizeof(a)); alignment issue on arm SLOT 2 
+  operators used in the rhythm sounds generation process:
+
+  Envelope Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    TL ARDR SLRR Wave Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        50  70   90   f0  +
+  6 / 1   15        53  73   93   f3  +
+  7 / 0   13        51  71   91   f1        +
+  7 / 1   16        54  74   94   f4              +
+  8 / 0   14        52  72   92   f2                    +
+  8 / 1   17        55  75   95   f5                          +
+
+  Phase Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    MULTIPLE          Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        30                +
+  6 / 1   15        33                +
+  7 / 0   13        31                      +     +           +
+  7 / 1   16        34                -----  n o t  u s e d -----
+  8 / 0   14        32                                  +
+  8 / 1   17        35                      +                 +
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  number   number    BLK/FNUM2 FNUM    Drum  Hat   Drum  Tom  Cymbal
+  6     12,15     B6        A6      +
+
+  7     13,16     B7        A7            +     +           +
+
+  8     14,17     B8        A8            +           +     +
+
+ calculate rhythm  Bass Drum (verified on real YM3812):
+       - depends on the channel 6 'connect' register:
+       when connect = 0 it works the same as in normal (non-rhythm) mode (op1->op2->out)
+       when connect = 1 _only_ operator 2 is present on output (op2->out), operator 1 is ignored
+       - output sample always is multiplied by 2
+     SLOT 1  else ignore output of operator 1  SLOT 2  Phase generation is based on:  HH  (13) channel 7->slot 1 combined with channel 8->slot 2 (same combination as TOP CYMBAL but different output phases)  SD  (16) channel 7->slot 1  TOM (14) channel 8->slot 1  TOP (17) channel 7->slot 1 combined with channel 8->slot 2 (same combination as HIGH HAT but different output phases)  Envelope generation based on:  HH  channel 7->slot1  SD  channel 7->slot2  TOM channel 8->slot1  TOP channel 8->slot2  The following formulas can be well optimized.
+       I leave them in direct form for now (in case I've missed something).
+     High Hat (verified on real YM3812)  high hat phase generation:
+           phase = d0 or 234 (based on frequency only)
+           phase = 34 or 2d0 (based on noise)
+         base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0xd0;  when res1 = 1 phase = 0x200 | (0xd0>>2);  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | (0xd0>>2);  when phase & 0x200 is set and noise=1 then phase = 0x200|0xd0  when phase & 0x200 is set and noise=0 then phase = 0x200|(0xd0>>2), ie no change  when phase & 0x200 is clear and noise=1 then phase = 0xd0>>2  when phase & 0x200 is clear and noise=0 then phase = 0xd0, ie no change  Snare Drum (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when bit8 = 0 phase = 0x100;  when bit8 = 1 phase = 0x200;  Noise bit XOR'es phase by 0x100  when noisebit = 0 pass the phase from calculation above  when noisebit = 1 phase ^= 0x100;  in other words: phase ^= (noisebit<<8);  Tom Tom (verified on real YM3812)  Top Cymbal (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0x100;  when res1 = 1 phase = 0x200 | 0x100;  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | 0x100;  generic table initialize  we never reach (1<<16) here due to the (x+1)  result fits within 16 bits at maximum  16 bits here  12 bits here  round to nearest  11 bits here (rounded)  12 bits here (as in real chip) +1logerror("FMOPL.C: TL_TAB_LEN = %i elements (%i bytes)\n",TL_TAB_LEN, (int)sizeof(tl_tab)); non-standard sinus  checked against the real chip  we never reach zero here due to ((i*2)+1)  convert to 'decibels'  convert to 'decibels'  round to nearest logerror("FMOPL.C: sin [%4i (hex=%03x)]= %4i (tl_tab value=%5i)\n", i, i, sin_tab[i], tl_tab[sin_tab[i]] ); waveform 1:  __      __                  /  \____/  \____ output only first half of the sinus waveform (positive one)  waveform 2:  __  __  __  __              /  \/  \/  \/  \ abs(sin)  waveform 3:  _   _   _   _               / |_/ |_/ |_/ |_ abs(output only first quarter of the sinus waveform) logerror("FMOPL.C: sin1[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[1*SIN_LEN+i], tl_tab[sin_tab[1*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin2[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[2*SIN_LEN+i], tl_tab[sin_tab[2*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin3[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[3*SIN_LEN+i], tl_tab[sin_tab[3*SIN_LEN+i]] );logerror("FMOPL.C: ENV_QUIET= %08x (dec*8=%i)\n", ENV_QUIET, ENV_QUIET*8 ); frequency base logerror("freqbase=%f\n", OPL->freqbase); Timer base time  make fnumber -> increment counter table  opn phase increment counter = 20bit  -10 because chip works with 10.10 fixed point, while we use 16.16  Amplitude modulation: 27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples  One entry from LFO_AM_TABLE lasts for 64 samples  Vibrato: 8 output levels (triangle waveform); 1 level takes 1024 samples logerror ("OPL->lfo_am_inc = %8x ; OPL->lfo_pm_inc = %8x\n", OPL->lfo_am_inc, OPL->lfo_pm_inc); Noise generator: a step takes 1 sample logerror("OPLinit eg_timer_add=%8x eg_timer_overflow=%8x\n", OPL->eg_timer_add, OPL->eg_timer_overflow); restart Phase Generator  phase -> Attack  phase -> Release  update phase increment counter of operator (also update the EG rates if necessary)  (frequency) phase increment counter  calculate envelope generator rates  set multi,am,vib,EG-TYP,KSR,mul  set ksl & tl  7 bits TL (bit 6 = always 0)  0 / 1.5 / 3.0 / 6.0 dB/OCT  7 bits TL (bit 6 = always 0)  set attack rate & decay rate   set sustain level & release rate  write a value v to register r on OPL chip  adjust bus to 8 bits  00-1f:control  waveform select enable  do not change the waveform previously selected  Timer 1  Timer 2  IRQ clear / mask and Timer enable  IRQ flag clear  don't reset BFRDY flag or we will have to call deltat module to set the flag  set IRQ mask ,timer enable IRQRST,T1MSK,t2MSK,EOSMSK,BRMSK,x,ST2,ST1  timer 2 double period = st2 ? (OPL->TimerBase * OPL->T[1]) : 0; timer 1 double period = st1 ? (OPL->TimerBase * OPL->T[0]) : 0; Key Board OUT OPL->device->logerror("Y8950: write unmapped KEYBOARD port\n"); DELTA-T control 1 : START,REC,MEMDATA,REPT,SPOFF,x,x,RST  MODE,DELTA-T control 2 : CSM,NOTESEL,x,x,smpl,da/ad,64k,rom  mask 4 LSBs in register 08 for DELTA-T unit  START ADD  STOP ADD   PRESCALE    ADPCM data write  DELTA-N     DELTA-N     ADPCM volume  DAC data high 8 bits (F7,F6...F2)  DAC data low 2 bits (F1, F0 in bits 7,6)  DAC data shift (S2,S1,S0 in bits 2,1,0) OPL->device->logerror("FMOPL.C: DAC data register written, but not implemented reg=%02x val=%02x\n",r,v); I/O CTRL (Direction)  I/O DATA OPL->device->logerror("FMOPL.C: write to unknown register: %02x\n",r); am ON, vib ON, ksr, eg_type, mul  am depth, vibrato depth, r,bd,sd,tom,tc,hh  BD key on/off  HH key on/off  SD key on/off  TOM key on/off  TOP-CY key on/off  BD key off  HH key off  SD key off  TOM key off  TOP-CY off  keyon,block,fnum  a0-a8  b0-b8  update  BLK 2,1,0 bits -> bits 3,2,1 of kcode  the info below is actually opposite to what is stated in the Manuals (verifed on real YM3812)  if notesel == 0 -> lsb of kcode is bit 10 (MSB) of fnum   if notesel == 1 -> lsb of kcode is bit 9 (MSB-1) of fnum  notesel == 1  notesel == 0  refresh Total Level in both SLOTs of this channel  refresh frequency counter in both SLOTs of this channel  FB,C  waveform select  simply ignore write to the waveform select register if selecting not enabled in test register fputc( (unsigned char)0, cymfile ); lock/unlock for common table  first time  allocate total level table (128kb space) device->machine().scheduler().timer_pulse ( double::from_hz(110), FUNC(cymfile_callback)); /*110 Hz pulse timer*/device->logerror("Could not create file 3812_.cym\n"); last time  noise shift register  normal mode  reset with register write  wavesel disable  Timer1  Timer2  IRQ mask clear  reset operator parameters  wave table  Look up key scale level  Calculate key scale rate  Calculate attack, decay and release rates  Calculate phase increment  Total level  Connect output  We really should call the postlod function for the YM_DELTAT, but it's hard without registers (see the way the YM2610 does it)YM_DELTAT_postload(OPL->deltat, REGS); Register savestate for a virtual YM3812/YM3526Y8950  Create one of virtual YM3812/YM3526/Y8950  'clock' is chip clock in Hz   'rate'  is sampling rate   calculate OPL state size  allocate memory block  GCC behaves weirdly... check that it's not acting up  init global tables  Destroy one of virtual YM3812  Optional handlers  address port  data port  status port  Y8950  OPL and OPL2  data port  KeyBoard IN  ADPCM-DATA  logerror("Y8950: read ADPCM value read=%02x\n",val); I/O DATA     PCM-DATA     2's complement PCM data - result from A/D convertion  CSM Key Controll  The key off should happen exactly one sample later - not implemented correctly yet  Timer B  Timer A  CSM mode key,TL controll  CSM mode total level latch and auto key on  reload timer  emulator create  emulator shutdown  technically correct, but breaks Wolf4SDL - FW19return OPLWrite(YM3812, a, v); YM3812 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3812's
+**
+** 'which' is the virtual YM3812 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part lt >>= FINAL_SH; limit check  store to sound buffer buf[i] = lt; stereo version BUILD_YM3812  Rockbox: we don't care about the rest. emulator create  emulator shutdown  YM3526 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3526's
+**
+** 'which' is the virtual YM3526 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part  limit check  store to sound buffer  BUILD_YM3526  emulator create  status flag: set bit4 on End Of Sample  status flag: set bit3 on BRDY (End Of: ADPCM analysis/synthesis, memory reading/writing) Y8950->deltat->write_time = 10.0 / clock; a single byte write takes 10 cycles of main clock Y8950->deltat->read_time  = 8.0 / clock; a single byte read takes 8 cycles of main clock  reset  emulator shutdown 
+** Generate samples for one of the Y8950's
+**
+** 'which' is the virtual Y8950 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ deltaT ADPCM  FM part  Rhythm part  limit check  store to sound buffer 
+ * Rockbox notes:
+ *
+ * This file is originally from the MAME project, from after their
+ * GPLv2 relicense. I (Franklin Wei) have made some modifications
+ * since then to make it work with the Wolf4SDL source. Notably, I
+ * corrected the behavior of YM3812Write() to write directly to the
+ * registers. Additionally, I fixed an unaligned write in OPL_CALC_CH
+ * which caused terrible output on ARM.
+  license:GPL-2.0+ copyright-holders:Jarek Burczynski,Tatsuyuki Satoh
+**
+** File: fmopl.c - software implementation of FM sound generator
+**                                            types OPL and OPL2
+**
+** Copyright Jarek Burczynski (bujar at mame dot net)
+** Copyright Tatsuyuki Satoh , MultiArcadeMachineEmulator development
+**
+** Version 0.72
+**
+
+Revision History:
+
+04-08-2003 Jarek Burczynski:
+- removed BFRDY hack. BFRDY is busy flag, and it should be 0 only when the chip
+handles memory read/write or during the adpcm synthesis when the chip
+requests another byte of ADPCM data.
+
+24-07-2003 Jarek Burczynski:
+- added a small hack for Y8950 status BFRDY flag (bit 3 should be set after
+some (unknown) delay). Right now it's always set.
+
+14-06-2003 Jarek Burczynski:
+- implemented all of the status register flags in Y8950 emulation
+- renamed y8950_set_delta_t_memory() parameters from _rom_ to _mem_ since
+they can be either RAM or ROM
+
+08-10-2002 Jarek Burczynski (thanks to Dox for the YM3526 chip)
+- corrected ym3526_read() to always set bit 2 and bit 1
+to HIGH state - identical to ym3812_read (verified on real YM3526)
+
+04-28-2002 Jarek Burczynski:
+- binary exact Envelope Generator (verified on real YM3812);
+compared to YM2151: the EG clock is equal to internal_clock,
+rates are 2 times slower and volume resolution is one bit less
+- modified interface functions (they no longer return pointer -
+that's internal to the emulator now):
+- new wrapper functions for OPLCreate: ym3526_init(), ym3812_init() and y8950_init()
+- corrected 'off by one' error in feedback calculations (when feedback is off)
+- enabled waveform usage (credit goes to Vlad Romascanu and zazzal22)
+- speeded up noise generator calculations (Nicola Salmoria)
+
+03-24-2002 Jarek Burczynski (thanks to Dox for the YM3812 chip)
+Complete rewrite (all verified on real YM3812):
+- corrected sin_tab and tl_tab data
+- corrected operator output calculations
+- corrected waveform_select_enable register;
+simply: ignore all writes to waveform_select register when
+waveform_select_enable == 0 and do not change the waveform previously selected.
+- corrected KSR handling
+- corrected Envelope Generator: attack shape, Sustain mode and
+Percussive/Non-percussive modes handling
+- Envelope Generator rates are two times slower now
+- LFO amplitude (tremolo) and phase modulation (vibrato)
+- rhythm sounds phase generation
+- white noise generator (big thanks to Olivier Galibert for mentioning Berlekamp-Massey algorithm)
+- corrected key on/off handling (the 'key' signal is ORed from three sources: FM, rhythm and CSM)
+- funky details (like ignoring output of operator 1 in BD rhythm sound when connect == 1)
+
+12-28-2001 Acho A. Tang
+- reflected Delta-T EOS status on Y8950 status port.
+- fixed subscription range of attack/decay tables
+
+
+To do:
+add delay before key off in CSM mode (see CSMKeyControll)
+verify volume of the FM part on the Y8950
+ Don't pack structs in here. This causes dangerous things on ARM regarding alignment. output final shift  16.16 fixed point (frequency calculations)  16.16 fixed point (EG timing)                8.24 fixed point (LFO calculations)        16.16 fixed point (timers calculations)     envelope output entries 511 sinwave entries  8 bits addressing (real chip)  register number to channel number , slot offset  Envelope Generator phases  save output as raw 16-bit sample #define SAVE_SAMPLEelse value < 0save to MONO file save to STEREO file  waveform select      DELTA-T ADPCM unit   keyboard interface   I/O port             ---------- Generic interface section ----------  attack rate: AR<<2            decay rate:  DR<<2            release rate:RR<<2            key scale rate                keyscale level                key scale rate: kcode>>KSR    multiple: mul_tab[ML]         Phase Generator  frequency counter             frequency counter step        feedback shift value          slot1 output pointer          slot1 output for feedback     connection (algorithm) type   Envelope Generator  percussive/non-percussive mode  phase type                    total level: TL << 2          adjusted now TL               envelope counter              sustain level: sl_tab[SL]     (attack state)                (attack state)                (decay state)                 (decay state)                 (release state)               (release state)               0 = KEY OFF, >0 = KEY ON      LFO  LFO Amplitude Modulation enable mask  LFO Phase Modulation enable flag (active high) waveform select  phase generator state  block+fnum                    Freq. Increment base          KeyScaleLevel Base step       key code (for key scaling)    OPL state  FM channel slots  OPL/OPL2 chips have 9 channels global envelope generator counter     global envelope generator counter works at frequency = chipclock/72  step of eg_timer                      envelope generator timer overlfows every 1 sample (on real chip)  Rhythm mode                   fnumber->increment counter    LFO  23 bit noise shift register   current noise 'phase'         current noise period          waveform select enable flag   timer counters                timer enable                  Delta-T ADPCM unit (Y8950)  Keyboard and I/O ports interface  external event callback handlers  TIMER handler                 TIMER parameter               IRQ handler                   IRQ parameter                 stream update handler         stream update parameter       chip type                     address register              status flag                   status mask                   Reg.08 : CSM,notesel,etc.     master clock  (Hz)            sampling rate (Hz)            frequency base                Timer base time (==sampling time) phase modulation input (SLOT 2)  for Y8950 DELTA-T, chip is mono, that 4 here is just for safety  mapping of register number (offset) to slot number used by the emulator  key scale level  table is 3dB/octave , DV converts this into 6dB/octave  0.1875 is bit 0 weight of the envelope counter (volume) expressed in the 'decibel' scale  OCT 0  OCT 1  OCT 2  OCT 3  OCT 4  OCT 5  OCT 6  OCT 7  0 / 3.0 / 1.5 / 6.0 dB/OCT  sustain level table (3dB per step)  0 - 15: 0, 3, 6, 9,12,15,18,21,24,27,30,33,36,39,42,93 (dB)cycle:0 1  2 3  4 5  6 7 0  rates 00..12 0 (increment by 0 or 1)  1  rates 00..12 1  2  rates 00..12 2  3  rates 00..12 3  4  rate 13 0 (increment by 1)  5  rate 13 1  6  rate 13 2  7  rate 13 3  8  rate 14 0 (increment by 2)  9  rate 14 1 10  rate 14 2 11  rate 14 3 12  rates 15 0, 15 1, 15 2, 15 3 (increment by 4) 13  rates 15 2, 15 3 for attack 14  infinity rates for attack and decay(s) note that there is no O(13) in this table - it's directly in the code  Envelope Generator rates (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3) rate  0,    1,    2,    3,   4,   5,   6,  7,  8,  9,  10, 11, 12, 13, 14, 15 shift 12,   11,   10,   9,   8,   7,   6,  5,  4,  3,  2,  1,  0,  0,  0,  0  mask  4095, 2047, 1023, 511, 255, 127, 63, 31, 15, 7,  3,  1,  0,  0,  0,  0   Envelope Generator counter shifts (16 + 64 rates + 16 RKS)  16 infinite time rates  rates 00-12  rate 13  rate 14  rate 15  16 dummy rates (same as 15 3)  multiple table  1/2, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,10,12,12,15,15   TL_TAB_LEN is calculated as:
+ *   12 - sinus amplitude bits     (Y axis)
+ *   2  - sinus sign bit           (Y axis)
+ *   TL_RES_LEN - sinus resolution (X axis)
+  sin waveform table in 'decibel' scale  four waveforms on OPL2 type chips  LFO Amplitude Modulation table (verified on real YM3812)
+   27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples
+
+   Length: 210 elements.
+
+   Each of the elements has to be repeated
+   exactly 64 times (on 64 consecutive samples).
+   The whole table takes: 64 * 210 = 13440 samples.
+
+   When AM = 1 data is used directly
+   When AM = 0 data is divided by 4 before being used (losing precision is important)
+ LFO Phase Modulation table (verified on real YM3812)  FNUM2/FNUM = 00 0xxxxxxx (0x0000) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 00 1xxxxxxx (0x0080) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 0xxxxxxx (0x0100) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 01 1xxxxxxx (0x0180) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 0xxxxxxx (0x0200) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 10 1xxxxxxx (0x0280) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 0xxxxxxx (0x0300) LFO PM depth = 0LFO PM depth = 1 FNUM2/FNUM = 11 1xxxxxxx (0x0380) LFO PM depth = 0LFO PM depth = 1 lock level of common table  status set and IRQ handling  set status flag  IRQ on  callback user interrupt handler (IRQ is OFF to ON)  status reset and IRQ handling  reset status flag  callback user interrupt handler (IRQ is ON to OFF)  IRQ mask set  IRQ handling check  advance LFO to next sample  LFO 	if (OPL->lfo_am_cnt >= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH) )  /* lfo_am_table is 210 elements long */		OPL->lfo_am_cnt -= ((UINT32)LFO_AM_TAB_ELEMENTS<<LFO_SH); lfo_am_table is 210 elements long  advance to next sample  Envelope Generator  attack phase  decay phase  sustain phase  this is important behaviour:
+                   one can change percusive/non-percussive modes on the fly and
+                   the chip will remain in sustain phase - verified on real YM3812  non-percussive mode  do nothing  percussive mode  during sustain phase chip adds Release Rate (in percussive mode)  else do nothing in sustain phase  release phase  Phase Generator  LFO phase modulation active  LFO phase modulation  = zero  LFO phase modulation disabled for this operator   The Noise Generator of the YM3812 is 23-bit shift register.
+     *   Period is equal to 2^23-2 samples.
+     *   Register works at sampling frequency of the chip, so output
+     *   can change on every sample.
+     *
+     *   Output of the register and input to the bit 22 is:
+     *   bit0 XOR bit14 XOR bit15 XOR bit22
+     *
+     *   Simply use bit 22 as the noise output.
+      number of events (shifts of the shift register) 
+          UINT32 j;
+          j = ( (OPL->noise_rng) ^ (OPL->noise_rng>>14) ^ (OPL->noise_rng>>15) ^ (OPL->noise_rng>>22) ) & 1;
+          OPL->noise_rng = (j<<22) | (OPL->noise_rng>>1);
+        
+          Instead of doing all the logic operations above, we
+          use a trick here (and use bit 0 as the noise output).
+          The difference is only that the noise bit changes one
+          step ahead. This doesn't matter since we don't know
+          what is real state of the noise_rng after the reset.
+         calculate output  SLOT 1 INT32 a;memcpy(&a, SLOT->connect1, sizeof(a));a += SLOT->op1_out[0];memcpy(SLOT->connect1, &a, sizeof(a)); alignment issue on arm SLOT 2 
+  operators used in the rhythm sounds generation process:
+
+  Envelope Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    TL ARDR SLRR Wave Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        50  70   90   f0  +
+  6 / 1   15        53  73   93   f3  +
+  7 / 0   13        51  71   91   f1        +
+  7 / 1   16        54  74   94   f4              +
+  8 / 0   14        52  72   92   f2                    +
+  8 / 1   17        55  75   95   f5                          +
+
+  Phase Generator:
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  / slot   number    MULTIPLE          Drum  Hat   Drum  Tom  Cymbal
+  6 / 0   12        30                +
+  6 / 1   15        33                +
+  7 / 0   13        31                      +     +           +
+  7 / 1   16        34                -----  n o t  u s e d -----
+  8 / 0   14        32                                  +
+  8 / 1   17        35                      +                 +
+
+  channel  operator  register number   Bass  High  Snare Tom  Top
+  number   number    BLK/FNUM2 FNUM    Drum  Hat   Drum  Tom  Cymbal
+  6     12,15     B6        A6      +
+
+  7     13,16     B7        A7            +     +           +
+
+  8     14,17     B8        A8            +           +     +
+
+ calculate rhythm  Bass Drum (verified on real YM3812):
+       - depends on the channel 6 'connect' register:
+       when connect = 0 it works the same as in normal (non-rhythm) mode (op1->op2->out)
+       when connect = 1 _only_ operator 2 is present on output (op2->out), operator 1 is ignored
+       - output sample always is multiplied by 2
+     SLOT 1  else ignore output of operator 1  SLOT 2  Phase generation is based on:  HH  (13) channel 7->slot 1 combined with channel 8->slot 2 (same combination as TOP CYMBAL but different output phases)  SD  (16) channel 7->slot 1  TOM (14) channel 8->slot 1  TOP (17) channel 7->slot 1 combined with channel 8->slot 2 (same combination as HIGH HAT but different output phases)  Envelope generation based on:  HH  channel 7->slot1  SD  channel 7->slot2  TOM channel 8->slot1  TOP channel 8->slot2  The following formulas can be well optimized.
+       I leave them in direct form for now (in case I've missed something).
+     High Hat (verified on real YM3812)  high hat phase generation:
+           phase = d0 or 234 (based on frequency only)
+           phase = 34 or 2d0 (based on noise)
+         base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0xd0;  when res1 = 1 phase = 0x200 | (0xd0>>2);  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | (0xd0>>2);  when phase & 0x200 is set and noise=1 then phase = 0x200|0xd0  when phase & 0x200 is set and noise=0 then phase = 0x200|(0xd0>>2), ie no change  when phase & 0x200 is clear and noise=1 then phase = 0xd0>>2  when phase & 0x200 is clear and noise=0 then phase = 0xd0, ie no change  Snare Drum (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when bit8 = 0 phase = 0x100;  when bit8 = 1 phase = 0x200;  Noise bit XOR'es phase by 0x100  when noisebit = 0 pass the phase from calculation above  when noisebit = 1 phase ^= 0x100;  in other words: phase ^= (noisebit<<8);  Tom Tom (verified on real YM3812)  Top Cymbal (verified on real YM3812)  base frequency derived from operator 1 in channel 7  when res1 = 0 phase = 0x000 | 0x100;  when res1 = 1 phase = 0x200 | 0x100;  enable gate based on frequency of operator 2 in channel 8  when res2 = 0 pass the phase from calculation above (res1);  when res2 = 1 phase = 0x200 | 0x100;  generic table initialize  we never reach (1<<16) here due to the (x+1)  result fits within 16 bits at maximum  16 bits here  12 bits here  round to nearest  11 bits here (rounded)  12 bits here (as in real chip) +1logerror("FMOPL.C: TL_TAB_LEN = %i elements (%i bytes)\n",TL_TAB_LEN, (int)sizeof(tl_tab)); non-standard sinus  checked against the real chip  we never reach zero here due to ((i*2)+1)  convert to 'decibels'  convert to 'decibels'  round to nearest logerror("FMOPL.C: sin [%4i (hex=%03x)]= %4i (tl_tab value=%5i)\n", i, i, sin_tab[i], tl_tab[sin_tab[i]] ); waveform 1:  __      __                  /  \____/  \____ output only first half of the sinus waveform (positive one)  waveform 2:  __  __  __  __              /  \/  \/  \/  \ abs(sin)  waveform 3:  _   _   _   _               / |_/ |_/ |_/ |_ abs(output only first quarter of the sinus waveform) logerror("FMOPL.C: sin1[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[1*SIN_LEN+i], tl_tab[sin_tab[1*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin2[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[2*SIN_LEN+i], tl_tab[sin_tab[2*SIN_LEN+i]] );
+              logerror("FMOPL.C: sin3[%4i]= %4i (tl_tab value=%5i)\n", i, sin_tab[3*SIN_LEN+i], tl_tab[sin_tab[3*SIN_LEN+i]] );logerror("FMOPL.C: ENV_QUIET= %08x (dec*8=%i)\n", ENV_QUIET, ENV_QUIET*8 ); frequency base logerror("freqbase=%f\n", OPL->freqbase); Timer base time  make fnumber -> increment counter table  opn phase increment counter = 20bit  -10 because chip works with 10.10 fixed point, while we use 16.16  Amplitude modulation: 27 output levels (triangle waveform); 1 level takes one of: 192, 256 or 448 samples  One entry from LFO_AM_TABLE lasts for 64 samples  Vibrato: 8 output levels (triangle waveform); 1 level takes 1024 samples logerror ("OPL->lfo_am_inc = %8x ; OPL->lfo_pm_inc = %8x\n", OPL->lfo_am_inc, OPL->lfo_pm_inc); Noise generator: a step takes 1 sample logerror("OPLinit eg_timer_add=%8x eg_timer_overflow=%8x\n", OPL->eg_timer_add, OPL->eg_timer_overflow); restart Phase Generator  phase -> Attack  phase -> Release  update phase increment counter of operator (also update the EG rates if necessary)  (frequency) phase increment counter  calculate envelope generator rates  set multi,am,vib,EG-TYP,KSR,mul  set ksl & tl  7 bits TL (bit 6 = always 0)  0 / 1.5 / 3.0 / 6.0 dB/OCT  7 bits TL (bit 6 = always 0)  set attack rate & decay rate   set sustain level & release rate  write a value v to register r on OPL chip  adjust bus to 8 bits  00-1f:control  waveform select enable  do not change the waveform previously selected  Timer 1  Timer 2  IRQ clear / mask and Timer enable  IRQ flag clear  don't reset BFRDY flag or we will have to call deltat module to set the flag  set IRQ mask ,timer enable IRQRST,T1MSK,t2MSK,EOSMSK,BRMSK,x,ST2,ST1  timer 2 double period = st2 ? (OPL->TimerBase * OPL->T[1]) : 0; timer 1 double period = st1 ? (OPL->TimerBase * OPL->T[0]) : 0; Key Board OUT OPL->device->logerror("Y8950: write unmapped KEYBOARD port\n"); DELTA-T control 1 : START,REC,MEMDATA,REPT,SPOFF,x,x,RST  MODE,DELTA-T control 2 : CSM,NOTESEL,x,x,smpl,da/ad,64k,rom  mask 4 LSBs in register 08 for DELTA-T unit  START ADD  STOP ADD   PRESCALE    ADPCM data write  DELTA-N     DELTA-N     ADPCM volume  DAC data high 8 bits (F7,F6...F2)  DAC data low 2 bits (F1, F0 in bits 7,6)  DAC data shift (S2,S1,S0 in bits 2,1,0) OPL->device->logerror("FMOPL.C: DAC data register written, but not implemented reg=%02x val=%02x\n",r,v); I/O CTRL (Direction)  I/O DATA OPL->device->logerror("FMOPL.C: write to unknown register: %02x\n",r); am ON, vib ON, ksr, eg_type, mul  am depth, vibrato depth, r,bd,sd,tom,tc,hh  BD key on/off  HH key on/off  SD key on/off  TOM key on/off  TOP-CY key on/off  BD key off  HH key off  SD key off  TOM key off  TOP-CY off  keyon,block,fnum  a0-a8  b0-b8  update  BLK 2,1,0 bits -> bits 3,2,1 of kcode  the info below is actually opposite to what is stated in the Manuals (verifed on real YM3812)  if notesel == 0 -> lsb of kcode is bit 10 (MSB) of fnum   if notesel == 1 -> lsb of kcode is bit 9 (MSB-1) of fnum  notesel == 1  notesel == 0  refresh Total Level in both SLOTs of this channel  refresh frequency counter in both SLOTs of this channel  FB,C  waveform select  simply ignore write to the waveform select register if selecting not enabled in test register fputc( (unsigned char)0, cymfile ); lock/unlock for common table  first time  allocate total level table (128kb space) device->machine().scheduler().timer_pulse ( double::from_hz(110), FUNC(cymfile_callback)); /*110 Hz pulse timer*/device->logerror("Could not create file 3812_.cym\n"); last time  noise shift register  normal mode  reset with register write  wavesel disable  Timer1  Timer2  IRQ mask clear  reset operator parameters  wave table  Look up key scale level  Calculate key scale rate  Calculate attack, decay and release rates  Calculate phase increment  Total level  Connect output  We really should call the postlod function for the YM_DELTAT, but it's hard without registers (see the way the YM2610 does it)YM_DELTAT_postload(OPL->deltat, REGS); Register savestate for a virtual YM3812/YM3526Y8950  Create one of virtual YM3812/YM3526/Y8950  'clock' is chip clock in Hz   'rate'  is sampling rate   calculate OPL state size  allocate memory block  GCC behaves weirdly... check that it's not acting up  init global tables  Destroy one of virtual YM3812  Optional handlers  address port  data port  status port  Y8950  OPL and OPL2  data port  KeyBoard IN  ADPCM-DATA  logerror("Y8950: read ADPCM value read=%02x\n",val); I/O DATA     PCM-DATA     2's complement PCM data - result from A/D convertion  CSM Key Controll  The key off should happen exactly one sample later - not implemented correctly yet  Timer B  Timer A  CSM mode key,TL controll  CSM mode total level latch and auto key on  reload timer  emulator create  emulator shutdown  technically correct, but breaks Wolf4SDL - FW19return OPLWrite(YM3812, a, v); YM3812 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3812's
+**
+** 'which' is the virtual YM3812 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part lt >>= FINAL_SH; limit check  store to sound buffer buf[i] = lt; stereo version BUILD_YM3812  Rockbox: we don't care about the rest. emulator create  emulator shutdown  YM3526 always returns bit2 and bit1 in HIGH state 
+** Generate samples for one of the YM3526's
+**
+** 'which' is the virtual YM3526 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ FM part  Rhythm part  limit check  store to sound buffer  BUILD_YM3526  emulator create  status flag: set bit4 on End Of Sample  status flag: set bit3 on BRDY (End Of: ADPCM analysis/synthesis, memory reading/writing) Y8950->deltat->write_time = 10.0 / clock; a single byte write takes 10 cycles of main clock Y8950->deltat->read_time  = 8.0 / clock; a single byte read takes 8 cycles of main clock  reset  emulator shutdown 
+** Generate samples for one of the Y8950's
+**
+** 'which' is the virtual Y8950 number
+** '*buffer' is the output buffer pointer
+** 'length' is the number of samples that should be generated
+ deltaT ADPCM  FM part  Rhythm part  limit check  store to sound buffer 

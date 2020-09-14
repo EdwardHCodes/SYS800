@@ -1,0 +1,214 @@
+ Copyright (C) 2003-2006 Jean-Marc Valin
+
+   File: mdf.c
+   Echo canceller based on the MDF algorithm (see below)
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The echo canceller is based on the MDF algorithm described in:
+
+   J. S. Soo, K. K. Pang Multidelay block frequency adaptive filter, 
+   IEEE Trans. Acoust. Speech Signal Process., Vol. ASSP-38, No. 2, 
+   February 1990.
+   
+   We use the Alternatively Updated MDF (AUMDF) variant. Robustness to 
+   double-talk is achieved using a variable learning rate as described in:
+   
+   Valin, J.-M., On Adjusting the Learning Rate in Frequency Domain Echo 
+   Cancellation With Double-Talk. IEEE Transactions on Audio,
+   Speech and Language Processing, Vol. 15, No. 3, pp. 1030-1034, 2007.
+   http://people.xiph.org/~jm/papers/valin_taslp2006.pdf
+   
+   There is no explicit double-talk detection, but a continuous variation
+   in the learning rate based on residual echo, double-talk and background
+   noise.
+   
+   About the fixed-point version:
+   All the signals are represented with 16-bit words. The filter weights 
+   are represented with 32-bit words, but only the top 16 bits are used
+   in most cases. The lower 16 bits are completely unreliable (due to the
+   fact that the update is done only on the top bits), but help in the
+   adaptation -- probably by removing a "threshold effect" due to
+   quantization (rounding going to zero) when the gradient is small.
+   
+   Another kludge that seems to work good: when performing the weight
+   update, we only move half the way toward the "goal" this seems to
+   reduce the effect of quantization noise in the update phase. This
+   can be seen as applying a gradient descent on a "soft constraint"
+   instead of having a hard constraint.
+   
+ If enabled, the AEC will use a foreground filter and a background filter to be more robust to double-talk
+   and difficult signals in general. The cost is an extra FFT and a matrix-vector multiply  Constants for the two-path filter  Constants for the two-path filter * Speex echo cancellation state. *< Number of samples processed each time  scratch  Far-end input buffer (2N)  Far-end buffer (M+1 frames) in frequency domain  scratch  scratch  scratch  scratch  (Background) filter weights  Foreground filter weights  1st recursive average of the residual power difference  2nd recursive average of the residual power difference  Estimated variance of 1st estimator  Estimated variance of 2nd estimator  Power of the far-end signal  Inverse power of far-end  scratch  scratch  scratch  scratch  scratch  NOTE: If you only use speex_echo_cancel() and want to save some memory, remove this printf ("%d %d %d %d %d %d\n", num[0], num[1], num[2], den[0], den[1], den[2]); This inner product is slightly different from the codec version because of fixed-point  HINT: If you had a 40-bit accumulator, you could shift only at the end * Compute power spectrum of a half-complex (packed) vector * Compute cross-power spectrum of a half-complex (packed) vectors and add to acc * Compute weighted cross-power spectrum of a half-complex (packed) vector with conjugate  Just a security in case an overflow were to occur printf ("%f ", prop[i]);printf ("\n");* Creates a new echo canceller state  This is the default sampling rate  Ratio of ~10 between adaptation rate of first and last block * Resets echo canceller state * Destroys an echo canceller state speex_warning_int("capture with fill level ", st->play_buf_pos/st->frame_size);speex_warning_int("playback with fill level ", st->play_buf_pos/st->frame_size);* Performs echo cancellation on a frame (deprecated, last arg now ignored) * Performs echo cancellation on a frame  Apply a notch filter to make sure DC doesn't end up causing problems  Copy input data to buffer and apply pre-emphasis  If saturation occurs here, we need to freeze adaptation for M+1 frames (not just one)  Shift memory: this could be optimized eventually Convert x (far end) to frequency domain  From here on, the top part of x is used as scratch space  Compute foreground filter  Adjust proportional adaption rate  Compute weight gradient  Update weight to prevent circular convolution (MDF / AUMDF)  This is a variant of the Alternatively Updated MDF (AUMDF)  Remove the "if" to make this an MDF filter  The "-1" in the shift is a sort of kludge that trades less efficient update speed for decrease noise  Compute filter response Y  Difference in response, this is used to estimate the variance of our residual power estimate  Logic for updating the foreground filter  For two time windows, compute the mean of the energy difference, as well as the variance  Equivalent float code:
+   st->Davg1 = .6*st->Davg1 + .4*(Sff-See);
+   st->Davg2 = .85*st->Davg2 + .15*(Sff-See);
+   st->Dvar1 = .36*st->Dvar1 + .16*Sff*Dbf;
+   st->Dvar2 = .7225*st->Dvar2 + .0225*Sff*Dbf;
+    Check if we have a statistically significant reduction in the residual echo  Note that this is *not* Gaussian, so we need to be careful about the longer tail  Do we update?  Copy background filter to foreground filter  Apply a smooth transition so as to not introduce blocking artifacts  Otherwise, check if the background filter is significantly worse  Copy foreground filter to background filter  We also need to copy the output so as to get correct adaptation  Compute error signal (for the output with de-emphasis)  Saturation  This is an arbitrary test for saturation in the microphone signal  Compute error signal (filter update version)  Compute a bunch of correlations printf ("%f %f %f %f\n", Sff, See, Syy, Sdd, st->update_cond); Do some sanity check  Things have gone really bad  AEC seems to add lots of echo instead of removing it, let's see if it will improve  Everything's fine  Add a small noise floor to make sure not to have problems when dividing  Convert error to frequency domain  Compute power spectrum of far end (X), error (E) and filter response (Y)  Smooth far end energy estimate over time  Enable this to compute the power based only on the tail (would need to compute more 
+      efficiently to make this really useful  Compute filtered spectra and (cross-)correlations  Compute correlation updatete rate  Update correlations (recursive average)  We don't really hope to get better than 33 dB (MIN_LEAK-3dB) attenuation anyway  leak_estimate is the linear regression result  This looks like a stupid bug, but it's right (because we convert from Q14 to Q15) printf ("%f\n", st->leak_estimate); Compute Residual to Error Ratio  Check for y in e (lower bound on RER)  Check for y in e (lower bound on RER)  We consider that the filter has had minimal adaptation if the following is true Normal learning rate calculation once we're past the minimal adaptation phase  Compute frequency-domain adaptation mask st->power_1[i] = adapt_rate*r/(e*(1+st->power[i])); Temporary adaption rate if filter is not yet adapted enough  How much have we adapted so far?  Save residual echo so it can be used by the nonlinear processor  If the filter is adapted, take the filtered echo  If filter isn't adapted yet, all we can do is take the far end signal directly  moved earlier: for (i=0;i<N;i++)
+      st->last_y[i] = st->x[i]; Compute spectrum of estimated echo for use in an echo post-filter  Apply hanning window (should pre-compute it) Compute power spectrum of the echo  Estimate residual echo  Copyright (C) 2003-2006 Jean-Marc Valin
+
+   File: mdf.c
+   Echo canceller based on the MDF algorithm (see below)
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The echo canceller is based on the MDF algorithm described in:
+
+   J. S. Soo, K. K. Pang Multidelay block frequency adaptive filter, 
+   IEEE Trans. Acoust. Speech Signal Process., Vol. ASSP-38, No. 2, 
+   February 1990.
+   
+   We use the Alternatively Updated MDF (AUMDF) variant. Robustness to 
+   double-talk is achieved using a variable learning rate as described in:
+   
+   Valin, J.-M., On Adjusting the Learning Rate in Frequency Domain Echo 
+   Cancellation With Double-Talk. IEEE Transactions on Audio,
+   Speech and Language Processing, Vol. 15, No. 3, pp. 1030-1034, 2007.
+   http://people.xiph.org/~jm/papers/valin_taslp2006.pdf
+   
+   There is no explicit double-talk detection, but a continuous variation
+   in the learning rate based on residual echo, double-talk and background
+   noise.
+   
+   About the fixed-point version:
+   All the signals are represented with 16-bit words. The filter weights 
+   are represented with 32-bit words, but only the top 16 bits are used
+   in most cases. The lower 16 bits are completely unreliable (due to the
+   fact that the update is done only on the top bits), but help in the
+   adaptation -- probably by removing a "threshold effect" due to
+   quantization (rounding going to zero) when the gradient is small.
+   
+   Another kludge that seems to work good: when performing the weight
+   update, we only move half the way toward the "goal" this seems to
+   reduce the effect of quantization noise in the update phase. This
+   can be seen as applying a gradient descent on a "soft constraint"
+   instead of having a hard constraint.
+   
+ If enabled, the AEC will use a foreground filter and a background filter to be more robust to double-talk
+   and difficult signals in general. The cost is an extra FFT and a matrix-vector multiply  Constants for the two-path filter  Constants for the two-path filter * Speex echo cancellation state. *< Number of samples processed each time  scratch  Far-end input buffer (2N)  Far-end buffer (M+1 frames) in frequency domain  scratch  scratch  scratch  scratch  (Background) filter weights  Foreground filter weights  1st recursive average of the residual power difference  2nd recursive average of the residual power difference  Estimated variance of 1st estimator  Estimated variance of 2nd estimator  Power of the far-end signal  Inverse power of far-end  scratch  scratch  scratch  scratch  scratch  NOTE: If you only use speex_echo_cancel() and want to save some memory, remove this printf ("%d %d %d %d %d %d\n", num[0], num[1], num[2], den[0], den[1], den[2]); This inner product is slightly different from the codec version because of fixed-point  HINT: If you had a 40-bit accumulator, you could shift only at the end * Compute power spectrum of a half-complex (packed) vector * Compute cross-power spectrum of a half-complex (packed) vectors and add to acc * Compute weighted cross-power spectrum of a half-complex (packed) vector with conjugate  Just a security in case an overflow were to occur printf ("%f ", prop[i]);printf ("\n");* Creates a new echo canceller state  This is the default sampling rate  Ratio of ~10 between adaptation rate of first and last block * Resets echo canceller state * Destroys an echo canceller state speex_warning_int("capture with fill level ", st->play_buf_pos/st->frame_size);speex_warning_int("playback with fill level ", st->play_buf_pos/st->frame_size);* Performs echo cancellation on a frame (deprecated, last arg now ignored) * Performs echo cancellation on a frame  Apply a notch filter to make sure DC doesn't end up causing problems  Copy input data to buffer and apply pre-emphasis  If saturation occurs here, we need to freeze adaptation for M+1 frames (not just one)  Shift memory: this could be optimized eventually Convert x (far end) to frequency domain  From here on, the top part of x is used as scratch space  Compute foreground filter  Adjust proportional adaption rate  Compute weight gradient  Update weight to prevent circular convolution (MDF / AUMDF)  This is a variant of the Alternatively Updated MDF (AUMDF)  Remove the "if" to make this an MDF filter  The "-1" in the shift is a sort of kludge that trades less efficient update speed for decrease noise  Compute filter response Y  Difference in response, this is used to estimate the variance of our residual power estimate  Logic for updating the foreground filter  For two time windows, compute the mean of the energy difference, as well as the variance  Equivalent float code:
+   st->Davg1 = .6*st->Davg1 + .4*(Sff-See);
+   st->Davg2 = .85*st->Davg2 + .15*(Sff-See);
+   st->Dvar1 = .36*st->Dvar1 + .16*Sff*Dbf;
+   st->Dvar2 = .7225*st->Dvar2 + .0225*Sff*Dbf;
+    Check if we have a statistically significant reduction in the residual echo  Note that this is *not* Gaussian, so we need to be careful about the longer tail  Do we update?  Copy background filter to foreground filter  Apply a smooth transition so as to not introduce blocking artifacts  Otherwise, check if the background filter is significantly worse  Copy foreground filter to background filter  We also need to copy the output so as to get correct adaptation  Compute error signal (for the output with de-emphasis)  Saturation  This is an arbitrary test for saturation in the microphone signal  Compute error signal (filter update version)  Compute a bunch of correlations printf ("%f %f %f %f\n", Sff, See, Syy, Sdd, st->update_cond); Do some sanity check  Things have gone really bad  AEC seems to add lots of echo instead of removing it, let's see if it will improve  Everything's fine  Add a small noise floor to make sure not to have problems when dividing  Convert error to frequency domain  Compute power spectrum of far end (X), error (E) and filter response (Y)  Smooth far end energy estimate over time  Enable this to compute the power based only on the tail (would need to compute more 
+      efficiently to make this really useful  Compute filtered spectra and (cross-)correlations  Compute correlation updatete rate  Update correlations (recursive average)  We don't really hope to get better than 33 dB (MIN_LEAK-3dB) attenuation anyway  leak_estimate is the linear regression result  This looks like a stupid bug, but it's right (because we convert from Q14 to Q15) printf ("%f\n", st->leak_estimate); Compute Residual to Error Ratio  Check for y in e (lower bound on RER)  Check for y in e (lower bound on RER)  We consider that the filter has had minimal adaptation if the following is true Normal learning rate calculation once we're past the minimal adaptation phase  Compute frequency-domain adaptation mask st->power_1[i] = adapt_rate*r/(e*(1+st->power[i])); Temporary adaption rate if filter is not yet adapted enough  How much have we adapted so far?  Save residual echo so it can be used by the nonlinear processor  If the filter is adapted, take the filtered echo  If filter isn't adapted yet, all we can do is take the far end signal directly  moved earlier: for (i=0;i<N;i++)
+      st->last_y[i] = st->x[i]; Compute spectrum of estimated echo for use in an echo post-filter  Apply hanning window (should pre-compute it) Compute power spectrum of the echo  Estimate residual echo  Copyright (C) 2003-2006 Jean-Marc Valin
+
+   File: mdf.c
+   Echo canceller based on the MDF algorithm (see below)
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The echo canceller is based on the MDF algorithm described in:
+
+   J. S. Soo, K. K. Pang Multidelay block frequency adaptive filter, 
+   IEEE Trans. Acoust. Speech Signal Process., Vol. ASSP-38, No. 2, 
+   February 1990.
+   
+   We use the Alternatively Updated MDF (AUMDF) variant. Robustness to 
+   double-talk is achieved using a variable learning rate as described in:
+   
+   Valin, J.-M., On Adjusting the Learning Rate in Frequency Domain Echo 
+   Cancellation With Double-Talk. IEEE Transactions on Audio,
+   Speech and Language Processing, Vol. 15, No. 3, pp. 1030-1034, 2007.
+   http://people.xiph.org/~jm/papers/valin_taslp2006.pdf
+   
+   There is no explicit double-talk detection, but a continuous variation
+   in the learning rate based on residual echo, double-talk and background
+   noise.
+   
+   About the fixed-point version:
+   All the signals are represented with 16-bit words. The filter weights 
+   are represented with 32-bit words, but only the top 16 bits are used
+   in most cases. The lower 16 bits are completely unreliable (due to the
+   fact that the update is done only on the top bits), but help in the
+   adaptation -- probably by removing a "threshold effect" due to
+   quantization (rounding going to zero) when the gradient is small.
+   
+   Another kludge that seems to work good: when performing the weight
+   update, we only move half the way toward the "goal" this seems to
+   reduce the effect of quantization noise in the update phase. This
+   can be seen as applying a gradient descent on a "soft constraint"
+   instead of having a hard constraint.
+   
+ If enabled, the AEC will use a foreground filter and a background filter to be more robust to double-talk
+   and difficult signals in general. The cost is an extra FFT and a matrix-vector multiply  Constants for the two-path filter  Constants for the two-path filter * Speex echo cancellation state. *< Number of samples processed each time  scratch  Far-end input buffer (2N)  Far-end buffer (M+1 frames) in frequency domain  scratch  scratch  scratch  scratch  (Background) filter weights  Foreground filter weights  1st recursive average of the residual power difference  2nd recursive average of the residual power difference  Estimated variance of 1st estimator  Estimated variance of 2nd estimator  Power of the far-end signal  Inverse power of far-end  scratch  scratch  scratch  scratch  scratch  NOTE: If you only use speex_echo_cancel() and want to save some memory, remove this printf ("%d %d %d %d %d %d\n", num[0], num[1], num[2], den[0], den[1], den[2]); This inner product is slightly different from the codec version because of fixed-point  HINT: If you had a 40-bit accumulator, you could shift only at the end * Compute power spectrum of a half-complex (packed) vector * Compute cross-power spectrum of a half-complex (packed) vectors and add to acc * Compute weighted cross-power spectrum of a half-complex (packed) vector with conjugate  Just a security in case an overflow were to occur printf ("%f ", prop[i]);printf ("\n");* Creates a new echo canceller state  This is the default sampling rate  Ratio of ~10 between adaptation rate of first and last block * Resets echo canceller state * Destroys an echo canceller state speex_warning_int("capture with fill level ", st->play_buf_pos/st->frame_size);speex_warning_int("playback with fill level ", st->play_buf_pos/st->frame_size);* Performs echo cancellation on a frame (deprecated, last arg now ignored) * Performs echo cancellation on a frame  Apply a notch filter to make sure DC doesn't end up causing problems  Copy input data to buffer and apply pre-emphasis  If saturation occurs here, we need to freeze adaptation for M+1 frames (not just one)  Shift memory: this could be optimized eventually Convert x (far end) to frequency domain  From here on, the top part of x is used as scratch space  Compute foreground filter  Adjust proportional adaption rate  Compute weight gradient  Update weight to prevent circular convolution (MDF / AUMDF)  This is a variant of the Alternatively Updated MDF (AUMDF)  Remove the "if" to make this an MDF filter  The "-1" in the shift is a sort of kludge that trades less efficient update speed for decrease noise  Compute filter response Y  Difference in response, this is used to estimate the variance of our residual power estimate  Logic for updating the foreground filter  For two time windows, compute the mean of the energy difference, as well as the variance  Equivalent float code:
+   st->Davg1 = .6*st->Davg1 + .4*(Sff-See);
+   st->Davg2 = .85*st->Davg2 + .15*(Sff-See);
+   st->Dvar1 = .36*st->Dvar1 + .16*Sff*Dbf;
+   st->Dvar2 = .7225*st->Dvar2 + .0225*Sff*Dbf;
+    Check if we have a statistically significant reduction in the residual echo  Note that this is *not* Gaussian, so we need to be careful about the longer tail  Do we update?  Copy background filter to foreground filter  Apply a smooth transition so as to not introduce blocking artifacts  Otherwise, check if the background filter is significantly worse  Copy foreground filter to background filter  We also need to copy the output so as to get correct adaptation  Compute error signal (for the output with de-emphasis)  Saturation  This is an arbitrary test for saturation in the microphone signal  Compute error signal (filter update version)  Compute a bunch of correlations printf ("%f %f %f %f\n", Sff, See, Syy, Sdd, st->update_cond); Do some sanity check  Things have gone really bad  AEC seems to add lots of echo instead of removing it, let's see if it will improve  Everything's fine  Add a small noise floor to make sure not to have problems when dividing  Convert error to frequency domain  Compute power spectrum of far end (X), error (E) and filter response (Y)  Smooth far end energy estimate over time  Enable this to compute the power based only on the tail (would need to compute more 
+      efficiently to make this really useful  Compute filtered spectra and (cross-)correlations  Compute correlation updatete rate  Update correlations (recursive average)  We don't really hope to get better than 33 dB (MIN_LEAK-3dB) attenuation anyway  leak_estimate is the linear regression result  This looks like a stupid bug, but it's right (because we convert from Q14 to Q15) printf ("%f\n", st->leak_estimate); Compute Residual to Error Ratio  Check for y in e (lower bound on RER)  Check for y in e (lower bound on RER)  We consider that the filter has had minimal adaptation if the following is true Normal learning rate calculation once we're past the minimal adaptation phase  Compute frequency-domain adaptation mask st->power_1[i] = adapt_rate*r/(e*(1+st->power[i])); Temporary adaption rate if filter is not yet adapted enough  How much have we adapted so far?  Save residual echo so it can be used by the nonlinear processor  If the filter is adapted, take the filtered echo  If filter isn't adapted yet, all we can do is take the far end signal directly  moved earlier: for (i=0;i<N;i++)
+      st->last_y[i] = st->x[i]; Compute spectrum of estimated echo for use in an echo post-filter  Apply hanning window (should pre-compute it) Compute power spectrum of the echo  Estimate residual echo 

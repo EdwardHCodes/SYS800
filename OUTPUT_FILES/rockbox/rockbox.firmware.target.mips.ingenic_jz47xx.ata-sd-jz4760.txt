@@ -1,0 +1,151 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** COMPLETELY BROKEN! HANGS RANDOMLY!#define DEBUG(x...)         logf(x) volumes  SD card 1  SD card 2  Error codes  Standard MMC/SD clock speeds  400 kHz for initial setup  24 MHz for SD Cards  48 MHz for SD Cards  Extra commands for state control  Use negative numbers to disambiguate  Proprietary commands, illegal/reserved according to SD Specification 2.00  class 1  adtc [31:0]  dadr       R1   class 3  adtc [31:0]  data addr  R1   class 4  adtc                    R1   adtc                    R1   class 9  bcr                     R5   Don't change the order of these; they are used in dispatch tables  These are unpacked versions of the actual responses  Card Power up status bit  Slot index - used for CS lines  Command to send  Argument to send  Response type expected  Data transfer (these may be modified at the low level)  Number of blocks to transfer Block length  Data buffer  Data length, for PIO  Results  Buffer to store response - CRC is optional  Argument of OCR **********************************************************************
+ *  SD Events
+  No events  Rx data done  Tx data done  Programming is done *************************************************************************
+ * Utility functions
+ *************************************************************************if (r1->status & SD_R1_CARD_IS_LOCKED)     return SD_ERROR_CARD_IS_LOCKED; This should be last - it's the least dangerous error  Save RCA returned by the SD Card  Stop the MMC clock and wait while it happens DEBUG("stop MMC clock"); disable auto clock stop  only stop if necessary DEBUG("clock off time is %d microsec", timeout); Start the MMC clock and operation  Checking for response or data timeout  Checking for CRC error  Checking for FIFO empty if(status & MSC_STAT_DATA_FIFO_EMPTY && request->rtype != RESPONSE_NONE)
+    {
+        DEBUG("SD FIFO empty, MSC_STAT 0x%x", status);
+        return SD_ERROR_UNDERRUN;
+    } Obtain response to the command and store it to response buffer  length in word  word aligned ?  Use DMA if we can  Ready to read data  Read data from RXFIFO. It could be FULL or PARTIAL FULL  length in word  word aligned ?  Use DMA if we can  Ready to write data  Write data to TXFIFO  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel sd_rx_dma_callback();sd_rx_dma_callback();sd_tx_dma_callback();sd_tx_dma_callback(); SD_DMA_INTERRUPT  SD_DMA_ENABLE  MSC_CLK  Set the MMC clock frequency *******************************************************************************************************************
+** Name:      int jz_sd_exec_cmd()
+** Function:  send command to the card, and get a response
+** Input:     struct sd_request *req: SD request
+** Output:    0:  right        >0:  error code
+******************************************************************************************************************* Indicate we have no result yet  On reset, 1-bit bus width  On reset, stop SD clock  Reset MMC/SD controller  Drop SD clock down to lowest speed  Re-enable clocks  mask all interrupts and clear status  open interrupt  Set command type and events  SD core extra command  Initialization sequence sent prior to command  bc - broadcast - no response  bcr - broadcast with response  adtc - addressed with data transfer  SD card returns SCR register as data.
+               SD core expect it in the response buffer,
+               after normal response.         case SD_LOCK_UNLOCK: ac - no data transfer  Set response type  FALLTHRU  use 4-bit bus width when possible  Set command index  Set argument  Set block length and nob  Set command  Start SD clock and send command to card  Wait for command completion  clear flag  Check for status  Complete command with no response  Get response  Start data operation  Wait for Data Done  clear status  Wait for Prog Done event  clear status  Command completed  stop SD clock  return successfully ******************************************************************************************************************
+** Name:      int sd_chkcard()
+** Function:  check whether card is insert entirely
+** Input:     NULL
+** Output:    1: insert entirely    0: not insert entirely
+******************************************************************************************************************* MSC interrupt handlers  SD_SLOT_1  clear flag  clear flag  clear flag  MSC interrupt handlers  SD_SLOT_2  clear flag  clear flag  clear flag ******************************************************************************************************************
+** Name:      void sd_hardware_init()
+** Function:  initialize the hardware condiction that access sd card
+** Input:     NULL
+** Output:    NULL
+******************************************************************************************************************* enable mmc2 clock  enable mmc1 clock  reset mmc/sd controller  mask all IRQs  Enable clocks  enable auto clock stop  stop SD clock  No response to parse  Set the data bus width to 4 bits 
+ * Fetches and decodes switch information
+ 
+ * Test if the card supports high-speed mode and, if so, switch to it.
+  Initialise card data as blank  reset mmc/sd controller  Give the card/controller some rest  disable SD1 clock  disable SD2 clock  init GPIO  We don't use MSC0  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  CONFIG_STORAGE_MULTI  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  lock-out card activity  HAVE_HOTSWAP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** COMPLETELY BROKEN! HANGS RANDOMLY!#define DEBUG(x...)         logf(x) volumes  SD card 1  SD card 2  Error codes  Standard MMC/SD clock speeds  400 kHz for initial setup  24 MHz for SD Cards  48 MHz for SD Cards  Extra commands for state control  Use negative numbers to disambiguate  Proprietary commands, illegal/reserved according to SD Specification 2.00  class 1  adtc [31:0]  dadr       R1   class 3  adtc [31:0]  data addr  R1   class 4  adtc                    R1   adtc                    R1   class 9  bcr                     R5   Don't change the order of these; they are used in dispatch tables  These are unpacked versions of the actual responses  Card Power up status bit  Slot index - used for CS lines  Command to send  Argument to send  Response type expected  Data transfer (these may be modified at the low level)  Number of blocks to transfer Block length  Data buffer  Data length, for PIO  Results  Buffer to store response - CRC is optional  Argument of OCR **********************************************************************
+ *  SD Events
+  No events  Rx data done  Tx data done  Programming is done *************************************************************************
+ * Utility functions
+ *************************************************************************if (r1->status & SD_R1_CARD_IS_LOCKED)     return SD_ERROR_CARD_IS_LOCKED; This should be last - it's the least dangerous error  Save RCA returned by the SD Card  Stop the MMC clock and wait while it happens DEBUG("stop MMC clock"); disable auto clock stop  only stop if necessary DEBUG("clock off time is %d microsec", timeout); Start the MMC clock and operation  Checking for response or data timeout  Checking for CRC error  Checking for FIFO empty if(status & MSC_STAT_DATA_FIFO_EMPTY && request->rtype != RESPONSE_NONE)
+    {
+        DEBUG("SD FIFO empty, MSC_STAT 0x%x", status);
+        return SD_ERROR_UNDERRUN;
+    } Obtain response to the command and store it to response buffer  length in word  word aligned ?  Use DMA if we can  Ready to read data  Read data from RXFIFO. It could be FULL or PARTIAL FULL  length in word  word aligned ?  Use DMA if we can  Ready to write data  Write data to TXFIFO  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel sd_rx_dma_callback();sd_rx_dma_callback();sd_tx_dma_callback();sd_tx_dma_callback(); SD_DMA_INTERRUPT  SD_DMA_ENABLE  MSC_CLK  Set the MMC clock frequency *******************************************************************************************************************
+** Name:      int jz_sd_exec_cmd()
+** Function:  send command to the card, and get a response
+** Input:     struct sd_request *req: SD request
+** Output:    0:  right        >0:  error code
+******************************************************************************************************************* Indicate we have no result yet  On reset, 1-bit bus width  On reset, stop SD clock  Reset MMC/SD controller  Drop SD clock down to lowest speed  Re-enable clocks  mask all interrupts and clear status  open interrupt  Set command type and events  SD core extra command  Initialization sequence sent prior to command  bc - broadcast - no response  bcr - broadcast with response  adtc - addressed with data transfer  SD card returns SCR register as data.
+               SD core expect it in the response buffer,
+               after normal response.         case SD_LOCK_UNLOCK: ac - no data transfer  Set response type  FALLTHRU  use 4-bit bus width when possible  Set command index  Set argument  Set block length and nob  Set command  Start SD clock and send command to card  Wait for command completion  clear flag  Check for status  Complete command with no response  Get response  Start data operation  Wait for Data Done  clear status  Wait for Prog Done event  clear status  Command completed  stop SD clock  return successfully ******************************************************************************************************************
+** Name:      int sd_chkcard()
+** Function:  check whether card is insert entirely
+** Input:     NULL
+** Output:    1: insert entirely    0: not insert entirely
+******************************************************************************************************************* MSC interrupt handlers  SD_SLOT_1  clear flag  clear flag  clear flag  MSC interrupt handlers  SD_SLOT_2  clear flag  clear flag  clear flag ******************************************************************************************************************
+** Name:      void sd_hardware_init()
+** Function:  initialize the hardware condiction that access sd card
+** Input:     NULL
+** Output:    NULL
+******************************************************************************************************************* enable mmc2 clock  enable mmc1 clock  reset mmc/sd controller  mask all IRQs  Enable clocks  enable auto clock stop  stop SD clock  No response to parse  Set the data bus width to 4 bits 
+ * Fetches and decodes switch information
+ 
+ * Test if the card supports high-speed mode and, if so, switch to it.
+  Initialise card data as blank  reset mmc/sd controller  Give the card/controller some rest  disable SD1 clock  disable SD2 clock  init GPIO  We don't use MSC0  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  CONFIG_STORAGE_MULTI  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  lock-out card activity  HAVE_HOTSWAP **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2016 by Roman Stolyarov
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** COMPLETELY BROKEN! HANGS RANDOMLY!#define DEBUG(x...)         logf(x) volumes  SD card 1  SD card 2  Error codes  Standard MMC/SD clock speeds  400 kHz for initial setup  24 MHz for SD Cards  48 MHz for SD Cards  Extra commands for state control  Use negative numbers to disambiguate  Proprietary commands, illegal/reserved according to SD Specification 2.00  class 1  adtc [31:0]  dadr       R1   class 3  adtc [31:0]  data addr  R1   class 4  adtc                    R1   adtc                    R1   class 9  bcr                     R5   Don't change the order of these; they are used in dispatch tables  These are unpacked versions of the actual responses  Card Power up status bit  Slot index - used for CS lines  Command to send  Argument to send  Response type expected  Data transfer (these may be modified at the low level)  Number of blocks to transfer Block length  Data buffer  Data length, for PIO  Results  Buffer to store response - CRC is optional  Argument of OCR **********************************************************************
+ *  SD Events
+  No events  Rx data done  Tx data done  Programming is done *************************************************************************
+ * Utility functions
+ *************************************************************************if (r1->status & SD_R1_CARD_IS_LOCKED)     return SD_ERROR_CARD_IS_LOCKED; This should be last - it's the least dangerous error  Save RCA returned by the SD Card  Stop the MMC clock and wait while it happens DEBUG("stop MMC clock"); disable auto clock stop  only stop if necessary DEBUG("clock off time is %d microsec", timeout); Start the MMC clock and operation  Checking for response or data timeout  Checking for CRC error  Checking for FIFO empty if(status & MSC_STAT_DATA_FIFO_EMPTY && request->rtype != RESPONSE_NONE)
+    {
+        DEBUG("SD FIFO empty, MSC_STAT 0x%x", status);
+        return SD_ERROR_UNDERRUN;
+    } Obtain response to the command and store it to response buffer  length in word  word aligned ?  Use DMA if we can  Ready to read data  Read data from RXFIFO. It could be FULL or PARTIAL FULL  length in word  word aligned ?  Use DMA if we can  Ready to write data  Write data to TXFIFO  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel  flush dcache  setup dma channel  DMA source addr  DMA dest addr  DMA transfer count  DMA request type  Enable DMA interrupt  wait for dma completion  clear status and disable channel sd_rx_dma_callback();sd_rx_dma_callback();sd_tx_dma_callback();sd_tx_dma_callback(); SD_DMA_INTERRUPT  SD_DMA_ENABLE  MSC_CLK  Set the MMC clock frequency *******************************************************************************************************************
+** Name:      int jz_sd_exec_cmd()
+** Function:  send command to the card, and get a response
+** Input:     struct sd_request *req: SD request
+** Output:    0:  right        >0:  error code
+******************************************************************************************************************* Indicate we have no result yet  On reset, 1-bit bus width  On reset, stop SD clock  Reset MMC/SD controller  Drop SD clock down to lowest speed  Re-enable clocks  mask all interrupts and clear status  open interrupt  Set command type and events  SD core extra command  Initialization sequence sent prior to command  bc - broadcast - no response  bcr - broadcast with response  adtc - addressed with data transfer  SD card returns SCR register as data.
+               SD core expect it in the response buffer,
+               after normal response.         case SD_LOCK_UNLOCK: ac - no data transfer  Set response type  FALLTHRU  use 4-bit bus width when possible  Set command index  Set argument  Set block length and nob  Set command  Start SD clock and send command to card  Wait for command completion  clear flag  Check for status  Complete command with no response  Get response  Start data operation  Wait for Data Done  clear status  Wait for Prog Done event  clear status  Command completed  stop SD clock  return successfully ******************************************************************************************************************
+** Name:      int sd_chkcard()
+** Function:  check whether card is insert entirely
+** Input:     NULL
+** Output:    1: insert entirely    0: not insert entirely
+******************************************************************************************************************* MSC interrupt handlers  SD_SLOT_1  clear flag  clear flag  clear flag  MSC interrupt handlers  SD_SLOT_2  clear flag  clear flag  clear flag ******************************************************************************************************************
+** Name:      void sd_hardware_init()
+** Function:  initialize the hardware condiction that access sd card
+** Input:     NULL
+** Output:    NULL
+******************************************************************************************************************* enable mmc2 clock  enable mmc1 clock  reset mmc/sd controller  mask all IRQs  Enable clocks  enable auto clock stop  stop SD clock  No response to parse  Set the data bus width to 4 bits 
+ * Fetches and decodes switch information
+ 
+ * Test if the card supports high-speed mode and, if so, switch to it.
+  Initialise card data as blank  reset mmc/sd controller  Give the card/controller some rest  disable SD1 clock  disable SD2 clock  init GPIO  We don't use MSC0  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  called on insertion/removal interrupt  CONFIG_STORAGE_MULTI  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  lock-out card activity  HAVE_HOTSWAP 

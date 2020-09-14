@@ -1,0 +1,430 @@
+
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+
+ * RLE encoding for software colorkey and alpha-channel acceleration
+ *
+ * Original version by Sam Lantinga
+ *
+ * Mattias Engdegård (Yorick): Rewrite. New encoding format, encoder and
+ * decoder. Added per-surface alpha blitter. Added per-pixel alpha
+ * format, encoder and blitter.
+ *
+ * Many thanks to Xark and johns for hints, benchmarks and useful comments
+ * leading to this code.
+ *
+ * Welcome to Macro Mayhem.
+ 
+ * The encoding translates the image data to a stream of segments of the form
+ *
+ * <skip> <run> <data>
+ *
+ * where <skip> is the number of transparent pixels to skip,
+ *       <run>  is the number of opaque pixels to blit,
+ * and   <data> are the pixels themselves.
+ *
+ * This basic structure is used both for colorkeyed surfaces, used for simple
+ * binary transparency and for per-surface alpha blending, and for surfaces
+ * with per-pixel alpha. The details differ, however:
+ *
+ * Encoding of colorkeyed surfaces:
+ *
+ *   Encoded pixels always have the same format as the target surface.
+ *   <skip> and <run> are unsigned 8 bit integers, except for 32 bit depth
+ *   where they are 16 bit. This makes the pixel data aligned at all times.
+ *   Segments never wrap around from one scan line to the next.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the *
+ *   beginning of a line.
+ *
+ * Encoding of surfaces with per-pixel alpha:
+ *
+ *   The sequence begins with a struct RLEDestFormat describing the target
+ *   pixel format, to provide reliable un-encoding.
+ *
+ *   Each scan line is encoded twice: First all completely opaque pixels,
+ *   encoded in the target format as described above, and then all
+ *   partially transparent (translucent) pixels (where 1 <= alpha <= 254),
+ *   in the following 32-bit format:
+ *
+ *   For 32-bit targets, each pixel has the target RGB format but with
+ *   the alpha value occupying the highest 8 bits. The <skip> and <run>
+ *   counts are 16 bit.
+ * 
+ *   For 16-bit targets, each pixel has the target RGB format, but with
+ *   the middle component (usually green) shifted 16 steps to the left,
+ *   and the hole filled with the 5 most significant bits of the alpha value.
+ *   i.e. if the target has the format         rrrrrggggggbbbbb,
+ *   the encoded pixel will be 00000gggggg00000rrrrr0aaaaabbbbb.
+ *   The <skip> and <run> counts are 8 bit for the opaque lines, 16 bit
+ *   for the translucent lines. Two padding bytes may be inserted
+ *   before each translucent line to keep them 32-bit aligned.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the
+ *   beginning of an opaque line.
+  Force MMX to 0; this blows up on almost every major compiler now. --ryan. 
+ * Various colorkey blit methods, for opaque and per-surface alpha
+  set mm5 to "1"  make clear alpha mask  src -> mm1  dst -> mm2  00000RGB -> mm2  00000RGB -> mm2 
+ * For 32bpp pixels on the form 0x00rrggbb:
+ * If we treat the middle component separately, we can process the two
+ * remaining in parallel. This is safe to do because of the gap to the left
+ * of each component, so the bits from the multiplication don't collide.
+ * This can be used for any RGB permutation of course.
+ 
+ * For 16bpp pixels we can go a step further: put the middle component
+ * in the high 16 bits of a 32 bit word, and process all three RGB
+ * components at the same time. Since the smallest gap is here just
+ * 5 bits, we have to scale alpha down to 5 bits as well.
+ 
+ * The general slow catch-all function, for remaining depths and formats
+  dst -> mm2  dst -> mm6  src -> mm1  src -> mm5  dst & 0x00fefefe -> mm6  src & 0x00fefefe -> mm5  (dst & 0x00fefefe) + (dst & 0x00fefefe) -> mm5  s & d -> mm2  s & d & 0x00010101 -> mm2 
+ * Special case: 50% alpha (alpha=128)
+ * This is treated specially because it can be optimized very well, and
+ * since it is good for many cases of semi-translucency.
+ * The theory is to do all three components at the same time:
+ * First zero the lowest bit of each component, which gives us room to
+ * add them. Then shift right and add the sum of the lowest bits.
+ 
+ * For 16bpp, we can actually blend two pixels in parallel, if we take
+ * care to shift before we add, not after.
+  helper: blend a single 16 bit pixel at 50%  basic 16bpp blender. mask is the pixels to keep when adding.  source and destination not in phase, blit one by one  first odd pixel  last odd pixel  No 8bpp alpha blitting  fallthrough  No 8bpp alpha blitting  fallthrough 
+ * This takes care of the case when the surface is clipped on the left and/or
+ * right. Top clipping has already been taken care of.
+  clip to left and right borders  blit a colorkeyed RLE surface  Lock the destination if necessary  Set up the source and destination pointers  skip lines at the top if neccessary  if left or right edge clipping needed, call clip blit  Unlock the destination if necessary 
+ * Per-pixel blitting macros for translucent pixels:
+ * These use the same techniques as the per-surface blitting macros
+ 
+ * For 32bpp pixels, we have made sure the alpha is stored in the top
+ * 8 bits, so proceed as usual
+ 
+ * For 16bpp pixels, we have stored the 5 most significant alpha bits in
+ * bits 5-10. As before, we can process all 3 RGB components at the same time.
+  used to save the destination format in the encoding. Designed to be
+   macro-compatible with SDL_PixelFormat but without the unneeded fields  blit a pixel-alpha RLE surface clipped at the right and/or left edges 
+     * clipped blitter: Ptype is the destination pixel type,
+     * Ctype the translucent count type, and do_blend the macro
+     * to blend one pixel.
+      blit opaque pixels on one line  clip to left and right borders  skip padding if necessary  blit translucent pixels on the same line  clip to left and right borders  blit a pixel-alpha RLE surface  Lock the destination if necessary  skip lines at the top if necessary  the 16/32 interleaved format  skip opaque line  skip padding  skip translucent line  the 32/32 interleaved format  opaque and translucent have same format  if left or right edge clipping needed, call clip blit 
+	 * non-clipped blitter. Ptype is the destination pixel type,
+	 * Ctype the translucent count type, and do_blend the
+	 * macro to blend one pixel.
+	  blit opaque pixels on one line  skip padding if necessary  blit translucent pixels on the same line  Unlock the destination if necessary 
+ * Auxiliary functions:
+ * The encoding functions take 32bpp rgb + a, and
+ * return the number of bytes copied to the destination.
+ * The decoding functions copy to 32bpp rgb + a, and
+ * return the number of bytes copied from the source.
+ * These are only used in the encoder and un-RLE code and are therefore not
+ * highly optimised.
+  encode 32bpp rgb + a into 16bpp rgb, losing alpha  decode opaque pixels from 16bpp to 32bpp rgb + a  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 565  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 555  decode translucent pixels from 32bpp GORAB to 32bpp rgb + a  encode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  decode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  convert surface to be quickly alpha-blittable onto dest, if possible  only 32bpp source supported  find out whether the destination is one we support,
+       and determine the max size of the encoded result  16bpp: only support 565 and 555 formats  runs stored as bytes  worst case is alternating opaque and translucent pixels,
+	   with room for alignment padding between lines  requires unused high byte  runs stored as short ints  worst case is alternating opaque and translucent pixels  anything else unsupported right now  save the destination format so we can undo the encoding later  Do the actual encoding  end of last non-blank line  opaque counts are 8 or 16 bits, depending on target depth  translucent counts are always 16 bit  First encode all opaque pixels of a scan line  Make sure the next output address is 32-bit aligned  Next, encode all translucent pixels of the same scan line  back up past trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  calculate the worst case size for the compressed surface  worst case is alternating opaque and transparent pixels,
+	       starting with an opaque pixel  worst case is solid runs, at most 255 pixels wide  worst case is solid runs, at most 65535 pixels wide  Set up the conversion  find run of transparent, then opaque pixels  encode segment  back up bast trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  If realloc returns NULL, the original block is left intact  Clear any previous RLE conversion  We don't support RLE encoding of bitmaps  Lock the surface if it's in hardware  Encode  no RLE for per-surface alpha sans ckey  Unlock the surface if it's in hardware  The surface is now accelerated 
+ * Un-RLE a surface with pixel alpha
+ * This may not give back exactly the image before RLE-encoding; all
+ * completely transparent pixels will be lost, and colour and alpha depth
+ * may have been reduced (when encoding for 16bpp targets).
+  fill background with transparent pixels  copy opaque pixels  skip padding if needed  copy translucent pixels  Make the compiler happy  re-create the original surface  Oh crap...  fill it with the background colour  now render the encoded surface  opaque blit  Oh crap... 
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+
+ * RLE encoding for software colorkey and alpha-channel acceleration
+ *
+ * Original version by Sam Lantinga
+ *
+ * Mattias Engdegård (Yorick): Rewrite. New encoding format, encoder and
+ * decoder. Added per-surface alpha blitter. Added per-pixel alpha
+ * format, encoder and blitter.
+ *
+ * Many thanks to Xark and johns for hints, benchmarks and useful comments
+ * leading to this code.
+ *
+ * Welcome to Macro Mayhem.
+ 
+ * The encoding translates the image data to a stream of segments of the form
+ *
+ * <skip> <run> <data>
+ *
+ * where <skip> is the number of transparent pixels to skip,
+ *       <run>  is the number of opaque pixels to blit,
+ * and   <data> are the pixels themselves.
+ *
+ * This basic structure is used both for colorkeyed surfaces, used for simple
+ * binary transparency and for per-surface alpha blending, and for surfaces
+ * with per-pixel alpha. The details differ, however:
+ *
+ * Encoding of colorkeyed surfaces:
+ *
+ *   Encoded pixels always have the same format as the target surface.
+ *   <skip> and <run> are unsigned 8 bit integers, except for 32 bit depth
+ *   where they are 16 bit. This makes the pixel data aligned at all times.
+ *   Segments never wrap around from one scan line to the next.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the *
+ *   beginning of a line.
+ *
+ * Encoding of surfaces with per-pixel alpha:
+ *
+ *   The sequence begins with a struct RLEDestFormat describing the target
+ *   pixel format, to provide reliable un-encoding.
+ *
+ *   Each scan line is encoded twice: First all completely opaque pixels,
+ *   encoded in the target format as described above, and then all
+ *   partially transparent (translucent) pixels (where 1 <= alpha <= 254),
+ *   in the following 32-bit format:
+ *
+ *   For 32-bit targets, each pixel has the target RGB format but with
+ *   the alpha value occupying the highest 8 bits. The <skip> and <run>
+ *   counts are 16 bit.
+ * 
+ *   For 16-bit targets, each pixel has the target RGB format, but with
+ *   the middle component (usually green) shifted 16 steps to the left,
+ *   and the hole filled with the 5 most significant bits of the alpha value.
+ *   i.e. if the target has the format         rrrrrggggggbbbbb,
+ *   the encoded pixel will be 00000gggggg00000rrrrr0aaaaabbbbb.
+ *   The <skip> and <run> counts are 8 bit for the opaque lines, 16 bit
+ *   for the translucent lines. Two padding bytes may be inserted
+ *   before each translucent line to keep them 32-bit aligned.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the
+ *   beginning of an opaque line.
+  Force MMX to 0; this blows up on almost every major compiler now. --ryan. 
+ * Various colorkey blit methods, for opaque and per-surface alpha
+  set mm5 to "1"  make clear alpha mask  src -> mm1  dst -> mm2  00000RGB -> mm2  00000RGB -> mm2 
+ * For 32bpp pixels on the form 0x00rrggbb:
+ * If we treat the middle component separately, we can process the two
+ * remaining in parallel. This is safe to do because of the gap to the left
+ * of each component, so the bits from the multiplication don't collide.
+ * This can be used for any RGB permutation of course.
+ 
+ * For 16bpp pixels we can go a step further: put the middle component
+ * in the high 16 bits of a 32 bit word, and process all three RGB
+ * components at the same time. Since the smallest gap is here just
+ * 5 bits, we have to scale alpha down to 5 bits as well.
+ 
+ * The general slow catch-all function, for remaining depths and formats
+  dst -> mm2  dst -> mm6  src -> mm1  src -> mm5  dst & 0x00fefefe -> mm6  src & 0x00fefefe -> mm5  (dst & 0x00fefefe) + (dst & 0x00fefefe) -> mm5  s & d -> mm2  s & d & 0x00010101 -> mm2 
+ * Special case: 50% alpha (alpha=128)
+ * This is treated specially because it can be optimized very well, and
+ * since it is good for many cases of semi-translucency.
+ * The theory is to do all three components at the same time:
+ * First zero the lowest bit of each component, which gives us room to
+ * add them. Then shift right and add the sum of the lowest bits.
+ 
+ * For 16bpp, we can actually blend two pixels in parallel, if we take
+ * care to shift before we add, not after.
+  helper: blend a single 16 bit pixel at 50%  basic 16bpp blender. mask is the pixels to keep when adding.  source and destination not in phase, blit one by one  first odd pixel  last odd pixel  No 8bpp alpha blitting  fallthrough  No 8bpp alpha blitting  fallthrough 
+ * This takes care of the case when the surface is clipped on the left and/or
+ * right. Top clipping has already been taken care of.
+  clip to left and right borders  blit a colorkeyed RLE surface  Lock the destination if necessary  Set up the source and destination pointers  skip lines at the top if neccessary  if left or right edge clipping needed, call clip blit  Unlock the destination if necessary 
+ * Per-pixel blitting macros for translucent pixels:
+ * These use the same techniques as the per-surface blitting macros
+ 
+ * For 32bpp pixels, we have made sure the alpha is stored in the top
+ * 8 bits, so proceed as usual
+ 
+ * For 16bpp pixels, we have stored the 5 most significant alpha bits in
+ * bits 5-10. As before, we can process all 3 RGB components at the same time.
+  used to save the destination format in the encoding. Designed to be
+   macro-compatible with SDL_PixelFormat but without the unneeded fields  blit a pixel-alpha RLE surface clipped at the right and/or left edges 
+     * clipped blitter: Ptype is the destination pixel type,
+     * Ctype the translucent count type, and do_blend the macro
+     * to blend one pixel.
+      blit opaque pixels on one line  clip to left and right borders  skip padding if necessary  blit translucent pixels on the same line  clip to left and right borders  blit a pixel-alpha RLE surface  Lock the destination if necessary  skip lines at the top if necessary  the 16/32 interleaved format  skip opaque line  skip padding  skip translucent line  the 32/32 interleaved format  opaque and translucent have same format  if left or right edge clipping needed, call clip blit 
+	 * non-clipped blitter. Ptype is the destination pixel type,
+	 * Ctype the translucent count type, and do_blend the
+	 * macro to blend one pixel.
+	  blit opaque pixels on one line  skip padding if necessary  blit translucent pixels on the same line  Unlock the destination if necessary 
+ * Auxiliary functions:
+ * The encoding functions take 32bpp rgb + a, and
+ * return the number of bytes copied to the destination.
+ * The decoding functions copy to 32bpp rgb + a, and
+ * return the number of bytes copied from the source.
+ * These are only used in the encoder and un-RLE code and are therefore not
+ * highly optimised.
+  encode 32bpp rgb + a into 16bpp rgb, losing alpha  decode opaque pixels from 16bpp to 32bpp rgb + a  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 565  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 555  decode translucent pixels from 32bpp GORAB to 32bpp rgb + a  encode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  decode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  convert surface to be quickly alpha-blittable onto dest, if possible  only 32bpp source supported  find out whether the destination is one we support,
+       and determine the max size of the encoded result  16bpp: only support 565 and 555 formats  runs stored as bytes  worst case is alternating opaque and translucent pixels,
+	   with room for alignment padding between lines  requires unused high byte  runs stored as short ints  worst case is alternating opaque and translucent pixels  anything else unsupported right now  save the destination format so we can undo the encoding later  Do the actual encoding  end of last non-blank line  opaque counts are 8 or 16 bits, depending on target depth  translucent counts are always 16 bit  First encode all opaque pixels of a scan line  Make sure the next output address is 32-bit aligned  Next, encode all translucent pixels of the same scan line  back up past trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  calculate the worst case size for the compressed surface  worst case is alternating opaque and transparent pixels,
+	       starting with an opaque pixel  worst case is solid runs, at most 255 pixels wide  worst case is solid runs, at most 65535 pixels wide  Set up the conversion  find run of transparent, then opaque pixels  encode segment  back up bast trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  If realloc returns NULL, the original block is left intact  Clear any previous RLE conversion  We don't support RLE encoding of bitmaps  Lock the surface if it's in hardware  Encode  no RLE for per-surface alpha sans ckey  Unlock the surface if it's in hardware  The surface is now accelerated 
+ * Un-RLE a surface with pixel alpha
+ * This may not give back exactly the image before RLE-encoding; all
+ * completely transparent pixels will be lost, and colour and alpha depth
+ * may have been reduced (when encoding for 16bpp targets).
+  fill background with transparent pixels  copy opaque pixels  skip padding if needed  copy translucent pixels  Make the compiler happy  re-create the original surface  Oh crap...  fill it with the background colour  now render the encoded surface  opaque blit  Oh crap... 
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+
+ * RLE encoding for software colorkey and alpha-channel acceleration
+ *
+ * Original version by Sam Lantinga
+ *
+ * Mattias Engdegård (Yorick): Rewrite. New encoding format, encoder and
+ * decoder. Added per-surface alpha blitter. Added per-pixel alpha
+ * format, encoder and blitter.
+ *
+ * Many thanks to Xark and johns for hints, benchmarks and useful comments
+ * leading to this code.
+ *
+ * Welcome to Macro Mayhem.
+ 
+ * The encoding translates the image data to a stream of segments of the form
+ *
+ * <skip> <run> <data>
+ *
+ * where <skip> is the number of transparent pixels to skip,
+ *       <run>  is the number of opaque pixels to blit,
+ * and   <data> are the pixels themselves.
+ *
+ * This basic structure is used both for colorkeyed surfaces, used for simple
+ * binary transparency and for per-surface alpha blending, and for surfaces
+ * with per-pixel alpha. The details differ, however:
+ *
+ * Encoding of colorkeyed surfaces:
+ *
+ *   Encoded pixels always have the same format as the target surface.
+ *   <skip> and <run> are unsigned 8 bit integers, except for 32 bit depth
+ *   where they are 16 bit. This makes the pixel data aligned at all times.
+ *   Segments never wrap around from one scan line to the next.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the *
+ *   beginning of a line.
+ *
+ * Encoding of surfaces with per-pixel alpha:
+ *
+ *   The sequence begins with a struct RLEDestFormat describing the target
+ *   pixel format, to provide reliable un-encoding.
+ *
+ *   Each scan line is encoded twice: First all completely opaque pixels,
+ *   encoded in the target format as described above, and then all
+ *   partially transparent (translucent) pixels (where 1 <= alpha <= 254),
+ *   in the following 32-bit format:
+ *
+ *   For 32-bit targets, each pixel has the target RGB format but with
+ *   the alpha value occupying the highest 8 bits. The <skip> and <run>
+ *   counts are 16 bit.
+ * 
+ *   For 16-bit targets, each pixel has the target RGB format, but with
+ *   the middle component (usually green) shifted 16 steps to the left,
+ *   and the hole filled with the 5 most significant bits of the alpha value.
+ *   i.e. if the target has the format         rrrrrggggggbbbbb,
+ *   the encoded pixel will be 00000gggggg00000rrrrr0aaaaabbbbb.
+ *   The <skip> and <run> counts are 8 bit for the opaque lines, 16 bit
+ *   for the translucent lines. Two padding bytes may be inserted
+ *   before each translucent line to keep them 32-bit aligned.
+ *
+ *   The end of the sequence is marked by a zero <skip>,<run> pair at the
+ *   beginning of an opaque line.
+  Force MMX to 0; this blows up on almost every major compiler now. --ryan. 
+ * Various colorkey blit methods, for opaque and per-surface alpha
+  set mm5 to "1"  make clear alpha mask  src -> mm1  dst -> mm2  00000RGB -> mm2  00000RGB -> mm2 
+ * For 32bpp pixels on the form 0x00rrggbb:
+ * If we treat the middle component separately, we can process the two
+ * remaining in parallel. This is safe to do because of the gap to the left
+ * of each component, so the bits from the multiplication don't collide.
+ * This can be used for any RGB permutation of course.
+ 
+ * For 16bpp pixels we can go a step further: put the middle component
+ * in the high 16 bits of a 32 bit word, and process all three RGB
+ * components at the same time. Since the smallest gap is here just
+ * 5 bits, we have to scale alpha down to 5 bits as well.
+ 
+ * The general slow catch-all function, for remaining depths and formats
+  dst -> mm2  dst -> mm6  src -> mm1  src -> mm5  dst & 0x00fefefe -> mm6  src & 0x00fefefe -> mm5  (dst & 0x00fefefe) + (dst & 0x00fefefe) -> mm5  s & d -> mm2  s & d & 0x00010101 -> mm2 
+ * Special case: 50% alpha (alpha=128)
+ * This is treated specially because it can be optimized very well, and
+ * since it is good for many cases of semi-translucency.
+ * The theory is to do all three components at the same time:
+ * First zero the lowest bit of each component, which gives us room to
+ * add them. Then shift right and add the sum of the lowest bits.
+ 
+ * For 16bpp, we can actually blend two pixels in parallel, if we take
+ * care to shift before we add, not after.
+  helper: blend a single 16 bit pixel at 50%  basic 16bpp blender. mask is the pixels to keep when adding.  source and destination not in phase, blit one by one  first odd pixel  last odd pixel  No 8bpp alpha blitting  fallthrough  No 8bpp alpha blitting  fallthrough 
+ * This takes care of the case when the surface is clipped on the left and/or
+ * right. Top clipping has already been taken care of.
+  clip to left and right borders  blit a colorkeyed RLE surface  Lock the destination if necessary  Set up the source and destination pointers  skip lines at the top if neccessary  if left or right edge clipping needed, call clip blit  Unlock the destination if necessary 
+ * Per-pixel blitting macros for translucent pixels:
+ * These use the same techniques as the per-surface blitting macros
+ 
+ * For 32bpp pixels, we have made sure the alpha is stored in the top
+ * 8 bits, so proceed as usual
+ 
+ * For 16bpp pixels, we have stored the 5 most significant alpha bits in
+ * bits 5-10. As before, we can process all 3 RGB components at the same time.
+  used to save the destination format in the encoding. Designed to be
+   macro-compatible with SDL_PixelFormat but without the unneeded fields  blit a pixel-alpha RLE surface clipped at the right and/or left edges 
+     * clipped blitter: Ptype is the destination pixel type,
+     * Ctype the translucent count type, and do_blend the macro
+     * to blend one pixel.
+      blit opaque pixels on one line  clip to left and right borders  skip padding if necessary  blit translucent pixels on the same line  clip to left and right borders  blit a pixel-alpha RLE surface  Lock the destination if necessary  skip lines at the top if necessary  the 16/32 interleaved format  skip opaque line  skip padding  skip translucent line  the 32/32 interleaved format  opaque and translucent have same format  if left or right edge clipping needed, call clip blit 
+	 * non-clipped blitter. Ptype is the destination pixel type,
+	 * Ctype the translucent count type, and do_blend the
+	 * macro to blend one pixel.
+	  blit opaque pixels on one line  skip padding if necessary  blit translucent pixels on the same line  Unlock the destination if necessary 
+ * Auxiliary functions:
+ * The encoding functions take 32bpp rgb + a, and
+ * return the number of bytes copied to the destination.
+ * The decoding functions copy to 32bpp rgb + a, and
+ * return the number of bytes copied from the source.
+ * These are only used in the encoder and un-RLE code and are therefore not
+ * highly optimised.
+  encode 32bpp rgb + a into 16bpp rgb, losing alpha  decode opaque pixels from 16bpp to 32bpp rgb + a  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 565  encode 32bpp rgb + a into 32bpp G0RAB format for blitting into 555  decode translucent pixels from 32bpp GORAB to 32bpp rgb + a  encode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  decode 32bpp rgba into 32bpp rgba, keeping alpha (dual purpose)  convert surface to be quickly alpha-blittable onto dest, if possible  only 32bpp source supported  find out whether the destination is one we support,
+       and determine the max size of the encoded result  16bpp: only support 565 and 555 formats  runs stored as bytes  worst case is alternating opaque and translucent pixels,
+	   with room for alignment padding between lines  requires unused high byte  runs stored as short ints  worst case is alternating opaque and translucent pixels  anything else unsupported right now  save the destination format so we can undo the encoding later  Do the actual encoding  end of last non-blank line  opaque counts are 8 or 16 bits, depending on target depth  translucent counts are always 16 bit  First encode all opaque pixels of a scan line  Make sure the next output address is 32-bit aligned  Next, encode all translucent pixels of the same scan line  back up past trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  calculate the worst case size for the compressed surface  worst case is alternating opaque and transparent pixels,
+	       starting with an opaque pixel  worst case is solid runs, at most 255 pixels wide  worst case is solid runs, at most 65535 pixels wide  Set up the conversion  find run of transparent, then opaque pixels  encode segment  back up bast trailing blank lines  Now that we have it encoded, release the original pixels  realloc the buffer to release unused memory  If realloc returns NULL, the original block is left intact  Clear any previous RLE conversion  We don't support RLE encoding of bitmaps  Lock the surface if it's in hardware  Encode  no RLE for per-surface alpha sans ckey  Unlock the surface if it's in hardware  The surface is now accelerated 
+ * Un-RLE a surface with pixel alpha
+ * This may not give back exactly the image before RLE-encoding; all
+ * completely transparent pixels will be lost, and colour and alpha depth
+ * may have been reduced (when encoding for 16bpp targets).
+  fill background with transparent pixels  copy opaque pixels  skip padding if needed  copy translucent pixels  Make the compiler happy  re-create the original surface  Oh crap...  fill it with the background colour  now render the encoded surface  opaque blit  Oh crap... 

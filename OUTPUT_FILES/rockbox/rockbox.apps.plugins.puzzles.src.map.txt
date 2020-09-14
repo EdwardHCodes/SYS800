@@ -1,0 +1,1561 @@
+
+ * map.c: Game involving four-colouring a map.
+ 
+ * TODO:
+ * 
+ *  - clue marking
+ *  - better four-colouring algorithm?
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * I don't seriously anticipate wanting to change the number of
+ * colours used in this game, but it doesn't cost much to use a
+ * #define just in case :-)
+ 
+ * Ghastly run-time configuration option, just for Gareth (again).
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  top/bottom/left/right edges  position of a point on each edge  position of a point in each region  structure copy  ----------------------------------------------------------------------
+ * Cumulative frequency table functions.
+ 
+ * Initialise a cumulative frequency table. (Hardly worth writing
+ * this function; all it does is to initialise everything in the
+ * array to zero.)
+ 
+ * Increment the count of symbol `sym' by `count'.
+ 
+ * Cumulative frequency lookup: return the total count of symbols
+ * with value less than `sym'.
+  start with the whole table size 
+	 * Find the least number with its lowest set bit in this
+	 * position which is greater than or equal to sym.
+	 
+ * Single frequency lookup: return the count of symbol `sym'.
+ 
+ * Return the largest symbol index such that the cumulative
+ * frequency up to that symbol is less than _or equal to_ count.
+  ----------------------------------------------------------------------
+ * Map generation.
+ * 
+ * FIXME: this isn't entirely optimal at present, because it
+ * inherently prioritises growing the largest region since there
+ * are more squares adjacent to it. This acts as a destabilising
+ * influence leading to a few large regions and mostly small ones.
+ * It might be better to do it some other way.
+  for increased perimeter  for decreased perimeter  for unchanged perimeter 
+ * Look at a square and decide which colours can be extended into
+ * it.
+ * 
+ * If called with index < 0, it adds together one of
+ * WEIGHT_INCREASED, WEIGHT_DECREASED or WEIGHT_UNCHANGED for each
+ * colour that has a valid extension (according to the effect that
+ * it would have on the perimeter of the region being extended) and
+ * returns the overall total.
+ * 
+ * If called with index >= 0, it returns one of the possible
+ * colours depending on the value of index, in such a way that the
+ * number of possible inputs which would give rise to a given
+ * return value correspond to the weight of that value.
+  can't do this square at all 
+     * Fetch the eight neighbours of this square, in order around
+     * the square.
+     
+     * Iterate over each colour that might be feasible.
+     * 
+     * FIXME: this routine currently has O(n) running time. We
+     * could turn it into O(FOUR) by only bothering to iterate over
+     * the colours mentioned in the four neighbouring squares.
+     
+         * One of the even indices of col (representing the
+         * orthogonal neighbours of this square) must be equal to
+         * c, or else this square is not adjacent to region c and
+         * obviously cannot become an extension of it at this time.
+         
+         * Now we know this square is adjacent to region c. The
+         * next question is, would extending it cause the region to
+         * become non-simply-connected? If so, we mustn't do it.
+         * 
+         * We determine this by looking around col to see if we can
+         * find more than one separate run of colour c.
+         
+         * This square is a possibility. Determine its effect on
+         * the region's perimeter (computed from the number of
+         * orthogonal neighbours - 1 means a perimeter increase, 3
+         * a decrease, 2 no change; 4 is impossible because the
+         * region would already not be simply connected) and we're
+         * done.
+         
+     * Clear the map, and set up `tmp' as a list of grid indices.
+     
+     * Place the region seeds by selecting n members from `tmp'.
+     
+     * Re-initialise `tmp' as a cumulative frequency table. This
+     * will store the number of possible region colours we can
+     * extend into each square.
+     
+     * Go through the grid and set up the initial cumulative
+     * frequencies.
+     
+     * Now repeatedly choose a square we can extend a region into,
+     * and do so.
+     
+         * Re-scan the nine cells around the one we've just
+         * modified.
+         
+     * Finally, go through and normalise the region labels into
+     * order, meaning that indistinguishable maps are actually
+     * identical.
+      ----------------------------------------------------------------------
+ * Functions to handle graphs.
+ 
+ * Having got a map in a square grid, convert it into a graph
+ * representation.
+ 
+     * Start by setting the graph up as an adjacency matrix. We'll
+     * turn it into a list later.
+     
+     * Iterate over the map looking for all adjacencies.
+     
+     * Turn the matrix into a list.
+      ----------------------------------------------------------------------
+ * Generate a four-colouring of a graph.
+ *
+ * FIXME: it would be nice if we could convert this recursion into
+ * pseudo-recursion using some sort of explicit stack array, for
+ * the sake of the Palm port and its limited stack.
+ 
+     * Find the smallest number of free colours in any uncoloured
+     * vertex, and count the number of such vertices.
+      start off bigger than FOUR! 
+     * If there aren't any uncoloured vertices at all, we're done.
+      we've got a colouring! 
+     * Pick a random vertex in that set.
+     
+     * Loop over the possible colours for i, and recurse for each
+     * one.
+     
+	 * Fill in this colour.
+	 
+	 * Update the scratch space to reflect a new neighbour
+	 * of this colour for each neighbour of vertex i.
+	 
+	 * Recurse.
+	  got one! 
+	 * If that didn't work, clean up and try again with a
+	 * different colour.
+	 
+     * If we reach here, we were unable to find a colouring at all.
+     * (This doesn't necessarily mean the Four Colour Theorem is
+     * violated; it might just mean we've gone down a dead end and
+     * need to back up and look somewhere else. It's only an FCT
+     * violation if we get all the way back up to the top level and
+     * still fail.)
+     
+     * For each vertex and each colour, we store the number of
+     * neighbours that have that colour. Also, we store the number
+     * of free colours for the vertex.
+     
+     * Clear the colouring to start with.
+      by the Four Colour Theorem :-)  ----------------------------------------------------------------------
+ * Non-recursive solver.
+  bitmap of colours for each region 
+ * Count the bits in a word. Only needs to cope with FOUR bits.
+  or this needs changing  can't do it 
+     * Rule out this colour from all the region's neighbours.
+     
+ * Returns 0 for impossible, 1 for success, 2 for failure to
+ * converge (i.e. puzzle is either ambiguous or just too
+ * difficult).
+ 
+         * Initialise scratch space.
+         
+         * Place clues.
+          the clues aren't even consistent! 
+     * Now repeatedly loop until we find nothing further to do.
+      can't do anything at all! 
+	 * Simplest possible deduction: find a region with only one
+	 * possible colour.
+	  puzzle is inconsistent  p is a power of two 
+                 * place_colour() can only fail if colour c was not
+                 * even a _possibility_ for region i, and we're
+                 * pretty sure it was because we checked before
+                 * calling place_colour(). So we can safely assert
+                 * here rather than having to return a nice
+                 * friendly error code.
+                  can't do anything harder 
+         * Failing that, go up one level. Look for pairs of regions
+         * which (a) both have the same pair of possible colours,
+         * (b) are adjacent to one another, (c) are adjacent to the
+         * same region, and (d) that region still thinks it has one
+         * or both of those possible colours.
+         * 
+         * Simplest way to do this is by going through the graph
+         * edge by edge, so that we start with property (b) and
+         * then look for (a) and finally (c) and (d).
+          done it already, other way round  they're not undecided  they don't have the same possibles 
+             * See if v contains exactly two set bits.
+              find lowest set bit  clear it  not power of 2 
+             * We've found regions j1 and j2 satisfying properties
+             * (a) and (b): they have two possible colours between
+             * them, and since they're adjacent to one another they
+             * must use _both_ those colours between them.
+             * Therefore, if they are both adjacent to any other
+             * region then that region cannot be either colour.
+             * 
+             * Go through the neighbours of j1 and see if any are
+             * shared with j2.
+              can't do anything harder 
+         * Right; now we get creative. Now we're going to look for
+         * `forcing chains'. A forcing chain is a path through the
+         * graph with the following properties:
+         * 
+         *  (a) Each vertex on the path has precisely two possible
+         *      colours.
+         * 
+         *  (b) Each pair of vertices which are adjacent on the
+         *      path share at least one possible colour in common.
+         * 
+         *  (c) Each vertex in the middle of the path shares _both_
+         *      of its colours with at least one of its neighbours
+         *      (not the same one with both neighbours).
+         * 
+         * These together imply that at least one of the possible
+         * colour choices at one end of the path forces _all_ the
+         * rest of the colours along the path. In order to make
+         * real use of this, we need further properties:
+         * 
+         *  (c) Ruling out some colour C from the vertex at one end
+         *      of the path forces the vertex at the other end to
+         *      take colour C.
+         * 
+         *  (d) The two end vertices are mutually adjacent to some
+         *      third vertex.
+         * 
+         *  (e) That third vertex currently has C as a possibility.
+         * 
+         * If we can find all of that lot, we can deduce that at
+         * least one of the two ends of the forcing chain has
+         * colour C, and that therefore the mutually adjacent third
+         * vertex does not.
+         * 
+         * To find forcing chains, we're going to start a bfs at
+         * each suitable vertex of the graph, once for each of its
+         * two possible colours.
+         
+                     * Try a bfs from this vertex, ruling out
+                     * colour c.
+                     * 
+                     * Within this loop, we work in colour bitmaps
+                     * rather than actual colours, because
+                     * converting back and forth is a needless
+                     * computational expense.
+                     
+                         * Try neighbours of j.
+                         
+                             * To continue with the bfs in vertex
+                             * k, we need k to be
+                             *  (a) not already visited
+                             *  (b) have two possible colours
+                             *  (c) those colours include currc.
+                             
+                             * One other possibility is that k
+                             * might be the region in which we can
+                             * make a real deduction: if it's
+                             * adjacent to i, contains currc as a
+                             * possibility, and currc is equal to
+                             * the original colour we ruled out.
+                             
+     * See if we've got a complete solution, and return if so.
+      success! 
+     * If recursion is not permissible, we now give up.
+      unable to complete 
+     * Now we've got to do something recursive. So first hunt for a
+     * currently-most-constrained region.
+      Count the set bits.  or colouring[i] would be >= 0  or we'd be solved already 
+         * Now iterate over the possible colours for this region.
+         
+             * If this possibility turned up more than one valid
+             * solution, or if it turned up one and we already had
+             * one, we're definitely ambiguous.
+             
+             * If this possibility turned up one valid solution and
+             * it's the first we've seen, copy it into the output.
+             
+             * Otherwise, this guess led to a contradiction, so we
+             * do nothing.
+              ----------------------------------------------------------------------
+ * Game generation main function.
+ 
+     * This is the minimum difficulty below which we'll completely
+     * reject a map design. Normally we set this to one below the
+     * requested difficulty, ensuring that we have the right
+     * result. However, for particularly dense maps or maps with
+     * particularly few regions it might not be possible to get the
+     * desired difficulty, so we will eventually drop this down to
+     * -1 to indicate that any old map will do.
+     
+         * Create the map.
+         
+         * Convert the map into a graph.
+         
+         * Colour the map.
+         
+         * Encode the solution as an aux string.
+          in case we've come round again 
+         * Remove the region colours one by one, keeping
+         * solubility. Also ensure that there always remains at
+         * least one region of every colour, so that the user can
+         * drag from somewhere.
+          can't remove last region of colour  mustn't be impossible! 
+         * Finally, check that the puzzle is _at least_ as hard as
+         * required, and indeed that it isn't already solved.
+         * (Calling map_solver with negative difficulty ensures the
+         * latter - if a solver which _does nothing_ can solve it,
+         * it's too easy!)
+         
+	     * Drop minimum difficulty if necessary.
+	      give up and go for Easy 
+     * Encode as a game ID. We do this by:
+     * 
+     * 	- first going along the horizontal edges row by row, and
+     * 	  then the vertical edges column by column
+     * 	- encoding the lengths of runs of edges and runs of
+     * 	  non-edges
+     * 	- the decoder will reconstitute the region boundaries from
+     * 	  this and automatically number them the same way we did
+     * 	- then we encode the initial region colours in a Slant-like
+     * 	  fashion (digits 0-3 interspersed with letters giving
+     * 	  lengths of runs of empty spaces).
+     
+	 * Start with a notional non-edge, so that there'll be an
+	 * explicit `a' to distinguish the case where we start with
+	 * an edge.
+	  Horizontal edge.  Vertical edge. 
+		 * 'z' is a special case in this encoding. Rather
+		 * than meaning a run of 26 and a state switch, it
+		 * means a run of 25 and _no_ state switch, because
+		 * otherwise there'd be no way to encode runs of
+		 * more than 26.
+		 
+		 * In _this_ encoding, 'z' is a run of 26, since
+		 * there's no implicit state switch after each run.
+		 * Confusingly different, but more compact.
+		 
+     * Parse the game description to get the list of edges, and
+     * build up a disjoint set forest as we go (by identifying
+     * pairs of squares whenever the edge list shows a non-edge).
+      Horizontal edge.  Vertical edge. 
+     * Now go through again and allocate region numbers.
+      eat comma 
+     * Set up the other three quadrants in `map'.
+     
+     * Now process the clue list.
+     
+     * Attempt to smooth out some of the more jagged region
+     * outlines by the judicious use of diagonally divided squares.
+     
+                 * If this square is adjacent on two sides to one
+                 * region and on the other two sides to the other
+                 * region, and is itself one of the two regions, we can
+                 * adjust it so that it's a diagonal.
+                 
+     * Analyse the map to find a canonical line segment
+     * corresponding to each edge, and a canonical point
+     * corresponding to each region. The former are where we'll
+     * eventually put error markers; the latter are where we'll put
+     * per-region flags such as numbers (when in diagnostic mode).
+     
+	 * We make two passes over the map, finding all the line
+	 * segments separating regions and all the suitable points
+	 * within regions. In the first pass, we compute the
+	 * _average_ x and y coordinate of all the points in a
+	 * given class; in the second pass, for each such average
+	 * point, we find the candidate closest to it and call that
+	 * canonical.
+	 * 
+	 * Line segments are considered to have coordinates in
+	 * their centre. Thus, at least one coordinate for any line
+	 * segment is always something-and-a-half; so we store our
+	 * coordinates as twice their normal value.
+	 
+		     * Look for an edge to the right of this
+		     * square, an edge below it, and an edge in the
+		     * middle of it. Also look to see if the point
+		     * at the bottom right of this square is on an
+		     * edge (and isn't a place where more than two
+		     * regions meet).
+		      right edge  bottom edge  diagonal edge  bottom right corner  three colours at this point 
+			 * Now if there are exactly two regions at
+			 * this point (not one, and not three or
+			 * more), and only two changes around the
+			 * loop, then this is a valid place to put
+			 * an error marker.
+			 
+                         * If there's exactly _one_ region at this
+                         * point, on the other hand, it's a valid
+                         * place to put a region centre.
+                         
+		     * Now process the points we've found, one by
+		     * one.
+		      Graph edge  Region number 
+			     * In pass 0, accumulate the values
+			     * we'll use to compute the average
+			     * positions.
+			     
+			     * In pass 1, work out whether this
+			     * point is closer to the average than
+			     * the last one we've seen.
+			      Find the other representation of this edge. 
+	 * Use the solver.
+	 
+     * drag_colour:
+     * 
+     *  - -2 means no drag currently active.
+     *  - >=0 means we're dragging a solid colour.
+     * 	- -1 means we're dragging a blank space, and drag_pencil
+     * 	  might or might not add some pencil-mark stipples to that.
+      Flags in `drawn'. 
+  * EPSILON_FOO are epsilons added to absolute cursor position by
+  * cursor movement, such that in pathological cases (e.g. a very
+  * small diamond-shaped area) it's relatively easy to select the
+  * region you wanted.
+  
+ * Return the map region containing a point in tile (tx,ty), offset by
+ * (x_eps,y_eps) from the centre of the tile.
+ , n = state->p.n  border 
+     * Enable or disable numeric labels on regions.
+      not currently cursor-dragging, start.  currently cursor-dragging; drop the colour in the new region.  Double-select removes current colour.  should be already, but double-check 
+         * Cancel the drag, whatever happens.
+          drag into border; do nothing else  can't change this region  don't _need_ to change this region  Can't pencil on a coloured region  Right-dragging from colour to blank toggles one pencil  Otherwise, right-dragging from blank to blank is equivalent
+	     * to left-dragging.  ignore first semicolon 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  Use more vivid colours (e.g. on the Pocket PC) 
+     * Draw a diamond.
+     
+     * Draw an exclamation mark in the diamond. This turns out to
+     * look unpleasantly off-centre if done via draw_text, so I do
+     * it by hand on the basis that exclamation marks aren't that
+     * difficult to draw...
+     
+     * Draw the region colour.
+     
+     * Draw the second region colour, if this is a diagonally
+     * divided square.
+     
+     * Draw `pencil marks'. Currently we arrange these in a square
+     * formation, which means we may be in trouble if the value of
+     * FOUR changes later...
+      avoid TL-BR diagonal line  avoid BL-TR diagonal line 
+     * Draw the grid lines, if required.
+     
+     * Draw error markers.
+     
+     * Draw region numbers, if desired.
+     
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+     
+     * Set up the `todraw' array.
+     
+             * Add pencil marks.
+             
+     * Add error markers to the `todraw' array.
+     
+     * Now actually draw everything.
+     
+     * Draw the dragged colour blob if any.
+     bg = COL_GRID;
+     * I'll use 4mm squares by default, I think. Simplest way to
+     * compute this size is to compute the pixel puzzle size at a
+     * given tile size and then scale.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  We can't call game_set_size() here because we don't want a blitter 
+     * Draw a single filled polygon around each region.
+     
+	 * Start by finding a point on the region boundary. Any
+	 * point will do. To do this, we'll search for a square
+	 * containing the region and then decide which corner of it
+	 * to use.
+	  we must have found one somewhere 
+	 * This is the first square in lexicographic order which
+	 * contains part of this region. Therefore, one of the top
+	 * two corners of the square must be what we're after. The
+	 * only case in which it isn't the top left one is if the
+	 * square is diagonally divided and the region is in the
+	 * bottom right half.
+	  could just as well have done y++ 
+	 * Now we have a point on the region boundary. Trace around
+	 * the region until we come back to this point,
+	 * accumulating coordinates for a polygon draw operation as
+	 * we go.
+	 
+	     * There are eight possible directions we could head in
+	     * from here. We identify them by octant numbers, and
+	     * we also use octant numbers to identify the spaces
+	     * between them:
+	     * 
+	     *   6   7   0
+	     *    \ 7|0 /
+	     *     \ | /
+	     *    6 \|/ 1
+	     * 5-----+-----1
+	     *    5 /|\ 2
+	     *     / | \
+	     *    / 4|3 \
+	     *   4   3   2
+	     
+	     * Now we're heading in direction d1. Save the current
+	     * coordinates.
+	     
+	     * Compute the new coordinates.
+	      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 
+ * map.c: Game involving four-colouring a map.
+ 
+ * TODO:
+ * 
+ *  - clue marking
+ *  - better four-colouring algorithm?
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * I don't seriously anticipate wanting to change the number of
+ * colours used in this game, but it doesn't cost much to use a
+ * #define just in case :-)
+ 
+ * Ghastly run-time configuration option, just for Gareth (again).
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  top/bottom/left/right edges  position of a point on each edge  position of a point in each region  structure copy  ----------------------------------------------------------------------
+ * Cumulative frequency table functions.
+ 
+ * Initialise a cumulative frequency table. (Hardly worth writing
+ * this function; all it does is to initialise everything in the
+ * array to zero.)
+ 
+ * Increment the count of symbol `sym' by `count'.
+ 
+ * Cumulative frequency lookup: return the total count of symbols
+ * with value less than `sym'.
+  start with the whole table size 
+	 * Find the least number with its lowest set bit in this
+	 * position which is greater than or equal to sym.
+	 
+ * Single frequency lookup: return the count of symbol `sym'.
+ 
+ * Return the largest symbol index such that the cumulative
+ * frequency up to that symbol is less than _or equal to_ count.
+  ----------------------------------------------------------------------
+ * Map generation.
+ * 
+ * FIXME: this isn't entirely optimal at present, because it
+ * inherently prioritises growing the largest region since there
+ * are more squares adjacent to it. This acts as a destabilising
+ * influence leading to a few large regions and mostly small ones.
+ * It might be better to do it some other way.
+  for increased perimeter  for decreased perimeter  for unchanged perimeter 
+ * Look at a square and decide which colours can be extended into
+ * it.
+ * 
+ * If called with index < 0, it adds together one of
+ * WEIGHT_INCREASED, WEIGHT_DECREASED or WEIGHT_UNCHANGED for each
+ * colour that has a valid extension (according to the effect that
+ * it would have on the perimeter of the region being extended) and
+ * returns the overall total.
+ * 
+ * If called with index >= 0, it returns one of the possible
+ * colours depending on the value of index, in such a way that the
+ * number of possible inputs which would give rise to a given
+ * return value correspond to the weight of that value.
+  can't do this square at all 
+     * Fetch the eight neighbours of this square, in order around
+     * the square.
+     
+     * Iterate over each colour that might be feasible.
+     * 
+     * FIXME: this routine currently has O(n) running time. We
+     * could turn it into O(FOUR) by only bothering to iterate over
+     * the colours mentioned in the four neighbouring squares.
+     
+         * One of the even indices of col (representing the
+         * orthogonal neighbours of this square) must be equal to
+         * c, or else this square is not adjacent to region c and
+         * obviously cannot become an extension of it at this time.
+         
+         * Now we know this square is adjacent to region c. The
+         * next question is, would extending it cause the region to
+         * become non-simply-connected? If so, we mustn't do it.
+         * 
+         * We determine this by looking around col to see if we can
+         * find more than one separate run of colour c.
+         
+         * This square is a possibility. Determine its effect on
+         * the region's perimeter (computed from the number of
+         * orthogonal neighbours - 1 means a perimeter increase, 3
+         * a decrease, 2 no change; 4 is impossible because the
+         * region would already not be simply connected) and we're
+         * done.
+         
+     * Clear the map, and set up `tmp' as a list of grid indices.
+     
+     * Place the region seeds by selecting n members from `tmp'.
+     
+     * Re-initialise `tmp' as a cumulative frequency table. This
+     * will store the number of possible region colours we can
+     * extend into each square.
+     
+     * Go through the grid and set up the initial cumulative
+     * frequencies.
+     
+     * Now repeatedly choose a square we can extend a region into,
+     * and do so.
+     
+         * Re-scan the nine cells around the one we've just
+         * modified.
+         
+     * Finally, go through and normalise the region labels into
+     * order, meaning that indistinguishable maps are actually
+     * identical.
+      ----------------------------------------------------------------------
+ * Functions to handle graphs.
+ 
+ * Having got a map in a square grid, convert it into a graph
+ * representation.
+ 
+     * Start by setting the graph up as an adjacency matrix. We'll
+     * turn it into a list later.
+     
+     * Iterate over the map looking for all adjacencies.
+     
+     * Turn the matrix into a list.
+      ----------------------------------------------------------------------
+ * Generate a four-colouring of a graph.
+ *
+ * FIXME: it would be nice if we could convert this recursion into
+ * pseudo-recursion using some sort of explicit stack array, for
+ * the sake of the Palm port and its limited stack.
+ 
+     * Find the smallest number of free colours in any uncoloured
+     * vertex, and count the number of such vertices.
+      start off bigger than FOUR! 
+     * If there aren't any uncoloured vertices at all, we're done.
+      we've got a colouring! 
+     * Pick a random vertex in that set.
+     
+     * Loop over the possible colours for i, and recurse for each
+     * one.
+     
+	 * Fill in this colour.
+	 
+	 * Update the scratch space to reflect a new neighbour
+	 * of this colour for each neighbour of vertex i.
+	 
+	 * Recurse.
+	  got one! 
+	 * If that didn't work, clean up and try again with a
+	 * different colour.
+	 
+     * If we reach here, we were unable to find a colouring at all.
+     * (This doesn't necessarily mean the Four Colour Theorem is
+     * violated; it might just mean we've gone down a dead end and
+     * need to back up and look somewhere else. It's only an FCT
+     * violation if we get all the way back up to the top level and
+     * still fail.)
+     
+     * For each vertex and each colour, we store the number of
+     * neighbours that have that colour. Also, we store the number
+     * of free colours for the vertex.
+     
+     * Clear the colouring to start with.
+      by the Four Colour Theorem :-)  ----------------------------------------------------------------------
+ * Non-recursive solver.
+  bitmap of colours for each region 
+ * Count the bits in a word. Only needs to cope with FOUR bits.
+  or this needs changing  can't do it 
+     * Rule out this colour from all the region's neighbours.
+     
+ * Returns 0 for impossible, 1 for success, 2 for failure to
+ * converge (i.e. puzzle is either ambiguous or just too
+ * difficult).
+ 
+         * Initialise scratch space.
+         
+         * Place clues.
+          the clues aren't even consistent! 
+     * Now repeatedly loop until we find nothing further to do.
+      can't do anything at all! 
+	 * Simplest possible deduction: find a region with only one
+	 * possible colour.
+	  puzzle is inconsistent  p is a power of two 
+                 * place_colour() can only fail if colour c was not
+                 * even a _possibility_ for region i, and we're
+                 * pretty sure it was because we checked before
+                 * calling place_colour(). So we can safely assert
+                 * here rather than having to return a nice
+                 * friendly error code.
+                  can't do anything harder 
+         * Failing that, go up one level. Look for pairs of regions
+         * which (a) both have the same pair of possible colours,
+         * (b) are adjacent to one another, (c) are adjacent to the
+         * same region, and (d) that region still thinks it has one
+         * or both of those possible colours.
+         * 
+         * Simplest way to do this is by going through the graph
+         * edge by edge, so that we start with property (b) and
+         * then look for (a) and finally (c) and (d).
+          done it already, other way round  they're not undecided  they don't have the same possibles 
+             * See if v contains exactly two set bits.
+              find lowest set bit  clear it  not power of 2 
+             * We've found regions j1 and j2 satisfying properties
+             * (a) and (b): they have two possible colours between
+             * them, and since they're adjacent to one another they
+             * must use _both_ those colours between them.
+             * Therefore, if they are both adjacent to any other
+             * region then that region cannot be either colour.
+             * 
+             * Go through the neighbours of j1 and see if any are
+             * shared with j2.
+              can't do anything harder 
+         * Right; now we get creative. Now we're going to look for
+         * `forcing chains'. A forcing chain is a path through the
+         * graph with the following properties:
+         * 
+         *  (a) Each vertex on the path has precisely two possible
+         *      colours.
+         * 
+         *  (b) Each pair of vertices which are adjacent on the
+         *      path share at least one possible colour in common.
+         * 
+         *  (c) Each vertex in the middle of the path shares _both_
+         *      of its colours with at least one of its neighbours
+         *      (not the same one with both neighbours).
+         * 
+         * These together imply that at least one of the possible
+         * colour choices at one end of the path forces _all_ the
+         * rest of the colours along the path. In order to make
+         * real use of this, we need further properties:
+         * 
+         *  (c) Ruling out some colour C from the vertex at one end
+         *      of the path forces the vertex at the other end to
+         *      take colour C.
+         * 
+         *  (d) The two end vertices are mutually adjacent to some
+         *      third vertex.
+         * 
+         *  (e) That third vertex currently has C as a possibility.
+         * 
+         * If we can find all of that lot, we can deduce that at
+         * least one of the two ends of the forcing chain has
+         * colour C, and that therefore the mutually adjacent third
+         * vertex does not.
+         * 
+         * To find forcing chains, we're going to start a bfs at
+         * each suitable vertex of the graph, once for each of its
+         * two possible colours.
+         
+                     * Try a bfs from this vertex, ruling out
+                     * colour c.
+                     * 
+                     * Within this loop, we work in colour bitmaps
+                     * rather than actual colours, because
+                     * converting back and forth is a needless
+                     * computational expense.
+                     
+                         * Try neighbours of j.
+                         
+                             * To continue with the bfs in vertex
+                             * k, we need k to be
+                             *  (a) not already visited
+                             *  (b) have two possible colours
+                             *  (c) those colours include currc.
+                             
+                             * One other possibility is that k
+                             * might be the region in which we can
+                             * make a real deduction: if it's
+                             * adjacent to i, contains currc as a
+                             * possibility, and currc is equal to
+                             * the original colour we ruled out.
+                             
+     * See if we've got a complete solution, and return if so.
+      success! 
+     * If recursion is not permissible, we now give up.
+      unable to complete 
+     * Now we've got to do something recursive. So first hunt for a
+     * currently-most-constrained region.
+      Count the set bits.  or colouring[i] would be >= 0  or we'd be solved already 
+         * Now iterate over the possible colours for this region.
+         
+             * If this possibility turned up more than one valid
+             * solution, or if it turned up one and we already had
+             * one, we're definitely ambiguous.
+             
+             * If this possibility turned up one valid solution and
+             * it's the first we've seen, copy it into the output.
+             
+             * Otherwise, this guess led to a contradiction, so we
+             * do nothing.
+              ----------------------------------------------------------------------
+ * Game generation main function.
+ 
+     * This is the minimum difficulty below which we'll completely
+     * reject a map design. Normally we set this to one below the
+     * requested difficulty, ensuring that we have the right
+     * result. However, for particularly dense maps or maps with
+     * particularly few regions it might not be possible to get the
+     * desired difficulty, so we will eventually drop this down to
+     * -1 to indicate that any old map will do.
+     
+         * Create the map.
+         
+         * Convert the map into a graph.
+         
+         * Colour the map.
+         
+         * Encode the solution as an aux string.
+          in case we've come round again 
+         * Remove the region colours one by one, keeping
+         * solubility. Also ensure that there always remains at
+         * least one region of every colour, so that the user can
+         * drag from somewhere.
+          can't remove last region of colour  mustn't be impossible! 
+         * Finally, check that the puzzle is _at least_ as hard as
+         * required, and indeed that it isn't already solved.
+         * (Calling map_solver with negative difficulty ensures the
+         * latter - if a solver which _does nothing_ can solve it,
+         * it's too easy!)
+         
+	     * Drop minimum difficulty if necessary.
+	      give up and go for Easy 
+     * Encode as a game ID. We do this by:
+     * 
+     * 	- first going along the horizontal edges row by row, and
+     * 	  then the vertical edges column by column
+     * 	- encoding the lengths of runs of edges and runs of
+     * 	  non-edges
+     * 	- the decoder will reconstitute the region boundaries from
+     * 	  this and automatically number them the same way we did
+     * 	- then we encode the initial region colours in a Slant-like
+     * 	  fashion (digits 0-3 interspersed with letters giving
+     * 	  lengths of runs of empty spaces).
+     
+	 * Start with a notional non-edge, so that there'll be an
+	 * explicit `a' to distinguish the case where we start with
+	 * an edge.
+	  Horizontal edge.  Vertical edge. 
+		 * 'z' is a special case in this encoding. Rather
+		 * than meaning a run of 26 and a state switch, it
+		 * means a run of 25 and _no_ state switch, because
+		 * otherwise there'd be no way to encode runs of
+		 * more than 26.
+		 
+		 * In _this_ encoding, 'z' is a run of 26, since
+		 * there's no implicit state switch after each run.
+		 * Confusingly different, but more compact.
+		 
+     * Parse the game description to get the list of edges, and
+     * build up a disjoint set forest as we go (by identifying
+     * pairs of squares whenever the edge list shows a non-edge).
+      Horizontal edge.  Vertical edge. 
+     * Now go through again and allocate region numbers.
+      eat comma 
+     * Set up the other three quadrants in `map'.
+     
+     * Now process the clue list.
+     
+     * Attempt to smooth out some of the more jagged region
+     * outlines by the judicious use of diagonally divided squares.
+     
+                 * If this square is adjacent on two sides to one
+                 * region and on the other two sides to the other
+                 * region, and is itself one of the two regions, we can
+                 * adjust it so that it's a diagonal.
+                 
+     * Analyse the map to find a canonical line segment
+     * corresponding to each edge, and a canonical point
+     * corresponding to each region. The former are where we'll
+     * eventually put error markers; the latter are where we'll put
+     * per-region flags such as numbers (when in diagnostic mode).
+     
+	 * We make two passes over the map, finding all the line
+	 * segments separating regions and all the suitable points
+	 * within regions. In the first pass, we compute the
+	 * _average_ x and y coordinate of all the points in a
+	 * given class; in the second pass, for each such average
+	 * point, we find the candidate closest to it and call that
+	 * canonical.
+	 * 
+	 * Line segments are considered to have coordinates in
+	 * their centre. Thus, at least one coordinate for any line
+	 * segment is always something-and-a-half; so we store our
+	 * coordinates as twice their normal value.
+	 
+		     * Look for an edge to the right of this
+		     * square, an edge below it, and an edge in the
+		     * middle of it. Also look to see if the point
+		     * at the bottom right of this square is on an
+		     * edge (and isn't a place where more than two
+		     * regions meet).
+		      right edge  bottom edge  diagonal edge  bottom right corner  three colours at this point 
+			 * Now if there are exactly two regions at
+			 * this point (not one, and not three or
+			 * more), and only two changes around the
+			 * loop, then this is a valid place to put
+			 * an error marker.
+			 
+                         * If there's exactly _one_ region at this
+                         * point, on the other hand, it's a valid
+                         * place to put a region centre.
+                         
+		     * Now process the points we've found, one by
+		     * one.
+		      Graph edge  Region number 
+			     * In pass 0, accumulate the values
+			     * we'll use to compute the average
+			     * positions.
+			     
+			     * In pass 1, work out whether this
+			     * point is closer to the average than
+			     * the last one we've seen.
+			      Find the other representation of this edge. 
+	 * Use the solver.
+	 
+     * drag_colour:
+     * 
+     *  - -2 means no drag currently active.
+     *  - >=0 means we're dragging a solid colour.
+     * 	- -1 means we're dragging a blank space, and drag_pencil
+     * 	  might or might not add some pencil-mark stipples to that.
+      Flags in `drawn'. 
+  * EPSILON_FOO are epsilons added to absolute cursor position by
+  * cursor movement, such that in pathological cases (e.g. a very
+  * small diamond-shaped area) it's relatively easy to select the
+  * region you wanted.
+  
+ * Return the map region containing a point in tile (tx,ty), offset by
+ * (x_eps,y_eps) from the centre of the tile.
+ , n = state->p.n  border 
+     * Enable or disable numeric labels on regions.
+      not currently cursor-dragging, start.  currently cursor-dragging; drop the colour in the new region.  Double-select removes current colour.  should be already, but double-check 
+         * Cancel the drag, whatever happens.
+          drag into border; do nothing else  can't change this region  don't _need_ to change this region  Can't pencil on a coloured region  Right-dragging from colour to blank toggles one pencil  Otherwise, right-dragging from blank to blank is equivalent
+	     * to left-dragging.  ignore first semicolon 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  Use more vivid colours (e.g. on the Pocket PC) 
+     * Draw a diamond.
+     
+     * Draw an exclamation mark in the diamond. This turns out to
+     * look unpleasantly off-centre if done via draw_text, so I do
+     * it by hand on the basis that exclamation marks aren't that
+     * difficult to draw...
+     
+     * Draw the region colour.
+     
+     * Draw the second region colour, if this is a diagonally
+     * divided square.
+     
+     * Draw `pencil marks'. Currently we arrange these in a square
+     * formation, which means we may be in trouble if the value of
+     * FOUR changes later...
+      avoid TL-BR diagonal line  avoid BL-TR diagonal line 
+     * Draw the grid lines, if required.
+     
+     * Draw error markers.
+     
+     * Draw region numbers, if desired.
+     
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+     
+     * Set up the `todraw' array.
+     
+             * Add pencil marks.
+             
+     * Add error markers to the `todraw' array.
+     
+     * Now actually draw everything.
+     
+     * Draw the dragged colour blob if any.
+     bg = COL_GRID;
+     * I'll use 4mm squares by default, I think. Simplest way to
+     * compute this size is to compute the pixel puzzle size at a
+     * given tile size and then scale.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  We can't call game_set_size() here because we don't want a blitter 
+     * Draw a single filled polygon around each region.
+     
+	 * Start by finding a point on the region boundary. Any
+	 * point will do. To do this, we'll search for a square
+	 * containing the region and then decide which corner of it
+	 * to use.
+	  we must have found one somewhere 
+	 * This is the first square in lexicographic order which
+	 * contains part of this region. Therefore, one of the top
+	 * two corners of the square must be what we're after. The
+	 * only case in which it isn't the top left one is if the
+	 * square is diagonally divided and the region is in the
+	 * bottom right half.
+	  could just as well have done y++ 
+	 * Now we have a point on the region boundary. Trace around
+	 * the region until we come back to this point,
+	 * accumulating coordinates for a polygon draw operation as
+	 * we go.
+	 
+	     * There are eight possible directions we could head in
+	     * from here. We identify them by octant numbers, and
+	     * we also use octant numbers to identify the spaces
+	     * between them:
+	     * 
+	     *   6   7   0
+	     *    \ 7|0 /
+	     *     \ | /
+	     *    6 \|/ 1
+	     * 5-----+-----1
+	     *    5 /|\ 2
+	     *     / | \
+	     *    / 4|3 \
+	     *   4   3   2
+	     
+	     * Now we're heading in direction d1. Save the current
+	     * coordinates.
+	     
+	     * Compute the new coordinates.
+	      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 
+ * map.c: Game involving four-colouring a map.
+ 
+ * TODO:
+ * 
+ *  - clue marking
+ *  - better four-colouring algorithm?
+ 
+ * In standalone solver mode, `verbose' is a variable which can be
+ * set by command-line option; in debugging mode it's simply always
+ * true.
+ 
+ * I don't seriously anticipate wanting to change the number of
+ * colours used in this game, but it doesn't cost much to use a
+ * #define just in case :-)
+ 
+ * Ghastly run-time configuration option, just for Gareth (again).
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+  top/bottom/left/right edges  position of a point on each edge  position of a point in each region  structure copy  ----------------------------------------------------------------------
+ * Cumulative frequency table functions.
+ 
+ * Initialise a cumulative frequency table. (Hardly worth writing
+ * this function; all it does is to initialise everything in the
+ * array to zero.)
+ 
+ * Increment the count of symbol `sym' by `count'.
+ 
+ * Cumulative frequency lookup: return the total count of symbols
+ * with value less than `sym'.
+  start with the whole table size 
+	 * Find the least number with its lowest set bit in this
+	 * position which is greater than or equal to sym.
+	 
+ * Single frequency lookup: return the count of symbol `sym'.
+ 
+ * Return the largest symbol index such that the cumulative
+ * frequency up to that symbol is less than _or equal to_ count.
+  ----------------------------------------------------------------------
+ * Map generation.
+ * 
+ * FIXME: this isn't entirely optimal at present, because it
+ * inherently prioritises growing the largest region since there
+ * are more squares adjacent to it. This acts as a destabilising
+ * influence leading to a few large regions and mostly small ones.
+ * It might be better to do it some other way.
+  for increased perimeter  for decreased perimeter  for unchanged perimeter 
+ * Look at a square and decide which colours can be extended into
+ * it.
+ * 
+ * If called with index < 0, it adds together one of
+ * WEIGHT_INCREASED, WEIGHT_DECREASED or WEIGHT_UNCHANGED for each
+ * colour that has a valid extension (according to the effect that
+ * it would have on the perimeter of the region being extended) and
+ * returns the overall total.
+ * 
+ * If called with index >= 0, it returns one of the possible
+ * colours depending on the value of index, in such a way that the
+ * number of possible inputs which would give rise to a given
+ * return value correspond to the weight of that value.
+  can't do this square at all 
+     * Fetch the eight neighbours of this square, in order around
+     * the square.
+     
+     * Iterate over each colour that might be feasible.
+     * 
+     * FIXME: this routine currently has O(n) running time. We
+     * could turn it into O(FOUR) by only bothering to iterate over
+     * the colours mentioned in the four neighbouring squares.
+     
+         * One of the even indices of col (representing the
+         * orthogonal neighbours of this square) must be equal to
+         * c, or else this square is not adjacent to region c and
+         * obviously cannot become an extension of it at this time.
+         
+         * Now we know this square is adjacent to region c. The
+         * next question is, would extending it cause the region to
+         * become non-simply-connected? If so, we mustn't do it.
+         * 
+         * We determine this by looking around col to see if we can
+         * find more than one separate run of colour c.
+         
+         * This square is a possibility. Determine its effect on
+         * the region's perimeter (computed from the number of
+         * orthogonal neighbours - 1 means a perimeter increase, 3
+         * a decrease, 2 no change; 4 is impossible because the
+         * region would already not be simply connected) and we're
+         * done.
+         
+     * Clear the map, and set up `tmp' as a list of grid indices.
+     
+     * Place the region seeds by selecting n members from `tmp'.
+     
+     * Re-initialise `tmp' as a cumulative frequency table. This
+     * will store the number of possible region colours we can
+     * extend into each square.
+     
+     * Go through the grid and set up the initial cumulative
+     * frequencies.
+     
+     * Now repeatedly choose a square we can extend a region into,
+     * and do so.
+     
+         * Re-scan the nine cells around the one we've just
+         * modified.
+         
+     * Finally, go through and normalise the region labels into
+     * order, meaning that indistinguishable maps are actually
+     * identical.
+      ----------------------------------------------------------------------
+ * Functions to handle graphs.
+ 
+ * Having got a map in a square grid, convert it into a graph
+ * representation.
+ 
+     * Start by setting the graph up as an adjacency matrix. We'll
+     * turn it into a list later.
+     
+     * Iterate over the map looking for all adjacencies.
+     
+     * Turn the matrix into a list.
+      ----------------------------------------------------------------------
+ * Generate a four-colouring of a graph.
+ *
+ * FIXME: it would be nice if we could convert this recursion into
+ * pseudo-recursion using some sort of explicit stack array, for
+ * the sake of the Palm port and its limited stack.
+ 
+     * Find the smallest number of free colours in any uncoloured
+     * vertex, and count the number of such vertices.
+      start off bigger than FOUR! 
+     * If there aren't any uncoloured vertices at all, we're done.
+      we've got a colouring! 
+     * Pick a random vertex in that set.
+     
+     * Loop over the possible colours for i, and recurse for each
+     * one.
+     
+	 * Fill in this colour.
+	 
+	 * Update the scratch space to reflect a new neighbour
+	 * of this colour for each neighbour of vertex i.
+	 
+	 * Recurse.
+	  got one! 
+	 * If that didn't work, clean up and try again with a
+	 * different colour.
+	 
+     * If we reach here, we were unable to find a colouring at all.
+     * (This doesn't necessarily mean the Four Colour Theorem is
+     * violated; it might just mean we've gone down a dead end and
+     * need to back up and look somewhere else. It's only an FCT
+     * violation if we get all the way back up to the top level and
+     * still fail.)
+     
+     * For each vertex and each colour, we store the number of
+     * neighbours that have that colour. Also, we store the number
+     * of free colours for the vertex.
+     
+     * Clear the colouring to start with.
+      by the Four Colour Theorem :-)  ----------------------------------------------------------------------
+ * Non-recursive solver.
+  bitmap of colours for each region 
+ * Count the bits in a word. Only needs to cope with FOUR bits.
+  or this needs changing  can't do it 
+     * Rule out this colour from all the region's neighbours.
+     
+ * Returns 0 for impossible, 1 for success, 2 for failure to
+ * converge (i.e. puzzle is either ambiguous or just too
+ * difficult).
+ 
+         * Initialise scratch space.
+         
+         * Place clues.
+          the clues aren't even consistent! 
+     * Now repeatedly loop until we find nothing further to do.
+      can't do anything at all! 
+	 * Simplest possible deduction: find a region with only one
+	 * possible colour.
+	  puzzle is inconsistent  p is a power of two 
+                 * place_colour() can only fail if colour c was not
+                 * even a _possibility_ for region i, and we're
+                 * pretty sure it was because we checked before
+                 * calling place_colour(). So we can safely assert
+                 * here rather than having to return a nice
+                 * friendly error code.
+                  can't do anything harder 
+         * Failing that, go up one level. Look for pairs of regions
+         * which (a) both have the same pair of possible colours,
+         * (b) are adjacent to one another, (c) are adjacent to the
+         * same region, and (d) that region still thinks it has one
+         * or both of those possible colours.
+         * 
+         * Simplest way to do this is by going through the graph
+         * edge by edge, so that we start with property (b) and
+         * then look for (a) and finally (c) and (d).
+          done it already, other way round  they're not undecided  they don't have the same possibles 
+             * See if v contains exactly two set bits.
+              find lowest set bit  clear it  not power of 2 
+             * We've found regions j1 and j2 satisfying properties
+             * (a) and (b): they have two possible colours between
+             * them, and since they're adjacent to one another they
+             * must use _both_ those colours between them.
+             * Therefore, if they are both adjacent to any other
+             * region then that region cannot be either colour.
+             * 
+             * Go through the neighbours of j1 and see if any are
+             * shared with j2.
+              can't do anything harder 
+         * Right; now we get creative. Now we're going to look for
+         * `forcing chains'. A forcing chain is a path through the
+         * graph with the following properties:
+         * 
+         *  (a) Each vertex on the path has precisely two possible
+         *      colours.
+         * 
+         *  (b) Each pair of vertices which are adjacent on the
+         *      path share at least one possible colour in common.
+         * 
+         *  (c) Each vertex in the middle of the path shares _both_
+         *      of its colours with at least one of its neighbours
+         *      (not the same one with both neighbours).
+         * 
+         * These together imply that at least one of the possible
+         * colour choices at one end of the path forces _all_ the
+         * rest of the colours along the path. In order to make
+         * real use of this, we need further properties:
+         * 
+         *  (c) Ruling out some colour C from the vertex at one end
+         *      of the path forces the vertex at the other end to
+         *      take colour C.
+         * 
+         *  (d) The two end vertices are mutually adjacent to some
+         *      third vertex.
+         * 
+         *  (e) That third vertex currently has C as a possibility.
+         * 
+         * If we can find all of that lot, we can deduce that at
+         * least one of the two ends of the forcing chain has
+         * colour C, and that therefore the mutually adjacent third
+         * vertex does not.
+         * 
+         * To find forcing chains, we're going to start a bfs at
+         * each suitable vertex of the graph, once for each of its
+         * two possible colours.
+         
+                     * Try a bfs from this vertex, ruling out
+                     * colour c.
+                     * 
+                     * Within this loop, we work in colour bitmaps
+                     * rather than actual colours, because
+                     * converting back and forth is a needless
+                     * computational expense.
+                     
+                         * Try neighbours of j.
+                         
+                             * To continue with the bfs in vertex
+                             * k, we need k to be
+                             *  (a) not already visited
+                             *  (b) have two possible colours
+                             *  (c) those colours include currc.
+                             
+                             * One other possibility is that k
+                             * might be the region in which we can
+                             * make a real deduction: if it's
+                             * adjacent to i, contains currc as a
+                             * possibility, and currc is equal to
+                             * the original colour we ruled out.
+                             
+     * See if we've got a complete solution, and return if so.
+      success! 
+     * If recursion is not permissible, we now give up.
+      unable to complete 
+     * Now we've got to do something recursive. So first hunt for a
+     * currently-most-constrained region.
+      Count the set bits.  or colouring[i] would be >= 0  or we'd be solved already 
+         * Now iterate over the possible colours for this region.
+         
+             * If this possibility turned up more than one valid
+             * solution, or if it turned up one and we already had
+             * one, we're definitely ambiguous.
+             
+             * If this possibility turned up one valid solution and
+             * it's the first we've seen, copy it into the output.
+             
+             * Otherwise, this guess led to a contradiction, so we
+             * do nothing.
+              ----------------------------------------------------------------------
+ * Game generation main function.
+ 
+     * This is the minimum difficulty below which we'll completely
+     * reject a map design. Normally we set this to one below the
+     * requested difficulty, ensuring that we have the right
+     * result. However, for particularly dense maps or maps with
+     * particularly few regions it might not be possible to get the
+     * desired difficulty, so we will eventually drop this down to
+     * -1 to indicate that any old map will do.
+     
+         * Create the map.
+         
+         * Convert the map into a graph.
+         
+         * Colour the map.
+         
+         * Encode the solution as an aux string.
+          in case we've come round again 
+         * Remove the region colours one by one, keeping
+         * solubility. Also ensure that there always remains at
+         * least one region of every colour, so that the user can
+         * drag from somewhere.
+          can't remove last region of colour  mustn't be impossible! 
+         * Finally, check that the puzzle is _at least_ as hard as
+         * required, and indeed that it isn't already solved.
+         * (Calling map_solver with negative difficulty ensures the
+         * latter - if a solver which _does nothing_ can solve it,
+         * it's too easy!)
+         
+	     * Drop minimum difficulty if necessary.
+	      give up and go for Easy 
+     * Encode as a game ID. We do this by:
+     * 
+     * 	- first going along the horizontal edges row by row, and
+     * 	  then the vertical edges column by column
+     * 	- encoding the lengths of runs of edges and runs of
+     * 	  non-edges
+     * 	- the decoder will reconstitute the region boundaries from
+     * 	  this and automatically number them the same way we did
+     * 	- then we encode the initial region colours in a Slant-like
+     * 	  fashion (digits 0-3 interspersed with letters giving
+     * 	  lengths of runs of empty spaces).
+     
+	 * Start with a notional non-edge, so that there'll be an
+	 * explicit `a' to distinguish the case where we start with
+	 * an edge.
+	  Horizontal edge.  Vertical edge. 
+		 * 'z' is a special case in this encoding. Rather
+		 * than meaning a run of 26 and a state switch, it
+		 * means a run of 25 and _no_ state switch, because
+		 * otherwise there'd be no way to encode runs of
+		 * more than 26.
+		 
+		 * In _this_ encoding, 'z' is a run of 26, since
+		 * there's no implicit state switch after each run.
+		 * Confusingly different, but more compact.
+		 
+     * Parse the game description to get the list of edges, and
+     * build up a disjoint set forest as we go (by identifying
+     * pairs of squares whenever the edge list shows a non-edge).
+      Horizontal edge.  Vertical edge. 
+     * Now go through again and allocate region numbers.
+      eat comma 
+     * Set up the other three quadrants in `map'.
+     
+     * Now process the clue list.
+     
+     * Attempt to smooth out some of the more jagged region
+     * outlines by the judicious use of diagonally divided squares.
+     
+                 * If this square is adjacent on two sides to one
+                 * region and on the other two sides to the other
+                 * region, and is itself one of the two regions, we can
+                 * adjust it so that it's a diagonal.
+                 
+     * Analyse the map to find a canonical line segment
+     * corresponding to each edge, and a canonical point
+     * corresponding to each region. The former are where we'll
+     * eventually put error markers; the latter are where we'll put
+     * per-region flags such as numbers (when in diagnostic mode).
+     
+	 * We make two passes over the map, finding all the line
+	 * segments separating regions and all the suitable points
+	 * within regions. In the first pass, we compute the
+	 * _average_ x and y coordinate of all the points in a
+	 * given class; in the second pass, for each such average
+	 * point, we find the candidate closest to it and call that
+	 * canonical.
+	 * 
+	 * Line segments are considered to have coordinates in
+	 * their centre. Thus, at least one coordinate for any line
+	 * segment is always something-and-a-half; so we store our
+	 * coordinates as twice their normal value.
+	 
+		     * Look for an edge to the right of this
+		     * square, an edge below it, and an edge in the
+		     * middle of it. Also look to see if the point
+		     * at the bottom right of this square is on an
+		     * edge (and isn't a place where more than two
+		     * regions meet).
+		      right edge  bottom edge  diagonal edge  bottom right corner  three colours at this point 
+			 * Now if there are exactly two regions at
+			 * this point (not one, and not three or
+			 * more), and only two changes around the
+			 * loop, then this is a valid place to put
+			 * an error marker.
+			 
+                         * If there's exactly _one_ region at this
+                         * point, on the other hand, it's a valid
+                         * place to put a region centre.
+                         
+		     * Now process the points we've found, one by
+		     * one.
+		      Graph edge  Region number 
+			     * In pass 0, accumulate the values
+			     * we'll use to compute the average
+			     * positions.
+			     
+			     * In pass 1, work out whether this
+			     * point is closer to the average than
+			     * the last one we've seen.
+			      Find the other representation of this edge. 
+	 * Use the solver.
+	 
+     * drag_colour:
+     * 
+     *  - -2 means no drag currently active.
+     *  - >=0 means we're dragging a solid colour.
+     * 	- -1 means we're dragging a blank space, and drag_pencil
+     * 	  might or might not add some pencil-mark stipples to that.
+      Flags in `drawn'. 
+  * EPSILON_FOO are epsilons added to absolute cursor position by
+  * cursor movement, such that in pathological cases (e.g. a very
+  * small diamond-shaped area) it's relatively easy to select the
+  * region you wanted.
+  
+ * Return the map region containing a point in tile (tx,ty), offset by
+ * (x_eps,y_eps) from the centre of the tile.
+ , n = state->p.n  border 
+     * Enable or disable numeric labels on regions.
+      not currently cursor-dragging, start.  currently cursor-dragging; drop the colour in the new region.  Double-select removes current colour.  should be already, but double-check 
+         * Cancel the drag, whatever happens.
+          drag into border; do nothing else  can't change this region  don't _need_ to change this region  Can't pencil on a coloured region  Right-dragging from colour to blank toggles one pencil  Otherwise, right-dragging from blank to blank is equivalent
+	     * to left-dragging.  ignore first semicolon 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  set_size is never called twice  Use more vivid colours (e.g. on the Pocket PC) 
+     * Draw a diamond.
+     
+     * Draw an exclamation mark in the diamond. This turns out to
+     * look unpleasantly off-centre if done via draw_text, so I do
+     * it by hand on the basis that exclamation marks aren't that
+     * difficult to draw...
+     
+     * Draw the region colour.
+     
+     * Draw the second region colour, if this is a diagonally
+     * divided square.
+     
+     * Draw `pencil marks'. Currently we arrange these in a square
+     * formation, which means we may be in trouble if the value of
+     * FOUR changes later...
+      avoid TL-BR diagonal line  avoid BL-TR diagonal line 
+     * Draw the grid lines, if required.
+     
+     * Draw error markers.
+     
+     * Draw region numbers, if desired.
+     
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+     
+     * Set up the `todraw' array.
+     
+             * Add pencil marks.
+             
+     * Add error markers to the `todraw' array.
+     
+     * Now actually draw everything.
+     
+     * Draw the dragged colour blob if any.
+     bg = COL_GRID;
+     * I'll use 4mm squares by default, I think. Simplest way to
+     * compute this size is to compute the pixel puzzle size at a
+     * given tile size and then scale.
+      Ick: fake up `ds->tilesize' for macro expansion purposes  We can't call game_set_size() here because we don't want a blitter 
+     * Draw a single filled polygon around each region.
+     
+	 * Start by finding a point on the region boundary. Any
+	 * point will do. To do this, we'll search for a square
+	 * containing the region and then decide which corner of it
+	 * to use.
+	  we must have found one somewhere 
+	 * This is the first square in lexicographic order which
+	 * contains part of this region. Therefore, one of the top
+	 * two corners of the square must be what we're after. The
+	 * only case in which it isn't the top left one is if the
+	 * square is diagonally divided and the region is in the
+	 * bottom right half.
+	  could just as well have done y++ 
+	 * Now we have a point on the region boundary. Trace around
+	 * the region until we come back to this point,
+	 * accumulating coordinates for a polygon draw operation as
+	 * we go.
+	 
+	     * There are eight possible directions we could head in
+	     * from here. We identify them by octant numbers, and
+	     * we also use octant numbers to identify the spaces
+	     * between them:
+	     * 
+	     *   6   7   0
+	     *    \ 7|0 /
+	     *     \ | /
+	     *    6 \|/ 1
+	     * 5-----+-----1
+	     *    5 /|\ 2
+	     *     / | \
+	     *    / 4|3 \
+	     *   4   3   2
+	     
+	     * Now we're heading in direction d1. Save the current
+	     * coordinates.
+	     
+	     * Compute the new coordinates.
+	      game_request_keys  wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser  vim: set shiftwidth=4 tabstop=8: 

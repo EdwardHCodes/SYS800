@@ -1,0 +1,199 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Profiling routines counts ticks and calls to each profiled function.
+ * 
+ * Copyright (C) 2005 by Brandon Low
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ *
+ * profile_func_enter() based on mcount found in gmon.c:
+ *
+ ***************************************************************************
+ * Copyright (c) 1991, 1998 The Regents of the University of California.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. [rescinded 22 July 1999]
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * @(#)gmon.c 5.3 (Berkeley) 5/22/91
+  PFD is Profiled Function Data  Indices are shorts which means that we use 4k of RAM  What is a reasonable size for this?  2 ^ INDEX_BITS  lower INDEX_BITS 1 
+ * In the current setup (pfd has 4 longs and 2 shorts) this uses 20k of RAM
+ * for profiling, and allows for profiling sections of code with up-to
+ * 1024 function caller->callee pairs
+  Possible states of profiling  Masks for thread switches  This holds a pointer to the last pfd effected for time tracking  These are used to track the time when we've lost the CPU so it doesn't count
+ * against any of the profiled functions  internal function prototypes  Be careful to use the right one for the size of your variable  If profiling is busy or idle  Unregister the timer so that other threads aren't interrupted  Make sure we don't waste time profiling when we're running the
+         * wrong thread  Now we are allowed to profile again  if profiling was busy or idle  After we de-mask, if profiling is active, reactivate the timer  This function clears the links on top level linkers, and clears the needed
+ * parts of memory in the index array  When we started timing, we set the time to the tick at that time
+     * less the time already used in function  This shouldn't be necessary, maybe exit could be called first  check that we are profiling and that we aren't recursively invoked
+     * this is equivalent to 'if (profiling != PROF_ON)' but it's faster  A check that the PC is in the code range here wouldn't hurt, but this is
+     * logically guaranteed to be a valid address unless the constants are
+     * breaking the rules.   new caller, allocate new storage  only / most recent function called by this caller, usual case  increment count, start timing and exit  collision, bad for performance, look down the list of functions called by
+     * colliding PCs  goto done  no more previously called functions, allocate a new one  this function becomes the new head, link to the old head  and set the index to point to this function  start timing and exit  move along the chain  found ourself  Remove me from my old spot  Link to the old head  Make me head  increment count, start timing and exit  We've found a pfd, increment it  We've (found or created) and updated our pfd, save it and start timing  If we are not recursing  Start timing this function  normal return restores saved registers  this is the same as 'profiling = PROF_ERROR' **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Profiling routines counts ticks and calls to each profiled function.
+ * 
+ * Copyright (C) 2005 by Brandon Low
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ *
+ * profile_func_enter() based on mcount found in gmon.c:
+ *
+ ***************************************************************************
+ * Copyright (c) 1991, 1998 The Regents of the University of California.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. [rescinded 22 July 1999]
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * @(#)gmon.c 5.3 (Berkeley) 5/22/91
+  PFD is Profiled Function Data  Indices are shorts which means that we use 4k of RAM  What is a reasonable size for this?  2 ^ INDEX_BITS  lower INDEX_BITS 1 
+ * In the current setup (pfd has 4 longs and 2 shorts) this uses 20k of RAM
+ * for profiling, and allows for profiling sections of code with up-to
+ * 1024 function caller->callee pairs
+  Possible states of profiling  Masks for thread switches  This holds a pointer to the last pfd effected for time tracking  These are used to track the time when we've lost the CPU so it doesn't count
+ * against any of the profiled functions  internal function prototypes  Be careful to use the right one for the size of your variable  If profiling is busy or idle  Unregister the timer so that other threads aren't interrupted  Make sure we don't waste time profiling when we're running the
+         * wrong thread  Now we are allowed to profile again  if profiling was busy or idle  After we de-mask, if profiling is active, reactivate the timer  This function clears the links on top level linkers, and clears the needed
+ * parts of memory in the index array  When we started timing, we set the time to the tick at that time
+     * less the time already used in function  This shouldn't be necessary, maybe exit could be called first  check that we are profiling and that we aren't recursively invoked
+     * this is equivalent to 'if (profiling != PROF_ON)' but it's faster  A check that the PC is in the code range here wouldn't hurt, but this is
+     * logically guaranteed to be a valid address unless the constants are
+     * breaking the rules.   new caller, allocate new storage  only / most recent function called by this caller, usual case  increment count, start timing and exit  collision, bad for performance, look down the list of functions called by
+     * colliding PCs  goto done  no more previously called functions, allocate a new one  this function becomes the new head, link to the old head  and set the index to point to this function  start timing and exit  move along the chain  found ourself  Remove me from my old spot  Link to the old head  Make me head  increment count, start timing and exit  We've found a pfd, increment it  We've (found or created) and updated our pfd, save it and start timing  If we are not recursing  Start timing this function  normal return restores saved registers  this is the same as 'profiling = PROF_ERROR' **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Profiling routines counts ticks and calls to each profiled function.
+ * 
+ * Copyright (C) 2005 by Brandon Low
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ *
+ * profile_func_enter() based on mcount found in gmon.c:
+ *
+ ***************************************************************************
+ * Copyright (c) 1991, 1998 The Regents of the University of California.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. [rescinded 22 July 1999]
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * @(#)gmon.c 5.3 (Berkeley) 5/22/91
+  PFD is Profiled Function Data  Indices are shorts which means that we use 4k of RAM  What is a reasonable size for this?  2 ^ INDEX_BITS  lower INDEX_BITS 1 
+ * In the current setup (pfd has 4 longs and 2 shorts) this uses 20k of RAM
+ * for profiling, and allows for profiling sections of code with up-to
+ * 1024 function caller->callee pairs
+  Possible states of profiling  Masks for thread switches  This holds a pointer to the last pfd effected for time tracking  These are used to track the time when we've lost the CPU so it doesn't count
+ * against any of the profiled functions  internal function prototypes  Be careful to use the right one for the size of your variable  If profiling is busy or idle  Unregister the timer so that other threads aren't interrupted  Make sure we don't waste time profiling when we're running the
+         * wrong thread  Now we are allowed to profile again  if profiling was busy or idle  After we de-mask, if profiling is active, reactivate the timer  This function clears the links on top level linkers, and clears the needed
+ * parts of memory in the index array  When we started timing, we set the time to the tick at that time
+     * less the time already used in function  This shouldn't be necessary, maybe exit could be called first  check that we are profiling and that we aren't recursively invoked
+     * this is equivalent to 'if (profiling != PROF_ON)' but it's faster  A check that the PC is in the code range here wouldn't hurt, but this is
+     * logically guaranteed to be a valid address unless the constants are
+     * breaking the rules.   new caller, allocate new storage  only / most recent function called by this caller, usual case  increment count, start timing and exit  collision, bad for performance, look down the list of functions called by
+     * colliding PCs  goto done  no more previously called functions, allocate a new one  this function becomes the new head, link to the old head  and set the index to point to this function  start timing and exit  move along the chain  found ourself  Remove me from my old spot  Link to the old head  Make me head  increment count, start timing and exit  We've found a pfd, increment it  We've (found or created) and updated our pfd, save it and start timing  If we are not recursing  Start timing this function  normal return restores saved registers  this is the same as 'profiling = PROF_ERROR' 

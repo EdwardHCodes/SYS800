@@ -1,0 +1,346 @@
+*******************************************************************
+ *                                                                  *
+ * THIS FILE IS PART OF THE Ogg CONTAINER SOURCE CODE.              *
+ * USE, DISTRIBUTION AND REPRODUCTION OF THIS LIBRARY SOURCE IS     *
+ * GOVERNED BY A BSD-STYLE SOURCE LICENSE INCLUDED WITH THIS SOURCE *
+ * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
+ *                                                                  *
+ * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2010             *
+ * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ *                                                                  *
+ ********************************************************************
+
+ function: code raw packets into framed OggSquish stream and
+           decode Ogg streams back into raw packets
+ last mod: $Id: framing.c 18052 2011-08-04 17:57:02Z giles $
+
+ note: The CRC code is directly derived from public domain code by
+ Ross Williams (ross@guest.adelaide.edu.au).  See docs/framing.html
+ for details.
+
+ ******************************************************************* A complete description of Ogg framing exists in docs/framing.html  returns the number of packets that are completed on this page (if
+   the leading packet is begun on a previous page, but ends on this
+   page, it's counted  NOTE:
+   If a page consists of a packet begun on a previous page, and a new
+   packet begun (but not completed) on this page, the return will be:
+     ogg_page_packets(page)   ==1,
+     ogg_page_continued(page) !=0
+
+   If a page happens to be a single packet that was begun on a
+   previous page, and spans to the next page (in the case of a three or
+   more page packet), the return will be:
+     ogg_page_packets(page)   ==0,
+     ogg_page_continued(page) !=0
+ helper to initialize lookup for direct-table CRC (illustrative; we
+   use the static init below)  The same as the ethernet generator
+                                    polynomial, although we use an
+                                    unreflected alg and an init/final
+                                    of 0, not 0xffffffff  init the encode/decode logical stream state  async/delayed error detection for the ogg_stream_state  _clear does not free os, only the non-flat storage within  Helpers for ogg_stream_encode; this keeps the structure and
+   what's happening fairly clear  checksum the page  Direct table CRC; note that this will be faster in the future if we
+   perform the checksum simultaneously with other copies  safety; needed for API behavior, but not framing code  submit data to the internal buffer of the framing engine  advance packet data according to the body_returned pointer. We
+       had to keep it around to return a pointer into the buffer last
+       call  make sure we have the buffer storage  Copy in the submitted packet.  Yes, the copy is a waste; this is
+     the liability of overly clean abstraction for the time being.  It
+     will actually be fairly easy to eliminate the extra copy in the
+     future  Store lacing vals for this packet  flag the first segment as the beginning of the packet  for the sake of completeness  Conditionally flush a page; force==0 will only flush nominal-size
+   pages, force==1 forces us to flush a page regardless of page size
+   so long as there's any data available at all.  construct a page  decide how many segments to include  If this is the initial header case, the first page must only include
+     the initial header packet  'initial header page' case  The extra packets_done, packet_just_done logic here attempts to do two things:
+       1) Don't unneccessarily span pages.
+       2) Unless necessary, don't flush pages if there are less than four packets on
+          them; this expands page size to reduce unneccessary overhead if incoming packets
+          are large.
+       These are not necessary behaviors, just 'always better than naive flushing'
+       without requiring an application to explicitly request a specific optimized
+       behavior. We'll want an explicit behavior setup pathway eventually as well.  construct the header in temp storage  stream structure version  continued packet flag?  first page flag?  last page flag?  64 bits of PCM position  32 bits of stream serial number  32 bits of page counter (we have both counter and page header
+     because this val can roll over)  because someone called
+                                     stream_reset; this would be a
+                                     strange thing to do in an
+                                     encode stream, but it has
+                                     plausible uses  zero for computation; filled in later  segment table  set pointers in the ogg_page struct  advance the lacing data and set the body_returned pointer  calculate the checksum  done  This will flush remaining packets into a page (returning nonzero),
+   even if there is not enough data to trigger a flush normally
+   (undersized page). If there are no packets or partial packets to
+   flush, ogg_stream_flush returns 0.  Note that ogg_stream_flush will
+   try to flush a normal sized page like ogg_stream_pageout; a call to
+   ogg_stream_flush does not guarantee that all packets have flushed.
+   Only a return value of 0 from ogg_stream_flush indicates all packet
+   data is flushed into pages.
+
+   since ogg_stream_flush will flush the last page in a stream even if
+   it's undersized, you almost certainly want to use ogg_stream_pageout
+   (and *not* ogg_stream_flush) unless you specifically need to flush
+   a page regardless of size in the middle of a stream.  Like the above, but an argument is provided to adjust the nominal
+   page size for applications which are smart enough to provide their
+   own delay based flushing  This constructs pages from buffered packet segments.  The pointers
+returned are to static buffers; do not free. The returned buffers are
+good only until the next call (using the same ogg_stream_state)  'were done, now flush' case  'initial header page' case  Like the above, but an argument is provided to adjust the nominal
+page size for applications which are smart enough to provide their
+own delay based flushing  'were done, now flush' case  'initial header page' case  DECODING PRIMITIVES: packet streaming layer ********************* This has two layers to place more of the multi-serialno and paging
+   control in the application's hands.  First, we expose a data buffer
+   using ogg_sync_buffer().  The app either copies into the
+   buffer, or passes it directly to read(), etc.  We then call
+   ogg_sync_wrote() to tell how many bytes we just added.
+
+   Pages are returned (pointers into the buffer in ogg_sync_state)
+   by ogg_sync_pageout().  The page is then submitted to
+   ogg_stream_pagein() along with the appropriate
+   ogg_stream_state* (ie, matching serialno).  We then get raw
+   packets out calling ogg_stream_packetout() with a
+   ogg_stream_state.  initialize the struct to a known state  used as a readiness flag  clear non-flat storage within  first, clear out any space that has been previously returned  We need to extend the internal buffer  an extra page to be nice  expose a segment at least as large as requested at the fill mark  sync the stream.  This is meant to be useful for finding page
+   boundaries.
+
+   return values for this:
+  -n) skipped n bytes
+   0) page not ready; more data (no bytes skipped)
+   n) page synced at current location; page length n bytes
+
+ not enough for a header  verify capture pattern  not enough for header + seg table  count up body length in the segment table  The whole test page is buffered.  Verify the checksum  Grab the checksum bytes, set the header field to zero  set up a temp page struct and recompute the checksum  Compare  D'oh.  Mismatch! Corrupt page (or miscapture and not a page
+         at all)  replace the computed checksum with the one actually read in  Bad checksum. Lose sync  yes, have a whole page all ready to go  search for possible capture  sync the stream and get a page.  Keep trying until we find a page.
+   Suppress 'sync errors' after reporting the first.
+
+   return values:
+   -1) recapture (hole in data)
+    0) need more data
+    1) page returned
+
+   Returns pointers into buffered data; invalidated by next call to
+   _stream, _clear, _init, or _buffer  all we need to do is verify a page at the head of the stream
+     buffer.  If it doesn't verify, we look for the next potential
+     frame  have a page  need more data  head did not start a synced page... skipped some bytes  loop. keep looking  add the incoming page to the stream state; we decompose the page
+   into packet segments here as well.  clean up 'returned data'  body data  segment table  check the serial number  are we in sequence?  unroll previous partial packet (if any)  make a note of dropped data in segment table  are we a 'continued packet' page?  If so, we may need to skip
+     some segments  set the granulepos on the last granuleval of the last full packet  clear things to an initial state.  Good to call, eg, before seeking  The last part of decode. We have the stream broken into packet
+     segments.  Now we need to group them into packets (or return the
+     out of sync markers)  we need to tell the codec there's a gap; it might need to
+       handle previous packet dependencies.  just using peek as an inexpensive way
+                               to ask if there's a whole packet
+                               waiting  Gather the whole packet. We'll have no holes or a partial packet  last packet of the stream?  first packet of the stream? *******************************************************************
+ *                                                                  *
+ * THIS FILE IS PART OF THE Ogg CONTAINER SOURCE CODE.              *
+ * USE, DISTRIBUTION AND REPRODUCTION OF THIS LIBRARY SOURCE IS     *
+ * GOVERNED BY A BSD-STYLE SOURCE LICENSE INCLUDED WITH THIS SOURCE *
+ * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
+ *                                                                  *
+ * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2010             *
+ * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ *                                                                  *
+ ********************************************************************
+
+ function: code raw packets into framed OggSquish stream and
+           decode Ogg streams back into raw packets
+ last mod: $Id: framing.c 18052 2011-08-04 17:57:02Z giles $
+
+ note: The CRC code is directly derived from public domain code by
+ Ross Williams (ross@guest.adelaide.edu.au).  See docs/framing.html
+ for details.
+
+ ******************************************************************* A complete description of Ogg framing exists in docs/framing.html  returns the number of packets that are completed on this page (if
+   the leading packet is begun on a previous page, but ends on this
+   page, it's counted  NOTE:
+   If a page consists of a packet begun on a previous page, and a new
+   packet begun (but not completed) on this page, the return will be:
+     ogg_page_packets(page)   ==1,
+     ogg_page_continued(page) !=0
+
+   If a page happens to be a single packet that was begun on a
+   previous page, and spans to the next page (in the case of a three or
+   more page packet), the return will be:
+     ogg_page_packets(page)   ==0,
+     ogg_page_continued(page) !=0
+ helper to initialize lookup for direct-table CRC (illustrative; we
+   use the static init below)  The same as the ethernet generator
+                                    polynomial, although we use an
+                                    unreflected alg and an init/final
+                                    of 0, not 0xffffffff  init the encode/decode logical stream state  async/delayed error detection for the ogg_stream_state  _clear does not free os, only the non-flat storage within  Helpers for ogg_stream_encode; this keeps the structure and
+   what's happening fairly clear  checksum the page  Direct table CRC; note that this will be faster in the future if we
+   perform the checksum simultaneously with other copies  safety; needed for API behavior, but not framing code  submit data to the internal buffer of the framing engine  advance packet data according to the body_returned pointer. We
+       had to keep it around to return a pointer into the buffer last
+       call  make sure we have the buffer storage  Copy in the submitted packet.  Yes, the copy is a waste; this is
+     the liability of overly clean abstraction for the time being.  It
+     will actually be fairly easy to eliminate the extra copy in the
+     future  Store lacing vals for this packet  flag the first segment as the beginning of the packet  for the sake of completeness  Conditionally flush a page; force==0 will only flush nominal-size
+   pages, force==1 forces us to flush a page regardless of page size
+   so long as there's any data available at all.  construct a page  decide how many segments to include  If this is the initial header case, the first page must only include
+     the initial header packet  'initial header page' case  The extra packets_done, packet_just_done logic here attempts to do two things:
+       1) Don't unneccessarily span pages.
+       2) Unless necessary, don't flush pages if there are less than four packets on
+          them; this expands page size to reduce unneccessary overhead if incoming packets
+          are large.
+       These are not necessary behaviors, just 'always better than naive flushing'
+       without requiring an application to explicitly request a specific optimized
+       behavior. We'll want an explicit behavior setup pathway eventually as well.  construct the header in temp storage  stream structure version  continued packet flag?  first page flag?  last page flag?  64 bits of PCM position  32 bits of stream serial number  32 bits of page counter (we have both counter and page header
+     because this val can roll over)  because someone called
+                                     stream_reset; this would be a
+                                     strange thing to do in an
+                                     encode stream, but it has
+                                     plausible uses  zero for computation; filled in later  segment table  set pointers in the ogg_page struct  advance the lacing data and set the body_returned pointer  calculate the checksum  done  This will flush remaining packets into a page (returning nonzero),
+   even if there is not enough data to trigger a flush normally
+   (undersized page). If there are no packets or partial packets to
+   flush, ogg_stream_flush returns 0.  Note that ogg_stream_flush will
+   try to flush a normal sized page like ogg_stream_pageout; a call to
+   ogg_stream_flush does not guarantee that all packets have flushed.
+   Only a return value of 0 from ogg_stream_flush indicates all packet
+   data is flushed into pages.
+
+   since ogg_stream_flush will flush the last page in a stream even if
+   it's undersized, you almost certainly want to use ogg_stream_pageout
+   (and *not* ogg_stream_flush) unless you specifically need to flush
+   a page regardless of size in the middle of a stream.  Like the above, but an argument is provided to adjust the nominal
+   page size for applications which are smart enough to provide their
+   own delay based flushing  This constructs pages from buffered packet segments.  The pointers
+returned are to static buffers; do not free. The returned buffers are
+good only until the next call (using the same ogg_stream_state)  'were done, now flush' case  'initial header page' case  Like the above, but an argument is provided to adjust the nominal
+page size for applications which are smart enough to provide their
+own delay based flushing  'were done, now flush' case  'initial header page' case  DECODING PRIMITIVES: packet streaming layer ********************* This has two layers to place more of the multi-serialno and paging
+   control in the application's hands.  First, we expose a data buffer
+   using ogg_sync_buffer().  The app either copies into the
+   buffer, or passes it directly to read(), etc.  We then call
+   ogg_sync_wrote() to tell how many bytes we just added.
+
+   Pages are returned (pointers into the buffer in ogg_sync_state)
+   by ogg_sync_pageout().  The page is then submitted to
+   ogg_stream_pagein() along with the appropriate
+   ogg_stream_state* (ie, matching serialno).  We then get raw
+   packets out calling ogg_stream_packetout() with a
+   ogg_stream_state.  initialize the struct to a known state  used as a readiness flag  clear non-flat storage within  first, clear out any space that has been previously returned  We need to extend the internal buffer  an extra page to be nice  expose a segment at least as large as requested at the fill mark  sync the stream.  This is meant to be useful for finding page
+   boundaries.
+
+   return values for this:
+  -n) skipped n bytes
+   0) page not ready; more data (no bytes skipped)
+   n) page synced at current location; page length n bytes
+
+ not enough for a header  verify capture pattern  not enough for header + seg table  count up body length in the segment table  The whole test page is buffered.  Verify the checksum  Grab the checksum bytes, set the header field to zero  set up a temp page struct and recompute the checksum  Compare  D'oh.  Mismatch! Corrupt page (or miscapture and not a page
+         at all)  replace the computed checksum with the one actually read in  Bad checksum. Lose sync  yes, have a whole page all ready to go  search for possible capture  sync the stream and get a page.  Keep trying until we find a page.
+   Suppress 'sync errors' after reporting the first.
+
+   return values:
+   -1) recapture (hole in data)
+    0) need more data
+    1) page returned
+
+   Returns pointers into buffered data; invalidated by next call to
+   _stream, _clear, _init, or _buffer  all we need to do is verify a page at the head of the stream
+     buffer.  If it doesn't verify, we look for the next potential
+     frame  have a page  need more data  head did not start a synced page... skipped some bytes  loop. keep looking  add the incoming page to the stream state; we decompose the page
+   into packet segments here as well.  clean up 'returned data'  body data  segment table  check the serial number  are we in sequence?  unroll previous partial packet (if any)  make a note of dropped data in segment table  are we a 'continued packet' page?  If so, we may need to skip
+     some segments  set the granulepos on the last granuleval of the last full packet  clear things to an initial state.  Good to call, eg, before seeking  The last part of decode. We have the stream broken into packet
+     segments.  Now we need to group them into packets (or return the
+     out of sync markers)  we need to tell the codec there's a gap; it might need to
+       handle previous packet dependencies.  just using peek as an inexpensive way
+                               to ask if there's a whole packet
+                               waiting  Gather the whole packet. We'll have no holes or a partial packet  last packet of the stream?  first packet of the stream? *******************************************************************
+ *                                                                  *
+ * THIS FILE IS PART OF THE Ogg CONTAINER SOURCE CODE.              *
+ * USE, DISTRIBUTION AND REPRODUCTION OF THIS LIBRARY SOURCE IS     *
+ * GOVERNED BY A BSD-STYLE SOURCE LICENSE INCLUDED WITH THIS SOURCE *
+ * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
+ *                                                                  *
+ * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2010             *
+ * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ *                                                                  *
+ ********************************************************************
+
+ function: code raw packets into framed OggSquish stream and
+           decode Ogg streams back into raw packets
+ last mod: $Id: framing.c 18052 2011-08-04 17:57:02Z giles $
+
+ note: The CRC code is directly derived from public domain code by
+ Ross Williams (ross@guest.adelaide.edu.au).  See docs/framing.html
+ for details.
+
+ ******************************************************************* A complete description of Ogg framing exists in docs/framing.html  returns the number of packets that are completed on this page (if
+   the leading packet is begun on a previous page, but ends on this
+   page, it's counted  NOTE:
+   If a page consists of a packet begun on a previous page, and a new
+   packet begun (but not completed) on this page, the return will be:
+     ogg_page_packets(page)   ==1,
+     ogg_page_continued(page) !=0
+
+   If a page happens to be a single packet that was begun on a
+   previous page, and spans to the next page (in the case of a three or
+   more page packet), the return will be:
+     ogg_page_packets(page)   ==0,
+     ogg_page_continued(page) !=0
+ helper to initialize lookup for direct-table CRC (illustrative; we
+   use the static init below)  The same as the ethernet generator
+                                    polynomial, although we use an
+                                    unreflected alg and an init/final
+                                    of 0, not 0xffffffff  init the encode/decode logical stream state  async/delayed error detection for the ogg_stream_state  _clear does not free os, only the non-flat storage within  Helpers for ogg_stream_encode; this keeps the structure and
+   what's happening fairly clear  checksum the page  Direct table CRC; note that this will be faster in the future if we
+   perform the checksum simultaneously with other copies  safety; needed for API behavior, but not framing code  submit data to the internal buffer of the framing engine  advance packet data according to the body_returned pointer. We
+       had to keep it around to return a pointer into the buffer last
+       call  make sure we have the buffer storage  Copy in the submitted packet.  Yes, the copy is a waste; this is
+     the liability of overly clean abstraction for the time being.  It
+     will actually be fairly easy to eliminate the extra copy in the
+     future  Store lacing vals for this packet  flag the first segment as the beginning of the packet  for the sake of completeness  Conditionally flush a page; force==0 will only flush nominal-size
+   pages, force==1 forces us to flush a page regardless of page size
+   so long as there's any data available at all.  construct a page  decide how many segments to include  If this is the initial header case, the first page must only include
+     the initial header packet  'initial header page' case  The extra packets_done, packet_just_done logic here attempts to do two things:
+       1) Don't unneccessarily span pages.
+       2) Unless necessary, don't flush pages if there are less than four packets on
+          them; this expands page size to reduce unneccessary overhead if incoming packets
+          are large.
+       These are not necessary behaviors, just 'always better than naive flushing'
+       without requiring an application to explicitly request a specific optimized
+       behavior. We'll want an explicit behavior setup pathway eventually as well.  construct the header in temp storage  stream structure version  continued packet flag?  first page flag?  last page flag?  64 bits of PCM position  32 bits of stream serial number  32 bits of page counter (we have both counter and page header
+     because this val can roll over)  because someone called
+                                     stream_reset; this would be a
+                                     strange thing to do in an
+                                     encode stream, but it has
+                                     plausible uses  zero for computation; filled in later  segment table  set pointers in the ogg_page struct  advance the lacing data and set the body_returned pointer  calculate the checksum  done  This will flush remaining packets into a page (returning nonzero),
+   even if there is not enough data to trigger a flush normally
+   (undersized page). If there are no packets or partial packets to
+   flush, ogg_stream_flush returns 0.  Note that ogg_stream_flush will
+   try to flush a normal sized page like ogg_stream_pageout; a call to
+   ogg_stream_flush does not guarantee that all packets have flushed.
+   Only a return value of 0 from ogg_stream_flush indicates all packet
+   data is flushed into pages.
+
+   since ogg_stream_flush will flush the last page in a stream even if
+   it's undersized, you almost certainly want to use ogg_stream_pageout
+   (and *not* ogg_stream_flush) unless you specifically need to flush
+   a page regardless of size in the middle of a stream.  Like the above, but an argument is provided to adjust the nominal
+   page size for applications which are smart enough to provide their
+   own delay based flushing  This constructs pages from buffered packet segments.  The pointers
+returned are to static buffers; do not free. The returned buffers are
+good only until the next call (using the same ogg_stream_state)  'were done, now flush' case  'initial header page' case  Like the above, but an argument is provided to adjust the nominal
+page size for applications which are smart enough to provide their
+own delay based flushing  'were done, now flush' case  'initial header page' case  DECODING PRIMITIVES: packet streaming layer ********************* This has two layers to place more of the multi-serialno and paging
+   control in the application's hands.  First, we expose a data buffer
+   using ogg_sync_buffer().  The app either copies into the
+   buffer, or passes it directly to read(), etc.  We then call
+   ogg_sync_wrote() to tell how many bytes we just added.
+
+   Pages are returned (pointers into the buffer in ogg_sync_state)
+   by ogg_sync_pageout().  The page is then submitted to
+   ogg_stream_pagein() along with the appropriate
+   ogg_stream_state* (ie, matching serialno).  We then get raw
+   packets out calling ogg_stream_packetout() with a
+   ogg_stream_state.  initialize the struct to a known state  used as a readiness flag  clear non-flat storage within  first, clear out any space that has been previously returned  We need to extend the internal buffer  an extra page to be nice  expose a segment at least as large as requested at the fill mark  sync the stream.  This is meant to be useful for finding page
+   boundaries.
+
+   return values for this:
+  -n) skipped n bytes
+   0) page not ready; more data (no bytes skipped)
+   n) page synced at current location; page length n bytes
+
+ not enough for a header  verify capture pattern  not enough for header + seg table  count up body length in the segment table  The whole test page is buffered.  Verify the checksum  Grab the checksum bytes, set the header field to zero  set up a temp page struct and recompute the checksum  Compare  D'oh.  Mismatch! Corrupt page (or miscapture and not a page
+         at all)  replace the computed checksum with the one actually read in  Bad checksum. Lose sync  yes, have a whole page all ready to go  search for possible capture  sync the stream and get a page.  Keep trying until we find a page.
+   Suppress 'sync errors' after reporting the first.
+
+   return values:
+   -1) recapture (hole in data)
+    0) need more data
+    1) page returned
+
+   Returns pointers into buffered data; invalidated by next call to
+   _stream, _clear, _init, or _buffer  all we need to do is verify a page at the head of the stream
+     buffer.  If it doesn't verify, we look for the next potential
+     frame  have a page  need more data  head did not start a synced page... skipped some bytes  loop. keep looking  add the incoming page to the stream state; we decompose the page
+   into packet segments here as well.  clean up 'returned data'  body data  segment table  check the serial number  are we in sequence?  unroll previous partial packet (if any)  make a note of dropped data in segment table  are we a 'continued packet' page?  If so, we may need to skip
+     some segments  set the granulepos on the last granuleval of the last full packet  clear things to an initial state.  Good to call, eg, before seeking  The last part of decode. We have the stream broken into packet
+     segments.  Now we need to group them into packets (or return the
+     out of sync markers)  we need to tell the codec there's a gap; it might need to
+       handle previous packet dependencies.  just using peek as an inexpensive way
+                               to ask if there's a whole packet
+                               waiting  Gather the whole packet. We'll have no holes or a partial packet  last packet of the stream?  first packet of the stream? 

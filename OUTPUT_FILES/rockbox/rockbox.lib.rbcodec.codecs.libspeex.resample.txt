@@ -1,0 +1,259 @@
+ Copyright (C) 2007 Jean-Marc Valin
+      
+   File: resample.c
+   Arbitrary resampling code
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The design goals of this code are:
+      - Very fast algorithm
+      - SIMD-friendly algorithm
+      - Low memory requirement
+      - Good *perceptual* quality (and not best SNR)
+
+   Warning: This resampler is relatively new. Although I think I got rid of 
+   all the major bugs and I don't expect the API to change anymore, there
+   may be something I've missed. So use with caution.
+
+   This algorithm is based on this original resampling algorithm:
+   Smith, Julius O. Digital Audio Resampling Home Page
+   Center for Computer Research in Music and Acoustics (CCRMA), 
+   Stanford University, 2007.
+   Web published at http://www-ccrma.stanford.edu/~jos/resample/.
+
+   There is one main difference, though. This resampler uses cubic 
+   interpolation instead of linear interpolation in the above paper. This
+   makes the table much smaller and makes it possible to compute that table
+   on a per-stream basis. In turn, being able to tweak the table for each 
+   stream makes it possible to both reduce complexity on simple ratios 
+   (e.g. 2/3), and get rid of the rounding operations in the inner loop. 
+   The latter both reduces CPU time and makes the algorithm more SIMD-friendly.
+ OUTSIDE_SPEEX  OUTSIDE_SPEEX #define float double These are per-channel 
+static double kaiser12_table[36] = {
+   0.99440475, 1.00000000, 0.99440475, 0.97779076, 0.95066529, 0.91384741,
+   0.86843014, 0.81573067, 0.75723148, 0.69451601, 0.62920216, 0.56287762,
+   0.49704014, 0.43304576, 0.37206735, 0.31506490, 0.26276832, 0.21567274,
+   0.17404546, 0.13794294, 0.10723616, 0.08164178, 0.06075685, 0.04409466,
+   0.03111947, 0.02127838, 0.01402878, 0.00886058, 0.00531256, 0.00298291,
+   0.00153438, 0.00069463, 0.00025272, 0.0000527734, 0.00000500, 0.00000000};
+static struct FuncDef _KAISER12 = {kaiser12_table, 32};
+#define KAISER12 (&_KAISER12) This table maps conversion quality to internal parameters. There are two
+   reasons that explain why the up-sampling bandwidth is larger than the 
+   down-sampling bandwidth:
+   1) When up-sampling, we can assume that the spectrum is already attenuated
+      close to the Nyquist rate (from an A/D or a previous resampling filter)
+   2) Any aliasing that occurs very close to the Nyquist rate will be masked
+      by the sinusoids/noise just below the Nyquist rate (guaranteed only for
+      up-sampling).
+ Q0  Q1  Q2  82.3% cutoff ( ~60 dB stop) 6   Q3  84.9% cutoff ( ~80 dB stop) 8   Q4  88.7% cutoff ( ~80 dB stop) 8   Q5  89.1% cutoff (~100 dB stop) 10  Q6  91.5% cutoff (~100 dB stop) 10  Q7  93.1% cutoff (~100 dB stop) 10  Q8  94.5% cutoff (~100 dB stop) 10  Q9  95.5% cutoff (~100 dB stop) 10  Q10  96.6% cutoff (~100 dB stop) 10 8,24,40,56,80,104,128,160,200,256,320 CSE with handle the repeated powers interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems sum = frac*accum[1] + (1-frac)*accum[2]; The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc  Just to make sure we don't have rounding problems  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  down-sampling  FIXME: divide the numerator and denominator by a certain amount if they're too large  Round down to make sure we have a multiple of 4  up-sampling  Choose the resampling type that requires the least amount of memory fprintf (stderr, "resampler uses direct sinc table and normalised cutoff %f\n", cutoff);fprintf (stderr, "resampler uses interpolated sinc table and normalised cutoff %f\n", cutoff); Here's the place where we update the filter memory to take into account
+      the change in filter length. It's probably the messiest part of the code
+      due to handling of lots of corner cases. speex_warning("init filter");speex_warning("reinit filter"); Increase the filter length speex_warning("increase filter size");if (st->magic_samples[i]) Try and remove the magic samples as if nothing had happened  FIXME: This is wrong but for now we need it to avoid going over the array bounds  If the new filter length is still bigger than the "augmented" length  Copy data going backward  Then put zeros for lack of anything better  Adjust last_sample  Put back some of the magic!  Reduce filter length, this a bit tricky. We need to store some of the memory as "magic"
+         samples so they can be used directly as input the next time(s)  We must copy some of the memory that's no longer used  Copy data going backward  Per channel data  Handle the case where we have samples left from a reduction in filter length  magic_samples needs to be set to zero to avoid infinite recursion speex_warning_int("extra samples:", tmp_out_len); If we couldn't process all "magic" input samples, save the rest for next time  Call the right resampler through the function ptr VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t);VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t); FIXME: This is terribly inefficient, but who cares (at least for now)?  Safety net  Copyright (C) 2007 Jean-Marc Valin
+      
+   File: resample.c
+   Arbitrary resampling code
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The design goals of this code are:
+      - Very fast algorithm
+      - SIMD-friendly algorithm
+      - Low memory requirement
+      - Good *perceptual* quality (and not best SNR)
+
+   Warning: This resampler is relatively new. Although I think I got rid of 
+   all the major bugs and I don't expect the API to change anymore, there
+   may be something I've missed. So use with caution.
+
+   This algorithm is based on this original resampling algorithm:
+   Smith, Julius O. Digital Audio Resampling Home Page
+   Center for Computer Research in Music and Acoustics (CCRMA), 
+   Stanford University, 2007.
+   Web published at http://www-ccrma.stanford.edu/~jos/resample/.
+
+   There is one main difference, though. This resampler uses cubic 
+   interpolation instead of linear interpolation in the above paper. This
+   makes the table much smaller and makes it possible to compute that table
+   on a per-stream basis. In turn, being able to tweak the table for each 
+   stream makes it possible to both reduce complexity on simple ratios 
+   (e.g. 2/3), and get rid of the rounding operations in the inner loop. 
+   The latter both reduces CPU time and makes the algorithm more SIMD-friendly.
+ OUTSIDE_SPEEX  OUTSIDE_SPEEX #define float double These are per-channel 
+static double kaiser12_table[36] = {
+   0.99440475, 1.00000000, 0.99440475, 0.97779076, 0.95066529, 0.91384741,
+   0.86843014, 0.81573067, 0.75723148, 0.69451601, 0.62920216, 0.56287762,
+   0.49704014, 0.43304576, 0.37206735, 0.31506490, 0.26276832, 0.21567274,
+   0.17404546, 0.13794294, 0.10723616, 0.08164178, 0.06075685, 0.04409466,
+   0.03111947, 0.02127838, 0.01402878, 0.00886058, 0.00531256, 0.00298291,
+   0.00153438, 0.00069463, 0.00025272, 0.0000527734, 0.00000500, 0.00000000};
+static struct FuncDef _KAISER12 = {kaiser12_table, 32};
+#define KAISER12 (&_KAISER12) This table maps conversion quality to internal parameters. There are two
+   reasons that explain why the up-sampling bandwidth is larger than the 
+   down-sampling bandwidth:
+   1) When up-sampling, we can assume that the spectrum is already attenuated
+      close to the Nyquist rate (from an A/D or a previous resampling filter)
+   2) Any aliasing that occurs very close to the Nyquist rate will be masked
+      by the sinusoids/noise just below the Nyquist rate (guaranteed only for
+      up-sampling).
+ Q0  Q1  Q2  82.3% cutoff ( ~60 dB stop) 6   Q3  84.9% cutoff ( ~80 dB stop) 8   Q4  88.7% cutoff ( ~80 dB stop) 8   Q5  89.1% cutoff (~100 dB stop) 10  Q6  91.5% cutoff (~100 dB stop) 10  Q7  93.1% cutoff (~100 dB stop) 10  Q8  94.5% cutoff (~100 dB stop) 10  Q9  95.5% cutoff (~100 dB stop) 10  Q10  96.6% cutoff (~100 dB stop) 10 8,24,40,56,80,104,128,160,200,256,320 CSE with handle the repeated powers interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems sum = frac*accum[1] + (1-frac)*accum[2]; The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc  Just to make sure we don't have rounding problems  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  down-sampling  FIXME: divide the numerator and denominator by a certain amount if they're too large  Round down to make sure we have a multiple of 4  up-sampling  Choose the resampling type that requires the least amount of memory fprintf (stderr, "resampler uses direct sinc table and normalised cutoff %f\n", cutoff);fprintf (stderr, "resampler uses interpolated sinc table and normalised cutoff %f\n", cutoff); Here's the place where we update the filter memory to take into account
+      the change in filter length. It's probably the messiest part of the code
+      due to handling of lots of corner cases. speex_warning("init filter");speex_warning("reinit filter"); Increase the filter length speex_warning("increase filter size");if (st->magic_samples[i]) Try and remove the magic samples as if nothing had happened  FIXME: This is wrong but for now we need it to avoid going over the array bounds  If the new filter length is still bigger than the "augmented" length  Copy data going backward  Then put zeros for lack of anything better  Adjust last_sample  Put back some of the magic!  Reduce filter length, this a bit tricky. We need to store some of the memory as "magic"
+         samples so they can be used directly as input the next time(s)  We must copy some of the memory that's no longer used  Copy data going backward  Per channel data  Handle the case where we have samples left from a reduction in filter length  magic_samples needs to be set to zero to avoid infinite recursion speex_warning_int("extra samples:", tmp_out_len); If we couldn't process all "magic" input samples, save the rest for next time  Call the right resampler through the function ptr VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t);VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t); FIXME: This is terribly inefficient, but who cares (at least for now)?  Safety net  Copyright (C) 2007 Jean-Marc Valin
+      
+   File: resample.c
+   Arbitrary resampling code
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+
+   The design goals of this code are:
+      - Very fast algorithm
+      - SIMD-friendly algorithm
+      - Low memory requirement
+      - Good *perceptual* quality (and not best SNR)
+
+   Warning: This resampler is relatively new. Although I think I got rid of 
+   all the major bugs and I don't expect the API to change anymore, there
+   may be something I've missed. So use with caution.
+
+   This algorithm is based on this original resampling algorithm:
+   Smith, Julius O. Digital Audio Resampling Home Page
+   Center for Computer Research in Music and Acoustics (CCRMA), 
+   Stanford University, 2007.
+   Web published at http://www-ccrma.stanford.edu/~jos/resample/.
+
+   There is one main difference, though. This resampler uses cubic 
+   interpolation instead of linear interpolation in the above paper. This
+   makes the table much smaller and makes it possible to compute that table
+   on a per-stream basis. In turn, being able to tweak the table for each 
+   stream makes it possible to both reduce complexity on simple ratios 
+   (e.g. 2/3), and get rid of the rounding operations in the inner loop. 
+   The latter both reduces CPU time and makes the algorithm more SIMD-friendly.
+ OUTSIDE_SPEEX  OUTSIDE_SPEEX #define float double These are per-channel 
+static double kaiser12_table[36] = {
+   0.99440475, 1.00000000, 0.99440475, 0.97779076, 0.95066529, 0.91384741,
+   0.86843014, 0.81573067, 0.75723148, 0.69451601, 0.62920216, 0.56287762,
+   0.49704014, 0.43304576, 0.37206735, 0.31506490, 0.26276832, 0.21567274,
+   0.17404546, 0.13794294, 0.10723616, 0.08164178, 0.06075685, 0.04409466,
+   0.03111947, 0.02127838, 0.01402878, 0.00886058, 0.00531256, 0.00298291,
+   0.00153438, 0.00069463, 0.00025272, 0.0000527734, 0.00000500, 0.00000000};
+static struct FuncDef _KAISER12 = {kaiser12_table, 32};
+#define KAISER12 (&_KAISER12) This table maps conversion quality to internal parameters. There are two
+   reasons that explain why the up-sampling bandwidth is larger than the 
+   down-sampling bandwidth:
+   1) When up-sampling, we can assume that the spectrum is already attenuated
+      close to the Nyquist rate (from an A/D or a previous resampling filter)
+   2) Any aliasing that occurs very close to the Nyquist rate will be masked
+      by the sinusoids/noise just below the Nyquist rate (guaranteed only for
+      up-sampling).
+ Q0  Q1  Q2  82.3% cutoff ( ~60 dB stop) 6   Q3  84.9% cutoff ( ~80 dB stop) 8   Q4  88.7% cutoff ( ~80 dB stop) 8   Q5  89.1% cutoff (~100 dB stop) 10  Q6  91.5% cutoff (~100 dB stop) 10  Q7  93.1% cutoff (~100 dB stop) 10  Q8  94.5% cutoff (~100 dB stop) 10  Q9  95.5% cutoff (~100 dB stop) 10  Q10  96.6% cutoff (~100 dB stop) 10 8,24,40,56,80,104,128,160,200,256,320 CSE with handle the repeated powers interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems sum = frac*accum[1] + (1-frac)*accum[2]; The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  The slow way of computing a sinc for the table. Should improve that some day fprintf (stderr, "%f ", x);FIXME: Can it really be any slower than this?  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc  Just to make sure we don't have rounding problems  Compute interpolation coefficients. I'm not sure whether this corresponds to cubic interpolation
+   but I know it's MMSE-optimal on a sinc interp[2] = 1.f - 0.5f*frac - frac*frac + 0.5f*frac*frac*frac; Just to make sure we don't have rounding problems  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We already have all the filter coefficients pre-computed in the table  Do the memory part  Do the new part  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  This is the same as the previous function, except with a double-precision accumulator  We need to interpolate the sinc filter  This code is written like this to make it easy to optimise with SIMD.
+      For most DSPs, it would be best to split the loops in two because most DSPs 
+      have only two accumulators  Do the new part  down-sampling  FIXME: divide the numerator and denominator by a certain amount if they're too large  Round down to make sure we have a multiple of 4  up-sampling  Choose the resampling type that requires the least amount of memory fprintf (stderr, "resampler uses direct sinc table and normalised cutoff %f\n", cutoff);fprintf (stderr, "resampler uses interpolated sinc table and normalised cutoff %f\n", cutoff); Here's the place where we update the filter memory to take into account
+      the change in filter length. It's probably the messiest part of the code
+      due to handling of lots of corner cases. speex_warning("init filter");speex_warning("reinit filter"); Increase the filter length speex_warning("increase filter size");if (st->magic_samples[i]) Try and remove the magic samples as if nothing had happened  FIXME: This is wrong but for now we need it to avoid going over the array bounds  If the new filter length is still bigger than the "augmented" length  Copy data going backward  Then put zeros for lack of anything better  Adjust last_sample  Put back some of the magic!  Reduce filter length, this a bit tricky. We need to store some of the memory as "magic"
+         samples so they can be used directly as input the next time(s)  We must copy some of the memory that's no longer used  Copy data going backward  Per channel data  Handle the case where we have samples left from a reduction in filter length  magic_samples needs to be set to zero to avoid infinite recursion speex_warning_int("extra samples:", tmp_out_len); If we couldn't process all "magic" input samples, save the rest for next time  Call the right resampler through the function ptr VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t);VARDECL(spx_word16_t *x);
+   VARDECL(spx_word16_t *y);
+   ALLOC(x, *in_len, spx_word16_t);
+   ALLOC(y, *out_len, spx_word16_t); FIXME: This is terribly inefficient, but who cares (at least for now)?  Safety net 

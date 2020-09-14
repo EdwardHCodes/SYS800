@@ -1,0 +1,388 @@
+ qsort.c
+ * (c) 1998 Gareth McCaughan
+ *
+ * This is a drop-in replacement for the C library's |qsort()| routine.
+ *
+ * Features:
+ *   - Median-of-three pivoting (and more)
+ *   - Truncation and final polishing by a single insertion sort
+ *   - Early truncation when no swaps needed in pivoting step
+ *   - Explicit recursion, guaranteed not to overflow
+ *   - A few little wrinkles stolen from the GNU |qsort()|.
+ *   - separate code for non-aligned / aligned / word-size objects
+ *
+ * This code may be reproduced freely provided
+ *   - this file is retained unaltered apart from minor
+ *     changes for portability and efficiency
+ *   - no changes are made to this comment
+ *   - any changes that *are* made are clearly flagged
+ *   - the _ID string below is altered by inserting, after
+ *     the date, the string " altered" followed at your option
+ *     by other material. (Exceptions: you may change the name
+ *     of the exported routine without changing the ID string.
+ *     You may change the values of the macros TRUNC_* and
+ *     PIVOT_THRESHOLD without changing the ID string, provided
+ *     they remain constants with TRUNC_nonaligned, TRUNC_aligned
+ *     and TRUNC_words/WORD_BYTES between 8 and 24, and
+ *     PIVOT_THRESHOLD between 32 and 200.)
+ *
+ * You may use it in anything you like; you may make money
+ * out of it; you may distribute it in object form or as
+ * part of an executable without including source code;
+ * you don't have to credit me. (But it would be nice if
+ * you did.)
+ *
+ * If you find problems with this code, or find ways of
+ * making it significantly faster, please let me know!
+ * My e-mail address, valid as of early 1998 and certainly
+ * OK for at least the next 18 months, is
+ *    gjm11@dpmms.cam.ac.uk
+ * Thanks!
+ *
+ * Gareth McCaughan   Peterhouse   Cambridge   1998
+ 
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+ How many bytes are there per word? (Must be a power of 2,
+ * and must in fact equal sizeof(int).)
+  How big does our stack need to be? Answer: one entry per
+ * bit in a |size_t|.
+  Different situations have slightly different requirements,
+ * and we make life epsilon easier by using different truncation
+ * points for the three different cases.
+ * So far, I have tuned TRUNC_words and guessed that the same
+ * value might work well for the other two cases. Of course
+ * what works well on my machine might work badly on yours.
+  nb different meaning  We use a simple pivoting algorithm for shortish sub-arrays
+ * and a more complicated one for larger ones. The threshold
+ * is PIVOT_THRESHOLD.
+  Some comments on the implementation.
+ * 1. When we finish partitioning the array into "low"
+ *    and "high", we forget entirely about short subarrays,
+ *    because they'll be done later by insertion sort.
+ *    Doing lots of little insertion sorts might be a win
+ *    on large datasets for locality-of-reference reasons,
+ *    but it makes the code much nastier and increases
+ *    bookkeeping overhead.
+ * 2. We always save the shorter and get to work on the
+ *    longer. This guarantees that every time we push
+ *    an item onto the stack its size is <= 1/2 of that
+ *    of its parent; so the stack can't need more than
+ *    log_2(max-array-size) entries.
+ * 3. We choose a pivot by looking at the first, last
+ *    and middle elements. We arrange them into order
+ *    because it's easy to do that in conjunction with
+ *    choosing the pivot, and it makes things a little
+ *    easier in the partitioning step. Anyway, the pivot
+ *    is the middle of these three. It's still possible
+ *    to construct datasets where the algorithm takes
+ *    time of order n^2, but it simply never happens in
+ *    practice.
+ * 3' Newsflash: On further investigation I find that
+ *    it's easy to construct datasets where median-of-3
+ *    simply isn't good enough. So on large-ish subarrays
+ *    we do a more sophisticated pivoting: we take three
+ *    sets of 3 elements, find their medians, and then
+ *    take the median of those.
+ * 4. We copy the pivot element to a separate place
+ *    because that way we can always do our comparisons
+ *    directly against a pointer to that separate place,
+ *    and don't have to wonder "did we move the pivot
+ *    element?". This makes the inner loop better.
+ * 5. It's possible to make the pivoting even more
+ *    reliable by looking at more candidates when n
+ *    is larger. (Taking this to its logical conclusion
+ *    results in a variant of quicksort that doesn't
+ *    have that n^2 worst case.) However, the overhead
+ *    from the extra bookkeeping means that it's just
+ *    not worth while.
+ * 6. This is pretty clean and portable code. Here are
+ *    all the potential portability pitfalls and problems
+ *    I know of:
+ *      - In one place (the insertion sort) I construct
+ *        a pointer that points just past the end of the
+ *        supplied array, and assume that (a) it won't
+ *        compare equal to any pointer within the array,
+ *        and (b) it will compare equal to a pointer
+ *        obtained by stepping off the end of the array.
+ *        These might fail on some segmented architectures.
+ *      - I assume that there are 8 bits in a |char| when
+ *        computing the size of stack needed. This would
+ *        fail on machines with 9-bit or 16-bit bytes.
+ *      - I assume that if |((int)base&(sizeof(int)-1))==0|
+ *        and |(size&(sizeof(int)-1))==0| then it's safe to
+ *        get at array elements via |int*|s, and that if
+ *        actually |size==sizeof(int)| as well then it's
+ *        safe to treat the elements as |int|s. This might
+ *        fail on systems that convert pointers to integers
+ *        in non-standard ways.
+ *      - I assume that |8*sizeof(size_t)<=INT_MAX|. This
+ *        would be false on a machine with 8-bit |char|s,
+ *        16-bit |int|s and 4096-bit |size_t|s. :-)
+  The recursion logic is the same in each case:  and so is the pivoting logic:  and so is the partitioning logic:  and so is the pre-insertion-sort operation of putting
+ * the smallest element into place as a sentinel.
+ * Doing this makes the inner loop nicer. I got this
+ * idea from the GNU implementation of qsort().
+  and so is the insertion sort, in the first two cases:  Find the right place for |first|.	\
+     * My apologies for var reuse.  Shift everything in [test,first)	\
+       * up by one, and place |first|		\
+       * where |test| is.  ----------------------------------------------------------------------  ----------------------------------------------------------------------  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Now do insertion sort.  Find the right place for |first|. My apologies for var reuse  ----------------------------------------------------------------------  !HAVE_QSORT  qsort.c
+ * (c) 1998 Gareth McCaughan
+ *
+ * This is a drop-in replacement for the C library's |qsort()| routine.
+ *
+ * Features:
+ *   - Median-of-three pivoting (and more)
+ *   - Truncation and final polishing by a single insertion sort
+ *   - Early truncation when no swaps needed in pivoting step
+ *   - Explicit recursion, guaranteed not to overflow
+ *   - A few little wrinkles stolen from the GNU |qsort()|.
+ *   - separate code for non-aligned / aligned / word-size objects
+ *
+ * This code may be reproduced freely provided
+ *   - this file is retained unaltered apart from minor
+ *     changes for portability and efficiency
+ *   - no changes are made to this comment
+ *   - any changes that *are* made are clearly flagged
+ *   - the _ID string below is altered by inserting, after
+ *     the date, the string " altered" followed at your option
+ *     by other material. (Exceptions: you may change the name
+ *     of the exported routine without changing the ID string.
+ *     You may change the values of the macros TRUNC_* and
+ *     PIVOT_THRESHOLD without changing the ID string, provided
+ *     they remain constants with TRUNC_nonaligned, TRUNC_aligned
+ *     and TRUNC_words/WORD_BYTES between 8 and 24, and
+ *     PIVOT_THRESHOLD between 32 and 200.)
+ *
+ * You may use it in anything you like; you may make money
+ * out of it; you may distribute it in object form or as
+ * part of an executable without including source code;
+ * you don't have to credit me. (But it would be nice if
+ * you did.)
+ *
+ * If you find problems with this code, or find ways of
+ * making it significantly faster, please let me know!
+ * My e-mail address, valid as of early 1998 and certainly
+ * OK for at least the next 18 months, is
+ *    gjm11@dpmms.cam.ac.uk
+ * Thanks!
+ *
+ * Gareth McCaughan   Peterhouse   Cambridge   1998
+ 
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+ How many bytes are there per word? (Must be a power of 2,
+ * and must in fact equal sizeof(int).)
+  How big does our stack need to be? Answer: one entry per
+ * bit in a |size_t|.
+  Different situations have slightly different requirements,
+ * and we make life epsilon easier by using different truncation
+ * points for the three different cases.
+ * So far, I have tuned TRUNC_words and guessed that the same
+ * value might work well for the other two cases. Of course
+ * what works well on my machine might work badly on yours.
+  nb different meaning  We use a simple pivoting algorithm for shortish sub-arrays
+ * and a more complicated one for larger ones. The threshold
+ * is PIVOT_THRESHOLD.
+  Some comments on the implementation.
+ * 1. When we finish partitioning the array into "low"
+ *    and "high", we forget entirely about short subarrays,
+ *    because they'll be done later by insertion sort.
+ *    Doing lots of little insertion sorts might be a win
+ *    on large datasets for locality-of-reference reasons,
+ *    but it makes the code much nastier and increases
+ *    bookkeeping overhead.
+ * 2. We always save the shorter and get to work on the
+ *    longer. This guarantees that every time we push
+ *    an item onto the stack its size is <= 1/2 of that
+ *    of its parent; so the stack can't need more than
+ *    log_2(max-array-size) entries.
+ * 3. We choose a pivot by looking at the first, last
+ *    and middle elements. We arrange them into order
+ *    because it's easy to do that in conjunction with
+ *    choosing the pivot, and it makes things a little
+ *    easier in the partitioning step. Anyway, the pivot
+ *    is the middle of these three. It's still possible
+ *    to construct datasets where the algorithm takes
+ *    time of order n^2, but it simply never happens in
+ *    practice.
+ * 3' Newsflash: On further investigation I find that
+ *    it's easy to construct datasets where median-of-3
+ *    simply isn't good enough. So on large-ish subarrays
+ *    we do a more sophisticated pivoting: we take three
+ *    sets of 3 elements, find their medians, and then
+ *    take the median of those.
+ * 4. We copy the pivot element to a separate place
+ *    because that way we can always do our comparisons
+ *    directly against a pointer to that separate place,
+ *    and don't have to wonder "did we move the pivot
+ *    element?". This makes the inner loop better.
+ * 5. It's possible to make the pivoting even more
+ *    reliable by looking at more candidates when n
+ *    is larger. (Taking this to its logical conclusion
+ *    results in a variant of quicksort that doesn't
+ *    have that n^2 worst case.) However, the overhead
+ *    from the extra bookkeeping means that it's just
+ *    not worth while.
+ * 6. This is pretty clean and portable code. Here are
+ *    all the potential portability pitfalls and problems
+ *    I know of:
+ *      - In one place (the insertion sort) I construct
+ *        a pointer that points just past the end of the
+ *        supplied array, and assume that (a) it won't
+ *        compare equal to any pointer within the array,
+ *        and (b) it will compare equal to a pointer
+ *        obtained by stepping off the end of the array.
+ *        These might fail on some segmented architectures.
+ *      - I assume that there are 8 bits in a |char| when
+ *        computing the size of stack needed. This would
+ *        fail on machines with 9-bit or 16-bit bytes.
+ *      - I assume that if |((int)base&(sizeof(int)-1))==0|
+ *        and |(size&(sizeof(int)-1))==0| then it's safe to
+ *        get at array elements via |int*|s, and that if
+ *        actually |size==sizeof(int)| as well then it's
+ *        safe to treat the elements as |int|s. This might
+ *        fail on systems that convert pointers to integers
+ *        in non-standard ways.
+ *      - I assume that |8*sizeof(size_t)<=INT_MAX|. This
+ *        would be false on a machine with 8-bit |char|s,
+ *        16-bit |int|s and 4096-bit |size_t|s. :-)
+  The recursion logic is the same in each case:  and so is the pivoting logic:  and so is the partitioning logic:  and so is the pre-insertion-sort operation of putting
+ * the smallest element into place as a sentinel.
+ * Doing this makes the inner loop nicer. I got this
+ * idea from the GNU implementation of qsort().
+  and so is the insertion sort, in the first two cases:  Find the right place for |first|.	\
+     * My apologies for var reuse.  Shift everything in [test,first)	\
+       * up by one, and place |first|		\
+       * where |test| is.  ----------------------------------------------------------------------  ----------------------------------------------------------------------  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Now do insertion sort.  Find the right place for |first|. My apologies for var reuse  ----------------------------------------------------------------------  !HAVE_QSORT  qsort.c
+ * (c) 1998 Gareth McCaughan
+ *
+ * This is a drop-in replacement for the C library's |qsort()| routine.
+ *
+ * Features:
+ *   - Median-of-three pivoting (and more)
+ *   - Truncation and final polishing by a single insertion sort
+ *   - Early truncation when no swaps needed in pivoting step
+ *   - Explicit recursion, guaranteed not to overflow
+ *   - A few little wrinkles stolen from the GNU |qsort()|.
+ *   - separate code for non-aligned / aligned / word-size objects
+ *
+ * This code may be reproduced freely provided
+ *   - this file is retained unaltered apart from minor
+ *     changes for portability and efficiency
+ *   - no changes are made to this comment
+ *   - any changes that *are* made are clearly flagged
+ *   - the _ID string below is altered by inserting, after
+ *     the date, the string " altered" followed at your option
+ *     by other material. (Exceptions: you may change the name
+ *     of the exported routine without changing the ID string.
+ *     You may change the values of the macros TRUNC_* and
+ *     PIVOT_THRESHOLD without changing the ID string, provided
+ *     they remain constants with TRUNC_nonaligned, TRUNC_aligned
+ *     and TRUNC_words/WORD_BYTES between 8 and 24, and
+ *     PIVOT_THRESHOLD between 32 and 200.)
+ *
+ * You may use it in anything you like; you may make money
+ * out of it; you may distribute it in object form or as
+ * part of an executable without including source code;
+ * you don't have to credit me. (But it would be nice if
+ * you did.)
+ *
+ * If you find problems with this code, or find ways of
+ * making it significantly faster, please let me know!
+ * My e-mail address, valid as of early 1998 and certainly
+ * OK for at least the next 18 months, is
+ *    gjm11@dpmms.cam.ac.uk
+ * Thanks!
+ *
+ * Gareth McCaughan   Peterhouse   Cambridge   1998
+ 
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+ How many bytes are there per word? (Must be a power of 2,
+ * and must in fact equal sizeof(int).)
+  How big does our stack need to be? Answer: one entry per
+ * bit in a |size_t|.
+  Different situations have slightly different requirements,
+ * and we make life epsilon easier by using different truncation
+ * points for the three different cases.
+ * So far, I have tuned TRUNC_words and guessed that the same
+ * value might work well for the other two cases. Of course
+ * what works well on my machine might work badly on yours.
+  nb different meaning  We use a simple pivoting algorithm for shortish sub-arrays
+ * and a more complicated one for larger ones. The threshold
+ * is PIVOT_THRESHOLD.
+  Some comments on the implementation.
+ * 1. When we finish partitioning the array into "low"
+ *    and "high", we forget entirely about short subarrays,
+ *    because they'll be done later by insertion sort.
+ *    Doing lots of little insertion sorts might be a win
+ *    on large datasets for locality-of-reference reasons,
+ *    but it makes the code much nastier and increases
+ *    bookkeeping overhead.
+ * 2. We always save the shorter and get to work on the
+ *    longer. This guarantees that every time we push
+ *    an item onto the stack its size is <= 1/2 of that
+ *    of its parent; so the stack can't need more than
+ *    log_2(max-array-size) entries.
+ * 3. We choose a pivot by looking at the first, last
+ *    and middle elements. We arrange them into order
+ *    because it's easy to do that in conjunction with
+ *    choosing the pivot, and it makes things a little
+ *    easier in the partitioning step. Anyway, the pivot
+ *    is the middle of these three. It's still possible
+ *    to construct datasets where the algorithm takes
+ *    time of order n^2, but it simply never happens in
+ *    practice.
+ * 3' Newsflash: On further investigation I find that
+ *    it's easy to construct datasets where median-of-3
+ *    simply isn't good enough. So on large-ish subarrays
+ *    we do a more sophisticated pivoting: we take three
+ *    sets of 3 elements, find their medians, and then
+ *    take the median of those.
+ * 4. We copy the pivot element to a separate place
+ *    because that way we can always do our comparisons
+ *    directly against a pointer to that separate place,
+ *    and don't have to wonder "did we move the pivot
+ *    element?". This makes the inner loop better.
+ * 5. It's possible to make the pivoting even more
+ *    reliable by looking at more candidates when n
+ *    is larger. (Taking this to its logical conclusion
+ *    results in a variant of quicksort that doesn't
+ *    have that n^2 worst case.) However, the overhead
+ *    from the extra bookkeeping means that it's just
+ *    not worth while.
+ * 6. This is pretty clean and portable code. Here are
+ *    all the potential portability pitfalls and problems
+ *    I know of:
+ *      - In one place (the insertion sort) I construct
+ *        a pointer that points just past the end of the
+ *        supplied array, and assume that (a) it won't
+ *        compare equal to any pointer within the array,
+ *        and (b) it will compare equal to a pointer
+ *        obtained by stepping off the end of the array.
+ *        These might fail on some segmented architectures.
+ *      - I assume that there are 8 bits in a |char| when
+ *        computing the size of stack needed. This would
+ *        fail on machines with 9-bit or 16-bit bytes.
+ *      - I assume that if |((int)base&(sizeof(int)-1))==0|
+ *        and |(size&(sizeof(int)-1))==0| then it's safe to
+ *        get at array elements via |int*|s, and that if
+ *        actually |size==sizeof(int)| as well then it's
+ *        safe to treat the elements as |int|s. This might
+ *        fail on systems that convert pointers to integers
+ *        in non-standard ways.
+ *      - I assume that |8*sizeof(size_t)<=INT_MAX|. This
+ *        would be false on a machine with 8-bit |char|s,
+ *        16-bit |int|s and 4096-bit |size_t|s. :-)
+  The recursion logic is the same in each case:  and so is the pivoting logic:  and so is the partitioning logic:  and so is the pre-insertion-sort operation of putting
+ * the smallest element into place as a sentinel.
+ * Doing this makes the inner loop nicer. I got this
+ * idea from the GNU implementation of qsort().
+  and so is the insertion sort, in the first two cases:  Find the right place for |first|.	\
+     * My apologies for var reuse.  Shift everything in [test,first)	\
+       * up by one, and place |first|		\
+       * where |test| is.  ----------------------------------------------------------------------  ----------------------------------------------------------------------  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Select pivot  Partition.  Prepare to recurse/iterate.  Now do insertion sort.  Find the right place for |first|. My apologies for var reuse  ----------------------------------------------------------------------  !HAVE_QSORT 

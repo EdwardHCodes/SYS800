@@ -1,0 +1,286 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * SID Codec for rockbox based on the TinySID engine
+ *
+ * Written by Tammo Hinrichs (kb) and Rainer Sinsch in 1998-1999
+ * Ported to rockbox on 14 April 2006
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *******************************************************************************************************
+ * kb explicitly points out that this emulation sounds crappy, though
+ * we decided to put it open source so everyone can enjoy sidmusic
+ * on rockbox
+ *
+ ************************************************
+ * v1.1
+ * Added 16-04-2006: Rainer Sinsch
+ * Removed all time critical floating point operations and
+ * replaced them with quick & dirty integer calculations
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Improved quick & dirty integer calculations for the resonant filter
+ * Improved audio quality by 4 bits
+ *
+ * v1.2
+ * Added 17-04-2006: Dave Chapman
+ * Improved file loading
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Added sample routines
+ * Added cia timing routines
+ * Added fast forwarding capabilities
+ * Corrected bug in sid loading
+ *
+ * v1.2.1
+ * Added 04-05-2006: Rainer Sinsch
+ * Implemented Marco Alanens suggestion for subsong selection:
+ * Select the subsong by seeking: Each second represents a subsong
+ *
+ * v1.3
+ * Added 25-07-2019: Stefan Waigand, Igor Poretsky, Solomon Peachy
+ * SID playback in stereo (See FS#11052)
+ *
+ ************************* This codec supports SID Files:
+ *
+  The sample buffers  SID register definition  internal oscillator def  internal filter def  ------------------------ pseudo-constants (depending on mixing freq)  ------------------------------------------------------------ globals  ------------------------------------------------------ C64 Emu Stuff  -------------------------------------------------- Register & memory  ----------------------------------------- Variables for sample stuff  Fractal position of sample  ---------------------------------------------------------- constants  Routines for quick & dirty float calculation  Get the bit from an unsigned long at a specified position  N�hstes Samples holen Nähstes Sample-Nibble Hi-Nibble holen? ------------------------------------------------------------- synthesis
+   initialize SID and frequency dependant values  render a buffer of n samples with the actual register contents  step 1: convert the not easily processable sid registers into some
+               more convenient and fast values (makes the thing much faster
+              if you process more than 1 sample value at once)  the above line isnt correct at all - the problem is that the filter
+       works only up to rmxfreq/4 - this is sufficient for 44KHz but isnt
+       for 32KHz and lower - well, but sound quality is bad enough then to
+       neglect the fact that the filter doesnt come that high ;)  We precalculate part of the quick float operation, saves time in loop later  now render the buffer  step 2 : generate the two output signals (for filtered and non-
+                filtered) from the osc/eg sections  update wave counter  reset counter / noise generator if reset get_bit set  reference oscillator for sync/ring  sync oscillator to refosc if sync bit set  generate waveforms with really simple algorithms  generate noise waveform exactly as the SID does.  modulate triangle wave if ringmod bit set  now mix the oscillators with an AND operation as stated in
+               the SID's reference manual - even if this is completely wrong.
+               well, at least, the $30 and $70 waveform sounds correct and there's
+               no real solution to do $50 and $60, so who cares.  so now process the volume according to the phase and adsr values  Phase 0 : Attack  Phase 1 : Decay  Phase 2 : Sustain  :) yes, thats exactly how the SID works. and maybe
+                       a music routine out there supports this, so better
+                       let it in, thanks :)  Phase 3 : Release  the volume offset is because the SID does not
+                       completely silence the voices when it should. most
+                       emulators do so though and thats the main reason
+                       why the sound of emulators is too, err... emulated :)   now route the voice output to either the non-filtered or the
+               filtered channel and dont forget to blank out osc3 if desired  !USE_FILTER  Don't use filters, just mix voices together  for (v=0;v<3;v++)  step 3
+         * so, now theres finally time to apply the multi-mode resonant filter
+         * to the signal. The easiest thing ist just modelling a real electronic
+         * filter circuit instead of fiddling around with complex IIRs or even
+         * FIRs ...
+         * it sounds as good as them or maybe better and needs only 3 MULs and
+         * 4 ADDs for EVERYTHING. SIDPlay uses this kind of filter, too, but
+         * Mage messed the whole thing completely up - as the rest of the
+         * emulator.
+         * This filter sounds a lot like the 8580, as the low-quality, dirty
+         * sound of the 6581 is uuh too hard to achieve :)  do step 3 for both channels  mix in other channel to reduce stereo panning for better sound on headphones  !USE_FILTER for (bp=0;bp<len;bp++) 
+* C64 Mem Routines
+ New SID-Register  Start-Hi  Start-Lo  Repeat-Hi  Repeat-Lo  End-Hi  End-Lo  Loop-Size  Period-Hi  Period-Lo  Sample Order  Sample Add  Start sampling 
+* Poke a value into the sid register
+ Set frequency: Low byte  Set frequency: High byte  Set pulse width: Low byte  Set pulse width: High byte  Directly look at GATE-Bit!
+             * a change may happen twice or more often during one cpujsr
+             * Put the Envelope Generator into attack or release phase if desired
+             Just quit the emulation  Treat RTI like RTS  This is PAL SID single speed (44100/50Hz)  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load SID file the read_filebuf callback will return the full requested
+     * size if at all possible, so there is no need to loop  The main decoder loop  New time is ready in param  Start playing from scratch  Turn on full volume  Now use the current seek time in
+                                           seconds as subsong  Start the song initialize  Start the rendering from scratch  Set the elapsed time to the current subsong (in seconds)  Find out if cia timing is used and how many samples
+                   have to be calculated for each cpujsr **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * SID Codec for rockbox based on the TinySID engine
+ *
+ * Written by Tammo Hinrichs (kb) and Rainer Sinsch in 1998-1999
+ * Ported to rockbox on 14 April 2006
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *******************************************************************************************************
+ * kb explicitly points out that this emulation sounds crappy, though
+ * we decided to put it open source so everyone can enjoy sidmusic
+ * on rockbox
+ *
+ ************************************************
+ * v1.1
+ * Added 16-04-2006: Rainer Sinsch
+ * Removed all time critical floating point operations and
+ * replaced them with quick & dirty integer calculations
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Improved quick & dirty integer calculations for the resonant filter
+ * Improved audio quality by 4 bits
+ *
+ * v1.2
+ * Added 17-04-2006: Dave Chapman
+ * Improved file loading
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Added sample routines
+ * Added cia timing routines
+ * Added fast forwarding capabilities
+ * Corrected bug in sid loading
+ *
+ * v1.2.1
+ * Added 04-05-2006: Rainer Sinsch
+ * Implemented Marco Alanens suggestion for subsong selection:
+ * Select the subsong by seeking: Each second represents a subsong
+ *
+ * v1.3
+ * Added 25-07-2019: Stefan Waigand, Igor Poretsky, Solomon Peachy
+ * SID playback in stereo (See FS#11052)
+ *
+ ************************* This codec supports SID Files:
+ *
+  The sample buffers  SID register definition  internal oscillator def  internal filter def  ------------------------ pseudo-constants (depending on mixing freq)  ------------------------------------------------------------ globals  ------------------------------------------------------ C64 Emu Stuff  -------------------------------------------------- Register & memory  ----------------------------------------- Variables for sample stuff  Fractal position of sample  ---------------------------------------------------------- constants  Routines for quick & dirty float calculation  Get the bit from an unsigned long at a specified position  N�hstes Samples holen Nähstes Sample-Nibble Hi-Nibble holen? ------------------------------------------------------------- synthesis
+   initialize SID and frequency dependant values  render a buffer of n samples with the actual register contents  step 1: convert the not easily processable sid registers into some
+               more convenient and fast values (makes the thing much faster
+              if you process more than 1 sample value at once)  the above line isnt correct at all - the problem is that the filter
+       works only up to rmxfreq/4 - this is sufficient for 44KHz but isnt
+       for 32KHz and lower - well, but sound quality is bad enough then to
+       neglect the fact that the filter doesnt come that high ;)  We precalculate part of the quick float operation, saves time in loop later  now render the buffer  step 2 : generate the two output signals (for filtered and non-
+                filtered) from the osc/eg sections  update wave counter  reset counter / noise generator if reset get_bit set  reference oscillator for sync/ring  sync oscillator to refosc if sync bit set  generate waveforms with really simple algorithms  generate noise waveform exactly as the SID does.  modulate triangle wave if ringmod bit set  now mix the oscillators with an AND operation as stated in
+               the SID's reference manual - even if this is completely wrong.
+               well, at least, the $30 and $70 waveform sounds correct and there's
+               no real solution to do $50 and $60, so who cares.  so now process the volume according to the phase and adsr values  Phase 0 : Attack  Phase 1 : Decay  Phase 2 : Sustain  :) yes, thats exactly how the SID works. and maybe
+                       a music routine out there supports this, so better
+                       let it in, thanks :)  Phase 3 : Release  the volume offset is because the SID does not
+                       completely silence the voices when it should. most
+                       emulators do so though and thats the main reason
+                       why the sound of emulators is too, err... emulated :)   now route the voice output to either the non-filtered or the
+               filtered channel and dont forget to blank out osc3 if desired  !USE_FILTER  Don't use filters, just mix voices together  for (v=0;v<3;v++)  step 3
+         * so, now theres finally time to apply the multi-mode resonant filter
+         * to the signal. The easiest thing ist just modelling a real electronic
+         * filter circuit instead of fiddling around with complex IIRs or even
+         * FIRs ...
+         * it sounds as good as them or maybe better and needs only 3 MULs and
+         * 4 ADDs for EVERYTHING. SIDPlay uses this kind of filter, too, but
+         * Mage messed the whole thing completely up - as the rest of the
+         * emulator.
+         * This filter sounds a lot like the 8580, as the low-quality, dirty
+         * sound of the 6581 is uuh too hard to achieve :)  do step 3 for both channels  mix in other channel to reduce stereo panning for better sound on headphones  !USE_FILTER for (bp=0;bp<len;bp++) 
+* C64 Mem Routines
+ New SID-Register  Start-Hi  Start-Lo  Repeat-Hi  Repeat-Lo  End-Hi  End-Lo  Loop-Size  Period-Hi  Period-Lo  Sample Order  Sample Add  Start sampling 
+* Poke a value into the sid register
+ Set frequency: Low byte  Set frequency: High byte  Set pulse width: Low byte  Set pulse width: High byte  Directly look at GATE-Bit!
+             * a change may happen twice or more often during one cpujsr
+             * Put the Envelope Generator into attack or release phase if desired
+             Just quit the emulation  Treat RTI like RTS  This is PAL SID single speed (44100/50Hz)  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load SID file the read_filebuf callback will return the full requested
+     * size if at all possible, so there is no need to loop  The main decoder loop  New time is ready in param  Start playing from scratch  Turn on full volume  Now use the current seek time in
+                                           seconds as subsong  Start the song initialize  Start the rendering from scratch  Set the elapsed time to the current subsong (in seconds)  Find out if cia timing is used and how many samples
+                   have to be calculated for each cpujsr **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * SID Codec for rockbox based on the TinySID engine
+ *
+ * Written by Tammo Hinrichs (kb) and Rainer Sinsch in 1998-1999
+ * Ported to rockbox on 14 April 2006
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *******************************************************************************************************
+ * kb explicitly points out that this emulation sounds crappy, though
+ * we decided to put it open source so everyone can enjoy sidmusic
+ * on rockbox
+ *
+ ************************************************
+ * v1.1
+ * Added 16-04-2006: Rainer Sinsch
+ * Removed all time critical floating point operations and
+ * replaced them with quick & dirty integer calculations
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Improved quick & dirty integer calculations for the resonant filter
+ * Improved audio quality by 4 bits
+ *
+ * v1.2
+ * Added 17-04-2006: Dave Chapman
+ * Improved file loading
+ *
+ * Added 17-04-2006: Rainer Sinsch
+ * Added sample routines
+ * Added cia timing routines
+ * Added fast forwarding capabilities
+ * Corrected bug in sid loading
+ *
+ * v1.2.1
+ * Added 04-05-2006: Rainer Sinsch
+ * Implemented Marco Alanens suggestion for subsong selection:
+ * Select the subsong by seeking: Each second represents a subsong
+ *
+ * v1.3
+ * Added 25-07-2019: Stefan Waigand, Igor Poretsky, Solomon Peachy
+ * SID playback in stereo (See FS#11052)
+ *
+ ************************* This codec supports SID Files:
+ *
+  The sample buffers  SID register definition  internal oscillator def  internal filter def  ------------------------ pseudo-constants (depending on mixing freq)  ------------------------------------------------------------ globals  ------------------------------------------------------ C64 Emu Stuff  -------------------------------------------------- Register & memory  ----------------------------------------- Variables for sample stuff  Fractal position of sample  ---------------------------------------------------------- constants  Routines for quick & dirty float calculation  Get the bit from an unsigned long at a specified position  N�hstes Samples holen Nähstes Sample-Nibble Hi-Nibble holen? ------------------------------------------------------------- synthesis
+   initialize SID and frequency dependant values  render a buffer of n samples with the actual register contents  step 1: convert the not easily processable sid registers into some
+               more convenient and fast values (makes the thing much faster
+              if you process more than 1 sample value at once)  the above line isnt correct at all - the problem is that the filter
+       works only up to rmxfreq/4 - this is sufficient for 44KHz but isnt
+       for 32KHz and lower - well, but sound quality is bad enough then to
+       neglect the fact that the filter doesnt come that high ;)  We precalculate part of the quick float operation, saves time in loop later  now render the buffer  step 2 : generate the two output signals (for filtered and non-
+                filtered) from the osc/eg sections  update wave counter  reset counter / noise generator if reset get_bit set  reference oscillator for sync/ring  sync oscillator to refosc if sync bit set  generate waveforms with really simple algorithms  generate noise waveform exactly as the SID does.  modulate triangle wave if ringmod bit set  now mix the oscillators with an AND operation as stated in
+               the SID's reference manual - even if this is completely wrong.
+               well, at least, the $30 and $70 waveform sounds correct and there's
+               no real solution to do $50 and $60, so who cares.  so now process the volume according to the phase and adsr values  Phase 0 : Attack  Phase 1 : Decay  Phase 2 : Sustain  :) yes, thats exactly how the SID works. and maybe
+                       a music routine out there supports this, so better
+                       let it in, thanks :)  Phase 3 : Release  the volume offset is because the SID does not
+                       completely silence the voices when it should. most
+                       emulators do so though and thats the main reason
+                       why the sound of emulators is too, err... emulated :)   now route the voice output to either the non-filtered or the
+               filtered channel and dont forget to blank out osc3 if desired  !USE_FILTER  Don't use filters, just mix voices together  for (v=0;v<3;v++)  step 3
+         * so, now theres finally time to apply the multi-mode resonant filter
+         * to the signal. The easiest thing ist just modelling a real electronic
+         * filter circuit instead of fiddling around with complex IIRs or even
+         * FIRs ...
+         * it sounds as good as them or maybe better and needs only 3 MULs and
+         * 4 ADDs for EVERYTHING. SIDPlay uses this kind of filter, too, but
+         * Mage messed the whole thing completely up - as the rest of the
+         * emulator.
+         * This filter sounds a lot like the 8580, as the low-quality, dirty
+         * sound of the 6581 is uuh too hard to achieve :)  do step 3 for both channels  mix in other channel to reduce stereo panning for better sound on headphones  !USE_FILTER for (bp=0;bp<len;bp++) 
+* C64 Mem Routines
+ New SID-Register  Start-Hi  Start-Lo  Repeat-Hi  Repeat-Lo  End-Hi  End-Lo  Loop-Size  Period-Hi  Period-Lo  Sample Order  Sample Add  Start sampling 
+* Poke a value into the sid register
+ Set frequency: Low byte  Set frequency: High byte  Set pulse width: Low byte  Set pulse width: High byte  Directly look at GATE-Bit!
+             * a change may happen twice or more often during one cpujsr
+             * Put the Envelope Generator into attack or release phase if desired
+             Just quit the emulation  Treat RTI like RTS  This is PAL SID single speed (44100/50Hz)  this is the codec entry point  Make use of 44.1khz  Sample depth is 28 bit host endian  Stereo output  this is called for each file to process  Load SID file the read_filebuf callback will return the full requested
+     * size if at all possible, so there is no need to loop  The main decoder loop  New time is ready in param  Start playing from scratch  Turn on full volume  Now use the current seek time in
+                                           seconds as subsong  Start the song initialize  Start the rendering from scratch  Set the elapsed time to the current subsong (in seconds)  Find out if cia timing is used and how many samples
+                   have to be calculated for each cpujsr 

@@ -1,0 +1,193 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The output buffers containing the decoded samples (channels 0 and 1)  Notes about seeking:
+
+   The full seek table consists of:
+      uint64_t sample (only 36 bits are used)
+      uint64_t offset
+      uint32_t blocksize
+
+   We also limit the sample and offset values to 32-bits - Rockbox doesn't
+   support files bigger than 2GB on FAT32 filesystems.
+
+   The reference FLAC encoder produces a seek table with points every
+   10 seconds, but this can be overridden by the user when encoding a file.
+
+   With the default settings, a typical 4 minute track will contain
+   24 seek points.
+
+   Taking the extreme case of a Rockbox supported file to be a 2GB (compressed)
+   16-bit/44.1KHz mono stream with a likely uncompressed size of 4GB:
+      Total duration is: 48694 seconds (about 810 minutes - 13.5 hours)
+      Total number of seek points: 4869
+
+   Therefore we limit the number of seek points to 5000.  This is a
+   very extreme case, and requires 5000*8=40000 bytes of storage.
+
+   If we come across a FLAC file with more than this number of seekpoints, we
+   just use the first 5000.
+
+ Reset sample buffers  Set sample buffers in decoder structure  Skip any foreign tags at start of file  0 is the STREAMINFO block  totalsamples is a 36-bit field, but we assume <= 32 bits are 
+               used  Calculate track length (in ms) and estimate the bitrate 
+               (in kbit/s)  3 is the SEEKTABLE block  Only store seekpoints where the high 32 bits are zero  Skip any unread seekpoints  Skip to next metadata block  Synchronize to next frame in stream - adapted from libFLAC 1.1.3b2  Make sure we're byte aligned.  Error, end of bitstream, a valid stream should never reach here
+             * since the buffer should contain at least one frame header.
+              MAGIC NUMBER for first 8 frame sync bits.  We have to check if we just read two 0xff's in a row; the second
+             * may actually be the beginning of the sync code.
+              MAGIC NUMBER for first 8 frame sync bits.  MAGIC NUMBER for last 6 sync bits.  Succesfully synced.  Advance and init bit buffer to the new frame.  consumed bytes  Decode the frame to verify the frame crc and
+     * fill fc with its metadata.
+      Seek to sample - adapted from libFLAC 1.1.3b2+  We are just guessing here.  Check if it's a known fixed-blocksize stream.  Set an upper and lower bound on where in the stream we will search.  Refine the bounds if we have a seektable with suitable points.  Find the closest seek point <= target_sample, if it exists.  i.e. we found a suitable seek point...  Find the closest seek point > target_sample, if it exists.  i.e. we found a suitable seek point...  Check if bounds are still ok.  Calculate new seek position  Now we need to get a frame.  It is possible for our seek
+         * to land in the middle of audio data that looks exactly like
+         * a frame header from a future version of an encoder.  When
+         * that happens, frame_sync() will return false.
+         * But there is a remote possibility that it is properly
+         * synced at such a "future-codec frame", so to make sure,
+         * we wait to see several "unparseable" errors in a row before
+         * bailing out.
+          Found the frame containing the target sample.  Our last move backwards wasn't big enough, try again.  Allow one seek over upper bound,
+         * required for streams with unknown total samples.
+          Make sure we are not seeking in a corrupted stream  We need to narrow the search.  Target is beyond this frame.  We are close, continue in decoding next frames.  Seek to file offset  this is the codec entry point  Generic codec initialisation  this is called for each file to process  Need to save resume for later use (cleared indirectly by flac_init)  The main decoding loop  Deal with any pending seek requests  Refill the input buffer  Update the elapsed-time indicator **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The output buffers containing the decoded samples (channels 0 and 1)  Notes about seeking:
+
+   The full seek table consists of:
+      uint64_t sample (only 36 bits are used)
+      uint64_t offset
+      uint32_t blocksize
+
+   We also limit the sample and offset values to 32-bits - Rockbox doesn't
+   support files bigger than 2GB on FAT32 filesystems.
+
+   The reference FLAC encoder produces a seek table with points every
+   10 seconds, but this can be overridden by the user when encoding a file.
+
+   With the default settings, a typical 4 minute track will contain
+   24 seek points.
+
+   Taking the extreme case of a Rockbox supported file to be a 2GB (compressed)
+   16-bit/44.1KHz mono stream with a likely uncompressed size of 4GB:
+      Total duration is: 48694 seconds (about 810 minutes - 13.5 hours)
+      Total number of seek points: 4869
+
+   Therefore we limit the number of seek points to 5000.  This is a
+   very extreme case, and requires 5000*8=40000 bytes of storage.
+
+   If we come across a FLAC file with more than this number of seekpoints, we
+   just use the first 5000.
+
+ Reset sample buffers  Set sample buffers in decoder structure  Skip any foreign tags at start of file  0 is the STREAMINFO block  totalsamples is a 36-bit field, but we assume <= 32 bits are 
+               used  Calculate track length (in ms) and estimate the bitrate 
+               (in kbit/s)  3 is the SEEKTABLE block  Only store seekpoints where the high 32 bits are zero  Skip any unread seekpoints  Skip to next metadata block  Synchronize to next frame in stream - adapted from libFLAC 1.1.3b2  Make sure we're byte aligned.  Error, end of bitstream, a valid stream should never reach here
+             * since the buffer should contain at least one frame header.
+              MAGIC NUMBER for first 8 frame sync bits.  We have to check if we just read two 0xff's in a row; the second
+             * may actually be the beginning of the sync code.
+              MAGIC NUMBER for first 8 frame sync bits.  MAGIC NUMBER for last 6 sync bits.  Succesfully synced.  Advance and init bit buffer to the new frame.  consumed bytes  Decode the frame to verify the frame crc and
+     * fill fc with its metadata.
+      Seek to sample - adapted from libFLAC 1.1.3b2+  We are just guessing here.  Check if it's a known fixed-blocksize stream.  Set an upper and lower bound on where in the stream we will search.  Refine the bounds if we have a seektable with suitable points.  Find the closest seek point <= target_sample, if it exists.  i.e. we found a suitable seek point...  Find the closest seek point > target_sample, if it exists.  i.e. we found a suitable seek point...  Check if bounds are still ok.  Calculate new seek position  Now we need to get a frame.  It is possible for our seek
+         * to land in the middle of audio data that looks exactly like
+         * a frame header from a future version of an encoder.  When
+         * that happens, frame_sync() will return false.
+         * But there is a remote possibility that it is properly
+         * synced at such a "future-codec frame", so to make sure,
+         * we wait to see several "unparseable" errors in a row before
+         * bailing out.
+          Found the frame containing the target sample.  Our last move backwards wasn't big enough, try again.  Allow one seek over upper bound,
+         * required for streams with unknown total samples.
+          Make sure we are not seeking in a corrupted stream  We need to narrow the search.  Target is beyond this frame.  We are close, continue in decoding next frames.  Seek to file offset  this is the codec entry point  Generic codec initialisation  this is called for each file to process  Need to save resume for later use (cleared indirectly by flac_init)  The main decoding loop  Deal with any pending seek requests  Refill the input buffer  Update the elapsed-time indicator **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The output buffers containing the decoded samples (channels 0 and 1)  Notes about seeking:
+
+   The full seek table consists of:
+      uint64_t sample (only 36 bits are used)
+      uint64_t offset
+      uint32_t blocksize
+
+   We also limit the sample and offset values to 32-bits - Rockbox doesn't
+   support files bigger than 2GB on FAT32 filesystems.
+
+   The reference FLAC encoder produces a seek table with points every
+   10 seconds, but this can be overridden by the user when encoding a file.
+
+   With the default settings, a typical 4 minute track will contain
+   24 seek points.
+
+   Taking the extreme case of a Rockbox supported file to be a 2GB (compressed)
+   16-bit/44.1KHz mono stream with a likely uncompressed size of 4GB:
+      Total duration is: 48694 seconds (about 810 minutes - 13.5 hours)
+      Total number of seek points: 4869
+
+   Therefore we limit the number of seek points to 5000.  This is a
+   very extreme case, and requires 5000*8=40000 bytes of storage.
+
+   If we come across a FLAC file with more than this number of seekpoints, we
+   just use the first 5000.
+
+ Reset sample buffers  Set sample buffers in decoder structure  Skip any foreign tags at start of file  0 is the STREAMINFO block  totalsamples is a 36-bit field, but we assume <= 32 bits are 
+               used  Calculate track length (in ms) and estimate the bitrate 
+               (in kbit/s)  3 is the SEEKTABLE block  Only store seekpoints where the high 32 bits are zero  Skip any unread seekpoints  Skip to next metadata block  Synchronize to next frame in stream - adapted from libFLAC 1.1.3b2  Make sure we're byte aligned.  Error, end of bitstream, a valid stream should never reach here
+             * since the buffer should contain at least one frame header.
+              MAGIC NUMBER for first 8 frame sync bits.  We have to check if we just read two 0xff's in a row; the second
+             * may actually be the beginning of the sync code.
+              MAGIC NUMBER for first 8 frame sync bits.  MAGIC NUMBER for last 6 sync bits.  Succesfully synced.  Advance and init bit buffer to the new frame.  consumed bytes  Decode the frame to verify the frame crc and
+     * fill fc with its metadata.
+      Seek to sample - adapted from libFLAC 1.1.3b2+  We are just guessing here.  Check if it's a known fixed-blocksize stream.  Set an upper and lower bound on where in the stream we will search.  Refine the bounds if we have a seektable with suitable points.  Find the closest seek point <= target_sample, if it exists.  i.e. we found a suitable seek point...  Find the closest seek point > target_sample, if it exists.  i.e. we found a suitable seek point...  Check if bounds are still ok.  Calculate new seek position  Now we need to get a frame.  It is possible for our seek
+         * to land in the middle of audio data that looks exactly like
+         * a frame header from a future version of an encoder.  When
+         * that happens, frame_sync() will return false.
+         * But there is a remote possibility that it is properly
+         * synced at such a "future-codec frame", so to make sure,
+         * we wait to see several "unparseable" errors in a row before
+         * bailing out.
+          Found the frame containing the target sample.  Our last move backwards wasn't big enough, try again.  Allow one seek over upper bound,
+         * required for streams with unknown total samples.
+          Make sure we are not seeking in a corrupted stream  We need to narrow the search.  Target is beyond this frame.  We are close, continue in decoding next frames.  Seek to file offset  this is the codec entry point  Generic codec initialisation  this is called for each file to process  Need to save resume for later use (cleared indirectly by flac_init)  The main decoding loop  Deal with any pending seek requests  Refill the input buffer  Update the elapsed-time indicator 

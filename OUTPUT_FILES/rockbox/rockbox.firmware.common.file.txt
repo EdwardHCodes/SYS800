@@ -1,0 +1,154 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * These functions provide a roughly POSIX-compatible file I/O API.
+  structure used for open file descriptors  basic stream info (first!)  current offset for stream  shortcut to file size in fileobj  check and return a struct filestr_desc* from a file descriptor number  release the lock on the filestr_desc*  find a free file descriptor  return the file size in sectors  overflow proof whereas "(x + y - 1) / y" is not  flush a dirty cache buffer  get on the correct sector  set the file pointer  Handle syncing all file's streams to the truncation  caches with data beyond new extents are invalid  files outside bounds must be rewound  clip file offset too if needed  truncate the file to the specified length  sector created but may have never been added to the cluster
+               chain; flush it now or the subsequent may fail  no space left on device; further truncation needed  never needs to be done this way again since any data beyond the
+           cached size is now gone  else just change the cached file size  if truncation was partially successful, it effectively destroyed
+       everything after the truncation point; still, indicate failure
+       after adjusting size  flush back all outstanding writes to the file  call only when holding WRITER lock (updates directory entries)  flush sector cache?  no space left on device so this must be dropped  truncate?  tie up all loose ends (try to close the file even if failing)  dir_fatent is implicit arg  finish with the file and free resources  call only when holding WRITER lock (updates directory entries)  actually do the open gruntwork  allow file ops  not found; try to create it  size from storage applies to first stream only otherwise it's
+           already up to date  if the file is kind of "big" then free some space now  allocate a file descriptor, if needed, assemble stream flags and open
+   a new stream  O_TRUNC requires write mode  O_CREAT and O_APPEND are fine without write mode
+     * for the former, an empty file is created but no data may be written
+     * for the latter, no append will be allowed anyway  result is undefined: we choose "ignore"  fill a cache buffer with a new sector  sector != cachep->sector should have been checked by now  get on the correct sector  only reading or this sector would have been flushed if the cache
+           was previously needed for a different sector  create a fresh, shiny, new sector with that new sector smell  read or write to part or all of the cache buffer  read or write a partial sector using the file's cache  wrong sector in buffer  read from or write to the file; back end to read() and write()  if opened in append mode, move pointer to end  limit to maximum possible offset (EOF or FILE_SIZE_MAX)  would get too large  can't read here  any head bytes?  eof, skip the rest  if nbyte goes to 0, the rest is skipped anyway  read/write whole sectors right into/from the supplied buffer  if a cached sector is inside the transfer range, split the transfer
+           into two parts and use the cache for that sector to keep it coherent
+           without writeback  get on the correct sector  If the dirty bit isn't set, we're somehow beyond the file
+                   size and you can't explain _that_  if now ok, don't seek  if eof, skip tail bytes  do this one sector with the cache  any tail bytes?  tail bytes always start at sector offset 0  error or not, update the file offset and size if anything was
+           transferred  adjust file size to length written * Internal interface * open a file without codepage conversion during the directory search;
+   required to avoid any reentrancy when opening codepages and when scanning
+   directories internally, which could infinitely recurse and would corrupt
+   the static data  only we do writers so we know this is our guy * POSIX * open a file  create a new file or rewrite an existing one  close a file descriptor  needs to work even if marked "nonexistant"  truncate a file to a specified length  synchronize changes to a file  move the read/write file offset  read from a file  write on a file  remove a file  rename a file  open 'old'; it must exist  if 'old' is a directory then 'new' is also required to be one if 'new'
+       is to be overwritten  open new (may or may not exist)  if 'old' is found while parsing the new directory components then
+           'new' contains path prefix that names 'old'; if new and old are in
+           the same directory, this tests positive but that is checked later  HAVE_MULTIVOLUME  if the parent is changing then this is a move, not a simple rename  prefix found and moving?  new name exists in parent; check if 'old' is overwriting 'new';
+           if it's the very same file, then it's just a rename  the directory to be overwritten must be empty  case-only is ok  even if new doesn't exist, canonical path type must match
+           (ie. a directory path such as "/foo/bar/" when old names a file)  first, create the new entry so that there's never a time that the
+       victim's data has no reference in the directory tree, that is, until
+       everything else first succeeds  'new' would have been assigned its own directory entry and
+           succeeded so at this point it is treated like a remove() call
+           on the victim which preserves data until the last reference is
+           closed  for now, there is nothing to fail upon closing the old stream  the 'new' stream could fail to close cleanly because it became
+       impossible to remove its data if this was an overwrite operation * Extensions * get the binary size of a file (in bytes)  test if two file descriptors refer to the same file  tell the relationship of path1 to path2  this is basically what rename() does but reduced to the relationship
+       determination  open2rc == 0  path1 existing and path2's final part not can only be a prefix or
+           different  test file or directory existence **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * These functions provide a roughly POSIX-compatible file I/O API.
+  structure used for open file descriptors  basic stream info (first!)  current offset for stream  shortcut to file size in fileobj  check and return a struct filestr_desc* from a file descriptor number  release the lock on the filestr_desc*  find a free file descriptor  return the file size in sectors  overflow proof whereas "(x + y - 1) / y" is not  flush a dirty cache buffer  get on the correct sector  set the file pointer  Handle syncing all file's streams to the truncation  caches with data beyond new extents are invalid  files outside bounds must be rewound  clip file offset too if needed  truncate the file to the specified length  sector created but may have never been added to the cluster
+               chain; flush it now or the subsequent may fail  no space left on device; further truncation needed  never needs to be done this way again since any data beyond the
+           cached size is now gone  else just change the cached file size  if truncation was partially successful, it effectively destroyed
+       everything after the truncation point; still, indicate failure
+       after adjusting size  flush back all outstanding writes to the file  call only when holding WRITER lock (updates directory entries)  flush sector cache?  no space left on device so this must be dropped  truncate?  tie up all loose ends (try to close the file even if failing)  dir_fatent is implicit arg  finish with the file and free resources  call only when holding WRITER lock (updates directory entries)  actually do the open gruntwork  allow file ops  not found; try to create it  size from storage applies to first stream only otherwise it's
+           already up to date  if the file is kind of "big" then free some space now  allocate a file descriptor, if needed, assemble stream flags and open
+   a new stream  O_TRUNC requires write mode  O_CREAT and O_APPEND are fine without write mode
+     * for the former, an empty file is created but no data may be written
+     * for the latter, no append will be allowed anyway  result is undefined: we choose "ignore"  fill a cache buffer with a new sector  sector != cachep->sector should have been checked by now  get on the correct sector  only reading or this sector would have been flushed if the cache
+           was previously needed for a different sector  create a fresh, shiny, new sector with that new sector smell  read or write to part or all of the cache buffer  read or write a partial sector using the file's cache  wrong sector in buffer  read from or write to the file; back end to read() and write()  if opened in append mode, move pointer to end  limit to maximum possible offset (EOF or FILE_SIZE_MAX)  would get too large  can't read here  any head bytes?  eof, skip the rest  if nbyte goes to 0, the rest is skipped anyway  read/write whole sectors right into/from the supplied buffer  if a cached sector is inside the transfer range, split the transfer
+           into two parts and use the cache for that sector to keep it coherent
+           without writeback  get on the correct sector  If the dirty bit isn't set, we're somehow beyond the file
+                   size and you can't explain _that_  if now ok, don't seek  if eof, skip tail bytes  do this one sector with the cache  any tail bytes?  tail bytes always start at sector offset 0  error or not, update the file offset and size if anything was
+           transferred  adjust file size to length written * Internal interface * open a file without codepage conversion during the directory search;
+   required to avoid any reentrancy when opening codepages and when scanning
+   directories internally, which could infinitely recurse and would corrupt
+   the static data  only we do writers so we know this is our guy * POSIX * open a file  create a new file or rewrite an existing one  close a file descriptor  needs to work even if marked "nonexistant"  truncate a file to a specified length  synchronize changes to a file  move the read/write file offset  read from a file  write on a file  remove a file  rename a file  open 'old'; it must exist  if 'old' is a directory then 'new' is also required to be one if 'new'
+       is to be overwritten  open new (may or may not exist)  if 'old' is found while parsing the new directory components then
+           'new' contains path prefix that names 'old'; if new and old are in
+           the same directory, this tests positive but that is checked later  HAVE_MULTIVOLUME  if the parent is changing then this is a move, not a simple rename  prefix found and moving?  new name exists in parent; check if 'old' is overwriting 'new';
+           if it's the very same file, then it's just a rename  the directory to be overwritten must be empty  case-only is ok  even if new doesn't exist, canonical path type must match
+           (ie. a directory path such as "/foo/bar/" when old names a file)  first, create the new entry so that there's never a time that the
+       victim's data has no reference in the directory tree, that is, until
+       everything else first succeeds  'new' would have been assigned its own directory entry and
+           succeeded so at this point it is treated like a remove() call
+           on the victim which preserves data until the last reference is
+           closed  for now, there is nothing to fail upon closing the old stream  the 'new' stream could fail to close cleanly because it became
+       impossible to remove its data if this was an overwrite operation * Extensions * get the binary size of a file (in bytes)  test if two file descriptors refer to the same file  tell the relationship of path1 to path2  this is basically what rename() does but reduced to the relationship
+       determination  open2rc == 0  path1 existing and path2's final part not can only be a prefix or
+           different  test file or directory existence **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * These functions provide a roughly POSIX-compatible file I/O API.
+  structure used for open file descriptors  basic stream info (first!)  current offset for stream  shortcut to file size in fileobj  check and return a struct filestr_desc* from a file descriptor number  release the lock on the filestr_desc*  find a free file descriptor  return the file size in sectors  overflow proof whereas "(x + y - 1) / y" is not  flush a dirty cache buffer  get on the correct sector  set the file pointer  Handle syncing all file's streams to the truncation  caches with data beyond new extents are invalid  files outside bounds must be rewound  clip file offset too if needed  truncate the file to the specified length  sector created but may have never been added to the cluster
+               chain; flush it now or the subsequent may fail  no space left on device; further truncation needed  never needs to be done this way again since any data beyond the
+           cached size is now gone  else just change the cached file size  if truncation was partially successful, it effectively destroyed
+       everything after the truncation point; still, indicate failure
+       after adjusting size  flush back all outstanding writes to the file  call only when holding WRITER lock (updates directory entries)  flush sector cache?  no space left on device so this must be dropped  truncate?  tie up all loose ends (try to close the file even if failing)  dir_fatent is implicit arg  finish with the file and free resources  call only when holding WRITER lock (updates directory entries)  actually do the open gruntwork  allow file ops  not found; try to create it  size from storage applies to first stream only otherwise it's
+           already up to date  if the file is kind of "big" then free some space now  allocate a file descriptor, if needed, assemble stream flags and open
+   a new stream  O_TRUNC requires write mode  O_CREAT and O_APPEND are fine without write mode
+     * for the former, an empty file is created but no data may be written
+     * for the latter, no append will be allowed anyway  result is undefined: we choose "ignore"  fill a cache buffer with a new sector  sector != cachep->sector should have been checked by now  get on the correct sector  only reading or this sector would have been flushed if the cache
+           was previously needed for a different sector  create a fresh, shiny, new sector with that new sector smell  read or write to part or all of the cache buffer  read or write a partial sector using the file's cache  wrong sector in buffer  read from or write to the file; back end to read() and write()  if opened in append mode, move pointer to end  limit to maximum possible offset (EOF or FILE_SIZE_MAX)  would get too large  can't read here  any head bytes?  eof, skip the rest  if nbyte goes to 0, the rest is skipped anyway  read/write whole sectors right into/from the supplied buffer  if a cached sector is inside the transfer range, split the transfer
+           into two parts and use the cache for that sector to keep it coherent
+           without writeback  get on the correct sector  If the dirty bit isn't set, we're somehow beyond the file
+                   size and you can't explain _that_  if now ok, don't seek  if eof, skip tail bytes  do this one sector with the cache  any tail bytes?  tail bytes always start at sector offset 0  error or not, update the file offset and size if anything was
+           transferred  adjust file size to length written * Internal interface * open a file without codepage conversion during the directory search;
+   required to avoid any reentrancy when opening codepages and when scanning
+   directories internally, which could infinitely recurse and would corrupt
+   the static data  only we do writers so we know this is our guy * POSIX * open a file  create a new file or rewrite an existing one  close a file descriptor  needs to work even if marked "nonexistant"  truncate a file to a specified length  synchronize changes to a file  move the read/write file offset  read from a file  write on a file  remove a file  rename a file  open 'old'; it must exist  if 'old' is a directory then 'new' is also required to be one if 'new'
+       is to be overwritten  open new (may or may not exist)  if 'old' is found while parsing the new directory components then
+           'new' contains path prefix that names 'old'; if new and old are in
+           the same directory, this tests positive but that is checked later  HAVE_MULTIVOLUME  if the parent is changing then this is a move, not a simple rename  prefix found and moving?  new name exists in parent; check if 'old' is overwriting 'new';
+           if it's the very same file, then it's just a rename  the directory to be overwritten must be empty  case-only is ok  even if new doesn't exist, canonical path type must match
+           (ie. a directory path such as "/foo/bar/" when old names a file)  first, create the new entry so that there's never a time that the
+       victim's data has no reference in the directory tree, that is, until
+       everything else first succeeds  'new' would have been assigned its own directory entry and
+           succeeded so at this point it is treated like a remove() call
+           on the victim which preserves data until the last reference is
+           closed  for now, there is nothing to fail upon closing the old stream  the 'new' stream could fail to close cleanly because it became
+       impossible to remove its data if this was an overwrite operation * Extensions * get the binary size of a file (in bytes)  test if two file descriptors refer to the same file  tell the relationship of path1 to path2  this is basically what rename() does but reduced to the relationship
+       determination  open2rc == 0  path1 existing and path2's final part not can only be a prefix or
+           different  test file or directory existence 

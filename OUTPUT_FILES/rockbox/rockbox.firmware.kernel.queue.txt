@@ -1,0 +1,253 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds all queues that are initiated. It is used for broadcast. ***************************************************************************
+ * Queue handling stuff
+ ******************************************************************************************************************************************************
+ * Sender thread queue structure that aids implementation of priority
+ * inheritance on queues because the send list structure is the same as
+ * for all other kernel objects:
+ *
+ * Example state:
+ * E0 added with queue_send and removed by thread via queue_wait(_w_tmo)
+ * E3 was posted with queue_post
+ * 4 events remain enqueued (E1-E4)
+ *
+ *                                 rd                          wr
+ * q->events[]:          |  XX  |  E1  |  E2  |  E3  |  E4  |  XX  |
+ * q->send->senders[]:   | NULL |  T1  |  T2  | NULL |  T3  | NULL |
+ *                                 \/     \/            \/
+ * q->send->list:       0<-|T0|<->|T1|<->|T2|<-------->|T3|->0
+ * q->send->curr_sender:    /\
+ *
+ * Thread has E0 in its own struct queue_event.
+ *
+ *************************************************************************** Puts the specified return value in the waiting thread's return value
+ * and wakes the thread.
+ *
+ * A sender should be confirmed to exist before calling which makes it
+ * more efficent to reject the majority of cases that don't need this
+ * called.
+  Clear slot.  Assign thread-local return value.  Releases any waiting threads that are queued with queue_send -
+ * reply with 0.
+  Enables queue_send on the specified queue - caller allocates the extra
+ * data structure. Only queues which are taken to be owned by a thread should
+ * enable this however an official owner is not compulsory but must be
+ * specified for priority inheritance to operate.
+ *
+ * Use of queue_wait(_w_tmo) by multiple threads on a queue using synchronous
+ * messages results in an undefined order of message replies or possible default
+ * replies if two or more waits happen before a reply is done.
+  Unblock a blocked thread at a given event index  Perform the auto-reply sequence  Moves waiting thread's refrence from the senders array to the
+ * current_sender which represents the thread waiting for a reponse to the
+ * last message removed from the queue. This also protects the thread from
+ * being bumped due to overflow which would not be a valid action since its
+ * message _is_ being processed at this point.  Move thread reference from array to the next thread
+               that queue_reply will release  else message was posted asynchronously with queue_post  Empty macros for when synchoronous sending is not made  HAVE_EXTENDED_MESSAGING_AND_NAME  Queue must not be available for use during this call  What garbage is in write is irrelevant because of the masking design-
+     * any other functions the empty the queue do this as well so that
+     * queue_count and queue_empty return sane values in the case of a
+     * concurrent change without locking inside them.  No message sending by default  Add it to the all_queues array  Queue must not be available for use during this call  Remove the queue if registered  Release thread(s) waiting on queue head  Release threads waiting for replies  Reply to any dequeued message waiting for one  NOTE: multiple threads waiting on a queue head cannot have a well-
+   defined release order if timeouts are used. If multiple threads must
+   access the queue head, use a dispatcher or queue_wait only.  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  A waking message could disappear  Get data for a waiting thread if one  else just waiting on non-empty  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  no block  empty again, infinite block  timeout is legit if thread is still queued and awake  we mustn't return earlier than expected wait time  just waiting for something  Get data for a waiting thread if one  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  IRQ handlers are not allowed use of this function - we only aim to
+   protect the queue integrity by turning them off.  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  Save thread in slot, add to list and wait for reply  Function as queue_post if sending is not enabled  not used now but probably will be later  Query if the last message dequeued was added by queue_send or not  Replies with retval to the last dequeued message sent with queue_send  HAVE_EXTENDED_MESSAGING_AND_NAME  Scan the even queue from head to tail, returning any event from the
+   filter list that was found, optionally removing the event. If an
+   event is returned, synchronous events are handled in the same manner as
+   with queue_wait(_w_tmo); if discarded, then as queue_clear.
+   If filters are NULL, any event matches. If filters exist, the default
+   is to search the full queue depth.
+   Earlier filters take precedence.
+
+   Return true if an event was found, false otherwise.  Empty: do nothing further  Starting at the head, find first match   Have filters - find the first thing that passes  No match; test next event  Only check the head  else - anything passes  Found a matching event  Caller wants the event  Do event removal  Advance head  Auto-reply  Get the thread waiting for reply, if any  Release any thread waiting on this message  Slide messages forward into the gap if not at the head  Keep sender wait list in sync  !HAVE_EXTENDED_MESSAGING_AND_NAME  The more powerful routines aren't required  Release any thread waiting on this message  HAVE_EXTENDED_MESSAGING_AND_NAME  Poll queue to see if a message exists - careful in using the result if
+ * queue_remove_from_head is called when messages are posted - possibly use
+ * queue_wait_w_tmo(&q, 0) in that case or else a removed message that
+ * unsignals the queue may cause an unwanted block  Release all threads waiting in the queue for a reply -
+       dequeued sent message will be handled by owning thread *
+ * The number of events waiting in the queue.
+ * 
+ * @param struct of event_queue
+ * @return number of events in the queue
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds all queues that are initiated. It is used for broadcast. ***************************************************************************
+ * Queue handling stuff
+ ******************************************************************************************************************************************************
+ * Sender thread queue structure that aids implementation of priority
+ * inheritance on queues because the send list structure is the same as
+ * for all other kernel objects:
+ *
+ * Example state:
+ * E0 added with queue_send and removed by thread via queue_wait(_w_tmo)
+ * E3 was posted with queue_post
+ * 4 events remain enqueued (E1-E4)
+ *
+ *                                 rd                          wr
+ * q->events[]:          |  XX  |  E1  |  E2  |  E3  |  E4  |  XX  |
+ * q->send->senders[]:   | NULL |  T1  |  T2  | NULL |  T3  | NULL |
+ *                                 \/     \/            \/
+ * q->send->list:       0<-|T0|<->|T1|<->|T2|<-------->|T3|->0
+ * q->send->curr_sender:    /\
+ *
+ * Thread has E0 in its own struct queue_event.
+ *
+ *************************************************************************** Puts the specified return value in the waiting thread's return value
+ * and wakes the thread.
+ *
+ * A sender should be confirmed to exist before calling which makes it
+ * more efficent to reject the majority of cases that don't need this
+ * called.
+  Clear slot.  Assign thread-local return value.  Releases any waiting threads that are queued with queue_send -
+ * reply with 0.
+  Enables queue_send on the specified queue - caller allocates the extra
+ * data structure. Only queues which are taken to be owned by a thread should
+ * enable this however an official owner is not compulsory but must be
+ * specified for priority inheritance to operate.
+ *
+ * Use of queue_wait(_w_tmo) by multiple threads on a queue using synchronous
+ * messages results in an undefined order of message replies or possible default
+ * replies if two or more waits happen before a reply is done.
+  Unblock a blocked thread at a given event index  Perform the auto-reply sequence  Moves waiting thread's refrence from the senders array to the
+ * current_sender which represents the thread waiting for a reponse to the
+ * last message removed from the queue. This also protects the thread from
+ * being bumped due to overflow which would not be a valid action since its
+ * message _is_ being processed at this point.  Move thread reference from array to the next thread
+               that queue_reply will release  else message was posted asynchronously with queue_post  Empty macros for when synchoronous sending is not made  HAVE_EXTENDED_MESSAGING_AND_NAME  Queue must not be available for use during this call  What garbage is in write is irrelevant because of the masking design-
+     * any other functions the empty the queue do this as well so that
+     * queue_count and queue_empty return sane values in the case of a
+     * concurrent change without locking inside them.  No message sending by default  Add it to the all_queues array  Queue must not be available for use during this call  Remove the queue if registered  Release thread(s) waiting on queue head  Release threads waiting for replies  Reply to any dequeued message waiting for one  NOTE: multiple threads waiting on a queue head cannot have a well-
+   defined release order if timeouts are used. If multiple threads must
+   access the queue head, use a dispatcher or queue_wait only.  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  A waking message could disappear  Get data for a waiting thread if one  else just waiting on non-empty  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  no block  empty again, infinite block  timeout is legit if thread is still queued and awake  we mustn't return earlier than expected wait time  just waiting for something  Get data for a waiting thread if one  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  IRQ handlers are not allowed use of this function - we only aim to
+   protect the queue integrity by turning them off.  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  Save thread in slot, add to list and wait for reply  Function as queue_post if sending is not enabled  not used now but probably will be later  Query if the last message dequeued was added by queue_send or not  Replies with retval to the last dequeued message sent with queue_send  HAVE_EXTENDED_MESSAGING_AND_NAME  Scan the even queue from head to tail, returning any event from the
+   filter list that was found, optionally removing the event. If an
+   event is returned, synchronous events are handled in the same manner as
+   with queue_wait(_w_tmo); if discarded, then as queue_clear.
+   If filters are NULL, any event matches. If filters exist, the default
+   is to search the full queue depth.
+   Earlier filters take precedence.
+
+   Return true if an event was found, false otherwise.  Empty: do nothing further  Starting at the head, find first match   Have filters - find the first thing that passes  No match; test next event  Only check the head  else - anything passes  Found a matching event  Caller wants the event  Do event removal  Advance head  Auto-reply  Get the thread waiting for reply, if any  Release any thread waiting on this message  Slide messages forward into the gap if not at the head  Keep sender wait list in sync  !HAVE_EXTENDED_MESSAGING_AND_NAME  The more powerful routines aren't required  Release any thread waiting on this message  HAVE_EXTENDED_MESSAGING_AND_NAME  Poll queue to see if a message exists - careful in using the result if
+ * queue_remove_from_head is called when messages are posted - possibly use
+ * queue_wait_w_tmo(&q, 0) in that case or else a removed message that
+ * unsignals the queue may cause an unwanted block  Release all threads waiting in the queue for a reply -
+       dequeued sent message will be handled by owning thread *
+ * The number of events waiting in the queue.
+ * 
+ * @param struct of event_queue
+ * @return number of events in the queue
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This array holds all queues that are initiated. It is used for broadcast. ***************************************************************************
+ * Queue handling stuff
+ ******************************************************************************************************************************************************
+ * Sender thread queue structure that aids implementation of priority
+ * inheritance on queues because the send list structure is the same as
+ * for all other kernel objects:
+ *
+ * Example state:
+ * E0 added with queue_send and removed by thread via queue_wait(_w_tmo)
+ * E3 was posted with queue_post
+ * 4 events remain enqueued (E1-E4)
+ *
+ *                                 rd                          wr
+ * q->events[]:          |  XX  |  E1  |  E2  |  E3  |  E4  |  XX  |
+ * q->send->senders[]:   | NULL |  T1  |  T2  | NULL |  T3  | NULL |
+ *                                 \/     \/            \/
+ * q->send->list:       0<-|T0|<->|T1|<->|T2|<-------->|T3|->0
+ * q->send->curr_sender:    /\
+ *
+ * Thread has E0 in its own struct queue_event.
+ *
+ *************************************************************************** Puts the specified return value in the waiting thread's return value
+ * and wakes the thread.
+ *
+ * A sender should be confirmed to exist before calling which makes it
+ * more efficent to reject the majority of cases that don't need this
+ * called.
+  Clear slot.  Assign thread-local return value.  Releases any waiting threads that are queued with queue_send -
+ * reply with 0.
+  Enables queue_send on the specified queue - caller allocates the extra
+ * data structure. Only queues which are taken to be owned by a thread should
+ * enable this however an official owner is not compulsory but must be
+ * specified for priority inheritance to operate.
+ *
+ * Use of queue_wait(_w_tmo) by multiple threads on a queue using synchronous
+ * messages results in an undefined order of message replies or possible default
+ * replies if two or more waits happen before a reply is done.
+  Unblock a blocked thread at a given event index  Perform the auto-reply sequence  Moves waiting thread's refrence from the senders array to the
+ * current_sender which represents the thread waiting for a reponse to the
+ * last message removed from the queue. This also protects the thread from
+ * being bumped due to overflow which would not be a valid action since its
+ * message _is_ being processed at this point.  Move thread reference from array to the next thread
+               that queue_reply will release  else message was posted asynchronously with queue_post  Empty macros for when synchoronous sending is not made  HAVE_EXTENDED_MESSAGING_AND_NAME  Queue must not be available for use during this call  What garbage is in write is irrelevant because of the masking design-
+     * any other functions the empty the queue do this as well so that
+     * queue_count and queue_empty return sane values in the case of a
+     * concurrent change without locking inside them.  No message sending by default  Add it to the all_queues array  Queue must not be available for use during this call  Remove the queue if registered  Release thread(s) waiting on queue head  Release threads waiting for replies  Reply to any dequeued message waiting for one  NOTE: multiple threads waiting on a queue head cannot have a well-
+   defined release order if timeouts are used. If multiple threads must
+   access the queue head, use a dispatcher or queue_wait only.  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  A waking message could disappear  Get data for a waiting thread if one  else just waiting on non-empty  Auto-reply (even if ev is NULL to avoid stalling a waiting thread)  no block  empty again, infinite block  timeout is legit if thread is still queued and awake  we mustn't return earlier than expected wait time  just waiting for something  Get data for a waiting thread if one  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  IRQ handlers are not allowed use of this function - we only aim to
+   protect the queue integrity by turning them off.  overflow protect - unblock any thread waiting at this index  Wakeup a waiting thread if any  Save thread in slot, add to list and wait for reply  Function as queue_post if sending is not enabled  not used now but probably will be later  Query if the last message dequeued was added by queue_send or not  Replies with retval to the last dequeued message sent with queue_send  HAVE_EXTENDED_MESSAGING_AND_NAME  Scan the even queue from head to tail, returning any event from the
+   filter list that was found, optionally removing the event. If an
+   event is returned, synchronous events are handled in the same manner as
+   with queue_wait(_w_tmo); if discarded, then as queue_clear.
+   If filters are NULL, any event matches. If filters exist, the default
+   is to search the full queue depth.
+   Earlier filters take precedence.
+
+   Return true if an event was found, false otherwise.  Empty: do nothing further  Starting at the head, find first match   Have filters - find the first thing that passes  No match; test next event  Only check the head  else - anything passes  Found a matching event  Caller wants the event  Do event removal  Advance head  Auto-reply  Get the thread waiting for reply, if any  Release any thread waiting on this message  Slide messages forward into the gap if not at the head  Keep sender wait list in sync  !HAVE_EXTENDED_MESSAGING_AND_NAME  The more powerful routines aren't required  Release any thread waiting on this message  HAVE_EXTENDED_MESSAGING_AND_NAME  Poll queue to see if a message exists - careful in using the result if
+ * queue_remove_from_head is called when messages are posted - possibly use
+ * queue_wait_w_tmo(&q, 0) in that case or else a removed message that
+ * unsignals the queue may cause an unwanted block  Release all threads waiting in the queue for a reply -
+       dequeued sent message will be handled by owning thread *
+ * The number of events waiting in the queue.
+ * 
+ * @param struct of event_queue
+ * @return number of events in the queue
+ 

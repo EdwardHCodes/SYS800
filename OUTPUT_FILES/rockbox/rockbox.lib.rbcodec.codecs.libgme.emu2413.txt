@@ -1,0 +1,241 @@
+**********************************************************************************
+
+  emu2413.c -- YM2413 emulator written by Mitsutaka Okazaki 2001
+
+  2001 01-08 : Version 0.10 -- 1st version.
+  2001 01-15 : Version 0.20 -- semi-public version.
+  2001 01-16 : Version 0.30 -- 1st public version.
+  2001 01-17 : Version 0.31 -- Fixed bassdrum problem.
+             : Version 0.32 -- LPF implemented.
+  2001 01-18 : Version 0.33 -- Fixed the drum problem, refine the mix-down method.
+                            -- Fixed the LFO bug.
+  2001 01-24 : Version 0.35 -- Fixed the drum problem, 
+                               support undocumented EG behavior.
+  2001 02-02 : Version 0.38 -- Improved the performance.
+                               Fixed the hi-hat and cymbal model.
+                               Fixed the default percussive datas.
+                               Noise reduction.
+                               Fixed the feedback problem.
+  2001 03-03 : Version 0.39 -- Fixed some drum bugs.
+                               Improved the performance.
+  2001 03-04 : Version 0.40 -- Improved the feedback.
+                               Change the default table size.
+                               Clock and Rate can be changed during play.
+  2001 06-24 : Version 0.50 -- Improved the hi-hat and the cymbal tone.
+                               Added VRC7 patch (OPLL_reset_patch is changed).
+                               Fixed OPLL_reset() bug.
+                               Added OPLL_setMask, OPLL_getMask and OPLL_toggleMask.
+                               Added OPLL_writeIO.
+  2001 09-28 : Version 0.51 -- Removed the noise table.
+  2002 01-28 : Version 0.52 -- Added Stereo mode.
+  2002 02-07 : Version 0.53 -- Fixed some drum bugs.
+  2002 02-20 : Version 0.54 -- Added the best quality mode.
+  2002 03-02 : Version 0.55 -- Removed OPLL_init & OPLL_close.
+  2002 05-30 : Version 0.60 -- Fixed HH&CYM generator and all voice datas.
+  2004 04-10 : Version 0.61 -- Added YMF281B tone (defined by Chabin).
+  
+  2011 03-22 : --------------- Modified by gama to use precalculated tables.
+
+  References: 
+    fmopl.c        -- 1999,2000 written by Tatsuyuki Satoh (MAME development).
+    fmopl.c(fixed) -- (C) 2002 Jarek Burczynski.
+    s_opl.c        -- 2001 written by Mamiya (NEZplug development).
+    fmgen.cpp      -- 1999,2000 written by cisc.
+    fmpac.ill      -- 2000 created by NARUTO.
+    MSX-Datapack
+    YMU757 data sheet
+    YM2143 data sheet
+
+************************************************************************************* Size of Sintable ( 8 -- 18 can be used. 9 recommended.)  Phase increment counter  Dynamic range (Accuracy of sin table)  Dynamic range of envelope  Dynamic range of total level  Dynamic range of sustine level  Bits for liner value  Bits for envelope phase incremental counter  Bits for Pitch and Amp modulator  PM table is calcurated by PM_AMP * pow(2,PM_DEPTH*sin(x)/1200)  PM speed(Hz) and depth(cent)  AM speed(Hz) and depth(dB)  Cut the lower b bit(s) off.  Leave the lower b bit(s).  Expand x which is s bits to d bits.  Expand x which is s bits to d bits and fill expanded bits '1'  Adjust envelope speed which depends on sampling rate.  Input clock  Sampling rate  WaveTable for each envelope amp  LFO Table  Phase delta for LFO  dB to Liner table  Liner to Log curve conversion table (for Attack rate).  Empty voice data  Basic voice Data  Definition of envelope mode  Phase incr table for Attack  Phase incr table for Decay and Release  KSL + TL Table  We may not have too much SRAM in rockbox  Phase incr table for PG **************************************************
+ 
+                  Create tables
+ 
+*************************************************** Table for AR to LogCurve.  Table for dB(0 -- (1<<DB_BITS)-1) to Liner(0 -- DB2LIN_AMP_WIDTH)  Liner(+0.0 - +1.0) to dB((1<<DB_BITS) - 1 -- 0)  0 -- 127  Sin Table  Table for Pitch Modulator  pmtable[i] = (e_int32) ((double) PM_AMP * pow (2, (double) PM_DEPTH * sin (2.0 * PI * i / PM_PG_WIDTH) / 1200));  Table for Amp Modulator  amtable[i] = (e_int32) ((double) AM_DEPTH / 2 / DB_STEP * (1.0 + sin (2.0 * PI * i / PM_PG_WIDTH)));  Phase increment counter table  Multiplication owith 8 to have an integer result. This allows to remove floating point operation.  tllTable[fnum][block][TL][KL] = (e_uint32) ((tmp >> (3 - KL)) / EG_STEP) + TL2EG (TL);  Rate Table for Attack EG_DP_WIDTH; Rate Table for Decay and Release ***********************************************************
+
+                      Calc Parameters
+
+***********************************************************************************************************************
+
+                    OPLL internal interfaces
+
+************************************************************ We will set this dinamically, but not sure if this affects playback  EG should be updated last.  Slot key on   Slot key on without reseting the phase  Slot key off  Channel key on  Channel key off  Drum key off  Change a voice  Change a rhythm voice  Set sustine parameter  Volume : 6bit ( Volume register << 2 )  Set F-Number ( fnum : 9bit )  Set Block data (block : 3bit )  Change Rhythm Mode **********************************************************
+
+                      Initializing
+
+********************************************************** Reset patch datas by system default.  Reset whole of OPLL except patch datas.  Force Refresh (When external program changes some parameters). ********************************************************
+
+                 Generate wave data
+
+******************************************************** Convert Amp(0 to EG_HEIGHT) to Phase(0 to 2PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 4PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 8PI).  Update AM, PM unit  PG  Update Noise unit  EG  CARRIOR  MODULATOR  TOM  SNARE  
+  TOP-CYM 
+  the same as fmopl.c  different from fmopl.c  
+  HI-HAT 
+ the same as fmopl.c  different from fmopl.c  CH6  CH7  CH8  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[6].car.eg_mode != FINISH) return false;
+    if (ch[7].mod.eg_mode != FINISH) return false;
+    if (ch[7].car.eg_mode != FINISH) return false;
+    if (ch[8].mod.eg_mode != FINISH) return false;
+    if (ch[8].car.eg_mode != FINISH) return false;  nothing is playing, then mute ***************************************************
+
+                       I/O Ctrl
+
+**************************************************** status port  STEREO MODE (OPT)  Ignore, Right, Left, Center  Ignore, Right, Left, Center  EMU2413_COMPACTION **********************************************************************************
+
+  emu2413.c -- YM2413 emulator written by Mitsutaka Okazaki 2001
+
+  2001 01-08 : Version 0.10 -- 1st version.
+  2001 01-15 : Version 0.20 -- semi-public version.
+  2001 01-16 : Version 0.30 -- 1st public version.
+  2001 01-17 : Version 0.31 -- Fixed bassdrum problem.
+             : Version 0.32 -- LPF implemented.
+  2001 01-18 : Version 0.33 -- Fixed the drum problem, refine the mix-down method.
+                            -- Fixed the LFO bug.
+  2001 01-24 : Version 0.35 -- Fixed the drum problem, 
+                               support undocumented EG behavior.
+  2001 02-02 : Version 0.38 -- Improved the performance.
+                               Fixed the hi-hat and cymbal model.
+                               Fixed the default percussive datas.
+                               Noise reduction.
+                               Fixed the feedback problem.
+  2001 03-03 : Version 0.39 -- Fixed some drum bugs.
+                               Improved the performance.
+  2001 03-04 : Version 0.40 -- Improved the feedback.
+                               Change the default table size.
+                               Clock and Rate can be changed during play.
+  2001 06-24 : Version 0.50 -- Improved the hi-hat and the cymbal tone.
+                               Added VRC7 patch (OPLL_reset_patch is changed).
+                               Fixed OPLL_reset() bug.
+                               Added OPLL_setMask, OPLL_getMask and OPLL_toggleMask.
+                               Added OPLL_writeIO.
+  2001 09-28 : Version 0.51 -- Removed the noise table.
+  2002 01-28 : Version 0.52 -- Added Stereo mode.
+  2002 02-07 : Version 0.53 -- Fixed some drum bugs.
+  2002 02-20 : Version 0.54 -- Added the best quality mode.
+  2002 03-02 : Version 0.55 -- Removed OPLL_init & OPLL_close.
+  2002 05-30 : Version 0.60 -- Fixed HH&CYM generator and all voice datas.
+  2004 04-10 : Version 0.61 -- Added YMF281B tone (defined by Chabin).
+  
+  2011 03-22 : --------------- Modified by gama to use precalculated tables.
+
+  References: 
+    fmopl.c        -- 1999,2000 written by Tatsuyuki Satoh (MAME development).
+    fmopl.c(fixed) -- (C) 2002 Jarek Burczynski.
+    s_opl.c        -- 2001 written by Mamiya (NEZplug development).
+    fmgen.cpp      -- 1999,2000 written by cisc.
+    fmpac.ill      -- 2000 created by NARUTO.
+    MSX-Datapack
+    YMU757 data sheet
+    YM2143 data sheet
+
+************************************************************************************* Size of Sintable ( 8 -- 18 can be used. 9 recommended.)  Phase increment counter  Dynamic range (Accuracy of sin table)  Dynamic range of envelope  Dynamic range of total level  Dynamic range of sustine level  Bits for liner value  Bits for envelope phase incremental counter  Bits for Pitch and Amp modulator  PM table is calcurated by PM_AMP * pow(2,PM_DEPTH*sin(x)/1200)  PM speed(Hz) and depth(cent)  AM speed(Hz) and depth(dB)  Cut the lower b bit(s) off.  Leave the lower b bit(s).  Expand x which is s bits to d bits.  Expand x which is s bits to d bits and fill expanded bits '1'  Adjust envelope speed which depends on sampling rate.  Input clock  Sampling rate  WaveTable for each envelope amp  LFO Table  Phase delta for LFO  dB to Liner table  Liner to Log curve conversion table (for Attack rate).  Empty voice data  Basic voice Data  Definition of envelope mode  Phase incr table for Attack  Phase incr table for Decay and Release  KSL + TL Table  We may not have too much SRAM in rockbox  Phase incr table for PG **************************************************
+ 
+                  Create tables
+ 
+*************************************************** Table for AR to LogCurve.  Table for dB(0 -- (1<<DB_BITS)-1) to Liner(0 -- DB2LIN_AMP_WIDTH)  Liner(+0.0 - +1.0) to dB((1<<DB_BITS) - 1 -- 0)  0 -- 127  Sin Table  Table for Pitch Modulator  pmtable[i] = (e_int32) ((double) PM_AMP * pow (2, (double) PM_DEPTH * sin (2.0 * PI * i / PM_PG_WIDTH) / 1200));  Table for Amp Modulator  amtable[i] = (e_int32) ((double) AM_DEPTH / 2 / DB_STEP * (1.0 + sin (2.0 * PI * i / PM_PG_WIDTH)));  Phase increment counter table  Multiplication owith 8 to have an integer result. This allows to remove floating point operation.  tllTable[fnum][block][TL][KL] = (e_uint32) ((tmp >> (3 - KL)) / EG_STEP) + TL2EG (TL);  Rate Table for Attack EG_DP_WIDTH; Rate Table for Decay and Release ***********************************************************
+
+                      Calc Parameters
+
+***********************************************************************************************************************
+
+                    OPLL internal interfaces
+
+************************************************************ We will set this dinamically, but not sure if this affects playback  EG should be updated last.  Slot key on   Slot key on without reseting the phase  Slot key off  Channel key on  Channel key off  Drum key off  Change a voice  Change a rhythm voice  Set sustine parameter  Volume : 6bit ( Volume register << 2 )  Set F-Number ( fnum : 9bit )  Set Block data (block : 3bit )  Change Rhythm Mode **********************************************************
+
+                      Initializing
+
+********************************************************** Reset patch datas by system default.  Reset whole of OPLL except patch datas.  Force Refresh (When external program changes some parameters). ********************************************************
+
+                 Generate wave data
+
+******************************************************** Convert Amp(0 to EG_HEIGHT) to Phase(0 to 2PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 4PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 8PI).  Update AM, PM unit  PG  Update Noise unit  EG  CARRIOR  MODULATOR  TOM  SNARE  
+  TOP-CYM 
+  the same as fmopl.c  different from fmopl.c  
+  HI-HAT 
+ the same as fmopl.c  different from fmopl.c  CH6  CH7  CH8  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[6].car.eg_mode != FINISH) return false;
+    if (ch[7].mod.eg_mode != FINISH) return false;
+    if (ch[7].car.eg_mode != FINISH) return false;
+    if (ch[8].mod.eg_mode != FINISH) return false;
+    if (ch[8].car.eg_mode != FINISH) return false;  nothing is playing, then mute ***************************************************
+
+                       I/O Ctrl
+
+**************************************************** status port  STEREO MODE (OPT)  Ignore, Right, Left, Center  Ignore, Right, Left, Center  EMU2413_COMPACTION **********************************************************************************
+
+  emu2413.c -- YM2413 emulator written by Mitsutaka Okazaki 2001
+
+  2001 01-08 : Version 0.10 -- 1st version.
+  2001 01-15 : Version 0.20 -- semi-public version.
+  2001 01-16 : Version 0.30 -- 1st public version.
+  2001 01-17 : Version 0.31 -- Fixed bassdrum problem.
+             : Version 0.32 -- LPF implemented.
+  2001 01-18 : Version 0.33 -- Fixed the drum problem, refine the mix-down method.
+                            -- Fixed the LFO bug.
+  2001 01-24 : Version 0.35 -- Fixed the drum problem, 
+                               support undocumented EG behavior.
+  2001 02-02 : Version 0.38 -- Improved the performance.
+                               Fixed the hi-hat and cymbal model.
+                               Fixed the default percussive datas.
+                               Noise reduction.
+                               Fixed the feedback problem.
+  2001 03-03 : Version 0.39 -- Fixed some drum bugs.
+                               Improved the performance.
+  2001 03-04 : Version 0.40 -- Improved the feedback.
+                               Change the default table size.
+                               Clock and Rate can be changed during play.
+  2001 06-24 : Version 0.50 -- Improved the hi-hat and the cymbal tone.
+                               Added VRC7 patch (OPLL_reset_patch is changed).
+                               Fixed OPLL_reset() bug.
+                               Added OPLL_setMask, OPLL_getMask and OPLL_toggleMask.
+                               Added OPLL_writeIO.
+  2001 09-28 : Version 0.51 -- Removed the noise table.
+  2002 01-28 : Version 0.52 -- Added Stereo mode.
+  2002 02-07 : Version 0.53 -- Fixed some drum bugs.
+  2002 02-20 : Version 0.54 -- Added the best quality mode.
+  2002 03-02 : Version 0.55 -- Removed OPLL_init & OPLL_close.
+  2002 05-30 : Version 0.60 -- Fixed HH&CYM generator and all voice datas.
+  2004 04-10 : Version 0.61 -- Added YMF281B tone (defined by Chabin).
+  
+  2011 03-22 : --------------- Modified by gama to use precalculated tables.
+
+  References: 
+    fmopl.c        -- 1999,2000 written by Tatsuyuki Satoh (MAME development).
+    fmopl.c(fixed) -- (C) 2002 Jarek Burczynski.
+    s_opl.c        -- 2001 written by Mamiya (NEZplug development).
+    fmgen.cpp      -- 1999,2000 written by cisc.
+    fmpac.ill      -- 2000 created by NARUTO.
+    MSX-Datapack
+    YMU757 data sheet
+    YM2143 data sheet
+
+************************************************************************************* Size of Sintable ( 8 -- 18 can be used. 9 recommended.)  Phase increment counter  Dynamic range (Accuracy of sin table)  Dynamic range of envelope  Dynamic range of total level  Dynamic range of sustine level  Bits for liner value  Bits for envelope phase incremental counter  Bits for Pitch and Amp modulator  PM table is calcurated by PM_AMP * pow(2,PM_DEPTH*sin(x)/1200)  PM speed(Hz) and depth(cent)  AM speed(Hz) and depth(dB)  Cut the lower b bit(s) off.  Leave the lower b bit(s).  Expand x which is s bits to d bits.  Expand x which is s bits to d bits and fill expanded bits '1'  Adjust envelope speed which depends on sampling rate.  Input clock  Sampling rate  WaveTable for each envelope amp  LFO Table  Phase delta for LFO  dB to Liner table  Liner to Log curve conversion table (for Attack rate).  Empty voice data  Basic voice Data  Definition of envelope mode  Phase incr table for Attack  Phase incr table for Decay and Release  KSL + TL Table  We may not have too much SRAM in rockbox  Phase incr table for PG **************************************************
+ 
+                  Create tables
+ 
+*************************************************** Table for AR to LogCurve.  Table for dB(0 -- (1<<DB_BITS)-1) to Liner(0 -- DB2LIN_AMP_WIDTH)  Liner(+0.0 - +1.0) to dB((1<<DB_BITS) - 1 -- 0)  0 -- 127  Sin Table  Table for Pitch Modulator  pmtable[i] = (e_int32) ((double) PM_AMP * pow (2, (double) PM_DEPTH * sin (2.0 * PI * i / PM_PG_WIDTH) / 1200));  Table for Amp Modulator  amtable[i] = (e_int32) ((double) AM_DEPTH / 2 / DB_STEP * (1.0 + sin (2.0 * PI * i / PM_PG_WIDTH)));  Phase increment counter table  Multiplication owith 8 to have an integer result. This allows to remove floating point operation.  tllTable[fnum][block][TL][KL] = (e_uint32) ((tmp >> (3 - KL)) / EG_STEP) + TL2EG (TL);  Rate Table for Attack EG_DP_WIDTH; Rate Table for Decay and Release ***********************************************************
+
+                      Calc Parameters
+
+***********************************************************************************************************************
+
+                    OPLL internal interfaces
+
+************************************************************ We will set this dinamically, but not sure if this affects playback  EG should be updated last.  Slot key on   Slot key on without reseting the phase  Slot key off  Channel key on  Channel key off  Drum key off  Change a voice  Change a rhythm voice  Set sustine parameter  Volume : 6bit ( Volume register << 2 )  Set F-Number ( fnum : 9bit )  Set Block data (block : 3bit )  Change Rhythm Mode **********************************************************
+
+                      Initializing
+
+********************************************************** Reset patch datas by system default.  Reset whole of OPLL except patch datas.  Force Refresh (When external program changes some parameters). ********************************************************
+
+                 Generate wave data
+
+******************************************************** Convert Amp(0 to EG_HEIGHT) to Phase(0 to 2PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 4PI).  Convert Amp(0 to EG_HEIGHT) to Phase(0 to 8PI).  Update AM, PM unit  PG  Update Noise unit  EG  CARRIOR  MODULATOR  TOM  SNARE  
+  TOP-CYM 
+  the same as fmopl.c  different from fmopl.c  
+  HI-HAT 
+ the same as fmopl.c  different from fmopl.c  CH6  CH7  CH8  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[i].car.eg_mode != FINISH) return 0;  if (ch[6].car.eg_mode != FINISH) return false;
+    if (ch[7].mod.eg_mode != FINISH) return false;
+    if (ch[7].car.eg_mode != FINISH) return false;
+    if (ch[8].mod.eg_mode != FINISH) return false;
+    if (ch[8].car.eg_mode != FINISH) return false;  nothing is playing, then mute ***************************************************
+
+                       I/O Ctrl
+
+**************************************************** status port  STEREO MODE (OPT)  Ignore, Right, Left, Center  Ignore, Right, Left, Center  EMU2413_COMPACTION 

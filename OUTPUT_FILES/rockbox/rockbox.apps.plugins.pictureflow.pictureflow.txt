@@ -1,0 +1,679 @@
+**************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* Copyright (C) 2007 Jonas Hurrelmann (j@outpo.st)
+* Copyright (C) 2007 Nicolas Pennequin
+* Copyright (C) 2007 Ariya Hidayat (ariya@kde.org) (original Qt Version)
+*
+* Original code: http://code.google.com/p/pictureflow/
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+********************************************************************************************************* Globals **********************************
+ *  Targets which use plugin_get_audio_buffer() can't have playback from
+ * within pictureflow itself, as the whole core audio buffer is occupied  scrollwheel targets use the wheel, just as they do in lists,
+     * so there's no need for a special context,
+     * others use left/right here too (as oppsed to up/down in lists)  !USE_CORE_PREVNEXT  These all use short press of BUTTON_POWER for menu, map long POWER to quit
+ LCD_DEPTH <= 1  m:robe 100, Clip  LCD_DEPTH <= 1  LCD_DEPTH >= 8  LCD_DEPTH >= 8  for fixed-point arithmetic, we need minimum 32-bit long
+   long long (64-bit) might be useful for multiplication and division  probably more than can be loaded  some magic numbers for cache_version.  Error return values  current version for cover cache * structs we use  config values INDEX_HDR index of the cached slide  handle ID of the cached slide  "next" slide, with LRU last  "previous" slide  offset to the album name  offset to the artist name  artist taglist position  album taglist position  offset to the artist name  artist taglist position  offset to the track name  offset to the filename in the string, needed for playlist generation  number of ticks between each move  number of ticks to delay starting scrolling  pixels to move  tick of the next move  width of the string  x coordinate of the string  0 if scroll is disabled. otherwise, pixels to move  tick when to start scrolling  bmap width in pixels  bmap height in pixels * below we allocate the memory we want to use * for now it always points to the lcd framebuffer  index of the slide that is in the center  use long for aligning  queue (as array) for scheduling load_surface 
+    Proposals for transitions:
+
+    pf_idle -> pf_scrolling : NEXT_ALBUM/PREV_ALBUM pressed
+            -> pf_cover_in -> pf_show_tracks : SELECT_ALBUM clicked
+
+    pf_scrolling -> pf_idle : NEXT_ALBUM/PREV_ALBUM released
+
+    pf_show_tracks -> pf_cover_out -> pf_idle : SELECT_ALBUM pressed
+
+    TODO:
+    pf_show_tracks -> pf_cover_out -> pf_idle : MENU_PRESSED pressed
+    pf_show_tracks -> play_track() -> exit() : SELECT_ALBUM pressed
+
+    pf_idle, pf_scrolling -> show_menu(): MENU_PRESSED
+* code *
+ * This version preshifts each operand, which is useful when we know how many
+ * of the least significant bits will be empty, or are worried about overflow
+ * in a particular calculation
+  ARMv5+ has a clz instruction equivalent to our function.
+  Otherwise, use our clz, which can be inlined  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
+ * A clz benchmark plugin showed this to be about 14% faster on coldfire
+ * than the LUT-based version.
+  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogLookup
+ * It is not any faster than the one above, but trades 16B in the lookup table
+ * for a savings of 12B per each inlined call.
+  Return the maximum possible left shift for a signed int32, without
+ * overflow
+  Calculate num/den, with the result shifted left by PFREAL_SHIFT, by shifting
+ * num and den before dividing.
+  warning: regenerate the table if IANGLE_MAX and PFREAL_SHIFT are changed!  scales the 8bit subpixel value to native lcd format, indicated by bits  read_image_file() is called without FORMAT_TRANSPARENT so
+ * it's safe to ignore alpha channel in the next two functions  scrolling  Hz values:
+        1, 1.25, 1.55, 2, 2.5, 3.12, 4, 5, 6.25, 8.33, 10, 12.5, 16.7, 20, 25, 33  at beginning of line  at end of line  Create the lookup table with the scaling values for the reflections  adds tagcache_search results into artist/album index  not enough memory adds <untagged> albums/artist to existing album index  store existing count  search tagcache for all <untagged> albums & save the albumartist seek pos  not enough memory  map the artist_seek position to the artist name index  last match, start here next loop  no match start back at beginning  Create an index of all artists from the database  artist index starts at end of buf it will be rearranged when finalized  artist names starts at beginning of buf  finalize the artist index  move buf ptr to end of artist_index *
+  Create an index of all artists and albums from the database.
+  Also store the artists and album names so we can access them later.
+  Artists  Albums  album_index starts at end of buf it will be rearranged when finalized  album_names starts at the beginning of buf  Build artist list for untagged albums  finalize the album index  move buf ptr to end of album_index  Assign indices  last match, start here next loop  no match start back at beginning  sort list order to find duplicates  mark duplicate albums for deletion  -1 don't check last entry  now fix the album list order  remove any extra untagged albums
+     * extra space is orphaned till restart Saves the album index into a binary file to be recovered the
+ next time PictureFlow is launched reads data from save file to buffer Loads the album_index information stored in the hard driverb->lseek(fr, sizeof(data) + 1, SEEK_SET); artist names  album names  index of album names  sanity check loaded data *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album artist of the given slide_index
+ *
+ Return a pointer to the track name of the active album
+ create_track_index has to be called first.
+  we could be looking for the artist in either field rb->splashf(1000, "%s, %s", current_album, current_artist);*
+  Compare two unsigned ints passed via pointers.
+ *
+  Create the track index of the given slide_index.
+  show filename instead of <untaggged>  if filename remove the '/'  retrieve filename for building the playlist  make sure track name and file name are really split by a \0, else
+             * get_track_name might fail  request more buffer so that track and filename fit  now fix the track list order *
+  Determine filename of the album art for the given slide_index and
+  store the result in buf.
+  The algorithm looks for the first track of the given album uses
+  find_albumart to find the filename.
+  find the first track of the album  did not find a matching track *
+  Draw the PictureFlow logo
+  Mono LCDs need the logo inverted  Mono LCDs need the logo inverted *
+  Draw a simple progress bar
+  Calculate modified FNV hash of string
+ * has good avalanche behaviour and uniform distribution
+ * see http://home.comcast.net/~bretm/hash/  2166136261;*
+ Save the given bitmap as filename in the pfraw format
+  Rollover  Rollover rb->strcpy(aa_cache.file, EMPTY_SLIDE_BMP); direct interaction with user *
+ Precomupte the album art images and store them in CACHE_PREFIX.
+ Use the "?" bitmap if image is not found.
+  Warn the user that we couldn't find any albumart *
+  Create the "?" slide, that is shown while loading
+  or when no cover was found.
+ *
+ Thread used for loading and preparing bitmaps in the background
+  we just woke up *
+ End the thread by posting the EV_EXIT event
+  remove the thread's queue from the broadcast list *
+ Create the thread an setup the event queue
+  put the thread's queue in the bcast list 
+ * The following functions implement the linked-list-in-array used to manage
+ * the LRU cache of slides, and the list of free cache slots.
+ *
+ Pop the given item from the linked list starting at *head, returning the next
+ item, or -1 if the list is now empty.
+*
+ Pop the head item from the list starting at *head, returning the index of the
+ item, or -1 if the list is already empty.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i at the end of the list starting at *head.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i before the one at index p in the list starting at
+ *head
+*
+ Free the used slide at index i, and its buffer, and move it to the free
+ slides list.
+*
+ Free one slide ranked above the given priority. If no such slide can be found,
+ return false.
+*
+ Free all slides ranked above the given priority.
+*
+ Read the pfraw image given as filename and return the hid of the buffer
+  pf_cfg.cache_version = CACHE_UPDATE; -- don't invalidate on missing pfraw  allow audio to play when fast scrolling *
+  Load the surface for the given slide_index into the cache at cache_index.
+ *
+ Load the "next" slide that we can load, freeing old slides if needed, provided
+ that they are further from center_index than the current slide
+ update indices *
+  Get a slide from the buffer
+ *
+ Return the requested surface
+*
+ adjust slides so that they are in "steady state" position
+ *
+ Updates look-up table and other stuff necessary for the rendering.
+ Call this when the viewport size or slide dimension is changed.
+ *
+ * To calculate the offset that will provide the proper margin, we use the same
+ * projection used to render the slides. The solution for xc, the slide center,
+ * is:
+ *                         xp * (zo + xs * sin(r))
+ * xc = xp - xs * cos(r) + ───────────────────────
+ *                                    z
+ * TODO: support moving the side slides toward or away from the camera
+  approx. 70 degrees tilted *
+   Fade the given color by spreading the fb_data
+   to an uint, multiply and compress the result back to a fb_data.
+  FIXME: check this*
+ * Render a single slide
+ * Where xc is the slide's horizontal offset from center, xs is the horizontal
+ * on the slide from its center, zo is the slide's depth offset from the plane
+ * of the display, r is the angle at which the slide is tilted, and xp is the
+ * point on the display corresponding to xs on the slide, the projection
+ * formulas are:
+ *
+ *      z * (xc + xs * cos(r))
+ * xp = ──────────────────────
+ *       z + zo + xs * sin(r)
+ *
+ *      z * (xc - xp) - xp * zo
+ * xs = ────────────────────────
+ *      xp * sin(r) - z * cos(r)
+ *
+ * We use the xp projection once, to find the left edge of the slide on the
+ * display. From there, we use the xs reverse projection to find the horizontal
+ * offset from the slide center of each column on the screen, until we reach
+ * the right edge of the slide, or the screen. The reverse projection can be
+ * optimized by saving the numerator and denominator of the fraction, which can
+ * then be incremented by (z + zo) and sin(r) respectively.
+  on stack, which is in IRAM on several targets  opaque -> copy table  precalculate faded table  Since we're finding the screen position of the left edge of the slide,
+     * we round up.
+      let the music play... *
+  Jump to the given slide_index
+ *
+  Start the animation for changing slides
+ *
+  Go to the previous slide
+ *
+  Go to the next slide
+ *
+  Render the slides. Updates only the offscreen buffer.
+ TODO: Optimizes this by e.g. invalidating rects  no animation, boring plain rendering  the first and last slide must fade in/fade out  if step<0 and nleft==1, left_slides[0] is fading in   if step>0 and nright==1, right_slides[0] is fading in   fading out center slide *
+  Updates the animation effect. Call this periodically from a timer.
+ deaccelerate when approaching the target  the leftmost and rightmost slide must fade away  must change direction ? *
+  Cleanup the plugin
+ Turn on backlight timeout (revert to settings) *
+  Shows the settings menu
+  changed?  fallthrough if changed, since cache needs to be rebuilt *
+  Show the main menu
+  WPS  Playback Control *
+   Animation step for zooming into the current cover
+ *
+   Animation step for zooming out the current cover
+ *
+   Draw a blue gradient at y with height h
+ *
+    Reset the track list after a album change
+  let the tracklist start more centered
+     * if the screen isn't filled with tracks *
+  Display the list of tracks
+  Rollover  Rolllover 
+ * Puts the current tracklist into a newly created playlist and starts playling
+  reuse existing playlist if possible
+     * regenerate if shuffle is on or changed, since playlist index and
+     * selected track are "out of sync"  First, replace the current playlist with a new one  TODO: can we adjust selected_track if !play_selected ?
+     * if shuffle, we can't predict the playing track easily, and for either
+     * case the track list doesn't get auto scrolled*
+   Draw the current album name
+  Draw album text  half way to next slide .. still not perfect! *
+  Display an error message and wait for input.
+*
+  Main function that also contain the main plasma
+  algorithm.
+  Turn off backlight timeout Scan will trigger when no file is found or the option was activated initialize  Initial rendering  Handle states  Calculate FPS  Draw FPS  Copy offscreen buffer to LCD and give time to other threads / Handle buttons ************************** Plugin entry point *************************** store buffer pointers and sizes **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* Copyright (C) 2007 Jonas Hurrelmann (j@outpo.st)
+* Copyright (C) 2007 Nicolas Pennequin
+* Copyright (C) 2007 Ariya Hidayat (ariya@kde.org) (original Qt Version)
+*
+* Original code: http://code.google.com/p/pictureflow/
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+********************************************************************************************************* Globals **********************************
+ *  Targets which use plugin_get_audio_buffer() can't have playback from
+ * within pictureflow itself, as the whole core audio buffer is occupied  scrollwheel targets use the wheel, just as they do in lists,
+     * so there's no need for a special context,
+     * others use left/right here too (as oppsed to up/down in lists)  !USE_CORE_PREVNEXT  These all use short press of BUTTON_POWER for menu, map long POWER to quit
+ LCD_DEPTH <= 1  m:robe 100, Clip  LCD_DEPTH <= 1  LCD_DEPTH >= 8  LCD_DEPTH >= 8  for fixed-point arithmetic, we need minimum 32-bit long
+   long long (64-bit) might be useful for multiplication and division  probably more than can be loaded  some magic numbers for cache_version.  Error return values  current version for cover cache * structs we use  config values INDEX_HDR index of the cached slide  handle ID of the cached slide  "next" slide, with LRU last  "previous" slide  offset to the album name  offset to the artist name  artist taglist position  album taglist position  offset to the artist name  artist taglist position  offset to the track name  offset to the filename in the string, needed for playlist generation  number of ticks between each move  number of ticks to delay starting scrolling  pixels to move  tick of the next move  width of the string  x coordinate of the string  0 if scroll is disabled. otherwise, pixels to move  tick when to start scrolling  bmap width in pixels  bmap height in pixels * below we allocate the memory we want to use * for now it always points to the lcd framebuffer  index of the slide that is in the center  use long for aligning  queue (as array) for scheduling load_surface 
+    Proposals for transitions:
+
+    pf_idle -> pf_scrolling : NEXT_ALBUM/PREV_ALBUM pressed
+            -> pf_cover_in -> pf_show_tracks : SELECT_ALBUM clicked
+
+    pf_scrolling -> pf_idle : NEXT_ALBUM/PREV_ALBUM released
+
+    pf_show_tracks -> pf_cover_out -> pf_idle : SELECT_ALBUM pressed
+
+    TODO:
+    pf_show_tracks -> pf_cover_out -> pf_idle : MENU_PRESSED pressed
+    pf_show_tracks -> play_track() -> exit() : SELECT_ALBUM pressed
+
+    pf_idle, pf_scrolling -> show_menu(): MENU_PRESSED
+* code *
+ * This version preshifts each operand, which is useful when we know how many
+ * of the least significant bits will be empty, or are worried about overflow
+ * in a particular calculation
+  ARMv5+ has a clz instruction equivalent to our function.
+  Otherwise, use our clz, which can be inlined  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
+ * A clz benchmark plugin showed this to be about 14% faster on coldfire
+ * than the LUT-based version.
+  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogLookup
+ * It is not any faster than the one above, but trades 16B in the lookup table
+ * for a savings of 12B per each inlined call.
+  Return the maximum possible left shift for a signed int32, without
+ * overflow
+  Calculate num/den, with the result shifted left by PFREAL_SHIFT, by shifting
+ * num and den before dividing.
+  warning: regenerate the table if IANGLE_MAX and PFREAL_SHIFT are changed!  scales the 8bit subpixel value to native lcd format, indicated by bits  read_image_file() is called without FORMAT_TRANSPARENT so
+ * it's safe to ignore alpha channel in the next two functions  scrolling  Hz values:
+        1, 1.25, 1.55, 2, 2.5, 3.12, 4, 5, 6.25, 8.33, 10, 12.5, 16.7, 20, 25, 33  at beginning of line  at end of line  Create the lookup table with the scaling values for the reflections  adds tagcache_search results into artist/album index  not enough memory adds <untagged> albums/artist to existing album index  store existing count  search tagcache for all <untagged> albums & save the albumartist seek pos  not enough memory  map the artist_seek position to the artist name index  last match, start here next loop  no match start back at beginning  Create an index of all artists from the database  artist index starts at end of buf it will be rearranged when finalized  artist names starts at beginning of buf  finalize the artist index  move buf ptr to end of artist_index *
+  Create an index of all artists and albums from the database.
+  Also store the artists and album names so we can access them later.
+  Artists  Albums  album_index starts at end of buf it will be rearranged when finalized  album_names starts at the beginning of buf  Build artist list for untagged albums  finalize the album index  move buf ptr to end of album_index  Assign indices  last match, start here next loop  no match start back at beginning  sort list order to find duplicates  mark duplicate albums for deletion  -1 don't check last entry  now fix the album list order  remove any extra untagged albums
+     * extra space is orphaned till restart Saves the album index into a binary file to be recovered the
+ next time PictureFlow is launched reads data from save file to buffer Loads the album_index information stored in the hard driverb->lseek(fr, sizeof(data) + 1, SEEK_SET); artist names  album names  index of album names  sanity check loaded data *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album artist of the given slide_index
+ *
+ Return a pointer to the track name of the active album
+ create_track_index has to be called first.
+  we could be looking for the artist in either field rb->splashf(1000, "%s, %s", current_album, current_artist);*
+  Compare two unsigned ints passed via pointers.
+ *
+  Create the track index of the given slide_index.
+  show filename instead of <untaggged>  if filename remove the '/'  retrieve filename for building the playlist  make sure track name and file name are really split by a \0, else
+             * get_track_name might fail  request more buffer so that track and filename fit  now fix the track list order *
+  Determine filename of the album art for the given slide_index and
+  store the result in buf.
+  The algorithm looks for the first track of the given album uses
+  find_albumart to find the filename.
+  find the first track of the album  did not find a matching track *
+  Draw the PictureFlow logo
+  Mono LCDs need the logo inverted  Mono LCDs need the logo inverted *
+  Draw a simple progress bar
+  Calculate modified FNV hash of string
+ * has good avalanche behaviour and uniform distribution
+ * see http://home.comcast.net/~bretm/hash/  2166136261;*
+ Save the given bitmap as filename in the pfraw format
+  Rollover  Rollover rb->strcpy(aa_cache.file, EMPTY_SLIDE_BMP); direct interaction with user *
+ Precomupte the album art images and store them in CACHE_PREFIX.
+ Use the "?" bitmap if image is not found.
+  Warn the user that we couldn't find any albumart *
+  Create the "?" slide, that is shown while loading
+  or when no cover was found.
+ *
+ Thread used for loading and preparing bitmaps in the background
+  we just woke up *
+ End the thread by posting the EV_EXIT event
+  remove the thread's queue from the broadcast list *
+ Create the thread an setup the event queue
+  put the thread's queue in the bcast list 
+ * The following functions implement the linked-list-in-array used to manage
+ * the LRU cache of slides, and the list of free cache slots.
+ *
+ Pop the given item from the linked list starting at *head, returning the next
+ item, or -1 if the list is now empty.
+*
+ Pop the head item from the list starting at *head, returning the index of the
+ item, or -1 if the list is already empty.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i at the end of the list starting at *head.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i before the one at index p in the list starting at
+ *head
+*
+ Free the used slide at index i, and its buffer, and move it to the free
+ slides list.
+*
+ Free one slide ranked above the given priority. If no such slide can be found,
+ return false.
+*
+ Free all slides ranked above the given priority.
+*
+ Read the pfraw image given as filename and return the hid of the buffer
+  pf_cfg.cache_version = CACHE_UPDATE; -- don't invalidate on missing pfraw  allow audio to play when fast scrolling *
+  Load the surface for the given slide_index into the cache at cache_index.
+ *
+ Load the "next" slide that we can load, freeing old slides if needed, provided
+ that they are further from center_index than the current slide
+ update indices *
+  Get a slide from the buffer
+ *
+ Return the requested surface
+*
+ adjust slides so that they are in "steady state" position
+ *
+ Updates look-up table and other stuff necessary for the rendering.
+ Call this when the viewport size or slide dimension is changed.
+ *
+ * To calculate the offset that will provide the proper margin, we use the same
+ * projection used to render the slides. The solution for xc, the slide center,
+ * is:
+ *                         xp * (zo + xs * sin(r))
+ * xc = xp - xs * cos(r) + ───────────────────────
+ *                                    z
+ * TODO: support moving the side slides toward or away from the camera
+  approx. 70 degrees tilted *
+   Fade the given color by spreading the fb_data
+   to an uint, multiply and compress the result back to a fb_data.
+  FIXME: check this*
+ * Render a single slide
+ * Where xc is the slide's horizontal offset from center, xs is the horizontal
+ * on the slide from its center, zo is the slide's depth offset from the plane
+ * of the display, r is the angle at which the slide is tilted, and xp is the
+ * point on the display corresponding to xs on the slide, the projection
+ * formulas are:
+ *
+ *      z * (xc + xs * cos(r))
+ * xp = ──────────────────────
+ *       z + zo + xs * sin(r)
+ *
+ *      z * (xc - xp) - xp * zo
+ * xs = ────────────────────────
+ *      xp * sin(r) - z * cos(r)
+ *
+ * We use the xp projection once, to find the left edge of the slide on the
+ * display. From there, we use the xs reverse projection to find the horizontal
+ * offset from the slide center of each column on the screen, until we reach
+ * the right edge of the slide, or the screen. The reverse projection can be
+ * optimized by saving the numerator and denominator of the fraction, which can
+ * then be incremented by (z + zo) and sin(r) respectively.
+  on stack, which is in IRAM on several targets  opaque -> copy table  precalculate faded table  Since we're finding the screen position of the left edge of the slide,
+     * we round up.
+      let the music play... *
+  Jump to the given slide_index
+ *
+  Start the animation for changing slides
+ *
+  Go to the previous slide
+ *
+  Go to the next slide
+ *
+  Render the slides. Updates only the offscreen buffer.
+ TODO: Optimizes this by e.g. invalidating rects  no animation, boring plain rendering  the first and last slide must fade in/fade out  if step<0 and nleft==1, left_slides[0] is fading in   if step>0 and nright==1, right_slides[0] is fading in   fading out center slide *
+  Updates the animation effect. Call this periodically from a timer.
+ deaccelerate when approaching the target  the leftmost and rightmost slide must fade away  must change direction ? *
+  Cleanup the plugin
+ Turn on backlight timeout (revert to settings) *
+  Shows the settings menu
+  changed?  fallthrough if changed, since cache needs to be rebuilt *
+  Show the main menu
+  WPS  Playback Control *
+   Animation step for zooming into the current cover
+ *
+   Animation step for zooming out the current cover
+ *
+   Draw a blue gradient at y with height h
+ *
+    Reset the track list after a album change
+  let the tracklist start more centered
+     * if the screen isn't filled with tracks *
+  Display the list of tracks
+  Rollover  Rolllover 
+ * Puts the current tracklist into a newly created playlist and starts playling
+  reuse existing playlist if possible
+     * regenerate if shuffle is on or changed, since playlist index and
+     * selected track are "out of sync"  First, replace the current playlist with a new one  TODO: can we adjust selected_track if !play_selected ?
+     * if shuffle, we can't predict the playing track easily, and for either
+     * case the track list doesn't get auto scrolled*
+   Draw the current album name
+  Draw album text  half way to next slide .. still not perfect! *
+  Display an error message and wait for input.
+*
+  Main function that also contain the main plasma
+  algorithm.
+  Turn off backlight timeout Scan will trigger when no file is found or the option was activated initialize  Initial rendering  Handle states  Calculate FPS  Draw FPS  Copy offscreen buffer to LCD and give time to other threads / Handle buttons ************************** Plugin entry point *************************** store buffer pointers and sizes **************************************************************************
+*             __________               __   ___.
+*   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+*   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+*   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+*   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+*                     \/            \/     \/    \/            \/
+* $Id$
+*
+* Copyright (C) 2007 Jonas Hurrelmann (j@outpo.st)
+* Copyright (C) 2007 Nicolas Pennequin
+* Copyright (C) 2007 Ariya Hidayat (ariya@kde.org) (original Qt Version)
+*
+* Original code: http://code.google.com/p/pictureflow/
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+*
+* This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+* KIND, either express or implied.
+*
+********************************************************************************************************* Globals **********************************
+ *  Targets which use plugin_get_audio_buffer() can't have playback from
+ * within pictureflow itself, as the whole core audio buffer is occupied  scrollwheel targets use the wheel, just as they do in lists,
+     * so there's no need for a special context,
+     * others use left/right here too (as oppsed to up/down in lists)  !USE_CORE_PREVNEXT  These all use short press of BUTTON_POWER for menu, map long POWER to quit
+ LCD_DEPTH <= 1  m:robe 100, Clip  LCD_DEPTH <= 1  LCD_DEPTH >= 8  LCD_DEPTH >= 8  for fixed-point arithmetic, we need minimum 32-bit long
+   long long (64-bit) might be useful for multiplication and division  probably more than can be loaded  some magic numbers for cache_version.  Error return values  current version for cover cache * structs we use  config values INDEX_HDR index of the cached slide  handle ID of the cached slide  "next" slide, with LRU last  "previous" slide  offset to the album name  offset to the artist name  artist taglist position  album taglist position  offset to the artist name  artist taglist position  offset to the track name  offset to the filename in the string, needed for playlist generation  number of ticks between each move  number of ticks to delay starting scrolling  pixels to move  tick of the next move  width of the string  x coordinate of the string  0 if scroll is disabled. otherwise, pixels to move  tick when to start scrolling  bmap width in pixels  bmap height in pixels * below we allocate the memory we want to use * for now it always points to the lcd framebuffer  index of the slide that is in the center  use long for aligning  queue (as array) for scheduling load_surface 
+    Proposals for transitions:
+
+    pf_idle -> pf_scrolling : NEXT_ALBUM/PREV_ALBUM pressed
+            -> pf_cover_in -> pf_show_tracks : SELECT_ALBUM clicked
+
+    pf_scrolling -> pf_idle : NEXT_ALBUM/PREV_ALBUM released
+
+    pf_show_tracks -> pf_cover_out -> pf_idle : SELECT_ALBUM pressed
+
+    TODO:
+    pf_show_tracks -> pf_cover_out -> pf_idle : MENU_PRESSED pressed
+    pf_show_tracks -> play_track() -> exit() : SELECT_ALBUM pressed
+
+    pf_idle, pf_scrolling -> show_menu(): MENU_PRESSED
+* code *
+ * This version preshifts each operand, which is useful when we know how many
+ * of the least significant bits will be empty, or are worried about overflow
+ * in a particular calculation
+  ARMv5+ has a clz instruction equivalent to our function.
+  Otherwise, use our clz, which can be inlined  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
+ * A clz benchmark plugin showed this to be about 14% faster on coldfire
+ * than the LUT-based version.
+  This clz is based on the log2(n) implementation at
+ * http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogLookup
+ * It is not any faster than the one above, but trades 16B in the lookup table
+ * for a savings of 12B per each inlined call.
+  Return the maximum possible left shift for a signed int32, without
+ * overflow
+  Calculate num/den, with the result shifted left by PFREAL_SHIFT, by shifting
+ * num and den before dividing.
+  warning: regenerate the table if IANGLE_MAX and PFREAL_SHIFT are changed!  scales the 8bit subpixel value to native lcd format, indicated by bits  read_image_file() is called without FORMAT_TRANSPARENT so
+ * it's safe to ignore alpha channel in the next two functions  scrolling  Hz values:
+        1, 1.25, 1.55, 2, 2.5, 3.12, 4, 5, 6.25, 8.33, 10, 12.5, 16.7, 20, 25, 33  at beginning of line  at end of line  Create the lookup table with the scaling values for the reflections  adds tagcache_search results into artist/album index  not enough memory adds <untagged> albums/artist to existing album index  store existing count  search tagcache for all <untagged> albums & save the albumartist seek pos  not enough memory  map the artist_seek position to the artist name index  last match, start here next loop  no match start back at beginning  Create an index of all artists from the database  artist index starts at end of buf it will be rearranged when finalized  artist names starts at beginning of buf  finalize the artist index  move buf ptr to end of artist_index *
+  Create an index of all artists and albums from the database.
+  Also store the artists and album names so we can access them later.
+  Artists  Albums  album_index starts at end of buf it will be rearranged when finalized  album_names starts at the beginning of buf  Build artist list for untagged albums  finalize the album index  move buf ptr to end of album_index  Assign indices  last match, start here next loop  no match start back at beginning  sort list order to find duplicates  mark duplicate albums for deletion  -1 don't check last entry  now fix the album list order  remove any extra untagged albums
+     * extra space is orphaned till restart Saves the album index into a binary file to be recovered the
+ next time PictureFlow is launched reads data from save file to buffer Loads the album_index information stored in the hard driverb->lseek(fr, sizeof(data) + 1, SEEK_SET); artist names  album names  index of album names  sanity check loaded data *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album name of the given slide_index
+ *
+ Return a pointer to the album artist of the given slide_index
+ *
+ Return a pointer to the track name of the active album
+ create_track_index has to be called first.
+  we could be looking for the artist in either field rb->splashf(1000, "%s, %s", current_album, current_artist);*
+  Compare two unsigned ints passed via pointers.
+ *
+  Create the track index of the given slide_index.
+  show filename instead of <untaggged>  if filename remove the '/'  retrieve filename for building the playlist  make sure track name and file name are really split by a \0, else
+             * get_track_name might fail  request more buffer so that track and filename fit  now fix the track list order *
+  Determine filename of the album art for the given slide_index and
+  store the result in buf.
+  The algorithm looks for the first track of the given album uses
+  find_albumart to find the filename.
+  find the first track of the album  did not find a matching track *
+  Draw the PictureFlow logo
+  Mono LCDs need the logo inverted  Mono LCDs need the logo inverted *
+  Draw a simple progress bar
+  Calculate modified FNV hash of string
+ * has good avalanche behaviour and uniform distribution
+ * see http://home.comcast.net/~bretm/hash/  2166136261;*
+ Save the given bitmap as filename in the pfraw format
+  Rollover  Rollover rb->strcpy(aa_cache.file, EMPTY_SLIDE_BMP); direct interaction with user *
+ Precomupte the album art images and store them in CACHE_PREFIX.
+ Use the "?" bitmap if image is not found.
+  Warn the user that we couldn't find any albumart *
+  Create the "?" slide, that is shown while loading
+  or when no cover was found.
+ *
+ Thread used for loading and preparing bitmaps in the background
+  we just woke up *
+ End the thread by posting the EV_EXIT event
+  remove the thread's queue from the broadcast list *
+ Create the thread an setup the event queue
+  put the thread's queue in the bcast list 
+ * The following functions implement the linked-list-in-array used to manage
+ * the LRU cache of slides, and the list of free cache slots.
+ *
+ Pop the given item from the linked list starting at *head, returning the next
+ item, or -1 if the list is now empty.
+*
+ Pop the head item from the list starting at *head, returning the index of the
+ item, or -1 if the list is already empty.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i at the end of the list starting at *head.
+*
+ Insert the item at index i before the one at index p.
+*
+ Insert the item at index i before the one at index p in the list starting at
+ *head
+*
+ Free the used slide at index i, and its buffer, and move it to the free
+ slides list.
+*
+ Free one slide ranked above the given priority. If no such slide can be found,
+ return false.
+*
+ Free all slides ranked above the given priority.
+*
+ Read the pfraw image given as filename and return the hid of the buffer
+  pf_cfg.cache_version = CACHE_UPDATE; -- don't invalidate on missing pfraw  allow audio to play when fast scrolling *
+  Load the surface for the given slide_index into the cache at cache_index.
+ *
+ Load the "next" slide that we can load, freeing old slides if needed, provided
+ that they are further from center_index than the current slide
+ update indices *
+  Get a slide from the buffer
+ *
+ Return the requested surface
+*
+ adjust slides so that they are in "steady state" position
+ *
+ Updates look-up table and other stuff necessary for the rendering.
+ Call this when the viewport size or slide dimension is changed.
+ *
+ * To calculate the offset that will provide the proper margin, we use the same
+ * projection used to render the slides. The solution for xc, the slide center,
+ * is:
+ *                         xp * (zo + xs * sin(r))
+ * xc = xp - xs * cos(r) + ───────────────────────
+ *                                    z
+ * TODO: support moving the side slides toward or away from the camera
+  approx. 70 degrees tilted *
+   Fade the given color by spreading the fb_data
+   to an uint, multiply and compress the result back to a fb_data.
+  FIXME: check this*
+ * Render a single slide
+ * Where xc is the slide's horizontal offset from center, xs is the horizontal
+ * on the slide from its center, zo is the slide's depth offset from the plane
+ * of the display, r is the angle at which the slide is tilted, and xp is the
+ * point on the display corresponding to xs on the slide, the projection
+ * formulas are:
+ *
+ *      z * (xc + xs * cos(r))
+ * xp = ──────────────────────
+ *       z + zo + xs * sin(r)
+ *
+ *      z * (xc - xp) - xp * zo
+ * xs = ────────────────────────
+ *      xp * sin(r) - z * cos(r)
+ *
+ * We use the xp projection once, to find the left edge of the slide on the
+ * display. From there, we use the xs reverse projection to find the horizontal
+ * offset from the slide center of each column on the screen, until we reach
+ * the right edge of the slide, or the screen. The reverse projection can be
+ * optimized by saving the numerator and denominator of the fraction, which can
+ * then be incremented by (z + zo) and sin(r) respectively.
+  on stack, which is in IRAM on several targets  opaque -> copy table  precalculate faded table  Since we're finding the screen position of the left edge of the slide,
+     * we round up.
+      let the music play... *
+  Jump to the given slide_index
+ *
+  Start the animation for changing slides
+ *
+  Go to the previous slide
+ *
+  Go to the next slide
+ *
+  Render the slides. Updates only the offscreen buffer.
+ TODO: Optimizes this by e.g. invalidating rects  no animation, boring plain rendering  the first and last slide must fade in/fade out  if step<0 and nleft==1, left_slides[0] is fading in   if step>0 and nright==1, right_slides[0] is fading in   fading out center slide *
+  Updates the animation effect. Call this periodically from a timer.
+ deaccelerate when approaching the target  the leftmost and rightmost slide must fade away  must change direction ? *
+  Cleanup the plugin
+ Turn on backlight timeout (revert to settings) *
+  Shows the settings menu
+  changed?  fallthrough if changed, since cache needs to be rebuilt *
+  Show the main menu
+  WPS  Playback Control *
+   Animation step for zooming into the current cover
+ *
+   Animation step for zooming out the current cover
+ *
+   Draw a blue gradient at y with height h
+ *
+    Reset the track list after a album change
+  let the tracklist start more centered
+     * if the screen isn't filled with tracks *
+  Display the list of tracks
+  Rollover  Rolllover 
+ * Puts the current tracklist into a newly created playlist and starts playling
+  reuse existing playlist if possible
+     * regenerate if shuffle is on or changed, since playlist index and
+     * selected track are "out of sync"  First, replace the current playlist with a new one  TODO: can we adjust selected_track if !play_selected ?
+     * if shuffle, we can't predict the playing track easily, and for either
+     * case the track list doesn't get auto scrolled*
+   Draw the current album name
+  Draw album text  half way to next slide .. still not perfect! *
+  Display an error message and wait for input.
+*
+  Main function that also contain the main plasma
+  algorithm.
+  Turn off backlight timeout Scan will trigger when no file is found or the option was activated initialize  Initial rendering  Handle states  Calculate FPS  Draw FPS  Copy offscreen buffer to LCD and give time to other threads / Handle buttons ************************** Plugin entry point *************************** store buffer pointers and sizes 

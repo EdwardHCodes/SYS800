@@ -1,0 +1,145 @@
+
+ * acpu.c - another 6502 CPU emulator
+ *
+ * Copyright (C) 2007-2010  Piotr Fusik
+ *
+ * This file is part of ASAP (Another Slight Atari Player),
+ * see http://asap.sourceforge.net
+ *
+ * ASAP is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; either version 2 of the License,
+ * or (at your option) any later version.
+ *
+ * ASAP is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ASAP; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  How 6502 registers are stored in this emulator:
+   All variables are int, because modern processors (and Java bytecode)
+   tend to operate more effectively on these type than narrower ones.
+   pc is really an unsigned 16-bit integer.
+   a, x, y and s are unsigned 8-bit integers.
+   Flags are decomposed into three variables for improved performance.
+   c is either 0 or 1.
+   nz contains 6502 flags N and Z.
+   N is set if (nz >= 0x80). Z is set if ((nz & 0xff) == 0).
+   Usually nz is simply assigned the unsigned 8-bit operation result.
+   There are just a few operations (ADC in decimal mode, BIT, PLP and RTI)
+   where both N and Z may be set. In these cases, N is reflected by the 8th
+   (not 7th) bit of nz.
+   vdi contains rarely used flags V, D and I, as a combination
+   of V_FLAG, D_FLAG and I_FLAG. Other vdi bits are clear.
+
+   "Unofficial" opcodes are not documented as "legal" 6502 opcodes.
+   Their operation has been reverse-engineered on Atari 800XL and Atari 65XE.
+   Unofficial opcodes are identical to C64's 6510, except for 0x8b and 0xab.
+   The operation of "unstable" opcodes is partially uncertain.
+   Explanation is welcome.
+
+   Emulation of POKEY timer interrupts is included.
+ 
+   Two preprocessor symbols may be used to strip the size of this emulator.
+   Define ACPU_NO_DECIMAL to disable emulation of the BCD mode.
+   Define ACPU_NO_UNOFFICIAL to disable emulation of unofficial opcodes.   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0x  1x  2x  3x  4x  5x  6x  7x  8x  9x  Ax  Bx  Cx  Dx  Ex  Fx  binary mode  binary mode  ACPU_NO_DECIMAL  binary mode  decimal mode  decimal mode  ACPU_NO_DECIMAL  push flags with B flag clear (NMI, IRQ)  push flags with B flag set (PHP, BRK)  Runs 6502 emulation for the specified number of Atari scanlines.
+   Each scanline is 114 cycles of which 9 is taken by ANTIC for memory refresh.  copy registers from ASAP_State to local variables for improved performance  BRK  ORA (ab,x)  CIM [unofficial]  ASO (ab,x) [unofficial]  NOP ab [unofficial]  NOP ab,x [unofficial]  NOP #ab [unofficial]  ASO ab [unofficial]  ANC #ab [unofficial]  NOP abcd [unofficial]  ASO abcd [unofficial]  ASO (ab),y [unofficial]  ASO ab,x [unofficial]  ASO abcd,y [unofficial]  NOP abcd,x [unofficial]  ASO abcd,x [unofficial]  RLA (ab,x) [unofficial]  RLA ab [unofficial]  RLA abcd [unofficial]  RLA (ab),y [unofficial]  RLA ab,x [unofficial]  RLA abcd,y [unofficial]  RLA abcd,x [unofficial]  LSE (ab,x) [unofficial]  LSE ab [unofficial]  ALR #ab [unofficial]  LSE abcd [unofficial]  LSE (ab),y [unofficial]  LSE ab,x [unofficial]  LSE abcd,y [unofficial]  LSE abcd,x [unofficial]  RRA (ab,x) [unofficial]  RRA ab [unofficial]  ARR #ab [unofficial]  RRA abcd [unofficial]  RRA (ab),y [unofficial]  RRA ab,x [unofficial]  RRA abcd,y [unofficial]  RRA abcd,x [unofficial]  SAX (ab,x) [unofficial]  SAX ab [unofficial]  ANE #ab [unofficial]  SAX abcd [unofficial]  SHA (ab),y [unofficial, unstable]  SAX ab,y [unofficial]  SHS abcd,y [unofficial, unstable]  S seems to be stable, only memory values vary  SHY abcd,x [unofficial]  SHX abcd,y [unofficial]  SHA abcd,y [unofficial, unstable]  LAX (ab,x) [unofficial]  LAX ab [unofficial]  ANX #ab [unofficial]  LAX abcd [unofficial]  LAX (ab),y [unofficial]  LAX ab,y [unofficial]  LAS abcd,y [unofficial]  LAX abcd,y [unofficial]  DCM (ab,x) [unofficial]  DCM ab [unofficial]  SBX #ab [unofficial]  DCM abcd [unofficial]  DCM (ab),y [unofficial]  DCM ab,x [unofficial]  DCM abcd,y [unofficial]  DCM abcd,x [unofficial]  INS (ab,x) [unofficial]  INS ab [unofficial]  INS abcd [unofficial]  INS (ab),y [unofficial]  INS ab,x [unofficial]  INS abcd,y [unofficial]  INS abcd,x [unofficial]  ACPU_NO_UNOFFICIAL  ORA ab  ASL ab  PHP  ORA #ab  ASL  ORA abcd  ASL abcd  BPL  ORA (ab),y  ORA ab,x  ASL ab,x  CLC  ORA abcd,y  ORA abcd,x  ASL abcd,x  JSR abcd  AND (ab,x)  BIT ab  AND ab  ROL ab  PLP  AND #ab  ROL  BIT abcd  AND abcd  ROL abcd  BMI  AND (ab),y  AND ab,x  ROL ab,x  SEC  AND abcd,y  AND abcd,x  ROL abcd,x  RTI  EOR (ab,x)  EOR ab  LSR ab  PHA  EOR #ab  LSR  JMP abcd  EOR abcd  LSR abcd  BVC  EOR (ab),y  EOR ab,x  LSR ab,x  CLI  EOR abcd,y  EOR abcd,x  LSR abcd,x  RTS  ADC (ab,x)  ADC ab  ROR ab  PLA  ADC #ab  ROR  JMP (abcd)  ADC abcd  ROR abcd  BVS  ADC (ab),y  ADC ab,x  ROR ab,x  SEI  ADC abcd,y  ADC abcd,x  ROR abcd,x  STA (ab,x)  STY ab  STA ab  STX ab  DEY  TXA  STY abcd  STA abcd  STX abcd  BCC  STA (ab),y  STY ab,x  STA ab,x  STX ab,y  TYA  STA abcd,y  TXS  STA abcd,x  LDY #ab  LDA (ab,x)  LDX #ab  LDY ab  LDA ab  LDX ab  TAY  LDA #ab  TAX  LDY abcd  LDA abcd  LDX abcd  BCS  LDA (ab),y  LDY ab,x  LDA ab,x  LDX ab,y  CLV  LDA abcd,y  TSX  LDY abcd,x  LDA abcd,x  LDX abcd,y  CPY #ab  CMP (ab,x)  CPY ab  CMP ab  DEC ab  INY  CMP #ab  DEX  CPY abcd  CMP abcd  DEC abcd  BNE  CMP (ab),y  CMP ab,x  DEC ab,x  CLD  CMP abcd,y  CMP abcd,x  DEC abcd,x  CPX #ab  SBC (ab,x)  CPX ab  SBC ab  INC ab  INX  SBC #ab  SBC #ab [unofficial]  NOP  NOP [unofficial]  CPX abcd  SBC abcd  INC abcd  BEQ  SBC (ab),y  SBC ab,x  INC ab,x  SED  SBC abcd,y  SBC abcd,x  INC abcd,x 
+ * acpu.c - another 6502 CPU emulator
+ *
+ * Copyright (C) 2007-2010  Piotr Fusik
+ *
+ * This file is part of ASAP (Another Slight Atari Player),
+ * see http://asap.sourceforge.net
+ *
+ * ASAP is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; either version 2 of the License,
+ * or (at your option) any later version.
+ *
+ * ASAP is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ASAP; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  How 6502 registers are stored in this emulator:
+   All variables are int, because modern processors (and Java bytecode)
+   tend to operate more effectively on these type than narrower ones.
+   pc is really an unsigned 16-bit integer.
+   a, x, y and s are unsigned 8-bit integers.
+   Flags are decomposed into three variables for improved performance.
+   c is either 0 or 1.
+   nz contains 6502 flags N and Z.
+   N is set if (nz >= 0x80). Z is set if ((nz & 0xff) == 0).
+   Usually nz is simply assigned the unsigned 8-bit operation result.
+   There are just a few operations (ADC in decimal mode, BIT, PLP and RTI)
+   where both N and Z may be set. In these cases, N is reflected by the 8th
+   (not 7th) bit of nz.
+   vdi contains rarely used flags V, D and I, as a combination
+   of V_FLAG, D_FLAG and I_FLAG. Other vdi bits are clear.
+
+   "Unofficial" opcodes are not documented as "legal" 6502 opcodes.
+   Their operation has been reverse-engineered on Atari 800XL and Atari 65XE.
+   Unofficial opcodes are identical to C64's 6510, except for 0x8b and 0xab.
+   The operation of "unstable" opcodes is partially uncertain.
+   Explanation is welcome.
+
+   Emulation of POKEY timer interrupts is included.
+ 
+   Two preprocessor symbols may be used to strip the size of this emulator.
+   Define ACPU_NO_DECIMAL to disable emulation of the BCD mode.
+   Define ACPU_NO_UNOFFICIAL to disable emulation of unofficial opcodes.   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0x  1x  2x  3x  4x  5x  6x  7x  8x  9x  Ax  Bx  Cx  Dx  Ex  Fx  binary mode  binary mode  ACPU_NO_DECIMAL  binary mode  decimal mode  decimal mode  ACPU_NO_DECIMAL  push flags with B flag clear (NMI, IRQ)  push flags with B flag set (PHP, BRK)  Runs 6502 emulation for the specified number of Atari scanlines.
+   Each scanline is 114 cycles of which 9 is taken by ANTIC for memory refresh.  copy registers from ASAP_State to local variables for improved performance  BRK  ORA (ab,x)  CIM [unofficial]  ASO (ab,x) [unofficial]  NOP ab [unofficial]  NOP ab,x [unofficial]  NOP #ab [unofficial]  ASO ab [unofficial]  ANC #ab [unofficial]  NOP abcd [unofficial]  ASO abcd [unofficial]  ASO (ab),y [unofficial]  ASO ab,x [unofficial]  ASO abcd,y [unofficial]  NOP abcd,x [unofficial]  ASO abcd,x [unofficial]  RLA (ab,x) [unofficial]  RLA ab [unofficial]  RLA abcd [unofficial]  RLA (ab),y [unofficial]  RLA ab,x [unofficial]  RLA abcd,y [unofficial]  RLA abcd,x [unofficial]  LSE (ab,x) [unofficial]  LSE ab [unofficial]  ALR #ab [unofficial]  LSE abcd [unofficial]  LSE (ab),y [unofficial]  LSE ab,x [unofficial]  LSE abcd,y [unofficial]  LSE abcd,x [unofficial]  RRA (ab,x) [unofficial]  RRA ab [unofficial]  ARR #ab [unofficial]  RRA abcd [unofficial]  RRA (ab),y [unofficial]  RRA ab,x [unofficial]  RRA abcd,y [unofficial]  RRA abcd,x [unofficial]  SAX (ab,x) [unofficial]  SAX ab [unofficial]  ANE #ab [unofficial]  SAX abcd [unofficial]  SHA (ab),y [unofficial, unstable]  SAX ab,y [unofficial]  SHS abcd,y [unofficial, unstable]  S seems to be stable, only memory values vary  SHY abcd,x [unofficial]  SHX abcd,y [unofficial]  SHA abcd,y [unofficial, unstable]  LAX (ab,x) [unofficial]  LAX ab [unofficial]  ANX #ab [unofficial]  LAX abcd [unofficial]  LAX (ab),y [unofficial]  LAX ab,y [unofficial]  LAS abcd,y [unofficial]  LAX abcd,y [unofficial]  DCM (ab,x) [unofficial]  DCM ab [unofficial]  SBX #ab [unofficial]  DCM abcd [unofficial]  DCM (ab),y [unofficial]  DCM ab,x [unofficial]  DCM abcd,y [unofficial]  DCM abcd,x [unofficial]  INS (ab,x) [unofficial]  INS ab [unofficial]  INS abcd [unofficial]  INS (ab),y [unofficial]  INS ab,x [unofficial]  INS abcd,y [unofficial]  INS abcd,x [unofficial]  ACPU_NO_UNOFFICIAL  ORA ab  ASL ab  PHP  ORA #ab  ASL  ORA abcd  ASL abcd  BPL  ORA (ab),y  ORA ab,x  ASL ab,x  CLC  ORA abcd,y  ORA abcd,x  ASL abcd,x  JSR abcd  AND (ab,x)  BIT ab  AND ab  ROL ab  PLP  AND #ab  ROL  BIT abcd  AND abcd  ROL abcd  BMI  AND (ab),y  AND ab,x  ROL ab,x  SEC  AND abcd,y  AND abcd,x  ROL abcd,x  RTI  EOR (ab,x)  EOR ab  LSR ab  PHA  EOR #ab  LSR  JMP abcd  EOR abcd  LSR abcd  BVC  EOR (ab),y  EOR ab,x  LSR ab,x  CLI  EOR abcd,y  EOR abcd,x  LSR abcd,x  RTS  ADC (ab,x)  ADC ab  ROR ab  PLA  ADC #ab  ROR  JMP (abcd)  ADC abcd  ROR abcd  BVS  ADC (ab),y  ADC ab,x  ROR ab,x  SEI  ADC abcd,y  ADC abcd,x  ROR abcd,x  STA (ab,x)  STY ab  STA ab  STX ab  DEY  TXA  STY abcd  STA abcd  STX abcd  BCC  STA (ab),y  STY ab,x  STA ab,x  STX ab,y  TYA  STA abcd,y  TXS  STA abcd,x  LDY #ab  LDA (ab,x)  LDX #ab  LDY ab  LDA ab  LDX ab  TAY  LDA #ab  TAX  LDY abcd  LDA abcd  LDX abcd  BCS  LDA (ab),y  LDY ab,x  LDA ab,x  LDX ab,y  CLV  LDA abcd,y  TSX  LDY abcd,x  LDA abcd,x  LDX abcd,y  CPY #ab  CMP (ab,x)  CPY ab  CMP ab  DEC ab  INY  CMP #ab  DEX  CPY abcd  CMP abcd  DEC abcd  BNE  CMP (ab),y  CMP ab,x  DEC ab,x  CLD  CMP abcd,y  CMP abcd,x  DEC abcd,x  CPX #ab  SBC (ab,x)  CPX ab  SBC ab  INC ab  INX  SBC #ab  SBC #ab [unofficial]  NOP  NOP [unofficial]  CPX abcd  SBC abcd  INC abcd  BEQ  SBC (ab),y  SBC ab,x  INC ab,x  SED  SBC abcd,y  SBC abcd,x  INC abcd,x 
+ * acpu.c - another 6502 CPU emulator
+ *
+ * Copyright (C) 2007-2010  Piotr Fusik
+ *
+ * This file is part of ASAP (Another Slight Atari Player),
+ * see http://asap.sourceforge.net
+ *
+ * ASAP is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; either version 2 of the License,
+ * or (at your option) any later version.
+ *
+ * ASAP is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ASAP; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  How 6502 registers are stored in this emulator:
+   All variables are int, because modern processors (and Java bytecode)
+   tend to operate more effectively on these type than narrower ones.
+   pc is really an unsigned 16-bit integer.
+   a, x, y and s are unsigned 8-bit integers.
+   Flags are decomposed into three variables for improved performance.
+   c is either 0 or 1.
+   nz contains 6502 flags N and Z.
+   N is set if (nz >= 0x80). Z is set if ((nz & 0xff) == 0).
+   Usually nz is simply assigned the unsigned 8-bit operation result.
+   There are just a few operations (ADC in decimal mode, BIT, PLP and RTI)
+   where both N and Z may be set. In these cases, N is reflected by the 8th
+   (not 7th) bit of nz.
+   vdi contains rarely used flags V, D and I, as a combination
+   of V_FLAG, D_FLAG and I_FLAG. Other vdi bits are clear.
+
+   "Unofficial" opcodes are not documented as "legal" 6502 opcodes.
+   Their operation has been reverse-engineered on Atari 800XL and Atari 65XE.
+   Unofficial opcodes are identical to C64's 6510, except for 0x8b and 0xab.
+   The operation of "unstable" opcodes is partially uncertain.
+   Explanation is welcome.
+
+   Emulation of POKEY timer interrupts is included.
+ 
+   Two preprocessor symbols may be used to strip the size of this emulator.
+   Define ACPU_NO_DECIMAL to disable emulation of the BCD mode.
+   Define ACPU_NO_UNOFFICIAL to disable emulation of unofficial opcodes.   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0x  1x  2x  3x  4x  5x  6x  7x  8x  9x  Ax  Bx  Cx  Dx  Ex  Fx  binary mode  binary mode  ACPU_NO_DECIMAL  binary mode  decimal mode  decimal mode  ACPU_NO_DECIMAL  push flags with B flag clear (NMI, IRQ)  push flags with B flag set (PHP, BRK)  Runs 6502 emulation for the specified number of Atari scanlines.
+   Each scanline is 114 cycles of which 9 is taken by ANTIC for memory refresh.  copy registers from ASAP_State to local variables for improved performance  BRK  ORA (ab,x)  CIM [unofficial]  ASO (ab,x) [unofficial]  NOP ab [unofficial]  NOP ab,x [unofficial]  NOP #ab [unofficial]  ASO ab [unofficial]  ANC #ab [unofficial]  NOP abcd [unofficial]  ASO abcd [unofficial]  ASO (ab),y [unofficial]  ASO ab,x [unofficial]  ASO abcd,y [unofficial]  NOP abcd,x [unofficial]  ASO abcd,x [unofficial]  RLA (ab,x) [unofficial]  RLA ab [unofficial]  RLA abcd [unofficial]  RLA (ab),y [unofficial]  RLA ab,x [unofficial]  RLA abcd,y [unofficial]  RLA abcd,x [unofficial]  LSE (ab,x) [unofficial]  LSE ab [unofficial]  ALR #ab [unofficial]  LSE abcd [unofficial]  LSE (ab),y [unofficial]  LSE ab,x [unofficial]  LSE abcd,y [unofficial]  LSE abcd,x [unofficial]  RRA (ab,x) [unofficial]  RRA ab [unofficial]  ARR #ab [unofficial]  RRA abcd [unofficial]  RRA (ab),y [unofficial]  RRA ab,x [unofficial]  RRA abcd,y [unofficial]  RRA abcd,x [unofficial]  SAX (ab,x) [unofficial]  SAX ab [unofficial]  ANE #ab [unofficial]  SAX abcd [unofficial]  SHA (ab),y [unofficial, unstable]  SAX ab,y [unofficial]  SHS abcd,y [unofficial, unstable]  S seems to be stable, only memory values vary  SHY abcd,x [unofficial]  SHX abcd,y [unofficial]  SHA abcd,y [unofficial, unstable]  LAX (ab,x) [unofficial]  LAX ab [unofficial]  ANX #ab [unofficial]  LAX abcd [unofficial]  LAX (ab),y [unofficial]  LAX ab,y [unofficial]  LAS abcd,y [unofficial]  LAX abcd,y [unofficial]  DCM (ab,x) [unofficial]  DCM ab [unofficial]  SBX #ab [unofficial]  DCM abcd [unofficial]  DCM (ab),y [unofficial]  DCM ab,x [unofficial]  DCM abcd,y [unofficial]  DCM abcd,x [unofficial]  INS (ab,x) [unofficial]  INS ab [unofficial]  INS abcd [unofficial]  INS (ab),y [unofficial]  INS ab,x [unofficial]  INS abcd,y [unofficial]  INS abcd,x [unofficial]  ACPU_NO_UNOFFICIAL  ORA ab  ASL ab  PHP  ORA #ab  ASL  ORA abcd  ASL abcd  BPL  ORA (ab),y  ORA ab,x  ASL ab,x  CLC  ORA abcd,y  ORA abcd,x  ASL abcd,x  JSR abcd  AND (ab,x)  BIT ab  AND ab  ROL ab  PLP  AND #ab  ROL  BIT abcd  AND abcd  ROL abcd  BMI  AND (ab),y  AND ab,x  ROL ab,x  SEC  AND abcd,y  AND abcd,x  ROL abcd,x  RTI  EOR (ab,x)  EOR ab  LSR ab  PHA  EOR #ab  LSR  JMP abcd  EOR abcd  LSR abcd  BVC  EOR (ab),y  EOR ab,x  LSR ab,x  CLI  EOR abcd,y  EOR abcd,x  LSR abcd,x  RTS  ADC (ab,x)  ADC ab  ROR ab  PLA  ADC #ab  ROR  JMP (abcd)  ADC abcd  ROR abcd  BVS  ADC (ab),y  ADC ab,x  ROR ab,x  SEI  ADC abcd,y  ADC abcd,x  ROR abcd,x  STA (ab,x)  STY ab  STA ab  STX ab  DEY  TXA  STY abcd  STA abcd  STX abcd  BCC  STA (ab),y  STY ab,x  STA ab,x  STX ab,y  TYA  STA abcd,y  TXS  STA abcd,x  LDY #ab  LDA (ab,x)  LDX #ab  LDY ab  LDA ab  LDX ab  TAY  LDA #ab  TAX  LDY abcd  LDA abcd  LDX abcd  BCS  LDA (ab),y  LDY ab,x  LDA ab,x  LDX ab,y  CLV  LDA abcd,y  TSX  LDY abcd,x  LDA abcd,x  LDX abcd,y  CPY #ab  CMP (ab,x)  CPY ab  CMP ab  DEC ab  INY  CMP #ab  DEX  CPY abcd  CMP abcd  DEC abcd  BNE  CMP (ab),y  CMP ab,x  DEC ab,x  CLD  CMP abcd,y  CMP abcd,x  DEC abcd,x  CPX #ab  SBC (ab,x)  CPX ab  SBC ab  INC ab  INX  SBC #ab  SBC #ab [unofficial]  NOP  NOP [unofficial]  CPX abcd  SBC abcd  INC abcd  BEQ  SBC (ab),y  SBC ab,x  INC ab,x  SED  SBC abcd,y  SBC abcd,x  INC abcd,x 

@@ -1,0 +1,1249 @@
+
+ * pearl.c: Nikoli's `Masyu' puzzle. 
+ 
+ * TODO:
+ *
+ *  - The current keyboard cursor mechanism works well on ordinary PC
+ *    keyboards, but for platforms with only arrow keys and a select
+ *    button or two, we may at some point need a simpler one which can
+ *    handle 'x' markings without needing shift keys. For instance, a
+ *    cursor with twice the grid resolution, so that it can range
+ *    across face centres, edge centres and vertices; 'clicks' on face
+ *    centres begin a drag as currently, clicks on edges toggle
+ *    markings, and clicks on vertices are ignored (but it would be
+ *    too confusing not to let the cursor rest on them). But I'm
+ *    pretty sure that would be less pleasant to play on a full
+ *    keyboard, so probably a #ifdef would be the thing.
+ *
+ *  - Generation is still pretty slow, due to difficulty coming up in
+ *    the first place with a loop that makes a soluble puzzle even
+ *    with all possible clues filled in.
+ *     + A possible alternative strategy to further tuning of the
+ * 	 existing loop generator would be to throw the entire
+ * 	 mechanism out and instead write a different generator from
+ * 	 scratch which evolves the solution along with the puzzle:
+ * 	 place a few clues, nail down a bit of the loop, place another
+ * 	 clue, nail down some more, etc. However, I don't have a
+ * 	 detailed plan for any such mechanism, so it may be a pipe
+ * 	 dream.
+  Macro ickery copied from slant.c  XXX remove me!  size w*h  size w*h: lines placed  size w*h: errors detected  size w*h: 'no line here' marks placed.  struct copy  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * workspace[(2*y+1)*W+(2*x+1)] indicates the possible nature
+     * of the square (x,y), as a logical OR of bitfields.
+     * 
+     * workspace[(2*y)*W+(2*x+1)], for x odd and y even, indicates
+     * whether the horizontal edge between (x,y) and (x+1,y) is
+     * connected (1), disconnected (2) or unknown (3).
+     * 
+     * workspace[(2*y+1)*W+(2*x)], indicates the same about the
+     * vertical edge between (x,y) and (x,y+1).
+     * 
+     * Initially, every square is considered capable of being in
+     * any of the seven possible states (two straights, four
+     * corners and empty), except those corresponding to clue
+     * squares which are more restricted.
+     * 
+     * Initially, all edges are unknown, except the ones around the
+     * grid border which are known to be disconnected.
+      Square states  Horizontal edges  Vertical edges 
+     * We maintain a dsf of connected squares, together with a
+     * count of the size of each equivalence class.
+     
+     * Now repeatedly try to find something we can do.
+     
+	 * Go through the square state words, and discard any
+	 * square state which is inconsistent with known facts
+	 * about the edges around the square.
+	 
+			 * If any edge of this square is known to
+			 * be connected when state b would require
+			 * it disconnected, or vice versa, discard
+			 * the state.
+			 
+		 * Consistency check: each square must have at
+		 * least one state left!
+		 
+	 * Now go through the states array again, and nail down any
+	 * unknown edge if one of its neighbouring squares makes it
+	 * known.
+	 
+		 * Now any bit clear in edgeor marks a disconnected
+		 * edge, and any bit set in edgeand marks a
+		 * connected edge.
+		  First check consistency: neither bit is both! 
+	 * Now for longer-range clue-based deductions (using the
+	 * rules that a corner clue must connect to two straight
+	 * squares, and a straight clue must connect to at least
+	 * one corner square).
+	 
+			     * If a corner clue is connected on any
+			     * edge, then we can immediately nail
+			     * down the square beyond that edge as
+			     * being a straight in the appropriate
+			     * direction.
+			     
+			     * Conversely, if a corner clue is
+			     * separated by an unknown edge from a
+			     * square which _cannot_ be a straight
+			     * in the appropriate direction, we can
+			     * mark that edge as disconnected.
+			     
+		     * If a straight clue is between two squares
+		     * neither of which is capable of being a
+		     * corner connected to it, then the straight
+		     * clue cannot point in that direction.
+		     
+		     * If a straight clue with known direction is
+		     * connected on one side to a known straight,
+		     * then on the other side it must be a corner.
+		     
+	 * Now detect shortcut loops.
+	 
+	     * First go through the edge entries and update the dsf
+	     * of which squares are connected to which others. We
+	     * also track the number of squares in each equivalence
+	     * class, and count the overall number of
+	     * known-non-blank squares.
+	     *
+	     * In the process of doing this, we must notice if a
+	     * loop has already been formed. If it has, we blank
+	     * out any square which isn't part of that loop
+	     * (failing a consistency check if any such square does
+	     * not have BLANK as one of its remaining options) and
+	     * exit the deduction loop with success.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is connected, do the dsf
+			 * thing.
+			 
+				 * We have a loop!
+				 
+				     * In fact, we have two
+				     * separate loops, which is
+				     * doom.
+				     
+				 * Merge the two equivalence
+				 * classes.
+				 
+			 * (x,y) are the workspace coordinates of a
+			 * square field. If the square is
+			 * definitely not blank, count it.
+			 
+	     * If we discovered an existing loop above, we must now
+	     * blank every square not part of it, and exit the main
+	     * deduction loop.
+	     
+				 * This square is not part of the
+				 * loop, but is known non-blank. We
+				 * have goofed.
+				 
+		 * And we're done.
+		  Further deductions are considered 'tricky'. 
+	     * Now go through the workspace again and mark any edge
+	     * which would cause a shortcut loop (i.e. would
+	     * connect together two squares in the same equivalence
+	     * class, and that equivalence class does not contain
+	     * _all_ the known-non-blank squares currently in the
+	     * grid) as disconnected. Also, mark any _square state_
+	     * which would cause a shortcut loop as disconnected.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is currently unknown, and
+			 * sits between two squares in the same
+			 * equivalence class, and the size of that
+			 * class is less than nonblanks, then
+			 * connecting this edge would be a shortcut
+			 * loop and so we must not do so.
+			 
+				 * We have a loop. Is it a shortcut?
+				 
+				     * Yes! Mark this edge disconnected.
+				     
+			 * (x,y) are the workspace coordinates of a
+			 * square field. Go through its possible
+			 * (non-blank) states and see if any gives
+			 * rise to a shortcut loop.
+			 * 
+			 * This is slightly fiddly, because we have
+			 * to check whether this square is already
+			 * part of the same equivalence class as
+			 * the things it's joining.
+			 
+				 * Find the equivalence classes of
+				 * the two squares this one would
+				 * connect if it were in this
+				 * state.
+				 
+				     * This square state would form
+				     * a loop on equivalence class
+				     * e. Measure the size of that
+				     * loop, and see if it's a
+				     * shortcut.
+				      add the square itself 
+					 * It is! Mark this square
+					 * state invalid.
+					 
+	 * If we reach here, there is nothing left we can do.
+	 * Return 2 for ambiguous puzzle.
+	 
+     * If ret = 1 then we've successfully achieved a solution. This
+     * means that we expect every square to be nailed down to
+     * exactly one possibility. If this is the case, or if the caller
+     * asked for a partial solution anyway, transcribe those
+     * possibilities into the result array.
+      we should have had a break by now  ----------------------------------------------------------------------
+ * Loop generator.
+ 
+ * We use the loop generator code from loopy, hard-coding to a square
+ * grid of the appropriate size. Knowing the grid layout and the tile
+ * size we can shrink that to our small grid and then make our line
+ * layout from the face colour info.
+ *
+ * We provide a bias function to the loop generator which tries to
+ * bias in favour of loops with more scope for Pearl black clues. This
+ * seems to improve the success rate of the puzzle generator, in that
+ * such loops have a better chance of being soluble with all valid
+ * clues put in.
+ 
+     * Our bias function counts the number of 'black clue' corners
+     * (i.e. corners adjacent to two straights) in both the
+     * BLACK/nonBLACK and WHITE/nonWHITE boundaries. In order to do
+     * this, we must:
+     *
+     *  - track the edges that are part of each of those loops
+     *  - track the types of vertex in each loop (corner, straight,
+     *    none)
+     *  - track the current black-clue status of each vertex in each
+     *    loop.
+     *
+     * Each of these chunks of data is updated incrementally from the
+     * previous one, to avoid slowdown due to the bias function
+     * rescanning the whole grid every time it's called.
+     *
+     * So we need a lot of separate arrays, plus a tdq for each one,
+     * and we must repeat it all twice for the BLACK and WHITE
+     * boundaries.
+      FACE_WHITE or FACE_BLACK  is each edge part of the loop?  bits 0-3 == outgoing edge bitmap;
+                                        * bit 4 set iff corner clue.
+                                        * Hence, 0 means non-vertex;
+                                        * nonzero but bit 4 zero = straight.  indices of neighbour vertices in loop  is each vertex a black clue site?  boundaries[0]=WHITE, [1]=BLACK  remember last-seen colour of each face 
+             * If the face has changed either from or to colour c, we need
+             * to reprocess the edges for this boundary.
+             
+         * Go through the to-do list of edges. For each edge, decide
+         * anew whether it's part of this boundary or not. Any edge
+         * that changes state has to have both its endpoints put on
+         * the vertextypes_todo list.
+         
+         * Go through the to-do list of vertices whose types need
+         * refreshing. For each one, decide whether it's a corner, a
+         * straight, or a vertex not in the loop, and in the former
+         * two cases also work out the indices of its neighbour
+         * vertices along the loop. Any vertex that changes state must
+         * be put back on the to-do list for deciding if it's a black
+         * clue site, and so must its two new neighbours _and_ its two
+         * old neighbours.
+          dir == 0,1,2,3 for an edge going L,U,R,D 
+             * Decide if it's a corner, and set the corner flag if so.
+             
+                 * Recompute old neighbours, if any.
+                 
+                 * Recompute this vertex.
+                 
+                 * Recompute new neighbours, if any.
+                 
+         * Go through the list of vertices which we must check to see
+         * if they're black clue sites. Each one is a black clue site
+         * iff it is a corner and its loop neighbours are non-corners.
+         * Adjust the running total of black clues we've counted.
+         
+     * Initialise the context for the bias function. Initially we fill
+     * all the to-do lists, so that the first call will scan
+     * everything; thereafter the lists stay empty so we make
+     * incremental changes.
+      This grid edge is on the loop: lay line along it  (x1,y1) and (x2,y2) are now in our grid coords (0-w,0-h). 
+     * Difficulty exception: 5x5 Tricky is not generable (the
+     * generator will spin forever trying) and so we fudge it to Easy.
+     
+	 * Set up the maximal clue array.
+	 
+		     * This is a straight; see if it's a viable
+		     * candidate for a straight clue. It qualifies if
+		     * at least one of the squares it connects to is a
+		     * corner.
+		      we found one 
+		     * This is a corner; see if it's a viable candidate
+		     * for a corner clue. It qualifies if all the
+		     * squares it connects to are straights.
+		      we didn't find a counterexample 
+             * See if we can solve the puzzle just like this.
+              shouldn't be inconsistent!  go round and try again 
+             * Check this puzzle isn't too easy.
+              too easy: try again 
+             * Now shuffle the grid points and gradually remove the
+             * clues to find a minimal set which still leaves the
+             * puzzle soluble.
+             *
+             * We preferentially attempt to remove whichever type of
+             * clue is currently most numerous, to combat a general
+             * tendency of plain random generation to bias in favour
+             * of many white clues and few black.
+             *
+             * 'nstraights' and 'ncorners' count the number of clues
+             * of each type currently remaining in the grid;
+             * 'nstraightpos' and 'ncornerpos' count the clues of each
+             * type we have left to try to remove. (Clues which we
+             * have tried and failed to remove are counted by the
+             * former but not the latter.)
+             
+                 * Decide which clue to try to remove next. If both
+                 * types are available, we choose whichever kind is
+                 * currently overrepresented; otherwise we take
+                 * whatever we can get.
+                  try removing this clue  oops, put it back again  got it , h = state->shared->h  no link  should not have a link off grid  should have reciprocal link 
+     * Analyse the solution into loops, paths and stranger things.
+     * Basic strategy here is all the same as in Loopy - see the big
+     * comment in loopy.c's check_completion() - and for exactly the
+     * same reasons, since Loopy and Pearl have basically the same
+     * form of expected solution.
+      Build the dsf.  Initialise a state variable for each connected component. 
+     * Classify components, and mark errors where a square has more
+     * than two line segments.
+      Count the components, and find the largest sensible one.  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight every sensible component that is
+         * not the largest one.
+          Now we've finished with the dsf and component states. The only
+     * thing we'll need to remember later on is whether all edges were
+     * part of a single loop, for which our counter variables
+     * nsilly,nloop,npath are enough. 
+     * Check that no clues are contradicted. This code is similar to
+     * the code that sets up the maximal clue array for any given
+     * loop.
+      Supposed to be a corner: will find a contradiction if
+                 * it actually contains a straight line, or if it touches any
+                 * corners.  actually straight  leads off grid  touches corner  Supposed to be straight: will find a contradiction if
+                 * it actually contains a corner, or if it only touches
+                 * straight lines.  actually a corner  leads off grid  a straight  everything touched is straight 
+         * If there's exactly one loop (so that the puzzle is at least
+         * potentially complete), we need to ensure it hasn't left any
+         * clue out completely.
+          the loop doesn't include this clue square! 
+         * But if not, then we're done!
+          completion check:
+ *
+ * - no clues must be contradicted (highlight clue itself in error if so)
+ * - if there is a closed loop it must include every line segment laid
+ *    - if there's a smaller closed loop then highlight whole loop as error
+ * - no square must have more than 2 lines radiating from centre point
+ *   (highlight all lines in that square as error if so)
+  Try to solve with present (half-solved) state first: if there's no
+         * solution from there go back to original state.  list of (y*w+x) coords in drag so far  number of entries in dragcoords.
+                            * 0 = click but no drag yet. -1 = no drag at all  pixel position of initial click  grid position of keyboard cursor  true iff cursor is shown  R/U/L/D shift, for error flags  R/U/L/D shift, for drag-in-progress flags  shift for no-line mark  size w*h  size w*h; lines flipped by current drag  sz = state->shared->sz,  square is outside grid  drag not in progress anyway  same square as last visited one  Drag confirmed, if it wasn't already. 
+     * Dragging the mouse into a square that's already been visited by
+     * the drag path so far has the effect of truncating the path back
+     * to that square, so a player can back out part of an uncommitted
+     * drag without having to let go of the mouse.
+     
+     * Otherwise, dragging the mouse into a square that's a rook-move
+     * away from the last one on the path extends the path.
+     
+             * If the drag attempts to cross a 'no line here' mark,
+             * stop there. We physically don't allow the user to drag
+             * over those marks.
+             
+     * Failing that, we do nothing at all: if the user has dragged
+     * diagonally across the board, they'll just have to return the
+     * mouse to the last known position and do whatever they meant to
+     * do again, more slowly and clearly.
+     
+ * Routine shared between interpret_move and game_redraw to work out
+ * the intended effect of a drag path on the grid.
+ *
+ * Call it in a loop, like this:
+ *
+ *     bool clearing = true;
+ *     for (i = 0; i < ui->ndragcoords - 1; i++) {
+ *         int sx, sy, dx, dy, dir, oldstate, newstate;
+ *         interpret_ui_drag(state, ui, &clearing, i, &sx, &sy, &dx, &dy,
+ *                           &dir, &oldstate, &newstate);
+ *
+ *         [do whatever is needed to handle the fact that the drag
+ *         wants the edge from sx,sy to dx,dy (heading in direction
+ *         'dir' at the sx,sy end) to be changed from state oldstate
+ *         to state newstate, each of which equals either 0 or dir]
+ *     }
+ 
+         * The edge we've dragged over was previously
+         * present. Set it to absent, unless we've already
+         * stopped doing that.
+         
+         * The edge we've dragged over was previously
+         * absent. Set it to present, and cancel the
+         * 'clearing' flag so that all subsequent edges in
+         * the drag are set rather than cleared.
+         , h = state->shared->h, sz = state->shared->sz  disallow laying a mark over a line, or vice versa. , sz = state->shared->sz  will be 1 once drag is confirmed  End of a drag: process the cached line data.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              TODO closer to centre of grid: process as a cell click not an edge click.  Closest to top/bottom edge.  Closest to left/right edge.  'line' or 'noline' or 'replace' or 'flip' or 'mark'  erase marks too 
+             * If we ended up trying to lay a line _over_ a mark,
+             * that's a failed move: interpret_move() should have
+             * ensured we never received a move string like that in
+             * the first place.
+              erase marks too  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw each of the four directions, where laid (or error, or drag, etc.)  end cap  Clip to the grid square.  Clear the square.  Draw small dot, underneath any lines.  Draw outline of grid square  Draw grid: either thin gridlines, or no-line marks.
+     * We draw these first because the thick laid lines should be on top.  no gridlines out to the border.  either a no-line mark ...  draw grid lines connecting centre of cells  Draw each of the four directions, where laid (or error, or drag, etc.)
+     * Order is important here, specifically for the eventual colours of the
+     * exposed end caps.  Draw a clue, if present  draw a bigger 'error' clue circle. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+             * Smaller black rectangle which is the main grid.
+             
+     * I'll use 6mm squares by default.
+      No GUI_LOOPY here: only use the familiar masyu style.  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw grid outlines (black).  game_request_keys  wants_statusbar  flags  Currently this generates puzzles of any difficulty (trying to solve it
+     * on the maximum difficulty level and not checking it's not too easy).  should be 1, with nosolve  run forever  vim: set shiftwidth=4 tabstop=8: 
+ * pearl.c: Nikoli's `Masyu' puzzle. 
+ 
+ * TODO:
+ *
+ *  - The current keyboard cursor mechanism works well on ordinary PC
+ *    keyboards, but for platforms with only arrow keys and a select
+ *    button or two, we may at some point need a simpler one which can
+ *    handle 'x' markings without needing shift keys. For instance, a
+ *    cursor with twice the grid resolution, so that it can range
+ *    across face centres, edge centres and vertices; 'clicks' on face
+ *    centres begin a drag as currently, clicks on edges toggle
+ *    markings, and clicks on vertices are ignored (but it would be
+ *    too confusing not to let the cursor rest on them). But I'm
+ *    pretty sure that would be less pleasant to play on a full
+ *    keyboard, so probably a #ifdef would be the thing.
+ *
+ *  - Generation is still pretty slow, due to difficulty coming up in
+ *    the first place with a loop that makes a soluble puzzle even
+ *    with all possible clues filled in.
+ *     + A possible alternative strategy to further tuning of the
+ * 	 existing loop generator would be to throw the entire
+ * 	 mechanism out and instead write a different generator from
+ * 	 scratch which evolves the solution along with the puzzle:
+ * 	 place a few clues, nail down a bit of the loop, place another
+ * 	 clue, nail down some more, etc. However, I don't have a
+ * 	 detailed plan for any such mechanism, so it may be a pipe
+ * 	 dream.
+  Macro ickery copied from slant.c  XXX remove me!  size w*h  size w*h: lines placed  size w*h: errors detected  size w*h: 'no line here' marks placed.  struct copy  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * workspace[(2*y+1)*W+(2*x+1)] indicates the possible nature
+     * of the square (x,y), as a logical OR of bitfields.
+     * 
+     * workspace[(2*y)*W+(2*x+1)], for x odd and y even, indicates
+     * whether the horizontal edge between (x,y) and (x+1,y) is
+     * connected (1), disconnected (2) or unknown (3).
+     * 
+     * workspace[(2*y+1)*W+(2*x)], indicates the same about the
+     * vertical edge between (x,y) and (x,y+1).
+     * 
+     * Initially, every square is considered capable of being in
+     * any of the seven possible states (two straights, four
+     * corners and empty), except those corresponding to clue
+     * squares which are more restricted.
+     * 
+     * Initially, all edges are unknown, except the ones around the
+     * grid border which are known to be disconnected.
+      Square states  Horizontal edges  Vertical edges 
+     * We maintain a dsf of connected squares, together with a
+     * count of the size of each equivalence class.
+     
+     * Now repeatedly try to find something we can do.
+     
+	 * Go through the square state words, and discard any
+	 * square state which is inconsistent with known facts
+	 * about the edges around the square.
+	 
+			 * If any edge of this square is known to
+			 * be connected when state b would require
+			 * it disconnected, or vice versa, discard
+			 * the state.
+			 
+		 * Consistency check: each square must have at
+		 * least one state left!
+		 
+	 * Now go through the states array again, and nail down any
+	 * unknown edge if one of its neighbouring squares makes it
+	 * known.
+	 
+		 * Now any bit clear in edgeor marks a disconnected
+		 * edge, and any bit set in edgeand marks a
+		 * connected edge.
+		  First check consistency: neither bit is both! 
+	 * Now for longer-range clue-based deductions (using the
+	 * rules that a corner clue must connect to two straight
+	 * squares, and a straight clue must connect to at least
+	 * one corner square).
+	 
+			     * If a corner clue is connected on any
+			     * edge, then we can immediately nail
+			     * down the square beyond that edge as
+			     * being a straight in the appropriate
+			     * direction.
+			     
+			     * Conversely, if a corner clue is
+			     * separated by an unknown edge from a
+			     * square which _cannot_ be a straight
+			     * in the appropriate direction, we can
+			     * mark that edge as disconnected.
+			     
+		     * If a straight clue is between two squares
+		     * neither of which is capable of being a
+		     * corner connected to it, then the straight
+		     * clue cannot point in that direction.
+		     
+		     * If a straight clue with known direction is
+		     * connected on one side to a known straight,
+		     * then on the other side it must be a corner.
+		     
+	 * Now detect shortcut loops.
+	 
+	     * First go through the edge entries and update the dsf
+	     * of which squares are connected to which others. We
+	     * also track the number of squares in each equivalence
+	     * class, and count the overall number of
+	     * known-non-blank squares.
+	     *
+	     * In the process of doing this, we must notice if a
+	     * loop has already been formed. If it has, we blank
+	     * out any square which isn't part of that loop
+	     * (failing a consistency check if any such square does
+	     * not have BLANK as one of its remaining options) and
+	     * exit the deduction loop with success.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is connected, do the dsf
+			 * thing.
+			 
+				 * We have a loop!
+				 
+				     * In fact, we have two
+				     * separate loops, which is
+				     * doom.
+				     
+				 * Merge the two equivalence
+				 * classes.
+				 
+			 * (x,y) are the workspace coordinates of a
+			 * square field. If the square is
+			 * definitely not blank, count it.
+			 
+	     * If we discovered an existing loop above, we must now
+	     * blank every square not part of it, and exit the main
+	     * deduction loop.
+	     
+				 * This square is not part of the
+				 * loop, but is known non-blank. We
+				 * have goofed.
+				 
+		 * And we're done.
+		  Further deductions are considered 'tricky'. 
+	     * Now go through the workspace again and mark any edge
+	     * which would cause a shortcut loop (i.e. would
+	     * connect together two squares in the same equivalence
+	     * class, and that equivalence class does not contain
+	     * _all_ the known-non-blank squares currently in the
+	     * grid) as disconnected. Also, mark any _square state_
+	     * which would cause a shortcut loop as disconnected.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is currently unknown, and
+			 * sits between two squares in the same
+			 * equivalence class, and the size of that
+			 * class is less than nonblanks, then
+			 * connecting this edge would be a shortcut
+			 * loop and so we must not do so.
+			 
+				 * We have a loop. Is it a shortcut?
+				 
+				     * Yes! Mark this edge disconnected.
+				     
+			 * (x,y) are the workspace coordinates of a
+			 * square field. Go through its possible
+			 * (non-blank) states and see if any gives
+			 * rise to a shortcut loop.
+			 * 
+			 * This is slightly fiddly, because we have
+			 * to check whether this square is already
+			 * part of the same equivalence class as
+			 * the things it's joining.
+			 
+				 * Find the equivalence classes of
+				 * the two squares this one would
+				 * connect if it were in this
+				 * state.
+				 
+				     * This square state would form
+				     * a loop on equivalence class
+				     * e. Measure the size of that
+				     * loop, and see if it's a
+				     * shortcut.
+				      add the square itself 
+					 * It is! Mark this square
+					 * state invalid.
+					 
+	 * If we reach here, there is nothing left we can do.
+	 * Return 2 for ambiguous puzzle.
+	 
+     * If ret = 1 then we've successfully achieved a solution. This
+     * means that we expect every square to be nailed down to
+     * exactly one possibility. If this is the case, or if the caller
+     * asked for a partial solution anyway, transcribe those
+     * possibilities into the result array.
+      we should have had a break by now  ----------------------------------------------------------------------
+ * Loop generator.
+ 
+ * We use the loop generator code from loopy, hard-coding to a square
+ * grid of the appropriate size. Knowing the grid layout and the tile
+ * size we can shrink that to our small grid and then make our line
+ * layout from the face colour info.
+ *
+ * We provide a bias function to the loop generator which tries to
+ * bias in favour of loops with more scope for Pearl black clues. This
+ * seems to improve the success rate of the puzzle generator, in that
+ * such loops have a better chance of being soluble with all valid
+ * clues put in.
+ 
+     * Our bias function counts the number of 'black clue' corners
+     * (i.e. corners adjacent to two straights) in both the
+     * BLACK/nonBLACK and WHITE/nonWHITE boundaries. In order to do
+     * this, we must:
+     *
+     *  - track the edges that are part of each of those loops
+     *  - track the types of vertex in each loop (corner, straight,
+     *    none)
+     *  - track the current black-clue status of each vertex in each
+     *    loop.
+     *
+     * Each of these chunks of data is updated incrementally from the
+     * previous one, to avoid slowdown due to the bias function
+     * rescanning the whole grid every time it's called.
+     *
+     * So we need a lot of separate arrays, plus a tdq for each one,
+     * and we must repeat it all twice for the BLACK and WHITE
+     * boundaries.
+      FACE_WHITE or FACE_BLACK  is each edge part of the loop?  bits 0-3 == outgoing edge bitmap;
+                                        * bit 4 set iff corner clue.
+                                        * Hence, 0 means non-vertex;
+                                        * nonzero but bit 4 zero = straight.  indices of neighbour vertices in loop  is each vertex a black clue site?  boundaries[0]=WHITE, [1]=BLACK  remember last-seen colour of each face 
+             * If the face has changed either from or to colour c, we need
+             * to reprocess the edges for this boundary.
+             
+         * Go through the to-do list of edges. For each edge, decide
+         * anew whether it's part of this boundary or not. Any edge
+         * that changes state has to have both its endpoints put on
+         * the vertextypes_todo list.
+         
+         * Go through the to-do list of vertices whose types need
+         * refreshing. For each one, decide whether it's a corner, a
+         * straight, or a vertex not in the loop, and in the former
+         * two cases also work out the indices of its neighbour
+         * vertices along the loop. Any vertex that changes state must
+         * be put back on the to-do list for deciding if it's a black
+         * clue site, and so must its two new neighbours _and_ its two
+         * old neighbours.
+          dir == 0,1,2,3 for an edge going L,U,R,D 
+             * Decide if it's a corner, and set the corner flag if so.
+             
+                 * Recompute old neighbours, if any.
+                 
+                 * Recompute this vertex.
+                 
+                 * Recompute new neighbours, if any.
+                 
+         * Go through the list of vertices which we must check to see
+         * if they're black clue sites. Each one is a black clue site
+         * iff it is a corner and its loop neighbours are non-corners.
+         * Adjust the running total of black clues we've counted.
+         
+     * Initialise the context for the bias function. Initially we fill
+     * all the to-do lists, so that the first call will scan
+     * everything; thereafter the lists stay empty so we make
+     * incremental changes.
+      This grid edge is on the loop: lay line along it  (x1,y1) and (x2,y2) are now in our grid coords (0-w,0-h). 
+     * Difficulty exception: 5x5 Tricky is not generable (the
+     * generator will spin forever trying) and so we fudge it to Easy.
+     
+	 * Set up the maximal clue array.
+	 
+		     * This is a straight; see if it's a viable
+		     * candidate for a straight clue. It qualifies if
+		     * at least one of the squares it connects to is a
+		     * corner.
+		      we found one 
+		     * This is a corner; see if it's a viable candidate
+		     * for a corner clue. It qualifies if all the
+		     * squares it connects to are straights.
+		      we didn't find a counterexample 
+             * See if we can solve the puzzle just like this.
+              shouldn't be inconsistent!  go round and try again 
+             * Check this puzzle isn't too easy.
+              too easy: try again 
+             * Now shuffle the grid points and gradually remove the
+             * clues to find a minimal set which still leaves the
+             * puzzle soluble.
+             *
+             * We preferentially attempt to remove whichever type of
+             * clue is currently most numerous, to combat a general
+             * tendency of plain random generation to bias in favour
+             * of many white clues and few black.
+             *
+             * 'nstraights' and 'ncorners' count the number of clues
+             * of each type currently remaining in the grid;
+             * 'nstraightpos' and 'ncornerpos' count the clues of each
+             * type we have left to try to remove. (Clues which we
+             * have tried and failed to remove are counted by the
+             * former but not the latter.)
+             
+                 * Decide which clue to try to remove next. If both
+                 * types are available, we choose whichever kind is
+                 * currently overrepresented; otherwise we take
+                 * whatever we can get.
+                  try removing this clue  oops, put it back again  got it , h = state->shared->h  no link  should not have a link off grid  should have reciprocal link 
+     * Analyse the solution into loops, paths and stranger things.
+     * Basic strategy here is all the same as in Loopy - see the big
+     * comment in loopy.c's check_completion() - and for exactly the
+     * same reasons, since Loopy and Pearl have basically the same
+     * form of expected solution.
+      Build the dsf.  Initialise a state variable for each connected component. 
+     * Classify components, and mark errors where a square has more
+     * than two line segments.
+      Count the components, and find the largest sensible one.  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight every sensible component that is
+         * not the largest one.
+          Now we've finished with the dsf and component states. The only
+     * thing we'll need to remember later on is whether all edges were
+     * part of a single loop, for which our counter variables
+     * nsilly,nloop,npath are enough. 
+     * Check that no clues are contradicted. This code is similar to
+     * the code that sets up the maximal clue array for any given
+     * loop.
+      Supposed to be a corner: will find a contradiction if
+                 * it actually contains a straight line, or if it touches any
+                 * corners.  actually straight  leads off grid  touches corner  Supposed to be straight: will find a contradiction if
+                 * it actually contains a corner, or if it only touches
+                 * straight lines.  actually a corner  leads off grid  a straight  everything touched is straight 
+         * If there's exactly one loop (so that the puzzle is at least
+         * potentially complete), we need to ensure it hasn't left any
+         * clue out completely.
+          the loop doesn't include this clue square! 
+         * But if not, then we're done!
+          completion check:
+ *
+ * - no clues must be contradicted (highlight clue itself in error if so)
+ * - if there is a closed loop it must include every line segment laid
+ *    - if there's a smaller closed loop then highlight whole loop as error
+ * - no square must have more than 2 lines radiating from centre point
+ *   (highlight all lines in that square as error if so)
+  Try to solve with present (half-solved) state first: if there's no
+         * solution from there go back to original state.  list of (y*w+x) coords in drag so far  number of entries in dragcoords.
+                            * 0 = click but no drag yet. -1 = no drag at all  pixel position of initial click  grid position of keyboard cursor  true iff cursor is shown  R/U/L/D shift, for error flags  R/U/L/D shift, for drag-in-progress flags  shift for no-line mark  size w*h  size w*h; lines flipped by current drag  sz = state->shared->sz,  square is outside grid  drag not in progress anyway  same square as last visited one  Drag confirmed, if it wasn't already. 
+     * Dragging the mouse into a square that's already been visited by
+     * the drag path so far has the effect of truncating the path back
+     * to that square, so a player can back out part of an uncommitted
+     * drag without having to let go of the mouse.
+     
+     * Otherwise, dragging the mouse into a square that's a rook-move
+     * away from the last one on the path extends the path.
+     
+             * If the drag attempts to cross a 'no line here' mark,
+             * stop there. We physically don't allow the user to drag
+             * over those marks.
+             
+     * Failing that, we do nothing at all: if the user has dragged
+     * diagonally across the board, they'll just have to return the
+     * mouse to the last known position and do whatever they meant to
+     * do again, more slowly and clearly.
+     
+ * Routine shared between interpret_move and game_redraw to work out
+ * the intended effect of a drag path on the grid.
+ *
+ * Call it in a loop, like this:
+ *
+ *     bool clearing = true;
+ *     for (i = 0; i < ui->ndragcoords - 1; i++) {
+ *         int sx, sy, dx, dy, dir, oldstate, newstate;
+ *         interpret_ui_drag(state, ui, &clearing, i, &sx, &sy, &dx, &dy,
+ *                           &dir, &oldstate, &newstate);
+ *
+ *         [do whatever is needed to handle the fact that the drag
+ *         wants the edge from sx,sy to dx,dy (heading in direction
+ *         'dir' at the sx,sy end) to be changed from state oldstate
+ *         to state newstate, each of which equals either 0 or dir]
+ *     }
+ 
+         * The edge we've dragged over was previously
+         * present. Set it to absent, unless we've already
+         * stopped doing that.
+         
+         * The edge we've dragged over was previously
+         * absent. Set it to present, and cancel the
+         * 'clearing' flag so that all subsequent edges in
+         * the drag are set rather than cleared.
+         , h = state->shared->h, sz = state->shared->sz  disallow laying a mark over a line, or vice versa. , sz = state->shared->sz  will be 1 once drag is confirmed  End of a drag: process the cached line data.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              TODO closer to centre of grid: process as a cell click not an edge click.  Closest to top/bottom edge.  Closest to left/right edge.  'line' or 'noline' or 'replace' or 'flip' or 'mark'  erase marks too 
+             * If we ended up trying to lay a line _over_ a mark,
+             * that's a failed move: interpret_move() should have
+             * ensured we never received a move string like that in
+             * the first place.
+              erase marks too  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw each of the four directions, where laid (or error, or drag, etc.)  end cap  Clip to the grid square.  Clear the square.  Draw small dot, underneath any lines.  Draw outline of grid square  Draw grid: either thin gridlines, or no-line marks.
+     * We draw these first because the thick laid lines should be on top.  no gridlines out to the border.  either a no-line mark ...  draw grid lines connecting centre of cells  Draw each of the four directions, where laid (or error, or drag, etc.)
+     * Order is important here, specifically for the eventual colours of the
+     * exposed end caps.  Draw a clue, if present  draw a bigger 'error' clue circle. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+             * Smaller black rectangle which is the main grid.
+             
+     * I'll use 6mm squares by default.
+      No GUI_LOOPY here: only use the familiar masyu style.  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw grid outlines (black).  game_request_keys  wants_statusbar  flags  Currently this generates puzzles of any difficulty (trying to solve it
+     * on the maximum difficulty level and not checking it's not too easy).  should be 1, with nosolve  run forever  vim: set shiftwidth=4 tabstop=8: 
+ * pearl.c: Nikoli's `Masyu' puzzle. 
+ 
+ * TODO:
+ *
+ *  - The current keyboard cursor mechanism works well on ordinary PC
+ *    keyboards, but for platforms with only arrow keys and a select
+ *    button or two, we may at some point need a simpler one which can
+ *    handle 'x' markings without needing shift keys. For instance, a
+ *    cursor with twice the grid resolution, so that it can range
+ *    across face centres, edge centres and vertices; 'clicks' on face
+ *    centres begin a drag as currently, clicks on edges toggle
+ *    markings, and clicks on vertices are ignored (but it would be
+ *    too confusing not to let the cursor rest on them). But I'm
+ *    pretty sure that would be less pleasant to play on a full
+ *    keyboard, so probably a #ifdef would be the thing.
+ *
+ *  - Generation is still pretty slow, due to difficulty coming up in
+ *    the first place with a loop that makes a soluble puzzle even
+ *    with all possible clues filled in.
+ *     + A possible alternative strategy to further tuning of the
+ * 	 existing loop generator would be to throw the entire
+ * 	 mechanism out and instead write a different generator from
+ * 	 scratch which evolves the solution along with the puzzle:
+ * 	 place a few clues, nail down a bit of the loop, place another
+ * 	 clue, nail down some more, etc. However, I don't have a
+ * 	 detailed plan for any such mechanism, so it may be a pipe
+ * 	 dream.
+  Macro ickery copied from slant.c  XXX remove me!  size w*h  size w*h: lines placed  size w*h: errors detected  size w*h: 'no line here' marks placed.  struct copy  structure copy  ----------------------------------------------------------------------
+ * Solver.
+ 
+     * workspace[(2*y+1)*W+(2*x+1)] indicates the possible nature
+     * of the square (x,y), as a logical OR of bitfields.
+     * 
+     * workspace[(2*y)*W+(2*x+1)], for x odd and y even, indicates
+     * whether the horizontal edge between (x,y) and (x+1,y) is
+     * connected (1), disconnected (2) or unknown (3).
+     * 
+     * workspace[(2*y+1)*W+(2*x)], indicates the same about the
+     * vertical edge between (x,y) and (x,y+1).
+     * 
+     * Initially, every square is considered capable of being in
+     * any of the seven possible states (two straights, four
+     * corners and empty), except those corresponding to clue
+     * squares which are more restricted.
+     * 
+     * Initially, all edges are unknown, except the ones around the
+     * grid border which are known to be disconnected.
+      Square states  Horizontal edges  Vertical edges 
+     * We maintain a dsf of connected squares, together with a
+     * count of the size of each equivalence class.
+     
+     * Now repeatedly try to find something we can do.
+     
+	 * Go through the square state words, and discard any
+	 * square state which is inconsistent with known facts
+	 * about the edges around the square.
+	 
+			 * If any edge of this square is known to
+			 * be connected when state b would require
+			 * it disconnected, or vice versa, discard
+			 * the state.
+			 
+		 * Consistency check: each square must have at
+		 * least one state left!
+		 
+	 * Now go through the states array again, and nail down any
+	 * unknown edge if one of its neighbouring squares makes it
+	 * known.
+	 
+		 * Now any bit clear in edgeor marks a disconnected
+		 * edge, and any bit set in edgeand marks a
+		 * connected edge.
+		  First check consistency: neither bit is both! 
+	 * Now for longer-range clue-based deductions (using the
+	 * rules that a corner clue must connect to two straight
+	 * squares, and a straight clue must connect to at least
+	 * one corner square).
+	 
+			     * If a corner clue is connected on any
+			     * edge, then we can immediately nail
+			     * down the square beyond that edge as
+			     * being a straight in the appropriate
+			     * direction.
+			     
+			     * Conversely, if a corner clue is
+			     * separated by an unknown edge from a
+			     * square which _cannot_ be a straight
+			     * in the appropriate direction, we can
+			     * mark that edge as disconnected.
+			     
+		     * If a straight clue is between two squares
+		     * neither of which is capable of being a
+		     * corner connected to it, then the straight
+		     * clue cannot point in that direction.
+		     
+		     * If a straight clue with known direction is
+		     * connected on one side to a known straight,
+		     * then on the other side it must be a corner.
+		     
+	 * Now detect shortcut loops.
+	 
+	     * First go through the edge entries and update the dsf
+	     * of which squares are connected to which others. We
+	     * also track the number of squares in each equivalence
+	     * class, and count the overall number of
+	     * known-non-blank squares.
+	     *
+	     * In the process of doing this, we must notice if a
+	     * loop has already been formed. If it has, we blank
+	     * out any square which isn't part of that loop
+	     * (failing a consistency check if any such square does
+	     * not have BLANK as one of its remaining options) and
+	     * exit the deduction loop with success.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is connected, do the dsf
+			 * thing.
+			 
+				 * We have a loop!
+				 
+				     * In fact, we have two
+				     * separate loops, which is
+				     * doom.
+				     
+				 * Merge the two equivalence
+				 * classes.
+				 
+			 * (x,y) are the workspace coordinates of a
+			 * square field. If the square is
+			 * definitely not blank, count it.
+			 
+	     * If we discovered an existing loop above, we must now
+	     * blank every square not part of it, and exit the main
+	     * deduction loop.
+	     
+				 * This square is not part of the
+				 * loop, but is known non-blank. We
+				 * have goofed.
+				 
+		 * And we're done.
+		  Further deductions are considered 'tricky'. 
+	     * Now go through the workspace again and mark any edge
+	     * which would cause a shortcut loop (i.e. would
+	     * connect together two squares in the same equivalence
+	     * class, and that equivalence class does not contain
+	     * _all_ the known-non-blank squares currently in the
+	     * grid) as disconnected. Also, mark any _square state_
+	     * which would cause a shortcut loop as disconnected.
+	     
+			 * (x,y) are the workspace coordinates of
+			 * an edge field. Compute the normal-space
+			 * coordinates of the squares it connects.
+			 
+			 * If the edge is currently unknown, and
+			 * sits between two squares in the same
+			 * equivalence class, and the size of that
+			 * class is less than nonblanks, then
+			 * connecting this edge would be a shortcut
+			 * loop and so we must not do so.
+			 
+				 * We have a loop. Is it a shortcut?
+				 
+				     * Yes! Mark this edge disconnected.
+				     
+			 * (x,y) are the workspace coordinates of a
+			 * square field. Go through its possible
+			 * (non-blank) states and see if any gives
+			 * rise to a shortcut loop.
+			 * 
+			 * This is slightly fiddly, because we have
+			 * to check whether this square is already
+			 * part of the same equivalence class as
+			 * the things it's joining.
+			 
+				 * Find the equivalence classes of
+				 * the two squares this one would
+				 * connect if it were in this
+				 * state.
+				 
+				     * This square state would form
+				     * a loop on equivalence class
+				     * e. Measure the size of that
+				     * loop, and see if it's a
+				     * shortcut.
+				      add the square itself 
+					 * It is! Mark this square
+					 * state invalid.
+					 
+	 * If we reach here, there is nothing left we can do.
+	 * Return 2 for ambiguous puzzle.
+	 
+     * If ret = 1 then we've successfully achieved a solution. This
+     * means that we expect every square to be nailed down to
+     * exactly one possibility. If this is the case, or if the caller
+     * asked for a partial solution anyway, transcribe those
+     * possibilities into the result array.
+      we should have had a break by now  ----------------------------------------------------------------------
+ * Loop generator.
+ 
+ * We use the loop generator code from loopy, hard-coding to a square
+ * grid of the appropriate size. Knowing the grid layout and the tile
+ * size we can shrink that to our small grid and then make our line
+ * layout from the face colour info.
+ *
+ * We provide a bias function to the loop generator which tries to
+ * bias in favour of loops with more scope for Pearl black clues. This
+ * seems to improve the success rate of the puzzle generator, in that
+ * such loops have a better chance of being soluble with all valid
+ * clues put in.
+ 
+     * Our bias function counts the number of 'black clue' corners
+     * (i.e. corners adjacent to two straights) in both the
+     * BLACK/nonBLACK and WHITE/nonWHITE boundaries. In order to do
+     * this, we must:
+     *
+     *  - track the edges that are part of each of those loops
+     *  - track the types of vertex in each loop (corner, straight,
+     *    none)
+     *  - track the current black-clue status of each vertex in each
+     *    loop.
+     *
+     * Each of these chunks of data is updated incrementally from the
+     * previous one, to avoid slowdown due to the bias function
+     * rescanning the whole grid every time it's called.
+     *
+     * So we need a lot of separate arrays, plus a tdq for each one,
+     * and we must repeat it all twice for the BLACK and WHITE
+     * boundaries.
+      FACE_WHITE or FACE_BLACK  is each edge part of the loop?  bits 0-3 == outgoing edge bitmap;
+                                        * bit 4 set iff corner clue.
+                                        * Hence, 0 means non-vertex;
+                                        * nonzero but bit 4 zero = straight.  indices of neighbour vertices in loop  is each vertex a black clue site?  boundaries[0]=WHITE, [1]=BLACK  remember last-seen colour of each face 
+             * If the face has changed either from or to colour c, we need
+             * to reprocess the edges for this boundary.
+             
+         * Go through the to-do list of edges. For each edge, decide
+         * anew whether it's part of this boundary or not. Any edge
+         * that changes state has to have both its endpoints put on
+         * the vertextypes_todo list.
+         
+         * Go through the to-do list of vertices whose types need
+         * refreshing. For each one, decide whether it's a corner, a
+         * straight, or a vertex not in the loop, and in the former
+         * two cases also work out the indices of its neighbour
+         * vertices along the loop. Any vertex that changes state must
+         * be put back on the to-do list for deciding if it's a black
+         * clue site, and so must its two new neighbours _and_ its two
+         * old neighbours.
+          dir == 0,1,2,3 for an edge going L,U,R,D 
+             * Decide if it's a corner, and set the corner flag if so.
+             
+                 * Recompute old neighbours, if any.
+                 
+                 * Recompute this vertex.
+                 
+                 * Recompute new neighbours, if any.
+                 
+         * Go through the list of vertices which we must check to see
+         * if they're black clue sites. Each one is a black clue site
+         * iff it is a corner and its loop neighbours are non-corners.
+         * Adjust the running total of black clues we've counted.
+         
+     * Initialise the context for the bias function. Initially we fill
+     * all the to-do lists, so that the first call will scan
+     * everything; thereafter the lists stay empty so we make
+     * incremental changes.
+      This grid edge is on the loop: lay line along it  (x1,y1) and (x2,y2) are now in our grid coords (0-w,0-h). 
+     * Difficulty exception: 5x5 Tricky is not generable (the
+     * generator will spin forever trying) and so we fudge it to Easy.
+     
+	 * Set up the maximal clue array.
+	 
+		     * This is a straight; see if it's a viable
+		     * candidate for a straight clue. It qualifies if
+		     * at least one of the squares it connects to is a
+		     * corner.
+		      we found one 
+		     * This is a corner; see if it's a viable candidate
+		     * for a corner clue. It qualifies if all the
+		     * squares it connects to are straights.
+		      we didn't find a counterexample 
+             * See if we can solve the puzzle just like this.
+              shouldn't be inconsistent!  go round and try again 
+             * Check this puzzle isn't too easy.
+              too easy: try again 
+             * Now shuffle the grid points and gradually remove the
+             * clues to find a minimal set which still leaves the
+             * puzzle soluble.
+             *
+             * We preferentially attempt to remove whichever type of
+             * clue is currently most numerous, to combat a general
+             * tendency of plain random generation to bias in favour
+             * of many white clues and few black.
+             *
+             * 'nstraights' and 'ncorners' count the number of clues
+             * of each type currently remaining in the grid;
+             * 'nstraightpos' and 'ncornerpos' count the clues of each
+             * type we have left to try to remove. (Clues which we
+             * have tried and failed to remove are counted by the
+             * former but not the latter.)
+             
+                 * Decide which clue to try to remove next. If both
+                 * types are available, we choose whichever kind is
+                 * currently overrepresented; otherwise we take
+                 * whatever we can get.
+                  try removing this clue  oops, put it back again  got it , h = state->shared->h  no link  should not have a link off grid  should have reciprocal link 
+     * Analyse the solution into loops, paths and stranger things.
+     * Basic strategy here is all the same as in Loopy - see the big
+     * comment in loopy.c's check_completion() - and for exactly the
+     * same reasons, since Loopy and Pearl have basically the same
+     * form of expected solution.
+      Build the dsf.  Initialise a state variable for each connected component. 
+     * Classify components, and mark errors where a square has more
+     * than two line segments.
+      Count the components, and find the largest sensible one.  means the paths 
+         * If there are at least two sensible components including at
+         * least one loop, highlight every sensible component that is
+         * not the largest one.
+          Now we've finished with the dsf and component states. The only
+     * thing we'll need to remember later on is whether all edges were
+     * part of a single loop, for which our counter variables
+     * nsilly,nloop,npath are enough. 
+     * Check that no clues are contradicted. This code is similar to
+     * the code that sets up the maximal clue array for any given
+     * loop.
+      Supposed to be a corner: will find a contradiction if
+                 * it actually contains a straight line, or if it touches any
+                 * corners.  actually straight  leads off grid  touches corner  Supposed to be straight: will find a contradiction if
+                 * it actually contains a corner, or if it only touches
+                 * straight lines.  actually a corner  leads off grid  a straight  everything touched is straight 
+         * If there's exactly one loop (so that the puzzle is at least
+         * potentially complete), we need to ensure it hasn't left any
+         * clue out completely.
+          the loop doesn't include this clue square! 
+         * But if not, then we're done!
+          completion check:
+ *
+ * - no clues must be contradicted (highlight clue itself in error if so)
+ * - if there is a closed loop it must include every line segment laid
+ *    - if there's a smaller closed loop then highlight whole loop as error
+ * - no square must have more than 2 lines radiating from centre point
+ *   (highlight all lines in that square as error if so)
+  Try to solve with present (half-solved) state first: if there's no
+         * solution from there go back to original state.  list of (y*w+x) coords in drag so far  number of entries in dragcoords.
+                            * 0 = click but no drag yet. -1 = no drag at all  pixel position of initial click  grid position of keyboard cursor  true iff cursor is shown  R/U/L/D shift, for error flags  R/U/L/D shift, for drag-in-progress flags  shift for no-line mark  size w*h  size w*h; lines flipped by current drag  sz = state->shared->sz,  square is outside grid  drag not in progress anyway  same square as last visited one  Drag confirmed, if it wasn't already. 
+     * Dragging the mouse into a square that's already been visited by
+     * the drag path so far has the effect of truncating the path back
+     * to that square, so a player can back out part of an uncommitted
+     * drag without having to let go of the mouse.
+     
+     * Otherwise, dragging the mouse into a square that's a rook-move
+     * away from the last one on the path extends the path.
+     
+             * If the drag attempts to cross a 'no line here' mark,
+             * stop there. We physically don't allow the user to drag
+             * over those marks.
+             
+     * Failing that, we do nothing at all: if the user has dragged
+     * diagonally across the board, they'll just have to return the
+     * mouse to the last known position and do whatever they meant to
+     * do again, more slowly and clearly.
+     
+ * Routine shared between interpret_move and game_redraw to work out
+ * the intended effect of a drag path on the grid.
+ *
+ * Call it in a loop, like this:
+ *
+ *     bool clearing = true;
+ *     for (i = 0; i < ui->ndragcoords - 1; i++) {
+ *         int sx, sy, dx, dy, dir, oldstate, newstate;
+ *         interpret_ui_drag(state, ui, &clearing, i, &sx, &sy, &dx, &dy,
+ *                           &dir, &oldstate, &newstate);
+ *
+ *         [do whatever is needed to handle the fact that the drag
+ *         wants the edge from sx,sy to dx,dy (heading in direction
+ *         'dir' at the sx,sy end) to be changed from state oldstate
+ *         to state newstate, each of which equals either 0 or dir]
+ *     }
+ 
+         * The edge we've dragged over was previously
+         * present. Set it to absent, unless we've already
+         * stopped doing that.
+         
+         * The edge we've dragged over was previously
+         * absent. Set it to present, and cancel the
+         * 'clearing' flag so that all subsequent edges in
+         * the drag are set rather than cleared.
+         , h = state->shared->h, sz = state->shared->sz  disallow laying a mark over a line, or vice versa. , sz = state->shared->sz  will be 1 once drag is confirmed  End of a drag: process the cached line data.  Click (or tiny drag). Work out which edge we were
+             * closest to. 
+             * We process clicks based on the mouse-down location,
+             * because that's more natural for a user to carefully
+             * control than the mouse-up.
+              TODO closer to centre of grid: process as a cell click not an edge click.  Closest to top/bottom edge.  Closest to left/right edge.  'line' or 'noline' or 'replace' or 'flip' or 'mark'  erase marks too 
+             * If we ended up trying to lay a line _over_ a mark,
+             * that's a failed move: interpret_move() should have
+             * ensured we never received a move string like that in
+             * the first place.
+              erase marks too  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw each of the four directions, where laid (or error, or drag, etc.)  end cap  Clip to the grid square.  Clear the square.  Draw small dot, underneath any lines.  Draw outline of grid square  Draw grid: either thin gridlines, or no-line marks.
+     * We draw these first because the thick laid lines should be on top.  no gridlines out to the border.  either a no-line mark ...  draw grid lines connecting centre of cells  Draw each of the four directions, where laid (or error, or drag, etc.)
+     * Order is important here, specifically for the eventual colours of the
+     * exposed end caps.  Draw a clue, if present  draw a bigger 'error' clue circle. 
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+             * Smaller black rectangle which is the main grid.
+             
+     * I'll use 6mm squares by default.
+      No GUI_LOOPY here: only use the familiar masyu style.  Ick: fake up `ds->tilesize' for macro expansion purposes  Draw grid outlines (black).  game_request_keys  wants_statusbar  flags  Currently this generates puzzles of any difficulty (trying to solve it
+     * on the maximum difficulty level and not checking it's not too easy).  should be 1, with nosolve  run forever  vim: set shiftwidth=4 tabstop=8: 

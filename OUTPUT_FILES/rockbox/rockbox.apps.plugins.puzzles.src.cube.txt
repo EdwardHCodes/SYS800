@@ -1,0 +1,550 @@
+
+ * cube.c: Cube game.
+  3*npoints coordinates  order*nfaces point indices  3*npoints vector components  isometric shear for nice drawing  border required around arena  maximum  bit masks showing point pairs 
+     * Grid dimensions. For a square grid these are width and
+     * height respectively; otherwise the grid is a hexagon, with
+     * the top side and the two lower diagonals having length d1
+     * and the remaining three sides having length d2 (so that
+     * d1==d2 gives a regular hexagon, and d2==0 gives a triangle).
+      index of current grid square  key-point indices into grid sq  key-point indices into grid sq  key-point indices into polyhedron  key-point indices into polyhedron  stores move count at completion  structure copy  0,1  2,3  0,3  1,2  no diagonals in a square  no diagonals in a square  no diagonals in a square  no diagonals in a square 
+                 * This is supremely irrelevant, but just to avoid
+                 * having any uninitialised structure members...
+                 
+             * There are `rowlen' down-pointing triangles.
+              0,1  1,2  0,2  invalid move 
+                 * Down-pointing triangle: both the up diagonals go
+                 * up, and the down ones go left and right.
+                 
+             * There are `rowlen+other' up-pointing triangles.
+              1,2  0,1  0,2  invalid move 
+                 * Up-pointing triangle: both the down diagonals go
+                 * down, and the up ones go left and right.
+                 
+     * An NxM grid of squares has NM squares in it.
+     * 
+     * A grid of triangles with dimensions A and B has a total of
+     * A^2 + B^2 + 4AB triangles in it. (You can divide it up into
+     * a side-A triangle containing A^2 subtriangles, a side-B
+     * triangle containing B^2, and two congruent parallelograms,
+     * each with side lengths A and B, each therefore containing AB
+     * two-triangle rhombuses.)
+     
+     * Enumerate the grid squares, dividing them into equivalence
+     * classes as appropriate. (For the tetrahedron, there is one
+     * equivalence class for each face; for the octahedron there
+     * are two classes; for the other two solids there's only one.)
+     
+     * So now we know how many faces to allocate in each class. Get
+     * on with it.
+     
+	     * Move everything else up the array. I ought to use a
+	     * better data structure for this, but for such small
+	     * numbers it hardly seems worth the effort.
+	     
+     * Now we know precisely which squares are blue. Encode this
+     * information in hex. While we're looping over this, collect
+     * the non-blue squares into a list in the now-unused gridptrs
+     * array.
+     
+     * Choose a non-blue square for the polyhedron.
+      structure copy 
+     * First, find the lowest z-coordinate present in the solid.
+     
+     * Now go round the grid square. For each point in the grid
+     * square, we're looking for a point of the polyhedron with the
+     * same x- and y-coordinates (relative to the square's centre),
+     * and z-coordinate equal to zmin (near enough).
+      structure copy 
+     * Now rotate the polyhedron through the given angle. We must
+     * rotate about the Z-axis to bring the two vertices key0 and
+     * key1 into horizontal alignment, then rotate about the
+     * X-axis, then rotate back again.
+      NB if desc[j]=='\0' that will also be caught here, so we're safe  structure copy 
+     * Set up the blue squares and polyhedron position according to
+     * the game description.
+      got to do _something_ 
+     * Align the polyhedron with its grid square and determine
+     * initial key points.
+      structure copy  pixel position of float origin 
+ * Code shared between interpret_move() and execute_move().
+ 
+     * Find the two points in the current grid square which
+     * correspond to this move.
+     
+     * Now find the other grid square which shares those points.
+     * This is our move destination.
+     
+     * Moves can be made with the cursor keys or numeric keypad, or
+     * alternatively you can left-click and the polyhedron will
+     * move in the general direction of the mouse pointer.
+     
+         * Find the bearing of the click point from the current
+         * square's centre.
+          clicked in exact centre!  
+         * There are three possibilities.
+         * 
+         *  - This square is a square, so we choose between UP,
+         *    DOWN, LEFT and RIGHT by dividing the available angle
+         *    at the 45-degree points.
+         * 
+         *  - This square is an up-pointing triangle, so we choose
+         *    between DOWN, LEFT and RIGHT by dividing into
+         *    120-degree arcs.
+         * 
+         *  - This square is a down-pointing triangle, so we choose
+         *    between UP, LEFT and RIGHT in the inverse manner.
+         * 
+         * Don't forget that since our y-coordinates increase
+         * downwards, `angle' is measured _clockwise_ from the
+         * x-axis, not anticlockwise as most mathematicians would
+         * instinctively assume.
+          Square.  Up-pointing triangle.  Down-pointing triangle. 
+     * Translate diagonal directions into orthogonal ones.
+      should never happen 
+     * So we know what grid square we're aiming for, and we also
+     * know the two key points (as indices in both the source and
+     * destination grid squares) which are invariant between source
+     * and destination.
+     * 
+     * Next we must roll the polyhedron on to that square. So we
+     * find the indices of the key points within the polyhedron's
+     * vertex array, then use those in a call to transform_poly,
+     * and align the result on the new grid square.
+     
+         * Now pkey[0] corresponds to skey[0] and dkey[0], and
+         * likewise [1].
+         
+     * Now find the angle through which to rotate the polyhedron.
+     * Do this by finding the two faces that share the two vertices
+     * we've found, and taking the dot product of their normals.
+     
+     * Now transform the polyhedron. We aren't entirely sure
+     * whether we need to rotate through angle or -angle, and the
+     * simplest way round this is to try both and see which one
+     * aligns successfully!
+     * 
+     * Unfortunately, _both_ will align successfully if this is a
+     * cube, which won't tell us anything much. So for that
+     * particular case, I resort to gross hackery: I simply negate
+     * the angle before trying the alignment, depending on the
+     * direction. Which directions work which way is determined by
+     * pure trial and error. I said it was gross :-/
+      HACK 
+     * Now we have our rotated polyhedron, which we expect to be
+     * exactly congruent to the one we started with - but with the
+     * faces permuted. So we map that congruence and thereby figure
+     * out how to permute the faces as a result of the polyhedron
+     * having rolled.
+     
+             * Now go through the transformed polyhedron's faces
+             * and figure out which one's normal is approximately
+             * equal to this one.
+             
+     * And finally, swap the colour between the bottom face of the
+     * polyhedron and the face we've just landed on.
+     * 
+     * We don't do this if the game is already complete, since we
+     * allow the user to roll the fully blue polyhedron around the
+     * grid as a feeble reward.
+     
+         * Detect game completion.
+         
+     * Align the normal polyhedron with its grid square, to get key
+     * points for non-animated display.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * These should be hugely more than the real bounding box will
+     * be.
+      not decided yet 
+         * This is an Undo. So reverse the order of the states, and
+         * run the roll timer backwards.
+         
+     * Now compute and draw the polyhedron.
+     
+     * Compute the translation required to align the two key points
+     * on the polyhedron with the same key points on the current
+     * face.
+     
+     * Now actually draw each face.
+     
+         * Find out whether these points are in a clockwise or
+         * anticlockwise arrangement. If the latter, discard the
+         * face because it's facing away from the viewer.
+         *
+         * This would involve fiddly winding-number stuff for a
+         * general polygon, but for the simple parallelograms we'll
+         * be seeing here, all we have to do is check whether the
+         * corners turn right or left. So we'll take the vector
+         * from point 0 to point 1, turn it right 90 degrees,
+         * and check the sign of the dot product with that and the
+         * next vector (point 1 to point 2).
+         
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 
+ * cube.c: Cube game.
+  3*npoints coordinates  order*nfaces point indices  3*npoints vector components  isometric shear for nice drawing  border required around arena  maximum  bit masks showing point pairs 
+     * Grid dimensions. For a square grid these are width and
+     * height respectively; otherwise the grid is a hexagon, with
+     * the top side and the two lower diagonals having length d1
+     * and the remaining three sides having length d2 (so that
+     * d1==d2 gives a regular hexagon, and d2==0 gives a triangle).
+      index of current grid square  key-point indices into grid sq  key-point indices into grid sq  key-point indices into polyhedron  key-point indices into polyhedron  stores move count at completion  structure copy  0,1  2,3  0,3  1,2  no diagonals in a square  no diagonals in a square  no diagonals in a square  no diagonals in a square 
+                 * This is supremely irrelevant, but just to avoid
+                 * having any uninitialised structure members...
+                 
+             * There are `rowlen' down-pointing triangles.
+              0,1  1,2  0,2  invalid move 
+                 * Down-pointing triangle: both the up diagonals go
+                 * up, and the down ones go left and right.
+                 
+             * There are `rowlen+other' up-pointing triangles.
+              1,2  0,1  0,2  invalid move 
+                 * Up-pointing triangle: both the down diagonals go
+                 * down, and the up ones go left and right.
+                 
+     * An NxM grid of squares has NM squares in it.
+     * 
+     * A grid of triangles with dimensions A and B has a total of
+     * A^2 + B^2 + 4AB triangles in it. (You can divide it up into
+     * a side-A triangle containing A^2 subtriangles, a side-B
+     * triangle containing B^2, and two congruent parallelograms,
+     * each with side lengths A and B, each therefore containing AB
+     * two-triangle rhombuses.)
+     
+     * Enumerate the grid squares, dividing them into equivalence
+     * classes as appropriate. (For the tetrahedron, there is one
+     * equivalence class for each face; for the octahedron there
+     * are two classes; for the other two solids there's only one.)
+     
+     * So now we know how many faces to allocate in each class. Get
+     * on with it.
+     
+	     * Move everything else up the array. I ought to use a
+	     * better data structure for this, but for such small
+	     * numbers it hardly seems worth the effort.
+	     
+     * Now we know precisely which squares are blue. Encode this
+     * information in hex. While we're looping over this, collect
+     * the non-blue squares into a list in the now-unused gridptrs
+     * array.
+     
+     * Choose a non-blue square for the polyhedron.
+      structure copy 
+     * First, find the lowest z-coordinate present in the solid.
+     
+     * Now go round the grid square. For each point in the grid
+     * square, we're looking for a point of the polyhedron with the
+     * same x- and y-coordinates (relative to the square's centre),
+     * and z-coordinate equal to zmin (near enough).
+      structure copy 
+     * Now rotate the polyhedron through the given angle. We must
+     * rotate about the Z-axis to bring the two vertices key0 and
+     * key1 into horizontal alignment, then rotate about the
+     * X-axis, then rotate back again.
+      NB if desc[j]=='\0' that will also be caught here, so we're safe  structure copy 
+     * Set up the blue squares and polyhedron position according to
+     * the game description.
+      got to do _something_ 
+     * Align the polyhedron with its grid square and determine
+     * initial key points.
+      structure copy  pixel position of float origin 
+ * Code shared between interpret_move() and execute_move().
+ 
+     * Find the two points in the current grid square which
+     * correspond to this move.
+     
+     * Now find the other grid square which shares those points.
+     * This is our move destination.
+     
+     * Moves can be made with the cursor keys or numeric keypad, or
+     * alternatively you can left-click and the polyhedron will
+     * move in the general direction of the mouse pointer.
+     
+         * Find the bearing of the click point from the current
+         * square's centre.
+          clicked in exact centre!  
+         * There are three possibilities.
+         * 
+         *  - This square is a square, so we choose between UP,
+         *    DOWN, LEFT and RIGHT by dividing the available angle
+         *    at the 45-degree points.
+         * 
+         *  - This square is an up-pointing triangle, so we choose
+         *    between DOWN, LEFT and RIGHT by dividing into
+         *    120-degree arcs.
+         * 
+         *  - This square is a down-pointing triangle, so we choose
+         *    between UP, LEFT and RIGHT in the inverse manner.
+         * 
+         * Don't forget that since our y-coordinates increase
+         * downwards, `angle' is measured _clockwise_ from the
+         * x-axis, not anticlockwise as most mathematicians would
+         * instinctively assume.
+          Square.  Up-pointing triangle.  Down-pointing triangle. 
+     * Translate diagonal directions into orthogonal ones.
+      should never happen 
+     * So we know what grid square we're aiming for, and we also
+     * know the two key points (as indices in both the source and
+     * destination grid squares) which are invariant between source
+     * and destination.
+     * 
+     * Next we must roll the polyhedron on to that square. So we
+     * find the indices of the key points within the polyhedron's
+     * vertex array, then use those in a call to transform_poly,
+     * and align the result on the new grid square.
+     
+         * Now pkey[0] corresponds to skey[0] and dkey[0], and
+         * likewise [1].
+         
+     * Now find the angle through which to rotate the polyhedron.
+     * Do this by finding the two faces that share the two vertices
+     * we've found, and taking the dot product of their normals.
+     
+     * Now transform the polyhedron. We aren't entirely sure
+     * whether we need to rotate through angle or -angle, and the
+     * simplest way round this is to try both and see which one
+     * aligns successfully!
+     * 
+     * Unfortunately, _both_ will align successfully if this is a
+     * cube, which won't tell us anything much. So for that
+     * particular case, I resort to gross hackery: I simply negate
+     * the angle before trying the alignment, depending on the
+     * direction. Which directions work which way is determined by
+     * pure trial and error. I said it was gross :-/
+      HACK 
+     * Now we have our rotated polyhedron, which we expect to be
+     * exactly congruent to the one we started with - but with the
+     * faces permuted. So we map that congruence and thereby figure
+     * out how to permute the faces as a result of the polyhedron
+     * having rolled.
+     
+             * Now go through the transformed polyhedron's faces
+             * and figure out which one's normal is approximately
+             * equal to this one.
+             
+     * And finally, swap the colour between the bottom face of the
+     * polyhedron and the face we've just landed on.
+     * 
+     * We don't do this if the game is already complete, since we
+     * allow the user to roll the fully blue polyhedron around the
+     * grid as a feeble reward.
+     
+         * Detect game completion.
+         
+     * Align the normal polyhedron with its grid square, to get key
+     * points for non-animated display.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * These should be hugely more than the real bounding box will
+     * be.
+      not decided yet 
+         * This is an Undo. So reverse the order of the states, and
+         * run the roll timer backwards.
+         
+     * Now compute and draw the polyhedron.
+     
+     * Compute the translation required to align the two key points
+     * on the polyhedron with the same key points on the current
+     * face.
+     
+     * Now actually draw each face.
+     
+         * Find out whether these points are in a clockwise or
+         * anticlockwise arrangement. If the latter, discard the
+         * face because it's facing away from the viewer.
+         *
+         * This would involve fiddly winding-number stuff for a
+         * general polygon, but for the simple parallelograms we'll
+         * be seeing here, all we have to do is check whether the
+         * corners turn right or left. So we'll take the vector
+         * from point 0 to point 1, turn it right 90 degrees,
+         * and check the sign of the dot product with that and the
+         * next vector (point 1 to point 2).
+         
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 
+ * cube.c: Cube game.
+  3*npoints coordinates  order*nfaces point indices  3*npoints vector components  isometric shear for nice drawing  border required around arena  maximum  bit masks showing point pairs 
+     * Grid dimensions. For a square grid these are width and
+     * height respectively; otherwise the grid is a hexagon, with
+     * the top side and the two lower diagonals having length d1
+     * and the remaining three sides having length d2 (so that
+     * d1==d2 gives a regular hexagon, and d2==0 gives a triangle).
+      index of current grid square  key-point indices into grid sq  key-point indices into grid sq  key-point indices into polyhedron  key-point indices into polyhedron  stores move count at completion  structure copy  0,1  2,3  0,3  1,2  no diagonals in a square  no diagonals in a square  no diagonals in a square  no diagonals in a square 
+                 * This is supremely irrelevant, but just to avoid
+                 * having any uninitialised structure members...
+                 
+             * There are `rowlen' down-pointing triangles.
+              0,1  1,2  0,2  invalid move 
+                 * Down-pointing triangle: both the up diagonals go
+                 * up, and the down ones go left and right.
+                 
+             * There are `rowlen+other' up-pointing triangles.
+              1,2  0,1  0,2  invalid move 
+                 * Up-pointing triangle: both the down diagonals go
+                 * down, and the up ones go left and right.
+                 
+     * An NxM grid of squares has NM squares in it.
+     * 
+     * A grid of triangles with dimensions A and B has a total of
+     * A^2 + B^2 + 4AB triangles in it. (You can divide it up into
+     * a side-A triangle containing A^2 subtriangles, a side-B
+     * triangle containing B^2, and two congruent parallelograms,
+     * each with side lengths A and B, each therefore containing AB
+     * two-triangle rhombuses.)
+     
+     * Enumerate the grid squares, dividing them into equivalence
+     * classes as appropriate. (For the tetrahedron, there is one
+     * equivalence class for each face; for the octahedron there
+     * are two classes; for the other two solids there's only one.)
+     
+     * So now we know how many faces to allocate in each class. Get
+     * on with it.
+     
+	     * Move everything else up the array. I ought to use a
+	     * better data structure for this, but for such small
+	     * numbers it hardly seems worth the effort.
+	     
+     * Now we know precisely which squares are blue. Encode this
+     * information in hex. While we're looping over this, collect
+     * the non-blue squares into a list in the now-unused gridptrs
+     * array.
+     
+     * Choose a non-blue square for the polyhedron.
+      structure copy 
+     * First, find the lowest z-coordinate present in the solid.
+     
+     * Now go round the grid square. For each point in the grid
+     * square, we're looking for a point of the polyhedron with the
+     * same x- and y-coordinates (relative to the square's centre),
+     * and z-coordinate equal to zmin (near enough).
+      structure copy 
+     * Now rotate the polyhedron through the given angle. We must
+     * rotate about the Z-axis to bring the two vertices key0 and
+     * key1 into horizontal alignment, then rotate about the
+     * X-axis, then rotate back again.
+      NB if desc[j]=='\0' that will also be caught here, so we're safe  structure copy 
+     * Set up the blue squares and polyhedron position according to
+     * the game description.
+      got to do _something_ 
+     * Align the polyhedron with its grid square and determine
+     * initial key points.
+      structure copy  pixel position of float origin 
+ * Code shared between interpret_move() and execute_move().
+ 
+     * Find the two points in the current grid square which
+     * correspond to this move.
+     
+     * Now find the other grid square which shares those points.
+     * This is our move destination.
+     
+     * Moves can be made with the cursor keys or numeric keypad, or
+     * alternatively you can left-click and the polyhedron will
+     * move in the general direction of the mouse pointer.
+     
+         * Find the bearing of the click point from the current
+         * square's centre.
+          clicked in exact centre!  
+         * There are three possibilities.
+         * 
+         *  - This square is a square, so we choose between UP,
+         *    DOWN, LEFT and RIGHT by dividing the available angle
+         *    at the 45-degree points.
+         * 
+         *  - This square is an up-pointing triangle, so we choose
+         *    between DOWN, LEFT and RIGHT by dividing into
+         *    120-degree arcs.
+         * 
+         *  - This square is a down-pointing triangle, so we choose
+         *    between UP, LEFT and RIGHT in the inverse manner.
+         * 
+         * Don't forget that since our y-coordinates increase
+         * downwards, `angle' is measured _clockwise_ from the
+         * x-axis, not anticlockwise as most mathematicians would
+         * instinctively assume.
+          Square.  Up-pointing triangle.  Down-pointing triangle. 
+     * Translate diagonal directions into orthogonal ones.
+      should never happen 
+     * So we know what grid square we're aiming for, and we also
+     * know the two key points (as indices in both the source and
+     * destination grid squares) which are invariant between source
+     * and destination.
+     * 
+     * Next we must roll the polyhedron on to that square. So we
+     * find the indices of the key points within the polyhedron's
+     * vertex array, then use those in a call to transform_poly,
+     * and align the result on the new grid square.
+     
+         * Now pkey[0] corresponds to skey[0] and dkey[0], and
+         * likewise [1].
+         
+     * Now find the angle through which to rotate the polyhedron.
+     * Do this by finding the two faces that share the two vertices
+     * we've found, and taking the dot product of their normals.
+     
+     * Now transform the polyhedron. We aren't entirely sure
+     * whether we need to rotate through angle or -angle, and the
+     * simplest way round this is to try both and see which one
+     * aligns successfully!
+     * 
+     * Unfortunately, _both_ will align successfully if this is a
+     * cube, which won't tell us anything much. So for that
+     * particular case, I resort to gross hackery: I simply negate
+     * the angle before trying the alignment, depending on the
+     * direction. Which directions work which way is determined by
+     * pure trial and error. I said it was gross :-/
+      HACK 
+     * Now we have our rotated polyhedron, which we expect to be
+     * exactly congruent to the one we started with - but with the
+     * faces permuted. So we map that congruence and thereby figure
+     * out how to permute the faces as a result of the polyhedron
+     * having rolled.
+     
+             * Now go through the transformed polyhedron's faces
+             * and figure out which one's normal is approximately
+             * equal to this one.
+             
+     * And finally, swap the colour between the bottom face of the
+     * polyhedron and the face we've just landed on.
+     * 
+     * We don't do this if the game is already complete, since we
+     * allow the user to roll the fully blue polyhedron around the
+     * grid as a feeble reward.
+     
+         * Detect game completion.
+         
+     * Align the normal polyhedron with its grid square, to get key
+     * points for non-animated display.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * These should be hugely more than the real bounding box will
+     * be.
+      not decided yet 
+         * This is an Undo. So reverse the order of the states, and
+         * run the roll timer backwards.
+         
+     * Now compute and draw the polyhedron.
+     
+     * Compute the translation required to align the two key points
+     * on the polyhedron with the same key points on the current
+     * face.
+     
+     * Now actually draw each face.
+     
+         * Find out whether these points are in a clockwise or
+         * anticlockwise arrangement. If the latter, discard the
+         * face because it's facing away from the viewer.
+         *
+         * This would involve fiddly winding-number stuff for a
+         * general polygon, but for the simple parallelograms we'll
+         * be seeing here, all we have to do is check whether the
+         * corners turn right or left. So we'll take the vector
+         * from point 0 to point 1, turn it right 90 degrees,
+         * and check the sign of the dot product with that and the
+         * next vector (point 1 to point 2).
+         
+     * Update the status bar.
+      game_request_keys  wants_statusbar  flags 

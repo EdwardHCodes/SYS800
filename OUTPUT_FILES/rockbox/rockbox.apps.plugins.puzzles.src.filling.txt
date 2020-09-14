@@ -1,0 +1,1045 @@
+ -*- tab-width: 8; indent-tabs-mode: t -*-
+ * filling.c: An implementation of the Nikoli game fillomino.
+ * Copyright (C) 2007 Jonas Kölker.  See LICENSE for the license.
+  TODO:
+ *
+ *  - use a typedef instead of int for numbers on the board
+ *     + replace int with something else (signed short?)
+ *        - the type should be signed (for -board[i] and -SENTINEL)
+ *        - the type should be somewhat big: board[i] = i
+ *        - Using shorts gives us 181x181 puzzles as upper bound.
+ *
+ *  - in board generation, after having merged regions such that no
+ *    more merges are necessary, try splitting (big) regions.
+ *     + it seems that smaller regions make for better puzzles; see
+ *       for instance the 7x7 puzzle in this file (grep for 7x7:).
+ *
+ *  - symmetric hints (solo-style)
+ *     + right now that means including _many_ hints, and the puzzles
+ *       won't look any nicer.  Not worth it (at the moment).
+ *
+ *  - make the solver do recursion/backtracking.
+ *     + This is for user-submitted puzzles, not for puzzle
+ *       generation (on the other hand, never say never).
+ *
+ *  - prove that only w=h=2 needs a special case
+ *
+ *  - solo-like pencil marks?
+ *
+ *  - a user says that the difficulty is unevenly distributed.
+ *     + partition into levels?  Will they be non-crap?
+ *
+ *  - Allow square contents > 9?
+ *     + I could use letters for digits (solo does this), but
+ *       letters don't have numeric significance (normal people hate
+ *       base36), which is relevant here (much more than in solo).
+ *     + [click, 1, 0, enter] => [10 in clicked square]?
+ *     + How much information is needed to solve?  Does one need to
+ *       know the algorithm by which the largest number is set?
+ *
+ *  - eliminate puzzle instances with done chunks (1's in particular)?
+ *     + that's what the qsort call is all about.
+ *     + the 1's don't bother me that much.
+ *     + but this takes a LONG time (not always possible)?
+ *        - this may be affected by solver (lack of) quality.
+ *        - weed them out by construction instead of post-cons check
+ *           + but that interleaves make_board and new_game_desc: you
+ *             have to alternate between changing the board and
+ *             changing the hint set (instead of just creating the
+ *             board once, then changing the hint set once -> done).
+ *
+ *  - use binary search when discovering the minimal sovable point
+ *     + profile to show a need (but when the solver gets slower...)
+ *     + 7x9 @ .011s, 9x13 @ .075s, 17x13 @ .661s (all avg with n=100)
+ *     + but the hints are independent, not linear, so... what?
+ ****************************************************************************
+ * GAME CONFIGURATION AND PARAMETERS                                         *
+ **************************************************************************** struct copy  struct copy  struct copy ****************************************************************************
+ * STRINGIFICATION OF GAME STATE                                             *
+ **************************************************************************** Example of plaintext rendering:
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *
+ * This puzzle instance is taken from the nikoli website
+ * Encoded (unsolved and solved), the strings are these:
+ * 7x7:6002002030603030000010230420200000305010404003003
+ * 7x7:6662232336663232331311235422255544325413434443313
+  +2 for trailing '+' and '\n'  +1: n fence segments, n+1 posts  build the first line ("^(\+---){n}\+$")  ... and copy it onto the odd-numbered lines  build the second line ("^(\|\t){n}\|$")  ... and copy it onto the even-numbered lines  fill in the numbers ****************************************************************************
+ * GAME GENERATION AND SOLVER                                                *
+ **************************************************************************** Used internally by learn_bitmap_deductions; kept here to avoid
+     * mallocing/freeing them every time that function is called.  generate a random valid board; uses validate_board.  w=h=2 is a special case which requires a number > max(w, h)  TODO prove that this is the case ONLY for w=h=2.  Note that if 1 in {w, h} then it's impossible to have a region
+     * of size > w*h, so the special case only affects w=h=2.  I abuse the board variable: when generating the puzzle, it
+     * contains a shuffled list of numbers {0, ..., sz-1}.  as long as the board potentially has errors  find the smallest neighbour to merge with, which
+                 * wouldn't make the region too large.  (This is
+                 * guaranteed by the initial value of `min'.)  if this square is not in error, leave it be  if it is, but we can't fix it, retry the whole board.
+             * Maybe we could fix it by merging the conflicting
+             * neighbouring region(s) into some of their neighbours,
+             * but just restarting works out fine.  merge with the smallest neighbouring workable region.  expand to empty square  expand from non-empty square 
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+  Solving techniques:
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too big):
+ * When a CC can only be expanded in one direction, because all the
+ * other ones would make the CC too big.
+ *  +---+---+---+---+---+
+ *  | 2 | 2 |   | 2 | _ |
+ *  +---+---+---+---+---+
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too small):
+ * When a CC must include a particular square, because otherwise there
+ * would not be enough room to complete it.  This includes squares not
+ * adjacent to the CC through learn_critical_square.
+ *  +---+---+
+ *  | 2 | _ |
+ *  +---+---+
+ *
+ * DROPPING IN A ONE:
+ * When an empty square has no neighbouring empty squares and only a 1
+ * will go into the square (or other CCs would be too big).
+ *  +---+---+---+
+ *  | 2 | 2 | _ |
+ *  +---+---+---+
+ *
+ * TODO: generalise DROPPING IN A ONE: find the size of the CC of
+ * empty squares and a list of all adjacent numbers.  See if only one
+ * number in {1, ..., size} u {all adjacent numbers} is possible.
+ * Probably this is only effective for a CC size < n for some n (4?)
+ *
+ * TODO: backtracking.
+  for every connected component  (but only for each connected component)  (and not if it's already complete)  for each square j _in_ the connected component  for each neighbouring square (idx)  int l;
+                   int nhits = 0;
+                   int hits[4];  find out the would-be size of the new connected
+                 * component if we actually expanded into idx 
+                size = 1;
+                for (l = 0; l < 4; ++l) {
+                    const int lx = x + dx[l];
+                    const int ly = y + dy[l];
+                    const int idxl = w*ly + lx;
+                    int root;
+                    int m;
+                    if (lx < 0 || lx >= w || ly < 0 || ly >= h) continue;
+                    if (board[idxl] != board[j]) continue;
+                    root = dsf_canonify(dsf, idxl);
+                    for (m = 0; m < nhits && root != hits[m]; ++m);
+                    if (m != nhits) continue;
+                    // printv("\t  (%d, %d) contributed %d to size\n", lx, ly, dsf[root] >> 2);
+                    size += dsf_size(dsf, root);
+                    assert(dsf_size(dsf, root) >= 1);
+                    hits[nhits++] = root;
+                }
+                 ... and see if that size is too big, or if we
+                 * have other expansion candidates.  Otherwise
+                 * remember the (so far) only candidate.  printv("\tnow knowing %d expansions\n", nexpand + 1);  next square in the same CC  end: for each square j _in_ the connected component  end: for each connected component  for each connected component  for each empty square  if it's too far away from the CC, don't bother  not within range  if not expanding s->board[i] to s->board[j] implies
+	     * that s->board[i] can't reach its full size, ... 
+     * This function does deductions based on building up a bitmap
+     * which indicates the possible numbers that can appear in each
+     * grid square. If we can rule out all but one possibility for a
+     * particular square, then we've found out the value of that
+     * square. In particular, this is one of the few forms of
+     * deduction capable of inferring the existence of a 'ghost
+     * region', i.e. a region which has none of its squares filled in
+     * at all.
+     *
+     * The reasoning goes like this. A currently unfilled square S can
+     * turn out to contain digit n in exactly two ways: either S is
+     * part of an n-region which also includes some currently known
+     * connected component of squares with n in, or S is part of an
+     * n-region separate from _all_ currently known connected
+     * components. If we can rule out both possibilities, then square
+     * S can't contain digit n at all.
+     *
+     * The former possibility: if there's a region of size n
+     * containing both S and some existing component C, then that
+     * means the distance from S to C must be small enough that C
+     * could be extended to include S without becoming too big. So we
+     * can do a breadth-first search out from all existing components
+     * with n in them, to identify all the squares which could be
+     * joined to any of them.
+     *
+     * The latter possibility: if there's a region of size n that
+     * doesn't contain _any_ existing component, then it also can't
+     * contain any square adjacent to an existing component either. So
+     * we can identify all the EMPTY squares not adjacent to any
+     * existing square with n in, and group them into connected
+     * components; then any component of size less than n is ruled
+     * out, because there wouldn't be room to create a completely new
+     * n-region in it.
+     *
+     * In fact we process these possibilities in the other order.
+     * First we find all the squares not adjacent to an existing
+     * square with n in; then we winnow those by removing too-small
+     * connected components, to get the set of squares which could
+     * possibly be part of a brand new n-region; and finally we do the
+     * breadth-first search to add in the set of squares which could
+     * possibly be added to some existing n-region.
+     
+     * Start by initialising our bitmap to 'all numbers possible in
+     * all squares'.
+      bits 1,2,...,9 now set 
+     * Now completely zero out the bitmap for squares that are already
+     * filled in (we aren't interested in those anyway). Also, for any
+     * filled square, eliminate its number from all its neighbours
+     * (because, as discussed above, the neighbours couldn't be part
+     * of a _new_ region with that number in it, and that's the case
+     * we consider first).
+     
+     * Now, for each n, we separately find the connected components of
+     * squares for which n is still a possibility. Then discard any
+     * component of size < n, because that component is too small to
+     * have a completely new n-region in it.
+      Build the dsf  Query the dsf 
+     * Now our bitmap includes every square which could be part of a
+     * completely new region, of any size. Extend it to include
+     * squares which could be part of an existing region.
+     
+	 * We're going to do a breadth-first search starting from
+	 * existing connected components with cell value n, to find
+	 * all cells they might possibly extend into.
+	 *
+	 * The quantity we compute, for each square, is 'minimum size
+	 * that any existing CC would have to have if extended to
+	 * include this square'. So squares already _in_ an existing
+	 * CC are initialised to the size of that CC; then we search
+	 * outwards using the rule that if a square's score is j, then
+	 * its neighbours can't score more than j+1.
+	 *
+	 * Scores are capped at n+1, because if a square scores more
+	 * than n then that's enough to know it can't possibly be
+	 * reached by extending an existing region - we don't need to
+	 * know exactly _how far_ out of reach it is.
+	  Square is part of an existing CC.  Otherwise, initialise to the maximum score n+1;
+		 * we'll reduce this later if we find a neighbouring
+		 * square with a lower score. 
+	     * Find neighbours of cells scoring j, and set their score
+	     * to at most j+1.
+	     *
+	     * Doing the BFS this way means we need n passes over the
+	     * grid, which isn't entirely optimal but it seems to be
+	     * fast enough for the moment. This could probably be
+	     * improved by keeping a linked-list queue of cells in
+	     * some way, but I think you'd have to be a bit careful to
+	     * insert things into the right place in the queue; this
+	     * way is easier not to get wrong.
+	     
+	 * Now, every cell scoring at most n should have its 1<<n bit
+	 * in the bitmap reinstated, because we've found that it's
+	 * potentially reachable by extending an existing CC.
+	 
+     * Now our bitmap is complete. Look for entries with only one bit
+     * set; those are squares with only one possible number, in which
+     * case we can fill that number in.
+      is bm[i] a power of two?  Integer log2, by simple binary search.  Double-check that we ended up with a sensible
+	     * answer.  eqv classes: connected components  connected[n] := n.next;  cyclic disjoint singly linked lists, same partitioning as dsf.
+     * The lists lets you iterate over a partition given any member  We don't need the \0 for execute_move (the only user)
+         * I'm just being printf-friendly in case I wanna print 
+     * First, try to eliminate an entire region at a time if possible,
+     * because inferring the existence of a completely unclued region
+     * is a particularly good aspect of this puzzle type and we want
+     * to encourage it to happen.
+     *
+     * Begin by identifying the regions as linked lists of cells using
+     * the 'next' array.
+      First cell of a region; set next[i] = -1 to indicate
+	     * end-of-list.  Add this cell to a region which already has a
+	     * linked-list head, by pointing the canonical element j
+	     * at this one, and pointing this one in turn at wherever
+	     * j previously pointed. (This should end up with the
+	     * elements linked in the order 1,n,n-1,n-2,...,2, which
+	     * is a bit weird-looking, but any order is fine.)
+	     
+     * Now loop over the grid cells in our shuffled order, and each
+     * time we encounter a region for the first time, try to remove it
+     * all. Then we set next[canonical index] to -2 rather than -1, to
+     * mark it as already tried.
+     *
+     * Doing this in a loop over _cells_, rather than extracting and
+     * shuffling a list of _regions_, is intended to skew the
+     * probabilities towards trying to remove larger regions first
+     * (but without anything as crudely predictable as enforcing that
+     * we _always_ process regions in descending size order). Region
+     * removals might well be mutually exclusive, and larger ghost
+     * regions are more interesting, so we want to bias towards them
+     * if we can.
+      Blank out the whole thing.  Wasn't still solvable; reinstate it all  Either way, don't try this region again. 
+     * Now go through individual cells, in the same shuffled order,
+     * and try to remove each one by itself.
+      +1 for the terminating NUL  struct copy ****************************************************************************
+ * USER INTERFACE STATE AND ACTION                                           *
+ **************************************************************************** w*h highlighted squares, or NULL  Clear any selection  A left-click anywhere will clear the current selection.  in case cursor is on clue  Need to update UI at least, as we cleared the selection 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * Clip to the grid square.
+     
+     * Clear the square.
+     
+     * Draw the grid lines.
+     
+     * Draw the number.
+     
+     * Draw bold lines around the borders.
+     
+     * Build a dsf for the board in its current state, to use for
+     * highlights and hints.
+     
+     * Work out where we're putting borders between the cells.
+     
+                 * We only ever draw a border between two cells if
+                 * they don't have the same contents.
+                 
+                     * But in that situation, we don't always draw
+                     * a border. We do if the two cells both
+                     * contain actual numbers...
+                     
+                     * ... or if at least one of them is a
+                     * completed or overfull omino.
+                     
+     * Actually do the drawing.
+     
+             * Determine what we need to draw in this square.
+              clear all background flags 
+             * Borders at the very edges of the grid are
+             * independent of the `borders' flag.
+             
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+	 * Smaller black rectangle which is the main grid.
+	 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * We'll draw borders between the ominoes iff the grid is not
+     * pristine. So scan it to see if it is.
+     
+     * Draw grid.
+     
+     * Clean up.
+      wants_statusbar  flags  solver? hah!  vim: set shiftwidth=4 tabstop=8:  -*- tab-width: 8; indent-tabs-mode: t -*-
+ * filling.c: An implementation of the Nikoli game fillomino.
+ * Copyright (C) 2007 Jonas Kölker.  See LICENSE for the license.
+  TODO:
+ *
+ *  - use a typedef instead of int for numbers on the board
+ *     + replace int with something else (signed short?)
+ *        - the type should be signed (for -board[i] and -SENTINEL)
+ *        - the type should be somewhat big: board[i] = i
+ *        - Using shorts gives us 181x181 puzzles as upper bound.
+ *
+ *  - in board generation, after having merged regions such that no
+ *    more merges are necessary, try splitting (big) regions.
+ *     + it seems that smaller regions make for better puzzles; see
+ *       for instance the 7x7 puzzle in this file (grep for 7x7:).
+ *
+ *  - symmetric hints (solo-style)
+ *     + right now that means including _many_ hints, and the puzzles
+ *       won't look any nicer.  Not worth it (at the moment).
+ *
+ *  - make the solver do recursion/backtracking.
+ *     + This is for user-submitted puzzles, not for puzzle
+ *       generation (on the other hand, never say never).
+ *
+ *  - prove that only w=h=2 needs a special case
+ *
+ *  - solo-like pencil marks?
+ *
+ *  - a user says that the difficulty is unevenly distributed.
+ *     + partition into levels?  Will they be non-crap?
+ *
+ *  - Allow square contents > 9?
+ *     + I could use letters for digits (solo does this), but
+ *       letters don't have numeric significance (normal people hate
+ *       base36), which is relevant here (much more than in solo).
+ *     + [click, 1, 0, enter] => [10 in clicked square]?
+ *     + How much information is needed to solve?  Does one need to
+ *       know the algorithm by which the largest number is set?
+ *
+ *  - eliminate puzzle instances with done chunks (1's in particular)?
+ *     + that's what the qsort call is all about.
+ *     + the 1's don't bother me that much.
+ *     + but this takes a LONG time (not always possible)?
+ *        - this may be affected by solver (lack of) quality.
+ *        - weed them out by construction instead of post-cons check
+ *           + but that interleaves make_board and new_game_desc: you
+ *             have to alternate between changing the board and
+ *             changing the hint set (instead of just creating the
+ *             board once, then changing the hint set once -> done).
+ *
+ *  - use binary search when discovering the minimal sovable point
+ *     + profile to show a need (but when the solver gets slower...)
+ *     + 7x9 @ .011s, 9x13 @ .075s, 17x13 @ .661s (all avg with n=100)
+ *     + but the hints are independent, not linear, so... what?
+ ****************************************************************************
+ * GAME CONFIGURATION AND PARAMETERS                                         *
+ **************************************************************************** struct copy  struct copy  struct copy ****************************************************************************
+ * STRINGIFICATION OF GAME STATE                                             *
+ **************************************************************************** Example of plaintext rendering:
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *
+ * This puzzle instance is taken from the nikoli website
+ * Encoded (unsolved and solved), the strings are these:
+ * 7x7:6002002030603030000010230420200000305010404003003
+ * 7x7:6662232336663232331311235422255544325413434443313
+  +2 for trailing '+' and '\n'  +1: n fence segments, n+1 posts  build the first line ("^(\+---){n}\+$")  ... and copy it onto the odd-numbered lines  build the second line ("^(\|\t){n}\|$")  ... and copy it onto the even-numbered lines  fill in the numbers ****************************************************************************
+ * GAME GENERATION AND SOLVER                                                *
+ **************************************************************************** Used internally by learn_bitmap_deductions; kept here to avoid
+     * mallocing/freeing them every time that function is called.  generate a random valid board; uses validate_board.  w=h=2 is a special case which requires a number > max(w, h)  TODO prove that this is the case ONLY for w=h=2.  Note that if 1 in {w, h} then it's impossible to have a region
+     * of size > w*h, so the special case only affects w=h=2.  I abuse the board variable: when generating the puzzle, it
+     * contains a shuffled list of numbers {0, ..., sz-1}.  as long as the board potentially has errors  find the smallest neighbour to merge with, which
+                 * wouldn't make the region too large.  (This is
+                 * guaranteed by the initial value of `min'.)  if this square is not in error, leave it be  if it is, but we can't fix it, retry the whole board.
+             * Maybe we could fix it by merging the conflicting
+             * neighbouring region(s) into some of their neighbours,
+             * but just restarting works out fine.  merge with the smallest neighbouring workable region.  expand to empty square  expand from non-empty square 
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+  Solving techniques:
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too big):
+ * When a CC can only be expanded in one direction, because all the
+ * other ones would make the CC too big.
+ *  +---+---+---+---+---+
+ *  | 2 | 2 |   | 2 | _ |
+ *  +---+---+---+---+---+
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too small):
+ * When a CC must include a particular square, because otherwise there
+ * would not be enough room to complete it.  This includes squares not
+ * adjacent to the CC through learn_critical_square.
+ *  +---+---+
+ *  | 2 | _ |
+ *  +---+---+
+ *
+ * DROPPING IN A ONE:
+ * When an empty square has no neighbouring empty squares and only a 1
+ * will go into the square (or other CCs would be too big).
+ *  +---+---+---+
+ *  | 2 | 2 | _ |
+ *  +---+---+---+
+ *
+ * TODO: generalise DROPPING IN A ONE: find the size of the CC of
+ * empty squares and a list of all adjacent numbers.  See if only one
+ * number in {1, ..., size} u {all adjacent numbers} is possible.
+ * Probably this is only effective for a CC size < n for some n (4?)
+ *
+ * TODO: backtracking.
+  for every connected component  (but only for each connected component)  (and not if it's already complete)  for each square j _in_ the connected component  for each neighbouring square (idx)  int l;
+                   int nhits = 0;
+                   int hits[4];  find out the would-be size of the new connected
+                 * component if we actually expanded into idx 
+                size = 1;
+                for (l = 0; l < 4; ++l) {
+                    const int lx = x + dx[l];
+                    const int ly = y + dy[l];
+                    const int idxl = w*ly + lx;
+                    int root;
+                    int m;
+                    if (lx < 0 || lx >= w || ly < 0 || ly >= h) continue;
+                    if (board[idxl] != board[j]) continue;
+                    root = dsf_canonify(dsf, idxl);
+                    for (m = 0; m < nhits && root != hits[m]; ++m);
+                    if (m != nhits) continue;
+                    // printv("\t  (%d, %d) contributed %d to size\n", lx, ly, dsf[root] >> 2);
+                    size += dsf_size(dsf, root);
+                    assert(dsf_size(dsf, root) >= 1);
+                    hits[nhits++] = root;
+                }
+                 ... and see if that size is too big, or if we
+                 * have other expansion candidates.  Otherwise
+                 * remember the (so far) only candidate.  printv("\tnow knowing %d expansions\n", nexpand + 1);  next square in the same CC  end: for each square j _in_ the connected component  end: for each connected component  for each connected component  for each empty square  if it's too far away from the CC, don't bother  not within range  if not expanding s->board[i] to s->board[j] implies
+	     * that s->board[i] can't reach its full size, ... 
+     * This function does deductions based on building up a bitmap
+     * which indicates the possible numbers that can appear in each
+     * grid square. If we can rule out all but one possibility for a
+     * particular square, then we've found out the value of that
+     * square. In particular, this is one of the few forms of
+     * deduction capable of inferring the existence of a 'ghost
+     * region', i.e. a region which has none of its squares filled in
+     * at all.
+     *
+     * The reasoning goes like this. A currently unfilled square S can
+     * turn out to contain digit n in exactly two ways: either S is
+     * part of an n-region which also includes some currently known
+     * connected component of squares with n in, or S is part of an
+     * n-region separate from _all_ currently known connected
+     * components. If we can rule out both possibilities, then square
+     * S can't contain digit n at all.
+     *
+     * The former possibility: if there's a region of size n
+     * containing both S and some existing component C, then that
+     * means the distance from S to C must be small enough that C
+     * could be extended to include S without becoming too big. So we
+     * can do a breadth-first search out from all existing components
+     * with n in them, to identify all the squares which could be
+     * joined to any of them.
+     *
+     * The latter possibility: if there's a region of size n that
+     * doesn't contain _any_ existing component, then it also can't
+     * contain any square adjacent to an existing component either. So
+     * we can identify all the EMPTY squares not adjacent to any
+     * existing square with n in, and group them into connected
+     * components; then any component of size less than n is ruled
+     * out, because there wouldn't be room to create a completely new
+     * n-region in it.
+     *
+     * In fact we process these possibilities in the other order.
+     * First we find all the squares not adjacent to an existing
+     * square with n in; then we winnow those by removing too-small
+     * connected components, to get the set of squares which could
+     * possibly be part of a brand new n-region; and finally we do the
+     * breadth-first search to add in the set of squares which could
+     * possibly be added to some existing n-region.
+     
+     * Start by initialising our bitmap to 'all numbers possible in
+     * all squares'.
+      bits 1,2,...,9 now set 
+     * Now completely zero out the bitmap for squares that are already
+     * filled in (we aren't interested in those anyway). Also, for any
+     * filled square, eliminate its number from all its neighbours
+     * (because, as discussed above, the neighbours couldn't be part
+     * of a _new_ region with that number in it, and that's the case
+     * we consider first).
+     
+     * Now, for each n, we separately find the connected components of
+     * squares for which n is still a possibility. Then discard any
+     * component of size < n, because that component is too small to
+     * have a completely new n-region in it.
+      Build the dsf  Query the dsf 
+     * Now our bitmap includes every square which could be part of a
+     * completely new region, of any size. Extend it to include
+     * squares which could be part of an existing region.
+     
+	 * We're going to do a breadth-first search starting from
+	 * existing connected components with cell value n, to find
+	 * all cells they might possibly extend into.
+	 *
+	 * The quantity we compute, for each square, is 'minimum size
+	 * that any existing CC would have to have if extended to
+	 * include this square'. So squares already _in_ an existing
+	 * CC are initialised to the size of that CC; then we search
+	 * outwards using the rule that if a square's score is j, then
+	 * its neighbours can't score more than j+1.
+	 *
+	 * Scores are capped at n+1, because if a square scores more
+	 * than n then that's enough to know it can't possibly be
+	 * reached by extending an existing region - we don't need to
+	 * know exactly _how far_ out of reach it is.
+	  Square is part of an existing CC.  Otherwise, initialise to the maximum score n+1;
+		 * we'll reduce this later if we find a neighbouring
+		 * square with a lower score. 
+	     * Find neighbours of cells scoring j, and set their score
+	     * to at most j+1.
+	     *
+	     * Doing the BFS this way means we need n passes over the
+	     * grid, which isn't entirely optimal but it seems to be
+	     * fast enough for the moment. This could probably be
+	     * improved by keeping a linked-list queue of cells in
+	     * some way, but I think you'd have to be a bit careful to
+	     * insert things into the right place in the queue; this
+	     * way is easier not to get wrong.
+	     
+	 * Now, every cell scoring at most n should have its 1<<n bit
+	 * in the bitmap reinstated, because we've found that it's
+	 * potentially reachable by extending an existing CC.
+	 
+     * Now our bitmap is complete. Look for entries with only one bit
+     * set; those are squares with only one possible number, in which
+     * case we can fill that number in.
+      is bm[i] a power of two?  Integer log2, by simple binary search.  Double-check that we ended up with a sensible
+	     * answer.  eqv classes: connected components  connected[n] := n.next;  cyclic disjoint singly linked lists, same partitioning as dsf.
+     * The lists lets you iterate over a partition given any member  We don't need the \0 for execute_move (the only user)
+         * I'm just being printf-friendly in case I wanna print 
+     * First, try to eliminate an entire region at a time if possible,
+     * because inferring the existence of a completely unclued region
+     * is a particularly good aspect of this puzzle type and we want
+     * to encourage it to happen.
+     *
+     * Begin by identifying the regions as linked lists of cells using
+     * the 'next' array.
+      First cell of a region; set next[i] = -1 to indicate
+	     * end-of-list.  Add this cell to a region which already has a
+	     * linked-list head, by pointing the canonical element j
+	     * at this one, and pointing this one in turn at wherever
+	     * j previously pointed. (This should end up with the
+	     * elements linked in the order 1,n,n-1,n-2,...,2, which
+	     * is a bit weird-looking, but any order is fine.)
+	     
+     * Now loop over the grid cells in our shuffled order, and each
+     * time we encounter a region for the first time, try to remove it
+     * all. Then we set next[canonical index] to -2 rather than -1, to
+     * mark it as already tried.
+     *
+     * Doing this in a loop over _cells_, rather than extracting and
+     * shuffling a list of _regions_, is intended to skew the
+     * probabilities towards trying to remove larger regions first
+     * (but without anything as crudely predictable as enforcing that
+     * we _always_ process regions in descending size order). Region
+     * removals might well be mutually exclusive, and larger ghost
+     * regions are more interesting, so we want to bias towards them
+     * if we can.
+      Blank out the whole thing.  Wasn't still solvable; reinstate it all  Either way, don't try this region again. 
+     * Now go through individual cells, in the same shuffled order,
+     * and try to remove each one by itself.
+      +1 for the terminating NUL  struct copy ****************************************************************************
+ * USER INTERFACE STATE AND ACTION                                           *
+ **************************************************************************** w*h highlighted squares, or NULL  Clear any selection  A left-click anywhere will clear the current selection.  in case cursor is on clue  Need to update UI at least, as we cleared the selection 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * Clip to the grid square.
+     
+     * Clear the square.
+     
+     * Draw the grid lines.
+     
+     * Draw the number.
+     
+     * Draw bold lines around the borders.
+     
+     * Build a dsf for the board in its current state, to use for
+     * highlights and hints.
+     
+     * Work out where we're putting borders between the cells.
+     
+                 * We only ever draw a border between two cells if
+                 * they don't have the same contents.
+                 
+                     * But in that situation, we don't always draw
+                     * a border. We do if the two cells both
+                     * contain actual numbers...
+                     
+                     * ... or if at least one of them is a
+                     * completed or overfull omino.
+                     
+     * Actually do the drawing.
+     
+             * Determine what we need to draw in this square.
+              clear all background flags 
+             * Borders at the very edges of the grid are
+             * independent of the `borders' flag.
+             
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+	 * Smaller black rectangle which is the main grid.
+	 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * We'll draw borders between the ominoes iff the grid is not
+     * pristine. So scan it to see if it is.
+     
+     * Draw grid.
+     
+     * Clean up.
+      wants_statusbar  flags  solver? hah!  vim: set shiftwidth=4 tabstop=8:  -*- tab-width: 8; indent-tabs-mode: t -*-
+ * filling.c: An implementation of the Nikoli game fillomino.
+ * Copyright (C) 2007 Jonas Kölker.  See LICENSE for the license.
+  TODO:
+ *
+ *  - use a typedef instead of int for numbers on the board
+ *     + replace int with something else (signed short?)
+ *        - the type should be signed (for -board[i] and -SENTINEL)
+ *        - the type should be somewhat big: board[i] = i
+ *        - Using shorts gives us 181x181 puzzles as upper bound.
+ *
+ *  - in board generation, after having merged regions such that no
+ *    more merges are necessary, try splitting (big) regions.
+ *     + it seems that smaller regions make for better puzzles; see
+ *       for instance the 7x7 puzzle in this file (grep for 7x7:).
+ *
+ *  - symmetric hints (solo-style)
+ *     + right now that means including _many_ hints, and the puzzles
+ *       won't look any nicer.  Not worth it (at the moment).
+ *
+ *  - make the solver do recursion/backtracking.
+ *     + This is for user-submitted puzzles, not for puzzle
+ *       generation (on the other hand, never say never).
+ *
+ *  - prove that only w=h=2 needs a special case
+ *
+ *  - solo-like pencil marks?
+ *
+ *  - a user says that the difficulty is unevenly distributed.
+ *     + partition into levels?  Will they be non-crap?
+ *
+ *  - Allow square contents > 9?
+ *     + I could use letters for digits (solo does this), but
+ *       letters don't have numeric significance (normal people hate
+ *       base36), which is relevant here (much more than in solo).
+ *     + [click, 1, 0, enter] => [10 in clicked square]?
+ *     + How much information is needed to solve?  Does one need to
+ *       know the algorithm by which the largest number is set?
+ *
+ *  - eliminate puzzle instances with done chunks (1's in particular)?
+ *     + that's what the qsort call is all about.
+ *     + the 1's don't bother me that much.
+ *     + but this takes a LONG time (not always possible)?
+ *        - this may be affected by solver (lack of) quality.
+ *        - weed them out by construction instead of post-cons check
+ *           + but that interleaves make_board and new_game_desc: you
+ *             have to alternate between changing the board and
+ *             changing the hint set (instead of just creating the
+ *             board once, then changing the hint set once -> done).
+ *
+ *  - use binary search when discovering the minimal sovable point
+ *     + profile to show a need (but when the solver gets slower...)
+ *     + 7x9 @ .011s, 9x13 @ .075s, 17x13 @ .661s (all avg with n=100)
+ *     + but the hints are independent, not linear, so... what?
+ ****************************************************************************
+ * GAME CONFIGURATION AND PARAMETERS                                         *
+ **************************************************************************** struct copy  struct copy  struct copy ****************************************************************************
+ * STRINGIFICATION OF GAME STATE                                             *
+ **************************************************************************** Example of plaintext rendering:
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *
+ * This puzzle instance is taken from the nikoli website
+ * Encoded (unsolved and solved), the strings are these:
+ * 7x7:6002002030603030000010230420200000305010404003003
+ * 7x7:6662232336663232331311235422255544325413434443313
+  +2 for trailing '+' and '\n'  +1: n fence segments, n+1 posts  build the first line ("^(\+---){n}\+$")  ... and copy it onto the odd-numbered lines  build the second line ("^(\|\t){n}\|$")  ... and copy it onto the even-numbered lines  fill in the numbers ****************************************************************************
+ * GAME GENERATION AND SOLVER                                                *
+ **************************************************************************** Used internally by learn_bitmap_deductions; kept here to avoid
+     * mallocing/freeing them every time that function is called.  generate a random valid board; uses validate_board.  w=h=2 is a special case which requires a number > max(w, h)  TODO prove that this is the case ONLY for w=h=2.  Note that if 1 in {w, h} then it's impossible to have a region
+     * of size > w*h, so the special case only affects w=h=2.  I abuse the board variable: when generating the puzzle, it
+     * contains a shuffled list of numbers {0, ..., sz-1}.  as long as the board potentially has errors  find the smallest neighbour to merge with, which
+                 * wouldn't make the region too large.  (This is
+                 * guaranteed by the initial value of `min'.)  if this square is not in error, leave it be  if it is, but we can't fix it, retry the whole board.
+             * Maybe we could fix it by merging the conflicting
+             * neighbouring region(s) into some of their neighbours,
+             * but just restarting works out fine.  merge with the smallest neighbouring workable region.  expand to empty square  expand from non-empty square 
+ *  +---+---+---+---+---+---+---+
+ *  | 6 |   |   | 2 |   |   | 2 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 3 |   | 6 |   | 3 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 3 |   |   |   |   |   | 1 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 2 | 3 |   | 4 | 2 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 2 |   |   |   |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+ *  |   | 5 |   | 1 |   | 4 |   |
+ *  +---+---+---+---+---+---+---+
+ *  | 4 |   |   | 3 |   |   | 3 |
+ *  +---+---+---+---+---+---+---+
+  Solving techniques:
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too big):
+ * When a CC can only be expanded in one direction, because all the
+ * other ones would make the CC too big.
+ *  +---+---+---+---+---+
+ *  | 2 | 2 |   | 2 | _ |
+ *  +---+---+---+---+---+
+ *
+ * CONNECTED COMPONENT FORCED EXPANSION (too small):
+ * When a CC must include a particular square, because otherwise there
+ * would not be enough room to complete it.  This includes squares not
+ * adjacent to the CC through learn_critical_square.
+ *  +---+---+
+ *  | 2 | _ |
+ *  +---+---+
+ *
+ * DROPPING IN A ONE:
+ * When an empty square has no neighbouring empty squares and only a 1
+ * will go into the square (or other CCs would be too big).
+ *  +---+---+---+
+ *  | 2 | 2 | _ |
+ *  +---+---+---+
+ *
+ * TODO: generalise DROPPING IN A ONE: find the size of the CC of
+ * empty squares and a list of all adjacent numbers.  See if only one
+ * number in {1, ..., size} u {all adjacent numbers} is possible.
+ * Probably this is only effective for a CC size < n for some n (4?)
+ *
+ * TODO: backtracking.
+  for every connected component  (but only for each connected component)  (and not if it's already complete)  for each square j _in_ the connected component  for each neighbouring square (idx)  int l;
+                   int nhits = 0;
+                   int hits[4];  find out the would-be size of the new connected
+                 * component if we actually expanded into idx 
+                size = 1;
+                for (l = 0; l < 4; ++l) {
+                    const int lx = x + dx[l];
+                    const int ly = y + dy[l];
+                    const int idxl = w*ly + lx;
+                    int root;
+                    int m;
+                    if (lx < 0 || lx >= w || ly < 0 || ly >= h) continue;
+                    if (board[idxl] != board[j]) continue;
+                    root = dsf_canonify(dsf, idxl);
+                    for (m = 0; m < nhits && root != hits[m]; ++m);
+                    if (m != nhits) continue;
+                    // printv("\t  (%d, %d) contributed %d to size\n", lx, ly, dsf[root] >> 2);
+                    size += dsf_size(dsf, root);
+                    assert(dsf_size(dsf, root) >= 1);
+                    hits[nhits++] = root;
+                }
+                 ... and see if that size is too big, or if we
+                 * have other expansion candidates.  Otherwise
+                 * remember the (so far) only candidate.  printv("\tnow knowing %d expansions\n", nexpand + 1);  next square in the same CC  end: for each square j _in_ the connected component  end: for each connected component  for each connected component  for each empty square  if it's too far away from the CC, don't bother  not within range  if not expanding s->board[i] to s->board[j] implies
+	     * that s->board[i] can't reach its full size, ... 
+     * This function does deductions based on building up a bitmap
+     * which indicates the possible numbers that can appear in each
+     * grid square. If we can rule out all but one possibility for a
+     * particular square, then we've found out the value of that
+     * square. In particular, this is one of the few forms of
+     * deduction capable of inferring the existence of a 'ghost
+     * region', i.e. a region which has none of its squares filled in
+     * at all.
+     *
+     * The reasoning goes like this. A currently unfilled square S can
+     * turn out to contain digit n in exactly two ways: either S is
+     * part of an n-region which also includes some currently known
+     * connected component of squares with n in, or S is part of an
+     * n-region separate from _all_ currently known connected
+     * components. If we can rule out both possibilities, then square
+     * S can't contain digit n at all.
+     *
+     * The former possibility: if there's a region of size n
+     * containing both S and some existing component C, then that
+     * means the distance from S to C must be small enough that C
+     * could be extended to include S without becoming too big. So we
+     * can do a breadth-first search out from all existing components
+     * with n in them, to identify all the squares which could be
+     * joined to any of them.
+     *
+     * The latter possibility: if there's a region of size n that
+     * doesn't contain _any_ existing component, then it also can't
+     * contain any square adjacent to an existing component either. So
+     * we can identify all the EMPTY squares not adjacent to any
+     * existing square with n in, and group them into connected
+     * components; then any component of size less than n is ruled
+     * out, because there wouldn't be room to create a completely new
+     * n-region in it.
+     *
+     * In fact we process these possibilities in the other order.
+     * First we find all the squares not adjacent to an existing
+     * square with n in; then we winnow those by removing too-small
+     * connected components, to get the set of squares which could
+     * possibly be part of a brand new n-region; and finally we do the
+     * breadth-first search to add in the set of squares which could
+     * possibly be added to some existing n-region.
+     
+     * Start by initialising our bitmap to 'all numbers possible in
+     * all squares'.
+      bits 1,2,...,9 now set 
+     * Now completely zero out the bitmap for squares that are already
+     * filled in (we aren't interested in those anyway). Also, for any
+     * filled square, eliminate its number from all its neighbours
+     * (because, as discussed above, the neighbours couldn't be part
+     * of a _new_ region with that number in it, and that's the case
+     * we consider first).
+     
+     * Now, for each n, we separately find the connected components of
+     * squares for which n is still a possibility. Then discard any
+     * component of size < n, because that component is too small to
+     * have a completely new n-region in it.
+      Build the dsf  Query the dsf 
+     * Now our bitmap includes every square which could be part of a
+     * completely new region, of any size. Extend it to include
+     * squares which could be part of an existing region.
+     
+	 * We're going to do a breadth-first search starting from
+	 * existing connected components with cell value n, to find
+	 * all cells they might possibly extend into.
+	 *
+	 * The quantity we compute, for each square, is 'minimum size
+	 * that any existing CC would have to have if extended to
+	 * include this square'. So squares already _in_ an existing
+	 * CC are initialised to the size of that CC; then we search
+	 * outwards using the rule that if a square's score is j, then
+	 * its neighbours can't score more than j+1.
+	 *
+	 * Scores are capped at n+1, because if a square scores more
+	 * than n then that's enough to know it can't possibly be
+	 * reached by extending an existing region - we don't need to
+	 * know exactly _how far_ out of reach it is.
+	  Square is part of an existing CC.  Otherwise, initialise to the maximum score n+1;
+		 * we'll reduce this later if we find a neighbouring
+		 * square with a lower score. 
+	     * Find neighbours of cells scoring j, and set their score
+	     * to at most j+1.
+	     *
+	     * Doing the BFS this way means we need n passes over the
+	     * grid, which isn't entirely optimal but it seems to be
+	     * fast enough for the moment. This could probably be
+	     * improved by keeping a linked-list queue of cells in
+	     * some way, but I think you'd have to be a bit careful to
+	     * insert things into the right place in the queue; this
+	     * way is easier not to get wrong.
+	     
+	 * Now, every cell scoring at most n should have its 1<<n bit
+	 * in the bitmap reinstated, because we've found that it's
+	 * potentially reachable by extending an existing CC.
+	 
+     * Now our bitmap is complete. Look for entries with only one bit
+     * set; those are squares with only one possible number, in which
+     * case we can fill that number in.
+      is bm[i] a power of two?  Integer log2, by simple binary search.  Double-check that we ended up with a sensible
+	     * answer.  eqv classes: connected components  connected[n] := n.next;  cyclic disjoint singly linked lists, same partitioning as dsf.
+     * The lists lets you iterate over a partition given any member  We don't need the \0 for execute_move (the only user)
+         * I'm just being printf-friendly in case I wanna print 
+     * First, try to eliminate an entire region at a time if possible,
+     * because inferring the existence of a completely unclued region
+     * is a particularly good aspect of this puzzle type and we want
+     * to encourage it to happen.
+     *
+     * Begin by identifying the regions as linked lists of cells using
+     * the 'next' array.
+      First cell of a region; set next[i] = -1 to indicate
+	     * end-of-list.  Add this cell to a region which already has a
+	     * linked-list head, by pointing the canonical element j
+	     * at this one, and pointing this one in turn at wherever
+	     * j previously pointed. (This should end up with the
+	     * elements linked in the order 1,n,n-1,n-2,...,2, which
+	     * is a bit weird-looking, but any order is fine.)
+	     
+     * Now loop over the grid cells in our shuffled order, and each
+     * time we encounter a region for the first time, try to remove it
+     * all. Then we set next[canonical index] to -2 rather than -1, to
+     * mark it as already tried.
+     *
+     * Doing this in a loop over _cells_, rather than extracting and
+     * shuffling a list of _regions_, is intended to skew the
+     * probabilities towards trying to remove larger regions first
+     * (but without anything as crudely predictable as enforcing that
+     * we _always_ process regions in descending size order). Region
+     * removals might well be mutually exclusive, and larger ghost
+     * regions are more interesting, so we want to bias towards them
+     * if we can.
+      Blank out the whole thing.  Wasn't still solvable; reinstate it all  Either way, don't try this region again. 
+     * Now go through individual cells, in the same shuffled order,
+     * and try to remove each one by itself.
+      +1 for the terminating NUL  struct copy ****************************************************************************
+ * USER INTERFACE STATE AND ACTION                                           *
+ **************************************************************************** w*h highlighted squares, or NULL  Clear any selection  A left-click anywhere will clear the current selection.  in case cursor is on clue  Need to update UI at least, as we cleared the selection 
+     * Check for completion.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+ 
+     * Clip to the grid square.
+     
+     * Clear the square.
+     
+     * Draw the grid lines.
+     
+     * Draw the number.
+     
+     * Draw bold lines around the borders.
+     
+     * Build a dsf for the board in its current state, to use for
+     * highlights and hints.
+     
+     * Work out where we're putting borders between the cells.
+     
+                 * We only ever draw a border between two cells if
+                 * they don't have the same contents.
+                 
+                     * But in that situation, we don't always draw
+                     * a border. We do if the two cells both
+                     * contain actual numbers...
+                     
+                     * ... or if at least one of them is a
+                     * completed or overfull omino.
+                     
+     * Actually do the drawing.
+     
+             * Determine what we need to draw in this square.
+              clear all background flags 
+             * Borders at the very edges of the grid are
+             * independent of the `borders' flag.
+             
+         * The initial contents of the window are not guaranteed and
+         * can vary with front ends. To be on the safe side, all games
+         * should start by drawing a big background-colour rectangle
+         * covering the whole window.
+         
+	 * Smaller black rectangle which is the main grid.
+	 
+     * I'll use 6mm squares by default.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * We'll draw borders between the ominoes iff the grid is not
+     * pristine. So scan it to see if it is.
+     
+     * Draw grid.
+     
+     * Clean up.
+      wants_statusbar  flags  solver? hah!  vim: set shiftwidth=4 tabstop=8: 

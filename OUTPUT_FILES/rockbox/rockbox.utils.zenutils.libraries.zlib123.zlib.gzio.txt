@@ -1,0 +1,366 @@
+ gzio.c -- IO on .gz files
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ *
+ * Compile this file with -DNO_GZCOMPRESS to avoid the compression code.
+  @(#) $Id$  for compatibility with old definition  for buggy compilers  minimize memory usage for 16-bit DOS  gzip magic header  gzip flag byte  bit 0 set: file probably ascii text  bit 1 set: header CRC present  bit 2 set: extra field present  bit 3 set: original file name present  bit 4 set: file comment present  bits 5..7: reserved  error code for last stream operation  set if end of input file  .gz file  input buffer  output buffer  crc32 of uncompressed data  error message  path name for debugging only  1 if input file is not a .gz file  'w' or 'r'  start of compressed data in file (header skipped)  bytes into deflate or inflate  bytes out of deflate or inflate  one character push-back  true if push-back is last character  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing. The mode parameter
+   is as in fopen ("rb" or "wb"). The file is given either by file descriptor
+   or path name (if fd == -1).
+     gz_open returns NULL if the file could not be opened or if there was
+   insufficient memory to allocate the (de)compression state; errno
+   can be checked to distinguish the two cases (if errno is zero, the
+   zlib error is Z_MEM_ERROR).
+ compression level  compression strategy  copy of mode, without the compression level  do this early for debugging  copy the mode  windowBits is passed < 0 to suppress zlib header  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END. Here the gzip CRC32 ensures that 4 bytes are
+         * present after the compressed stream.
+          Write a very simple .gz header:
+         flagstimexflags We use 10L instead of ftell(s->file) to because ftell causes an
+         * fflush on some systems. This version of the library doesn't use
+         * start anyway in write mode, so this initialization is not
+         * necessary.
+          skip the .gz header  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing.
+ ===========================================================================
+     Associate a gzFile with the file descriptor fd. fd is not dup'ed here
+   to mimic the behavio(u)r of fdopen.
+ allow for up to 128-bit integers  for debugging  ===========================================================================
+ * Update the compression level and strategy
+  Make room to allow flushing  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+      Check the gzip header of a gz_stream opened for reading. Set the stream
+    mode to transparent if the gzip magic header is not present; set s->err
+    to Z_DATA_ERROR if the magic header is present but the rest of the header
+    is incorrect.
+    IN assertion: the stream s has already been created sucessfully;
+       s->stream.avail_in is zero for the first time, but may be non-zero
+       for concatenated .gz files.
+ method byte  flags byte  Assure two bytes in the buffer so we can peek ahead -- handle case
+       where first byte of header is at the end of the buffer after the last
+       gzip segment  Peek ahead to check the gzip magic header  Check the rest of the gzip header  Discard time, xflags and OS code:  skip the extra field  len is garbage if EOF but the loop below will quit anyway  skip the original file name  skip the .gz file comment  skip the header crc  ===========================================================================
+ * Cleanup then free the given gz_stream. Return a zlib error code.
+   Try freeing in the reverse order of allocations.
+  fclose is broken for pipes in HP/UX  ===========================================================================
+     Reads the given number of uncompressed bytes from the compressed file.
+   gzread returns the number of bytes actually read (0 for end of file).
+ starting point for crc computation  == stream.next_out but not forced far (for MSDOS)  EOF  Copy first the lookahead bytes:  Check CRC and original size  The uncompressed length returned by above getlong() may be
+                 * different from s->out in case of concatenated .gz files.
+                 * Check for such files:
+                  ===========================================================================
+      Reads one byte from the compressed file. gzgetc returns this byte
+   or -1 in case of end of file or error.
+ ===========================================================================
+      Push one byte back onto the stream.
+ ===========================================================================
+      Reads bytes from the compressed file until len-1 characters are
+   read, or a newline character is read and transferred to buf, or an
+   end-of-file condition is encountered.  The string is then terminated
+   with a null character.
+      gzgets returns buf, or Z_NULL in case of error.
+
+      The current implementation is not optimized at all.
+ ===========================================================================
+     Writes the given number of uncompressed bytes into the compressed file.
+   gzwrite returns the number of bytes actually written (0 in case of error).
+ ===========================================================================
+     Converts, formats, and writes the args to the compressed file under
+   control of the format string, as in fprintf. gzprintf returns the number of
+   uncompressed bytes actually written (0 in case of error).
+ args  not ANSI C  ===========================================================================
+      Writes c, converted to an unsigned char, into the compressed file.
+   gzputc returns the value that was written, or -1 in case of error.
+ required for big endian systems  ===========================================================================
+      Writes the given null-terminated string to the compressed file, excluding
+   the terminating null character.
+      gzputs returns the number of characters written, or -1 in case of error.
+ ===========================================================================
+     Flushes all pending output into the compressed file. The parameter
+   flush is as in the deflate() function.
+ should be zero already anyway  Ignore the second of two consecutive flushes:  deflate has finished flushing only when it hasn't used up
+         * all the available space in the output buffer:
+          NO_GZCOMPRESS  ===========================================================================
+      Sets the starting position for the next gzread or gzwrite on the given
+   compressed file. The offset represents a number of bytes in the
+      gzseek returns the resulting offset location as measured in bytes from
+   the beginning of the uncompressed stream, or -1 in case of error.
+      SEEK_END is not implemented, returns error.
+      In this version of the library, gzseek can be extremely slow.
+ At this point, offset is the number of zero bytes to write.  for seeking  Rest of function is for reading only  compute absolute position  map to fseek  For a negative seek, rewind and use positive seek  offset is now the number of bytes to skip.  ===========================================================================
+     Rewinds input file.
+ ===========================================================================
+     Returns the starting position for the next gzread or gzwrite on the
+   given compressed file. This position represents a number of bytes in the
+   uncompressed data stream.
+ ===========================================================================
+     Returns 1 when EOF has previously been detected reading the given
+   input stream, otherwise zero.
+ With concatenated compressed files that can have embedded
+     * crc trailers, z_eof is no longer the only/best indicator of EOF
+     * on a gz_stream. Handle end-of-stream error explicitly here.
+      ===========================================================================
+     Returns 1 if reading and doing so transparently, otherwise zero.
+ ===========================================================================
+   Outputs a long in LSB order to the given file
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets z_err in case
+   of error.
+ ===========================================================================
+     Flushes all pending output if necessary, closes the compressed file
+   and deallocates all the (de)compression state.
+ ===========================================================================
+     Returns the error message for the last error which occurred on the
+   given compressed file. errnum is set to zlib error number. If an
+   error occurred in the file system and not in the compression library,
+   errnum is set to Z_ERRNO and the application may consult errno
+   to get the exact error code.
+ ===========================================================================
+     Clear the error and end-of-file flags, and do the same for the real file.
+ gzio.c -- IO on .gz files
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ *
+ * Compile this file with -DNO_GZCOMPRESS to avoid the compression code.
+  @(#) $Id$  for compatibility with old definition  for buggy compilers  minimize memory usage for 16-bit DOS  gzip magic header  gzip flag byte  bit 0 set: file probably ascii text  bit 1 set: header CRC present  bit 2 set: extra field present  bit 3 set: original file name present  bit 4 set: file comment present  bits 5..7: reserved  error code for last stream operation  set if end of input file  .gz file  input buffer  output buffer  crc32 of uncompressed data  error message  path name for debugging only  1 if input file is not a .gz file  'w' or 'r'  start of compressed data in file (header skipped)  bytes into deflate or inflate  bytes out of deflate or inflate  one character push-back  true if push-back is last character  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing. The mode parameter
+   is as in fopen ("rb" or "wb"). The file is given either by file descriptor
+   or path name (if fd == -1).
+     gz_open returns NULL if the file could not be opened or if there was
+   insufficient memory to allocate the (de)compression state; errno
+   can be checked to distinguish the two cases (if errno is zero, the
+   zlib error is Z_MEM_ERROR).
+ compression level  compression strategy  copy of mode, without the compression level  do this early for debugging  copy the mode  windowBits is passed < 0 to suppress zlib header  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END. Here the gzip CRC32 ensures that 4 bytes are
+         * present after the compressed stream.
+          Write a very simple .gz header:
+         flagstimexflags We use 10L instead of ftell(s->file) to because ftell causes an
+         * fflush on some systems. This version of the library doesn't use
+         * start anyway in write mode, so this initialization is not
+         * necessary.
+          skip the .gz header  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing.
+ ===========================================================================
+     Associate a gzFile with the file descriptor fd. fd is not dup'ed here
+   to mimic the behavio(u)r of fdopen.
+ allow for up to 128-bit integers  for debugging  ===========================================================================
+ * Update the compression level and strategy
+  Make room to allow flushing  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+      Check the gzip header of a gz_stream opened for reading. Set the stream
+    mode to transparent if the gzip magic header is not present; set s->err
+    to Z_DATA_ERROR if the magic header is present but the rest of the header
+    is incorrect.
+    IN assertion: the stream s has already been created sucessfully;
+       s->stream.avail_in is zero for the first time, but may be non-zero
+       for concatenated .gz files.
+ method byte  flags byte  Assure two bytes in the buffer so we can peek ahead -- handle case
+       where first byte of header is at the end of the buffer after the last
+       gzip segment  Peek ahead to check the gzip magic header  Check the rest of the gzip header  Discard time, xflags and OS code:  skip the extra field  len is garbage if EOF but the loop below will quit anyway  skip the original file name  skip the .gz file comment  skip the header crc  ===========================================================================
+ * Cleanup then free the given gz_stream. Return a zlib error code.
+   Try freeing in the reverse order of allocations.
+  fclose is broken for pipes in HP/UX  ===========================================================================
+     Reads the given number of uncompressed bytes from the compressed file.
+   gzread returns the number of bytes actually read (0 for end of file).
+ starting point for crc computation  == stream.next_out but not forced far (for MSDOS)  EOF  Copy first the lookahead bytes:  Check CRC and original size  The uncompressed length returned by above getlong() may be
+                 * different from s->out in case of concatenated .gz files.
+                 * Check for such files:
+                  ===========================================================================
+      Reads one byte from the compressed file. gzgetc returns this byte
+   or -1 in case of end of file or error.
+ ===========================================================================
+      Push one byte back onto the stream.
+ ===========================================================================
+      Reads bytes from the compressed file until len-1 characters are
+   read, or a newline character is read and transferred to buf, or an
+   end-of-file condition is encountered.  The string is then terminated
+   with a null character.
+      gzgets returns buf, or Z_NULL in case of error.
+
+      The current implementation is not optimized at all.
+ ===========================================================================
+     Writes the given number of uncompressed bytes into the compressed file.
+   gzwrite returns the number of bytes actually written (0 in case of error).
+ ===========================================================================
+     Converts, formats, and writes the args to the compressed file under
+   control of the format string, as in fprintf. gzprintf returns the number of
+   uncompressed bytes actually written (0 in case of error).
+ args  not ANSI C  ===========================================================================
+      Writes c, converted to an unsigned char, into the compressed file.
+   gzputc returns the value that was written, or -1 in case of error.
+ required for big endian systems  ===========================================================================
+      Writes the given null-terminated string to the compressed file, excluding
+   the terminating null character.
+      gzputs returns the number of characters written, or -1 in case of error.
+ ===========================================================================
+     Flushes all pending output into the compressed file. The parameter
+   flush is as in the deflate() function.
+ should be zero already anyway  Ignore the second of two consecutive flushes:  deflate has finished flushing only when it hasn't used up
+         * all the available space in the output buffer:
+          NO_GZCOMPRESS  ===========================================================================
+      Sets the starting position for the next gzread or gzwrite on the given
+   compressed file. The offset represents a number of bytes in the
+      gzseek returns the resulting offset location as measured in bytes from
+   the beginning of the uncompressed stream, or -1 in case of error.
+      SEEK_END is not implemented, returns error.
+      In this version of the library, gzseek can be extremely slow.
+ At this point, offset is the number of zero bytes to write.  for seeking  Rest of function is for reading only  compute absolute position  map to fseek  For a negative seek, rewind and use positive seek  offset is now the number of bytes to skip.  ===========================================================================
+     Rewinds input file.
+ ===========================================================================
+     Returns the starting position for the next gzread or gzwrite on the
+   given compressed file. This position represents a number of bytes in the
+   uncompressed data stream.
+ ===========================================================================
+     Returns 1 when EOF has previously been detected reading the given
+   input stream, otherwise zero.
+ With concatenated compressed files that can have embedded
+     * crc trailers, z_eof is no longer the only/best indicator of EOF
+     * on a gz_stream. Handle end-of-stream error explicitly here.
+      ===========================================================================
+     Returns 1 if reading and doing so transparently, otherwise zero.
+ ===========================================================================
+   Outputs a long in LSB order to the given file
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets z_err in case
+   of error.
+ ===========================================================================
+     Flushes all pending output if necessary, closes the compressed file
+   and deallocates all the (de)compression state.
+ ===========================================================================
+     Returns the error message for the last error which occurred on the
+   given compressed file. errnum is set to zlib error number. If an
+   error occurred in the file system and not in the compression library,
+   errnum is set to Z_ERRNO and the application may consult errno
+   to get the exact error code.
+ ===========================================================================
+     Clear the error and end-of-file flags, and do the same for the real file.
+ gzio.c -- IO on .gz files
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ *
+ * Compile this file with -DNO_GZCOMPRESS to avoid the compression code.
+  @(#) $Id$  for compatibility with old definition  for buggy compilers  minimize memory usage for 16-bit DOS  gzip magic header  gzip flag byte  bit 0 set: file probably ascii text  bit 1 set: header CRC present  bit 2 set: extra field present  bit 3 set: original file name present  bit 4 set: file comment present  bits 5..7: reserved  error code for last stream operation  set if end of input file  .gz file  input buffer  output buffer  crc32 of uncompressed data  error message  path name for debugging only  1 if input file is not a .gz file  'w' or 'r'  start of compressed data in file (header skipped)  bytes into deflate or inflate  bytes out of deflate or inflate  one character push-back  true if push-back is last character  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing. The mode parameter
+   is as in fopen ("rb" or "wb"). The file is given either by file descriptor
+   or path name (if fd == -1).
+     gz_open returns NULL if the file could not be opened or if there was
+   insufficient memory to allocate the (de)compression state; errno
+   can be checked to distinguish the two cases (if errno is zero, the
+   zlib error is Z_MEM_ERROR).
+ compression level  compression strategy  copy of mode, without the compression level  do this early for debugging  copy the mode  windowBits is passed < 0 to suppress zlib header  windowBits is passed < 0 to tell that there is no zlib header.
+         * Note that in this case inflate *requires* an extra "dummy" byte
+         * after the compressed stream in order to complete decompression and
+         * return Z_STREAM_END. Here the gzip CRC32 ensures that 4 bytes are
+         * present after the compressed stream.
+          Write a very simple .gz header:
+         flagstimexflags We use 10L instead of ftell(s->file) to because ftell causes an
+         * fflush on some systems. This version of the library doesn't use
+         * start anyway in write mode, so this initialization is not
+         * necessary.
+          skip the .gz header  ===========================================================================
+     Opens a gzip (.gz) file for reading or writing.
+ ===========================================================================
+     Associate a gzFile with the file descriptor fd. fd is not dup'ed here
+   to mimic the behavio(u)r of fdopen.
+ allow for up to 128-bit integers  for debugging  ===========================================================================
+ * Update the compression level and strategy
+  Make room to allow flushing  ===========================================================================
+     Read a byte from a gz_stream; update next_in and avail_in. Return EOF
+   for end of file.
+   IN assertion: the stream s has been sucessfully opened for reading.
+ ===========================================================================
+      Check the gzip header of a gz_stream opened for reading. Set the stream
+    mode to transparent if the gzip magic header is not present; set s->err
+    to Z_DATA_ERROR if the magic header is present but the rest of the header
+    is incorrect.
+    IN assertion: the stream s has already been created sucessfully;
+       s->stream.avail_in is zero for the first time, but may be non-zero
+       for concatenated .gz files.
+ method byte  flags byte  Assure two bytes in the buffer so we can peek ahead -- handle case
+       where first byte of header is at the end of the buffer after the last
+       gzip segment  Peek ahead to check the gzip magic header  Check the rest of the gzip header  Discard time, xflags and OS code:  skip the extra field  len is garbage if EOF but the loop below will quit anyway  skip the original file name  skip the .gz file comment  skip the header crc  ===========================================================================
+ * Cleanup then free the given gz_stream. Return a zlib error code.
+   Try freeing in the reverse order of allocations.
+  fclose is broken for pipes in HP/UX  ===========================================================================
+     Reads the given number of uncompressed bytes from the compressed file.
+   gzread returns the number of bytes actually read (0 for end of file).
+ starting point for crc computation  == stream.next_out but not forced far (for MSDOS)  EOF  Copy first the lookahead bytes:  Check CRC and original size  The uncompressed length returned by above getlong() may be
+                 * different from s->out in case of concatenated .gz files.
+                 * Check for such files:
+                  ===========================================================================
+      Reads one byte from the compressed file. gzgetc returns this byte
+   or -1 in case of end of file or error.
+ ===========================================================================
+      Push one byte back onto the stream.
+ ===========================================================================
+      Reads bytes from the compressed file until len-1 characters are
+   read, or a newline character is read and transferred to buf, or an
+   end-of-file condition is encountered.  The string is then terminated
+   with a null character.
+      gzgets returns buf, or Z_NULL in case of error.
+
+      The current implementation is not optimized at all.
+ ===========================================================================
+     Writes the given number of uncompressed bytes into the compressed file.
+   gzwrite returns the number of bytes actually written (0 in case of error).
+ ===========================================================================
+     Converts, formats, and writes the args to the compressed file under
+   control of the format string, as in fprintf. gzprintf returns the number of
+   uncompressed bytes actually written (0 in case of error).
+ args  not ANSI C  ===========================================================================
+      Writes c, converted to an unsigned char, into the compressed file.
+   gzputc returns the value that was written, or -1 in case of error.
+ required for big endian systems  ===========================================================================
+      Writes the given null-terminated string to the compressed file, excluding
+   the terminating null character.
+      gzputs returns the number of characters written, or -1 in case of error.
+ ===========================================================================
+     Flushes all pending output into the compressed file. The parameter
+   flush is as in the deflate() function.
+ should be zero already anyway  Ignore the second of two consecutive flushes:  deflate has finished flushing only when it hasn't used up
+         * all the available space in the output buffer:
+          NO_GZCOMPRESS  ===========================================================================
+      Sets the starting position for the next gzread or gzwrite on the given
+   compressed file. The offset represents a number of bytes in the
+      gzseek returns the resulting offset location as measured in bytes from
+   the beginning of the uncompressed stream, or -1 in case of error.
+      SEEK_END is not implemented, returns error.
+      In this version of the library, gzseek can be extremely slow.
+ At this point, offset is the number of zero bytes to write.  for seeking  Rest of function is for reading only  compute absolute position  map to fseek  For a negative seek, rewind and use positive seek  offset is now the number of bytes to skip.  ===========================================================================
+     Rewinds input file.
+ ===========================================================================
+     Returns the starting position for the next gzread or gzwrite on the
+   given compressed file. This position represents a number of bytes in the
+   uncompressed data stream.
+ ===========================================================================
+     Returns 1 when EOF has previously been detected reading the given
+   input stream, otherwise zero.
+ With concatenated compressed files that can have embedded
+     * crc trailers, z_eof is no longer the only/best indicator of EOF
+     * on a gz_stream. Handle end-of-stream error explicitly here.
+      ===========================================================================
+     Returns 1 if reading and doing so transparently, otherwise zero.
+ ===========================================================================
+   Outputs a long in LSB order to the given file
+ ===========================================================================
+   Reads a long in LSB order from the given gz_stream. Sets z_err in case
+   of error.
+ ===========================================================================
+     Flushes all pending output if necessary, closes the compressed file
+   and deallocates all the (de)compression state.
+ ===========================================================================
+     Returns the error message for the last error which occurred on the
+   given compressed file. errnum is set to zlib error number. If an
+   error occurred in the file system and not in the compression library,
+   errnum is set to Z_ERRNO and the application may consult errno
+   to get the exact error code.
+ ===========================================================================
+     Clear the error and end-of-file flags, and do the same for the real file.

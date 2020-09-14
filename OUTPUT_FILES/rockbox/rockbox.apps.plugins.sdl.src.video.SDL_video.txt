@@ -1,0 +1,418 @@
+
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+ The high-level video driver subsystem  Available video drivers  Various local functions 
+ * Initialize the video and event subsystems -- determine native pixel format
+  Toggle the event thread flags, based on OS requirements  Check to make sure we don't overwrite 'current_video'  Select the proper video driver  This will be replaced with a better driver selection API  Do some basic variable initialization  Set some very sane GL defaults  not known, don't set  not known, don't set  Initialize the video subsystem  Create a zero sized video surface of the appropriate format  Until SDL_SetVideoMode()  Don't change the current palette - may be used by other programs.
+       * The application can't do anything with the display surface until
+       * a video mode has been set anyway. :)
+        If we have a palettized surface, create a default palette  Start the event loop  We're ready to go! 
+ * Get the current display surface
+ 
+ * Get the current information about the video hardware
+ 
+ * Return a pointer to an array of available screen dimensions for the
+ * given format, sorted largest to smallest.  Returns NULL if there are
+ * no dimensions available for a particular format, or (SDL_Rect **)-1
+ * if any dimension is okay for the given format.  If 'format' is NULL,
+ * the mode list will be for the format given by SDL_GetVideoInfo()->vfmt
+ 
+ * Check to see if a particular video mode is supported.
+ * It returns 0 if the requested mode is not supported under any bit depth,
+ * or returns the bits-per-pixel of the closest available mode with the
+ * given width and height.  If this bits-per-pixel is different from the
+ * one used when setting the video mode, SDL_SetVideoMode() will succeed,
+ * but will emulate the requested bits-per-pixel with a shadow surface.
+  8 bit closest depth ordering  15,16 bit closest depth ordering  24 bit closest depth ordering  32 bit closest depth ordering  MPW optimization bug?  Currently 1 and 4 bpp are not supported  Search through the list valid of modes  No sizes supported at this bit-depth  Any size supported at this bit-depth  Driver can center a smaller surface to simulate fullscreen  this mode can fit the centered window. 
+ * Get the closest non-emulated video mode to the one requested
+  Check parameters  Try the original video mode, get the closest depth  No exact size match at any depth, look for closest match  No sizes supported at this bit-depth  Mode with both dimensions bigger or equal than asked ?  Mode with any dimension smaller or equal than current best ?  Now choose the mode that has less pixels  This should probably go somewhere else -- like SDL_surface.c 
+ * Create a shadow surface suitable for fooling the app. :-)
+  Allocate the shadow surface  8-bit shadow surfaces report that they have exclusive palette  If the video surface is resizable, the shadow should say so  If the video surface has no frame, the shadow should say so  If the video surface is fullscreen, the shadow should say so  If the video surface is flippable, the shadow should say so  __QNXNTO__ 
+ * Set the requested video mode, allocating a shadow buffer if necessary.
+  Start up the video driver, if necessary..
+	   WARNING: This is the only function protected this way!
+	  Default to the current width and height  Default to the current video bpp  Get a good video mode, the closest one possible  Check the requested flags  There's no palette in > 8 bits-per-pixel mode  There's no windowed double-buffering  Use hardware surfaces when double-buffering  These flags are for 2D video modes only  Reset the keyboard here so event callbacks can run  Clean up any previous video mode  Save the previous grab state and turn off grab for mode switch  Try to set the video mode, along with offset and clipping  In case it's freed by driver  Prevent resize events from mode change  But not on OS/2  Sam - If we asked for OpenGL mode, and didn't get it, fail 
+	 * rcg11292000
+	 * If you try to set an SDL_OPENGL surface, and fail to find a
+	 * matching  visual, then the next call to SDL_SetVideoMode()
+	 * will segfault, since  we no longer point to a dummy surface,
+	 * but rather NULL.
+	 * Sam 11/29/00
+	 * WARNING, we need to make sure that the previous mode hasn't
+	 * already been freed by the video driver.  What do we do in
+	 * that case?  Should we call SDL_VideoInit() again?
+	  Sanity check  If we have a palettized surface, create a default palette  Clear the surface to black  Now adjust the offsets to match the desired mode  If we failed setting a video mode, return NULL... (Uh Oh!)  If there is no window manager, set the SDL_NOFRAME flag  Reset the mouse cursor and grab for new video mode  Clear first large delta  Load GL symbols (before MakeCurrent, where we need glGetString).  __SDL_NOGETPROCADDR__  SDL_VIDEO_OPENGL  If we're running OpenGL, make the context current  Set up a fake SDL surface for OpenGL "blitting"  Load GL functions for performing the texture updates  Create a software surface for blitting  If the implementation either supports the packed pixels
+		   extension, or implements the core OpenGL 1.2 API, it will
+		   support the GL_UNSIGNED_SHORT_5_6_5 texture format.
+		  OpenGL 1.2  Free the original video mode surface (is this safe?)  Set the surface completely opaque & white by default  Create a shadow surface if necessary  There are three conditions under which we create a shadow surface:
+		1.  We need a particular bits-per-pixel that we didn't get.
+		2.  We need a hardware palette and didn't get one.
+		3.  We need a software surface and got a hardware surface.
+	 If the surface is in hardware, video writes are visible
+		   as soon as they are performed, so we need to buffer them
+		  We're done!  
+ * Convert a surface into the video pixel format.
+  Set the flags appropriate for copying to display surface 
+ * Convert a surface into a format that's suitable for blitting to
+ * the screen, but including an alpha channel.
+  default to ARGB8888  For XGY5[56]5, use, AXGY8888, where {X, Y} = {R, B}.
+		   For anything else (like ARGB4444) it doesn't matter
+		   since we have no special code for it anyway  Keep the video format, as long as the high 8 bits are
+		   unused or alpha  We have no other optimised formats right now. When/if a new
+		   optimised alpha format is written, add the converter here 
+ * Update a specific portion of the physical screen
+  Perform some checking  Fill the rectangle  Blit the shadow surface using saved mapping  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update  Update the video surface 
+ * Performs hardware double buffering, if possible, or a full update if not.
+  Copy the shadow surface to the video surface  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update 
+			 * This is a shadow surface, and the physical
+			 * framebuffer is also indexed. Propagate the
+			 * changes to its logical palette so that
+			 * updates are always identity blits
+			  We need to copy the new colors, since we haven't
+		 * already done the copy in the logical set above.
+		 
+			 * The real screen is also indexed - set its physical
+			 * palette. The physical palette does not include the
+			 * gamma modification, we apply it directly instead,
+			 * but this only happens if we have hardware palette.
+			 
+			 * The video surface is not indexed - invalidate any
+			 * active shadow-to-video blit mappings.
+			  The video flags shouldn't have SDL_HWPALETTE, and
+			   the video driver is responsible for copying back the
+			   correct colors into the video surface palette.
+			
+ * Set the physical and/or logical colormap of a surface:
+ * Only the screen has a physical colormap. It determines what is actually
+ * sent to the display.
+ * The logical colormap is used to map blits to/from the surface.
+ * 'which' is one or both of SDL_LOGPAL, SDL_PHYSPAL
+ *
+ * Return nonzero if all colours were set as requested, or 0 otherwise.
+  only screens have physical palettes  hardware palettes required for split colormaps  Verify the parameters  not a palettized surface 
+		 * Logical palette change: The actual screen isn't affected,
+		 * but the internal colormap is altered so that the
+		 * interpretation of the pixel values (for blits etc) is
+		 * changed.
+		 
+		 * Physical palette change: This doesn't affect the
+		 * program's idea of what the screen looks like, but changes
+		 * its actual appearance.
+		  Lazy physical palette allocation 
+ * Clean up the video subsystem
+  Halt event processing before doing anything else  Clean up allocated window manager items  Just in case...  Clean up the system video  Free any lingering surfaces  Clean up miscellaneous memory  Finish cleaning up video subsystem  Load the GL driver library  Set the specified GL attribute for setting up a GL video mode  Retrieve an attribute value from the windowing system.  Perform a GL buffer swap on the current GL context  Update rects with locking  Update rects without state setting and changing (the caller is responsible for it) 
+				* Note the parens around the function name:
+				* This is because some OpenGL implementations define glTexCoord etc 
+				* as macros, and we don't want them expanded here.
+				 Lock == save current state  TODO: narrow range of what is saved  Solaris workaround  Unlock == restore saved state 
+ * Sets/Gets the title and icon text of the display window, if any.
+  PulseAudio can make use of this information.  Utility function used by SDL_WM_SetIcon();
+ * flags & 1 for color key, flags & 2 for alpha channel. 
+ * Sets the window manager icon for the display window.
+  Generate a mask if necessary, and create the icon! 
+ * Grab or ungrab the keyboard and mouse input.
+ * This function returns the final grab mode after calling the
+ * driver dependent function.
+  Only do something if we have support for grabs  If the final grab mode if off, only then do we actually grab  Return the final grab state  If the video isn't initialized yet, we can't do anything  Return the current mode on query  If the video surface is fullscreen, we always grab  First query the current grab state  Now explicitly turn off input grab  Return the old state 
+ * Iconify the window in window managed environments.
+ * A successful iconification will result in an SDL_APPACTIVE loss event.
+ 
+ * Toggle fullscreen mode
+  Double-check the grab state inside SDL_WM_GrabInput() 
+ * Get some platform dependent window manager information
+ 
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+ The high-level video driver subsystem  Available video drivers  Various local functions 
+ * Initialize the video and event subsystems -- determine native pixel format
+  Toggle the event thread flags, based on OS requirements  Check to make sure we don't overwrite 'current_video'  Select the proper video driver  This will be replaced with a better driver selection API  Do some basic variable initialization  Set some very sane GL defaults  not known, don't set  not known, don't set  Initialize the video subsystem  Create a zero sized video surface of the appropriate format  Until SDL_SetVideoMode()  Don't change the current palette - may be used by other programs.
+       * The application can't do anything with the display surface until
+       * a video mode has been set anyway. :)
+        If we have a palettized surface, create a default palette  Start the event loop  We're ready to go! 
+ * Get the current display surface
+ 
+ * Get the current information about the video hardware
+ 
+ * Return a pointer to an array of available screen dimensions for the
+ * given format, sorted largest to smallest.  Returns NULL if there are
+ * no dimensions available for a particular format, or (SDL_Rect **)-1
+ * if any dimension is okay for the given format.  If 'format' is NULL,
+ * the mode list will be for the format given by SDL_GetVideoInfo()->vfmt
+ 
+ * Check to see if a particular video mode is supported.
+ * It returns 0 if the requested mode is not supported under any bit depth,
+ * or returns the bits-per-pixel of the closest available mode with the
+ * given width and height.  If this bits-per-pixel is different from the
+ * one used when setting the video mode, SDL_SetVideoMode() will succeed,
+ * but will emulate the requested bits-per-pixel with a shadow surface.
+  8 bit closest depth ordering  15,16 bit closest depth ordering  24 bit closest depth ordering  32 bit closest depth ordering  MPW optimization bug?  Currently 1 and 4 bpp are not supported  Search through the list valid of modes  No sizes supported at this bit-depth  Any size supported at this bit-depth  Driver can center a smaller surface to simulate fullscreen  this mode can fit the centered window. 
+ * Get the closest non-emulated video mode to the one requested
+  Check parameters  Try the original video mode, get the closest depth  No exact size match at any depth, look for closest match  No sizes supported at this bit-depth  Mode with both dimensions bigger or equal than asked ?  Mode with any dimension smaller or equal than current best ?  Now choose the mode that has less pixels  This should probably go somewhere else -- like SDL_surface.c 
+ * Create a shadow surface suitable for fooling the app. :-)
+  Allocate the shadow surface  8-bit shadow surfaces report that they have exclusive palette  If the video surface is resizable, the shadow should say so  If the video surface has no frame, the shadow should say so  If the video surface is fullscreen, the shadow should say so  If the video surface is flippable, the shadow should say so  __QNXNTO__ 
+ * Set the requested video mode, allocating a shadow buffer if necessary.
+  Start up the video driver, if necessary..
+	   WARNING: This is the only function protected this way!
+	  Default to the current width and height  Default to the current video bpp  Get a good video mode, the closest one possible  Check the requested flags  There's no palette in > 8 bits-per-pixel mode  There's no windowed double-buffering  Use hardware surfaces when double-buffering  These flags are for 2D video modes only  Reset the keyboard here so event callbacks can run  Clean up any previous video mode  Save the previous grab state and turn off grab for mode switch  Try to set the video mode, along with offset and clipping  In case it's freed by driver  Prevent resize events from mode change  But not on OS/2  Sam - If we asked for OpenGL mode, and didn't get it, fail 
+	 * rcg11292000
+	 * If you try to set an SDL_OPENGL surface, and fail to find a
+	 * matching  visual, then the next call to SDL_SetVideoMode()
+	 * will segfault, since  we no longer point to a dummy surface,
+	 * but rather NULL.
+	 * Sam 11/29/00
+	 * WARNING, we need to make sure that the previous mode hasn't
+	 * already been freed by the video driver.  What do we do in
+	 * that case?  Should we call SDL_VideoInit() again?
+	  Sanity check  If we have a palettized surface, create a default palette  Clear the surface to black  Now adjust the offsets to match the desired mode  If we failed setting a video mode, return NULL... (Uh Oh!)  If there is no window manager, set the SDL_NOFRAME flag  Reset the mouse cursor and grab for new video mode  Clear first large delta  Load GL symbols (before MakeCurrent, where we need glGetString).  __SDL_NOGETPROCADDR__  SDL_VIDEO_OPENGL  If we're running OpenGL, make the context current  Set up a fake SDL surface for OpenGL "blitting"  Load GL functions for performing the texture updates  Create a software surface for blitting  If the implementation either supports the packed pixels
+		   extension, or implements the core OpenGL 1.2 API, it will
+		   support the GL_UNSIGNED_SHORT_5_6_5 texture format.
+		  OpenGL 1.2  Free the original video mode surface (is this safe?)  Set the surface completely opaque & white by default  Create a shadow surface if necessary  There are three conditions under which we create a shadow surface:
+		1.  We need a particular bits-per-pixel that we didn't get.
+		2.  We need a hardware palette and didn't get one.
+		3.  We need a software surface and got a hardware surface.
+	 If the surface is in hardware, video writes are visible
+		   as soon as they are performed, so we need to buffer them
+		  We're done!  
+ * Convert a surface into the video pixel format.
+  Set the flags appropriate for copying to display surface 
+ * Convert a surface into a format that's suitable for blitting to
+ * the screen, but including an alpha channel.
+  default to ARGB8888  For XGY5[56]5, use, AXGY8888, where {X, Y} = {R, B}.
+		   For anything else (like ARGB4444) it doesn't matter
+		   since we have no special code for it anyway  Keep the video format, as long as the high 8 bits are
+		   unused or alpha  We have no other optimised formats right now. When/if a new
+		   optimised alpha format is written, add the converter here 
+ * Update a specific portion of the physical screen
+  Perform some checking  Fill the rectangle  Blit the shadow surface using saved mapping  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update  Update the video surface 
+ * Performs hardware double buffering, if possible, or a full update if not.
+  Copy the shadow surface to the video surface  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update 
+			 * This is a shadow surface, and the physical
+			 * framebuffer is also indexed. Propagate the
+			 * changes to its logical palette so that
+			 * updates are always identity blits
+			  We need to copy the new colors, since we haven't
+		 * already done the copy in the logical set above.
+		 
+			 * The real screen is also indexed - set its physical
+			 * palette. The physical palette does not include the
+			 * gamma modification, we apply it directly instead,
+			 * but this only happens if we have hardware palette.
+			 
+			 * The video surface is not indexed - invalidate any
+			 * active shadow-to-video blit mappings.
+			  The video flags shouldn't have SDL_HWPALETTE, and
+			   the video driver is responsible for copying back the
+			   correct colors into the video surface palette.
+			
+ * Set the physical and/or logical colormap of a surface:
+ * Only the screen has a physical colormap. It determines what is actually
+ * sent to the display.
+ * The logical colormap is used to map blits to/from the surface.
+ * 'which' is one or both of SDL_LOGPAL, SDL_PHYSPAL
+ *
+ * Return nonzero if all colours were set as requested, or 0 otherwise.
+  only screens have physical palettes  hardware palettes required for split colormaps  Verify the parameters  not a palettized surface 
+		 * Logical palette change: The actual screen isn't affected,
+		 * but the internal colormap is altered so that the
+		 * interpretation of the pixel values (for blits etc) is
+		 * changed.
+		 
+		 * Physical palette change: This doesn't affect the
+		 * program's idea of what the screen looks like, but changes
+		 * its actual appearance.
+		  Lazy physical palette allocation 
+ * Clean up the video subsystem
+  Halt event processing before doing anything else  Clean up allocated window manager items  Just in case...  Clean up the system video  Free any lingering surfaces  Clean up miscellaneous memory  Finish cleaning up video subsystem  Load the GL driver library  Set the specified GL attribute for setting up a GL video mode  Retrieve an attribute value from the windowing system.  Perform a GL buffer swap on the current GL context  Update rects with locking  Update rects without state setting and changing (the caller is responsible for it) 
+				* Note the parens around the function name:
+				* This is because some OpenGL implementations define glTexCoord etc 
+				* as macros, and we don't want them expanded here.
+				 Lock == save current state  TODO: narrow range of what is saved  Solaris workaround  Unlock == restore saved state 
+ * Sets/Gets the title and icon text of the display window, if any.
+  PulseAudio can make use of this information.  Utility function used by SDL_WM_SetIcon();
+ * flags & 1 for color key, flags & 2 for alpha channel. 
+ * Sets the window manager icon for the display window.
+  Generate a mask if necessary, and create the icon! 
+ * Grab or ungrab the keyboard and mouse input.
+ * This function returns the final grab mode after calling the
+ * driver dependent function.
+  Only do something if we have support for grabs  If the final grab mode if off, only then do we actually grab  Return the final grab state  If the video isn't initialized yet, we can't do anything  Return the current mode on query  If the video surface is fullscreen, we always grab  First query the current grab state  Now explicitly turn off input grab  Return the old state 
+ * Iconify the window in window managed environments.
+ * A successful iconification will result in an SDL_APPACTIVE loss event.
+ 
+ * Toggle fullscreen mode
+  Double-check the grab state inside SDL_WM_GrabInput() 
+ * Get some platform dependent window manager information
+ 
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
+
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+    Sam Lantinga
+    slouken@libsdl.org
+ The high-level video driver subsystem  Available video drivers  Various local functions 
+ * Initialize the video and event subsystems -- determine native pixel format
+  Toggle the event thread flags, based on OS requirements  Check to make sure we don't overwrite 'current_video'  Select the proper video driver  This will be replaced with a better driver selection API  Do some basic variable initialization  Set some very sane GL defaults  not known, don't set  not known, don't set  Initialize the video subsystem  Create a zero sized video surface of the appropriate format  Until SDL_SetVideoMode()  Don't change the current palette - may be used by other programs.
+       * The application can't do anything with the display surface until
+       * a video mode has been set anyway. :)
+        If we have a palettized surface, create a default palette  Start the event loop  We're ready to go! 
+ * Get the current display surface
+ 
+ * Get the current information about the video hardware
+ 
+ * Return a pointer to an array of available screen dimensions for the
+ * given format, sorted largest to smallest.  Returns NULL if there are
+ * no dimensions available for a particular format, or (SDL_Rect **)-1
+ * if any dimension is okay for the given format.  If 'format' is NULL,
+ * the mode list will be for the format given by SDL_GetVideoInfo()->vfmt
+ 
+ * Check to see if a particular video mode is supported.
+ * It returns 0 if the requested mode is not supported under any bit depth,
+ * or returns the bits-per-pixel of the closest available mode with the
+ * given width and height.  If this bits-per-pixel is different from the
+ * one used when setting the video mode, SDL_SetVideoMode() will succeed,
+ * but will emulate the requested bits-per-pixel with a shadow surface.
+  8 bit closest depth ordering  15,16 bit closest depth ordering  24 bit closest depth ordering  32 bit closest depth ordering  MPW optimization bug?  Currently 1 and 4 bpp are not supported  Search through the list valid of modes  No sizes supported at this bit-depth  Any size supported at this bit-depth  Driver can center a smaller surface to simulate fullscreen  this mode can fit the centered window. 
+ * Get the closest non-emulated video mode to the one requested
+  Check parameters  Try the original video mode, get the closest depth  No exact size match at any depth, look for closest match  No sizes supported at this bit-depth  Mode with both dimensions bigger or equal than asked ?  Mode with any dimension smaller or equal than current best ?  Now choose the mode that has less pixels  This should probably go somewhere else -- like SDL_surface.c 
+ * Create a shadow surface suitable for fooling the app. :-)
+  Allocate the shadow surface  8-bit shadow surfaces report that they have exclusive palette  If the video surface is resizable, the shadow should say so  If the video surface has no frame, the shadow should say so  If the video surface is fullscreen, the shadow should say so  If the video surface is flippable, the shadow should say so  __QNXNTO__ 
+ * Set the requested video mode, allocating a shadow buffer if necessary.
+  Start up the video driver, if necessary..
+	   WARNING: This is the only function protected this way!
+	  Default to the current width and height  Default to the current video bpp  Get a good video mode, the closest one possible  Check the requested flags  There's no palette in > 8 bits-per-pixel mode  There's no windowed double-buffering  Use hardware surfaces when double-buffering  These flags are for 2D video modes only  Reset the keyboard here so event callbacks can run  Clean up any previous video mode  Save the previous grab state and turn off grab for mode switch  Try to set the video mode, along with offset and clipping  In case it's freed by driver  Prevent resize events from mode change  But not on OS/2  Sam - If we asked for OpenGL mode, and didn't get it, fail 
+	 * rcg11292000
+	 * If you try to set an SDL_OPENGL surface, and fail to find a
+	 * matching  visual, then the next call to SDL_SetVideoMode()
+	 * will segfault, since  we no longer point to a dummy surface,
+	 * but rather NULL.
+	 * Sam 11/29/00
+	 * WARNING, we need to make sure that the previous mode hasn't
+	 * already been freed by the video driver.  What do we do in
+	 * that case?  Should we call SDL_VideoInit() again?
+	  Sanity check  If we have a palettized surface, create a default palette  Clear the surface to black  Now adjust the offsets to match the desired mode  If we failed setting a video mode, return NULL... (Uh Oh!)  If there is no window manager, set the SDL_NOFRAME flag  Reset the mouse cursor and grab for new video mode  Clear first large delta  Load GL symbols (before MakeCurrent, where we need glGetString).  __SDL_NOGETPROCADDR__  SDL_VIDEO_OPENGL  If we're running OpenGL, make the context current  Set up a fake SDL surface for OpenGL "blitting"  Load GL functions for performing the texture updates  Create a software surface for blitting  If the implementation either supports the packed pixels
+		   extension, or implements the core OpenGL 1.2 API, it will
+		   support the GL_UNSIGNED_SHORT_5_6_5 texture format.
+		  OpenGL 1.2  Free the original video mode surface (is this safe?)  Set the surface completely opaque & white by default  Create a shadow surface if necessary  There are three conditions under which we create a shadow surface:
+		1.  We need a particular bits-per-pixel that we didn't get.
+		2.  We need a hardware palette and didn't get one.
+		3.  We need a software surface and got a hardware surface.
+	 If the surface is in hardware, video writes are visible
+		   as soon as they are performed, so we need to buffer them
+		  We're done!  
+ * Convert a surface into the video pixel format.
+  Set the flags appropriate for copying to display surface 
+ * Convert a surface into a format that's suitable for blitting to
+ * the screen, but including an alpha channel.
+  default to ARGB8888  For XGY5[56]5, use, AXGY8888, where {X, Y} = {R, B}.
+		   For anything else (like ARGB4444) it doesn't matter
+		   since we have no special code for it anyway  Keep the video format, as long as the high 8 bits are
+		   unused or alpha  We have no other optimised formats right now. When/if a new
+		   optimised alpha format is written, add the converter here 
+ * Update a specific portion of the physical screen
+  Perform some checking  Fill the rectangle  Blit the shadow surface using saved mapping  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update  Update the video surface 
+ * Performs hardware double buffering, if possible, or a full update if not.
+  Copy the shadow surface to the video surface  simulated 8bpp, use correct physical palette  gamma-corrected palette  physical palette different from logical  Fall through to video surface update 
+			 * This is a shadow surface, and the physical
+			 * framebuffer is also indexed. Propagate the
+			 * changes to its logical palette so that
+			 * updates are always identity blits
+			  We need to copy the new colors, since we haven't
+		 * already done the copy in the logical set above.
+		 
+			 * The real screen is also indexed - set its physical
+			 * palette. The physical palette does not include the
+			 * gamma modification, we apply it directly instead,
+			 * but this only happens if we have hardware palette.
+			 
+			 * The video surface is not indexed - invalidate any
+			 * active shadow-to-video blit mappings.
+			  The video flags shouldn't have SDL_HWPALETTE, and
+			   the video driver is responsible for copying back the
+			   correct colors into the video surface palette.
+			
+ * Set the physical and/or logical colormap of a surface:
+ * Only the screen has a physical colormap. It determines what is actually
+ * sent to the display.
+ * The logical colormap is used to map blits to/from the surface.
+ * 'which' is one or both of SDL_LOGPAL, SDL_PHYSPAL
+ *
+ * Return nonzero if all colours were set as requested, or 0 otherwise.
+  only screens have physical palettes  hardware palettes required for split colormaps  Verify the parameters  not a palettized surface 
+		 * Logical palette change: The actual screen isn't affected,
+		 * but the internal colormap is altered so that the
+		 * interpretation of the pixel values (for blits etc) is
+		 * changed.
+		 
+		 * Physical palette change: This doesn't affect the
+		 * program's idea of what the screen looks like, but changes
+		 * its actual appearance.
+		  Lazy physical palette allocation 
+ * Clean up the video subsystem
+  Halt event processing before doing anything else  Clean up allocated window manager items  Just in case...  Clean up the system video  Free any lingering surfaces  Clean up miscellaneous memory  Finish cleaning up video subsystem  Load the GL driver library  Set the specified GL attribute for setting up a GL video mode  Retrieve an attribute value from the windowing system.  Perform a GL buffer swap on the current GL context  Update rects with locking  Update rects without state setting and changing (the caller is responsible for it) 
+				* Note the parens around the function name:
+				* This is because some OpenGL implementations define glTexCoord etc 
+				* as macros, and we don't want them expanded here.
+				 Lock == save current state  TODO: narrow range of what is saved  Solaris workaround  Unlock == restore saved state 
+ * Sets/Gets the title and icon text of the display window, if any.
+  PulseAudio can make use of this information.  Utility function used by SDL_WM_SetIcon();
+ * flags & 1 for color key, flags & 2 for alpha channel. 
+ * Sets the window manager icon for the display window.
+  Generate a mask if necessary, and create the icon! 
+ * Grab or ungrab the keyboard and mouse input.
+ * This function returns the final grab mode after calling the
+ * driver dependent function.
+  Only do something if we have support for grabs  If the final grab mode if off, only then do we actually grab  Return the final grab state  If the video isn't initialized yet, we can't do anything  Return the current mode on query  If the video surface is fullscreen, we always grab  First query the current grab state  Now explicitly turn off input grab  Return the old state 
+ * Iconify the window in window managed environments.
+ * A successful iconification will result in an SDL_APPACTIVE loss event.
+ 
+ * Toggle fullscreen mode
+  Double-check the grab state inside SDL_WM_GrabInput() 
+ * Get some platform dependent window manager information
+ 

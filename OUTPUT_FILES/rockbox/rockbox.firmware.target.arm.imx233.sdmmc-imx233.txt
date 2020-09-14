@@ -1,0 +1,217 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** NOTE For convenience, this drivers relies on the many similar commands
+ * between SD and MMC. The following assumptions are made:
+ * - SD_SEND_STATUS = MMC_SEND_STATUS
+ * - SD_SELECT_CARD = MMC_SELECT_CARD
+ * - SD_TRAN = MMC_TRAN
+ * - MMC_WRITE_MULTIPLE_BLOCK = SD_WRITE_MULTIPLE_BLOCK
+ * - MMC_READ_MULTIPLE_BLOCK = SD_READ_MULTIPLE_BLOCK
+ * - SD_STOP_TRANSMISSION = MMC_STOP_TRANSMISSION
+ * - SD_DESELECT_CARD = MMC_DESELECT_CARD
+  static configuration  name(for debug)  flags  power pin  extra power up delay  write protect pin  associated ssp block  mode (SD vs MMC)  flags  modes  The Fuze+ uses pin #B0P8 for power  The Fuze+ uses pin #B1P29 for power  extra delay, to ramp up voltage?  The Zen X-Fi2 uses pin B1P29 for power  The Zen X-Fi3 uses pin #B0P07 for power  extra delay, to ramp up voltage?  The Zen X-Fi uses pin #B0P10 for power extra delay, to ramp up voltage?  The Sony NWZ-E370 uses #B1P29 for power  drive status  bus width (1, 4 or 8)  HS capable device  HS enabled  support SET_BLOCK_COUNT * WARNING
+ * to be consistent with all our SD drivers, the .rca field of sdmmc_card_info
+ * in reality holds (rca << 16) because all command arguments actually require
+ * the RCA is the 16-bit msb. Be careful that this is not the actuall RCA !  common  sd only  sd->sdmmc map  mmc only  mmc->sdmmc map  WARNING NOTE BUG FIXME
+ * There are three numbering schemes involved in the driver:
+ * - the sdmmc indexes into sdmmc_config[]
+ * - the sd drive indexes
+ * - the mmc drive indexes
+ * By convention, [drive] refers to a sdmmc index whereas sd_drive/mmc_drive
+ * refer to sd/mmc drive indexes. We keep two maps sd->sdmmc and mmc->sdmmc
+ * to find the sdmmc index from the sd or mmc one  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  Have to reverse lookup the ssp  message requires logical drive number as data  setup pins, never use alternatives pin on SSP1 because no device use it
+     * but this could be made a flag  power chip if needed  enable pullups for identification  sd only  Our SD codes assume most significant word first, so reverse resp  NOTE: rely on SD_SEND_STATUS=MMC_SEND_STATUS  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+       Non v2 cards will not respond to this command  timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  CMD9 send CSD  CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Switch to 4-bit  Try to switch V2 cards to HS timings, non HS seem to ignore this  only transfer 64 bytes log2(64) CMD6 switch to HS log2(512) probe for CMD23 support  ACMD51, only transfer 8 bytes log2(8)log2(512) SSPCLK @ 96MHz
+     * gives bitrate of 96 / 4 / 1 = 24MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz sd_hs deselect card  successfully initialised  Skip non-removable drivers  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  unlock card  Access is now safe  HAVE_HOTSWAP  CONFIG_STORAGE & STORAGE_SD  we can choose the RCA of mmc cards: pick drive. Following our convention,
+     * .rca is actually RCA << 16  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  send op cond until the card respond with busy bit set; it must complete within 1sec  get CID  Set RCA  Select card  Check TRAN state  Switch to 8-bit bus  switch error ?  Switch to high speed mode  switch error ? SSPCLK @ 96MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz  read extended CSD  deselect card  MMC always support CMD23  CONFIG_STORAGE & STORAGE_MMC  low-level function, don't call directly!  Set bank_start to the correct unit (blocks or bytes).
+         * MMC drives use block addressing, SD cards bytes or blocks  not SDHC  issue read/write
+         * NOTE: rely on SD_{READ,WRITE}_MULTIPLE_BLOCK=MMC_{READ,WRITE}_MULTIPLE_BLOCK  stop transmission
+         * NOTE: rely on SD_STOP_TRANSMISSION=MMC_STOP_TRANSMISSION  the function doesn't work when count is 0  update disk activity  lock per-drive mutex  update led status  for SD cards, init if necessary  check window  select card.
+     * NOTE: rely on SD_SELECT_CARD=MMC_SELECT_CARD  wait for TRAN state  NOTE: rely on SD_TRAN=MMC_TRAN *
+     * NOTE: we need to make sure dma transfers are aligned. This is handled
+     * differently for read and write transfers. We do not repeat it each
+     * time but it should be noted that all transfers are limited by
+     * IMX233_MAX_SINGLE_DMA_XFER_SIZE and thus need to be split if needed.
+     *
+     * Read transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, transfer all sectors but one to the sub-buffer starting
+     *   on the next cache line and then move the data. Then transfer the
+     *   last sector to the aligned_buffer and then copy to the buffer.
+     *
+     * Write transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, copy the first sector to the aligned_buffer and transfer.
+     *   Then move all other sectors within the buffer to make it cache
+     *   aligned and transfer it. Then move data to pretend the buffer was
+     *   never modified.
+      copy count-1 sector and then move within the buffer  transfer the last sector the aligned_buffer and copy  transfer the first sector to aligned_buffer and copy  move within the buffer and transfer  move back  deselect card   CMD7 w/rca =0 : deselects card & puts it in STBY state
+     * NOTE: rely on SD_DESELECT_CARD=MMC_DESELECT_CARD  update led status  release per-drive mutex  user specifies the sdmmc drive  compute window  NOTE: at this point the window shows the whole disk so raw disk
+         * accesses can be made to lookup partitions  if asked to probe, try to init it and ignore it if it fails  try to init drive, panic on failure or skip if probing * Information about SD/MMC slot  drive number (for queries like storage_removable(drive)  name of the slot: 'internal' or 'microsd'  is window enabled for this slot?  current bus width  is device high-speed capable?  is high-speed enabled?  device support SET_BLOCK_COUNT  return information about a particular sd device (use regular drive number)  return information about a particular mmc device (use regular drive number) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** NOTE For convenience, this drivers relies on the many similar commands
+ * between SD and MMC. The following assumptions are made:
+ * - SD_SEND_STATUS = MMC_SEND_STATUS
+ * - SD_SELECT_CARD = MMC_SELECT_CARD
+ * - SD_TRAN = MMC_TRAN
+ * - MMC_WRITE_MULTIPLE_BLOCK = SD_WRITE_MULTIPLE_BLOCK
+ * - MMC_READ_MULTIPLE_BLOCK = SD_READ_MULTIPLE_BLOCK
+ * - SD_STOP_TRANSMISSION = MMC_STOP_TRANSMISSION
+ * - SD_DESELECT_CARD = MMC_DESELECT_CARD
+  static configuration  name(for debug)  flags  power pin  extra power up delay  write protect pin  associated ssp block  mode (SD vs MMC)  flags  modes  The Fuze+ uses pin #B0P8 for power  The Fuze+ uses pin #B1P29 for power  extra delay, to ramp up voltage?  The Zen X-Fi2 uses pin B1P29 for power  The Zen X-Fi3 uses pin #B0P07 for power  extra delay, to ramp up voltage?  The Zen X-Fi uses pin #B0P10 for power extra delay, to ramp up voltage?  The Sony NWZ-E370 uses #B1P29 for power  drive status  bus width (1, 4 or 8)  HS capable device  HS enabled  support SET_BLOCK_COUNT * WARNING
+ * to be consistent with all our SD drivers, the .rca field of sdmmc_card_info
+ * in reality holds (rca << 16) because all command arguments actually require
+ * the RCA is the 16-bit msb. Be careful that this is not the actuall RCA !  common  sd only  sd->sdmmc map  mmc only  mmc->sdmmc map  WARNING NOTE BUG FIXME
+ * There are three numbering schemes involved in the driver:
+ * - the sdmmc indexes into sdmmc_config[]
+ * - the sd drive indexes
+ * - the mmc drive indexes
+ * By convention, [drive] refers to a sdmmc index whereas sd_drive/mmc_drive
+ * refer to sd/mmc drive indexes. We keep two maps sd->sdmmc and mmc->sdmmc
+ * to find the sdmmc index from the sd or mmc one  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  Have to reverse lookup the ssp  message requires logical drive number as data  setup pins, never use alternatives pin on SSP1 because no device use it
+     * but this could be made a flag  power chip if needed  enable pullups for identification  sd only  Our SD codes assume most significant word first, so reverse resp  NOTE: rely on SD_SEND_STATUS=MMC_SEND_STATUS  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+       Non v2 cards will not respond to this command  timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  CMD9 send CSD  CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Switch to 4-bit  Try to switch V2 cards to HS timings, non HS seem to ignore this  only transfer 64 bytes log2(64) CMD6 switch to HS log2(512) probe for CMD23 support  ACMD51, only transfer 8 bytes log2(8)log2(512) SSPCLK @ 96MHz
+     * gives bitrate of 96 / 4 / 1 = 24MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz sd_hs deselect card  successfully initialised  Skip non-removable drivers  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  unlock card  Access is now safe  HAVE_HOTSWAP  CONFIG_STORAGE & STORAGE_SD  we can choose the RCA of mmc cards: pick drive. Following our convention,
+     * .rca is actually RCA << 16  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  send op cond until the card respond with busy bit set; it must complete within 1sec  get CID  Set RCA  Select card  Check TRAN state  Switch to 8-bit bus  switch error ?  Switch to high speed mode  switch error ? SSPCLK @ 96MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz  read extended CSD  deselect card  MMC always support CMD23  CONFIG_STORAGE & STORAGE_MMC  low-level function, don't call directly!  Set bank_start to the correct unit (blocks or bytes).
+         * MMC drives use block addressing, SD cards bytes or blocks  not SDHC  issue read/write
+         * NOTE: rely on SD_{READ,WRITE}_MULTIPLE_BLOCK=MMC_{READ,WRITE}_MULTIPLE_BLOCK  stop transmission
+         * NOTE: rely on SD_STOP_TRANSMISSION=MMC_STOP_TRANSMISSION  the function doesn't work when count is 0  update disk activity  lock per-drive mutex  update led status  for SD cards, init if necessary  check window  select card.
+     * NOTE: rely on SD_SELECT_CARD=MMC_SELECT_CARD  wait for TRAN state  NOTE: rely on SD_TRAN=MMC_TRAN *
+     * NOTE: we need to make sure dma transfers are aligned. This is handled
+     * differently for read and write transfers. We do not repeat it each
+     * time but it should be noted that all transfers are limited by
+     * IMX233_MAX_SINGLE_DMA_XFER_SIZE and thus need to be split if needed.
+     *
+     * Read transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, transfer all sectors but one to the sub-buffer starting
+     *   on the next cache line and then move the data. Then transfer the
+     *   last sector to the aligned_buffer and then copy to the buffer.
+     *
+     * Write transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, copy the first sector to the aligned_buffer and transfer.
+     *   Then move all other sectors within the buffer to make it cache
+     *   aligned and transfer it. Then move data to pretend the buffer was
+     *   never modified.
+      copy count-1 sector and then move within the buffer  transfer the last sector the aligned_buffer and copy  transfer the first sector to aligned_buffer and copy  move within the buffer and transfer  move back  deselect card   CMD7 w/rca =0 : deselects card & puts it in STBY state
+     * NOTE: rely on SD_DESELECT_CARD=MMC_DESELECT_CARD  update led status  release per-drive mutex  user specifies the sdmmc drive  compute window  NOTE: at this point the window shows the whole disk so raw disk
+         * accesses can be made to lookup partitions  if asked to probe, try to init it and ignore it if it fails  try to init drive, panic on failure or skip if probing * Information about SD/MMC slot  drive number (for queries like storage_removable(drive)  name of the slot: 'internal' or 'microsd'  is window enabled for this slot?  current bus width  is device high-speed capable?  is high-speed enabled?  device support SET_BLOCK_COUNT  return information about a particular sd device (use regular drive number)  return information about a particular mmc device (use regular drive number) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** NOTE For convenience, this drivers relies on the many similar commands
+ * between SD and MMC. The following assumptions are made:
+ * - SD_SEND_STATUS = MMC_SEND_STATUS
+ * - SD_SELECT_CARD = MMC_SELECT_CARD
+ * - SD_TRAN = MMC_TRAN
+ * - MMC_WRITE_MULTIPLE_BLOCK = SD_WRITE_MULTIPLE_BLOCK
+ * - MMC_READ_MULTIPLE_BLOCK = SD_READ_MULTIPLE_BLOCK
+ * - SD_STOP_TRANSMISSION = MMC_STOP_TRANSMISSION
+ * - SD_DESELECT_CARD = MMC_DESELECT_CARD
+  static configuration  name(for debug)  flags  power pin  extra power up delay  write protect pin  associated ssp block  mode (SD vs MMC)  flags  modes  The Fuze+ uses pin #B0P8 for power  The Fuze+ uses pin #B1P29 for power  extra delay, to ramp up voltage?  The Zen X-Fi2 uses pin B1P29 for power  The Zen X-Fi3 uses pin #B0P07 for power  extra delay, to ramp up voltage?  The Zen X-Fi uses pin #B0P10 for power extra delay, to ramp up voltage?  The Sony NWZ-E370 uses #B1P29 for power  drive status  bus width (1, 4 or 8)  HS capable device  HS enabled  support SET_BLOCK_COUNT * WARNING
+ * to be consistent with all our SD drivers, the .rca field of sdmmc_card_info
+ * in reality holds (rca << 16) because all command arguments actually require
+ * the RCA is the 16-bit msb. Be careful that this is not the actuall RCA !  common  sd only  sd->sdmmc map  mmc only  mmc->sdmmc map  WARNING NOTE BUG FIXME
+ * There are three numbering schemes involved in the driver:
+ * - the sdmmc indexes into sdmmc_config[]
+ * - the sd drive indexes
+ * - the mmc drive indexes
+ * By convention, [drive] refers to a sdmmc index whereas sd_drive/mmc_drive
+ * refer to sd/mmc drive indexes. We keep two maps sd->sdmmc and mmc->sdmmc
+ * to find the sdmmc index from the sd or mmc one  This is called only if the state was stable for 300ms - check state
+     * and post appropriate event.  Have to reverse lookup the ssp  message requires logical drive number as data  setup pins, never use alternatives pin on SSP1 because no device use it
+     * but this could be made a flag  power chip if needed  enable pullups for identification  sd only  Our SD codes assume most significant word first, so reverse resp  NOTE: rely on SD_SEND_STATUS=MMC_SEND_STATUS  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  CMD8 Check for v2 sd card.  Must be sent before using ACMD41
+       Non v2 cards will not respond to this command  timeout for initialization is 1sec, from SD Specification 2.00  this timeout is the only valid error for this loop ACMD41 For v2 cards set HCS bit[30] & send host voltage range to all  CMD2 send CID  CMD3 send RCA  CMD9 send CSD  CMD7 w/rca: Select card to put it in TRAN state  ACMD6: set bus width to 4-bit  ACMD42: disconnect the pull-up resistor on CD/DAT3  Switch to 4-bit  Try to switch V2 cards to HS timings, non HS seem to ignore this  only transfer 64 bytes log2(64) CMD6 switch to HS log2(512) probe for CMD23 support  ACMD51, only transfer 8 bytes log2(8)log2(512) SSPCLK @ 96MHz
+     * gives bitrate of 96 / 4 / 1 = 24MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz sd_hs deselect card  successfully initialised  Skip non-removable drivers  lock-out card activity  Force card init for new card, re-init for re-inserted one or
+         * clear if the last attempt to init failed with an error.  unlock card  Access is now safe  HAVE_HOTSWAP  CONFIG_STORAGE & STORAGE_SD  we can choose the RCA of mmc cards: pick drive. Following our convention,
+     * .rca is actually RCA << 16  SSPCLK @ 96MHz
+     * gives bitrate of 96000 / 240 / 1 = 400kHz  go to idle state  send op cond until the card respond with busy bit set; it must complete within 1sec  get CID  Set RCA  Select card  Check TRAN state  Switch to 8-bit bus  switch error ?  Switch to high speed mode  switch error ? SSPCLK @ 96MHz
+     * gives bitrate of 96 / 2 / 1 = 48MHz  read extended CSD  deselect card  MMC always support CMD23  CONFIG_STORAGE & STORAGE_MMC  low-level function, don't call directly!  Set bank_start to the correct unit (blocks or bytes).
+         * MMC drives use block addressing, SD cards bytes or blocks  not SDHC  issue read/write
+         * NOTE: rely on SD_{READ,WRITE}_MULTIPLE_BLOCK=MMC_{READ,WRITE}_MULTIPLE_BLOCK  stop transmission
+         * NOTE: rely on SD_STOP_TRANSMISSION=MMC_STOP_TRANSMISSION  the function doesn't work when count is 0  update disk activity  lock per-drive mutex  update led status  for SD cards, init if necessary  check window  select card.
+     * NOTE: rely on SD_SELECT_CARD=MMC_SELECT_CARD  wait for TRAN state  NOTE: rely on SD_TRAN=MMC_TRAN *
+     * NOTE: we need to make sure dma transfers are aligned. This is handled
+     * differently for read and write transfers. We do not repeat it each
+     * time but it should be noted that all transfers are limited by
+     * IMX233_MAX_SINGLE_DMA_XFER_SIZE and thus need to be split if needed.
+     *
+     * Read transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, transfer all sectors but one to the sub-buffer starting
+     *   on the next cache line and then move the data. Then transfer the
+     *   last sector to the aligned_buffer and then copy to the buffer.
+     *
+     * Write transfers:
+     *   If the buffer is already aligned, transfer everything at once.
+     *   Otherwise, copy the first sector to the aligned_buffer and transfer.
+     *   Then move all other sectors within the buffer to make it cache
+     *   aligned and transfer it. Then move data to pretend the buffer was
+     *   never modified.
+      copy count-1 sector and then move within the buffer  transfer the last sector the aligned_buffer and copy  transfer the first sector to aligned_buffer and copy  move within the buffer and transfer  move back  deselect card   CMD7 w/rca =0 : deselects card & puts it in STBY state
+     * NOTE: rely on SD_DESELECT_CARD=MMC_DESELECT_CARD  update led status  release per-drive mutex  user specifies the sdmmc drive  compute window  NOTE: at this point the window shows the whole disk so raw disk
+         * accesses can be made to lookup partitions  if asked to probe, try to init it and ignore it if it fails  try to init drive, panic on failure or skip if probing * Information about SD/MMC slot  drive number (for queries like storage_removable(drive)  name of the slot: 'internal' or 'microsd'  is window enabled for this slot?  current bus width  is device high-speed capable?  is high-speed enabled?  device support SET_BLOCK_COUNT  return information about a particular sd device (use regular drive number)  return information about a particular mmc device (use regular drive number) 

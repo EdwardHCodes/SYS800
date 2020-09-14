@@ -1,0 +1,217 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for AS3514 and compatible audio codec
+ *
+ * Copyright (c) 2007 Daniel Ankers
+ * Copyright (c) 2007 Christian Gmeiner
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Headphone volume goes from -81.0 ... +6dB  Headphone volume goes from -73.5 ... +6dB 
+ * This drivers supports:
+ * as3514 , as used in the PP targets
+ * as3515 , as used in the as3525 targets
+ * as3543 , as used in the as3525v2 and other as3543 targets
+  AMS Sansas based on the AS3525 use the LINE2 input for the analog radio
+   signal instead of LINE1  There is only 1 pair of registers on AS3543, the line input is selectable in
+   LINE_IN_R register  PP use line1  Shadow registers  8-bit registers  Keep track of volume 
+ * little helper method to set register values.
+ * With the help of as3514_regs, we minimize i2c/syscall
+ * traffic.
+  Helpers to set/clear bits  convert tenth of dB volume to master volume register value 
+ * Initialise the PP I2C and I2S.
+  read all reg values  Prevent increasing noise and power consumption if booted through rolo  common ground on, delay playback unmuting when inserting headphones  Select Line 1 for FM radio  Select Line 2 for FM radio  Set LINEOUT to minimize pop-click noise in headphone on init stage   as3514/as3515  Set ADC off, mixer on, DAC on, line out on, line in off, mic off  Turn on SUM, DAC  Set ADC off, mixer on, DAC on, line out off, line in off, mic off  Turn on SUM, DAC  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  Set BIAS on, DITH off, AGC off, IBR_DAC max reduction, LSP_LP on, 
+       IBR_LSP max reduction (50%), taken from c200v2 OF
+      Mute and disable speaker  LRCK 8-23kHz (there are audible clicks while reading the ADC otherwise)  LRCK 24-48kHz  PHILIPS_SA9200  Set headphone over-current to 0, Min volume  AMS Sansas based on the AS3525 need HPCM enabled, otherwise they output the
+   L-R signal on both L and R headphone outputs instead of normal stereo.
+   Turning it off saves a little power on targets that don't need it.  Set HPCM on, ZCU off, reduce bias current, settings taken from c200v2 OF
+      TODO: check if AS3525 settings save power on e200v1 or as3525v2  Set HPCM off, ZCU on  CONFIG_CPU == AS3525  M2_Sup_off  HAVE_AS3543  registers identical on as3514/as3515 and as3543  M1_Sup_off  Headphone ON, MUTE, Min volume  Line Out Stereo, MUTE, Min volume  SANSA_E200V2 || SANSA_FUZE  DAC_Mute_off  DAC direct - gain, mixer and limitter bypassed  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  wait until outputs have stabilized  check C200  Release pop prevention  Set line out volume to 0dB  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  remember volume  We combine the mixer/DAC channel volume range with the headphone volume
+     * range. We want to keep the mixers volume as high as possible and the
+     * headphone volume as low as possible.  AS3543 mixer can go a little louder then the as3514, although
+     * it might be possible to go louder on the as3514 as well  IMPORTANT corresponds to a volume of 0dB (see below)  lets leave the AS3514 alone until its better tested In DAC only mode, if both left and right volume are higher than
+         * MIXER_MAX_VOLUME, we disable and bypass the DAC mixer to slightly
+         * improve noise.
+         *
+         * WARNING this works because MIXER_MAX_VOLUME corresponds to a DAC mixer
+         * volume of 0dB, thus it's the same to bypass the mixer or set its
+         * level to MIXER_MAX_VOLUME, except that bypassing is less noisy  In all other cases, we have no choice but to go through the main mixer
+         * (aka SUM) to get the volume we want or to properly route audio from
+         * line-in/microphone.  unused  line out volume is set in the same registers  Nice shutdown of AS3514 audio codec  mute headphones  check C200  Set pop prevention  turn on common  turn off everything  Allow caps to discharge  ADCmux = Stereo Microphone  MIC1_on, others off  XXX: why is the microphone supply not needed on other models ??  Enable supply  M1_AGC_off  ADCmux = Line_IN1 or Line_IN2  LIN1_or LIN2 on, rest off  Disable supply  ADC_Mute_off  ADC_on  ADC_Mute_on  ADC_off, all input sources off *
+ * Set recording volume
+ *
+ * Line in   : 0 .. 23 .. 31 =>
+               Volume -34.5 .. +00.0 .. +12.0 dB
+ * Mic (left): 0 .. 23 .. 39 =>
+ *             Volume -34.5 .. +00.0 .. +24.0 dB
+ *
+  Combine MIC gains seamlessly with ADC levels  M1_Gain = +40db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +19.5 dB .. +24.0 dB  M1_Gain = +34db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +13.5 dB .. +18.0 dB  M1_Gain = +28db, ADR_Vol = -34.5dB .. +12.0 dB =>
+               -34.5 dB .. +12.0 dB  HAVE_RECORDING *
+ * Enable line in analog monitoring
+ *
+  On AS3543 we play with DAC mixer bypass to decrease noise. This means that
+     * even in DAC mode, the headphone mux might be set to HPH_OUT_R_HP_OUT_SUM or
+     * HPH_OUT_R_HP_OUT_DAC depending on the volume. Care must be taken when
+     * changing monitor.
+     *
+     * The only safe procedure is to first change the Audioset1 register to enable/disable
+     * monitor, then call audiohw_set_volume to recompute the audio routing, then
+     * mute/unmute lines-in.  select either LIN1 or LIN2 but keep them muted for now  change audio routing  finally unmute line-in  mute line-in  disable line-in  change audio routing  HAVE_RECORDING || HAVE_FMRADIO_IN **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for AS3514 and compatible audio codec
+ *
+ * Copyright (c) 2007 Daniel Ankers
+ * Copyright (c) 2007 Christian Gmeiner
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Headphone volume goes from -81.0 ... +6dB  Headphone volume goes from -73.5 ... +6dB 
+ * This drivers supports:
+ * as3514 , as used in the PP targets
+ * as3515 , as used in the as3525 targets
+ * as3543 , as used in the as3525v2 and other as3543 targets
+  AMS Sansas based on the AS3525 use the LINE2 input for the analog radio
+   signal instead of LINE1  There is only 1 pair of registers on AS3543, the line input is selectable in
+   LINE_IN_R register  PP use line1  Shadow registers  8-bit registers  Keep track of volume 
+ * little helper method to set register values.
+ * With the help of as3514_regs, we minimize i2c/syscall
+ * traffic.
+  Helpers to set/clear bits  convert tenth of dB volume to master volume register value 
+ * Initialise the PP I2C and I2S.
+  read all reg values  Prevent increasing noise and power consumption if booted through rolo  common ground on, delay playback unmuting when inserting headphones  Select Line 1 for FM radio  Select Line 2 for FM radio  Set LINEOUT to minimize pop-click noise in headphone on init stage   as3514/as3515  Set ADC off, mixer on, DAC on, line out on, line in off, mic off  Turn on SUM, DAC  Set ADC off, mixer on, DAC on, line out off, line in off, mic off  Turn on SUM, DAC  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  Set BIAS on, DITH off, AGC off, IBR_DAC max reduction, LSP_LP on, 
+       IBR_LSP max reduction (50%), taken from c200v2 OF
+      Mute and disable speaker  LRCK 8-23kHz (there are audible clicks while reading the ADC otherwise)  LRCK 24-48kHz  PHILIPS_SA9200  Set headphone over-current to 0, Min volume  AMS Sansas based on the AS3525 need HPCM enabled, otherwise they output the
+   L-R signal on both L and R headphone outputs instead of normal stereo.
+   Turning it off saves a little power on targets that don't need it.  Set HPCM on, ZCU off, reduce bias current, settings taken from c200v2 OF
+      TODO: check if AS3525 settings save power on e200v1 or as3525v2  Set HPCM off, ZCU on  CONFIG_CPU == AS3525  M2_Sup_off  HAVE_AS3543  registers identical on as3514/as3515 and as3543  M1_Sup_off  Headphone ON, MUTE, Min volume  Line Out Stereo, MUTE, Min volume  SANSA_E200V2 || SANSA_FUZE  DAC_Mute_off  DAC direct - gain, mixer and limitter bypassed  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  wait until outputs have stabilized  check C200  Release pop prevention  Set line out volume to 0dB  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  remember volume  We combine the mixer/DAC channel volume range with the headphone volume
+     * range. We want to keep the mixers volume as high as possible and the
+     * headphone volume as low as possible.  AS3543 mixer can go a little louder then the as3514, although
+     * it might be possible to go louder on the as3514 as well  IMPORTANT corresponds to a volume of 0dB (see below)  lets leave the AS3514 alone until its better tested In DAC only mode, if both left and right volume are higher than
+         * MIXER_MAX_VOLUME, we disable and bypass the DAC mixer to slightly
+         * improve noise.
+         *
+         * WARNING this works because MIXER_MAX_VOLUME corresponds to a DAC mixer
+         * volume of 0dB, thus it's the same to bypass the mixer or set its
+         * level to MIXER_MAX_VOLUME, except that bypassing is less noisy  In all other cases, we have no choice but to go through the main mixer
+         * (aka SUM) to get the volume we want or to properly route audio from
+         * line-in/microphone.  unused  line out volume is set in the same registers  Nice shutdown of AS3514 audio codec  mute headphones  check C200  Set pop prevention  turn on common  turn off everything  Allow caps to discharge  ADCmux = Stereo Microphone  MIC1_on, others off  XXX: why is the microphone supply not needed on other models ??  Enable supply  M1_AGC_off  ADCmux = Line_IN1 or Line_IN2  LIN1_or LIN2 on, rest off  Disable supply  ADC_Mute_off  ADC_on  ADC_Mute_on  ADC_off, all input sources off *
+ * Set recording volume
+ *
+ * Line in   : 0 .. 23 .. 31 =>
+               Volume -34.5 .. +00.0 .. +12.0 dB
+ * Mic (left): 0 .. 23 .. 39 =>
+ *             Volume -34.5 .. +00.0 .. +24.0 dB
+ *
+  Combine MIC gains seamlessly with ADC levels  M1_Gain = +40db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +19.5 dB .. +24.0 dB  M1_Gain = +34db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +13.5 dB .. +18.0 dB  M1_Gain = +28db, ADR_Vol = -34.5dB .. +12.0 dB =>
+               -34.5 dB .. +12.0 dB  HAVE_RECORDING *
+ * Enable line in analog monitoring
+ *
+  On AS3543 we play with DAC mixer bypass to decrease noise. This means that
+     * even in DAC mode, the headphone mux might be set to HPH_OUT_R_HP_OUT_SUM or
+     * HPH_OUT_R_HP_OUT_DAC depending on the volume. Care must be taken when
+     * changing monitor.
+     *
+     * The only safe procedure is to first change the Audioset1 register to enable/disable
+     * monitor, then call audiohw_set_volume to recompute the audio routing, then
+     * mute/unmute lines-in.  select either LIN1 or LIN2 but keep them muted for now  change audio routing  finally unmute line-in  mute line-in  disable line-in  change audio routing  HAVE_RECORDING || HAVE_FMRADIO_IN **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for AS3514 and compatible audio codec
+ *
+ * Copyright (c) 2007 Daniel Ankers
+ * Copyright (c) 2007 Christian Gmeiner
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Headphone volume goes from -81.0 ... +6dB  Headphone volume goes from -73.5 ... +6dB 
+ * This drivers supports:
+ * as3514 , as used in the PP targets
+ * as3515 , as used in the as3525 targets
+ * as3543 , as used in the as3525v2 and other as3543 targets
+  AMS Sansas based on the AS3525 use the LINE2 input for the analog radio
+   signal instead of LINE1  There is only 1 pair of registers on AS3543, the line input is selectable in
+   LINE_IN_R register  PP use line1  Shadow registers  8-bit registers  Keep track of volume 
+ * little helper method to set register values.
+ * With the help of as3514_regs, we minimize i2c/syscall
+ * traffic.
+  Helpers to set/clear bits  convert tenth of dB volume to master volume register value 
+ * Initialise the PP I2C and I2S.
+  read all reg values  Prevent increasing noise and power consumption if booted through rolo  common ground on, delay playback unmuting when inserting headphones  Select Line 1 for FM radio  Select Line 2 for FM radio  Set LINEOUT to minimize pop-click noise in headphone on init stage   as3514/as3515  Set ADC off, mixer on, DAC on, line out on, line in off, mic off  Turn on SUM, DAC  Set ADC off, mixer on, DAC on, line out off, line in off, mic off  Turn on SUM, DAC  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  Set BIAS on, DITH off, AGC off, IBR_DAC max reduction, LSP_LP on, 
+       IBR_LSP max reduction (50%), taken from c200v2 OF
+      Mute and disable speaker  LRCK 8-23kHz (there are audible clicks while reading the ADC otherwise)  LRCK 24-48kHz  PHILIPS_SA9200  Set headphone over-current to 0, Min volume  AMS Sansas based on the AS3525 need HPCM enabled, otherwise they output the
+   L-R signal on both L and R headphone outputs instead of normal stereo.
+   Turning it off saves a little power on targets that don't need it.  Set HPCM on, ZCU off, reduce bias current, settings taken from c200v2 OF
+      TODO: check if AS3525 settings save power on e200v1 or as3525v2  Set HPCM off, ZCU on  CONFIG_CPU == AS3525  M2_Sup_off  HAVE_AS3543  registers identical on as3514/as3515 and as3543  M1_Sup_off  Headphone ON, MUTE, Min volume  Line Out Stereo, MUTE, Min volume  SANSA_E200V2 || SANSA_FUZE  DAC_Mute_off  DAC direct - gain, mixer and limitter bypassed  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  wait until outputs have stabilized  check C200  Release pop prevention  Set line out volume to 0dB  SANSA_E200V2 || SANSA_FUZE || SANSA_C200  remember volume  We combine the mixer/DAC channel volume range with the headphone volume
+     * range. We want to keep the mixers volume as high as possible and the
+     * headphone volume as low as possible.  AS3543 mixer can go a little louder then the as3514, although
+     * it might be possible to go louder on the as3514 as well  IMPORTANT corresponds to a volume of 0dB (see below)  lets leave the AS3514 alone until its better tested In DAC only mode, if both left and right volume are higher than
+         * MIXER_MAX_VOLUME, we disable and bypass the DAC mixer to slightly
+         * improve noise.
+         *
+         * WARNING this works because MIXER_MAX_VOLUME corresponds to a DAC mixer
+         * volume of 0dB, thus it's the same to bypass the mixer or set its
+         * level to MIXER_MAX_VOLUME, except that bypassing is less noisy  In all other cases, we have no choice but to go through the main mixer
+         * (aka SUM) to get the volume we want or to properly route audio from
+         * line-in/microphone.  unused  line out volume is set in the same registers  Nice shutdown of AS3514 audio codec  mute headphones  check C200  Set pop prevention  turn on common  turn off everything  Allow caps to discharge  ADCmux = Stereo Microphone  MIC1_on, others off  XXX: why is the microphone supply not needed on other models ??  Enable supply  M1_AGC_off  ADCmux = Line_IN1 or Line_IN2  LIN1_or LIN2 on, rest off  Disable supply  ADC_Mute_off  ADC_on  ADC_Mute_on  ADC_off, all input sources off *
+ * Set recording volume
+ *
+ * Line in   : 0 .. 23 .. 31 =>
+               Volume -34.5 .. +00.0 .. +12.0 dB
+ * Mic (left): 0 .. 23 .. 39 =>
+ *             Volume -34.5 .. +00.0 .. +24.0 dB
+ *
+  Combine MIC gains seamlessly with ADC levels  M1_Gain = +40db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +19.5 dB .. +24.0 dB  M1_Gain = +34db, ADR_Vol = +7.5dB .. +12.0 dB =>
+               +13.5 dB .. +18.0 dB  M1_Gain = +28db, ADR_Vol = -34.5dB .. +12.0 dB =>
+               -34.5 dB .. +12.0 dB  HAVE_RECORDING *
+ * Enable line in analog monitoring
+ *
+  On AS3543 we play with DAC mixer bypass to decrease noise. This means that
+     * even in DAC mode, the headphone mux might be set to HPH_OUT_R_HP_OUT_SUM or
+     * HPH_OUT_R_HP_OUT_DAC depending on the volume. Care must be taken when
+     * changing monitor.
+     *
+     * The only safe procedure is to first change the Audioset1 register to enable/disable
+     * monitor, then call audiohw_set_volume to recompute the audio routing, then
+     * mute/unmute lines-in.  select either LIN1 or LIN2 but keep them muted for now  change audio routing  finally unmute line-in  mute line-in  disable line-in  change audio routing  HAVE_RECORDING || HAVE_FMRADIO_IN 

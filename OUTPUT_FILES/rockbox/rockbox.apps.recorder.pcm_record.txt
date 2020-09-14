@@ -1,0 +1,406 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Linus Nielsen Feltzing
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PCMREC_LOGQUEUES_SYS_TIMEOUT SIMULATOR * Target-related configuration **
+ * PCM_NUM_CHUNKS:    Number of PCM chunks
+ * PCM_CHUNK_SAMP:    Number of samples in a PCM chunk
+ * PCM_BOOST_SECONDS: PCM level at which to boost CPU
+ * PANIC_SECONDS:     Flood watermark time until full
+ * FLUSH_SECONDS:     Flush watermark time until full
+ * STREAM_BUF_SIZE:   Size of stream write buffer
+ * PRIO_SECONDS:      Max flush time before prio boost
+ *
+ * Total PCM buffer size should be mem aligned
+ *
+ * Fractions should be left without parentheses so the multiplier is
+ * multiplied by the numerator first.
+  MEMORYSIZE > 16  MEMORYSIZE  Default values if not overridden above  FAT limit for filesize. Recording will accept no further data from the
+ * codec if this limit is reached in order to preserve its own data
+ * integrity. A split should have made by the higher-ups long before this
+ * point.
+ *
+ * Leave a generous 64k margin for metadata being added to file. ************************************************************************* in codec_thread.c  in audio_thread.c  in audio_thread.c * General recording state * Recording action being performed  State of engine operations  Stopped or prerecording   Monitoring buffer status  Flushing buffer           An error has occured (bitmask)  Non-fatal warnings (bitmask)    Mirror of errors but private to
+                                          * avoid race with controlling
+                                          * thread. Engine uses this
+                                          * internally. * Stats on encoded data for current file * Currently open file descriptor  Number of bytes recorded        Number of PCM samples recorded  Count of slots written to buffer
+                                            for current file               * These apply to current settings * Current rec_source setting      Samplerate setting in HZ        Current number of channels      Current encoder configuration   Pre-record time in seconds     ***************************************************************************
+  Use 2 circular buffers:
+  pcm_buffer=DMA output buffer:    chunks (8192 Bytes) of raw pcm audio data
+  enc_buffer=encoded audio buffer: storage for encoder output data
+
+  Flow:
+  1. When entering recording_screen DMA feeds the ringbuffer pcm_buffer
+  2. If enough pcm data are available the encoder codec does encoding of pcm
+      chunks (4-8192 Bytes) into ringbuffer enc_buffer in codec_thread
+  3. pcmrec_callback detects enc_buffer 'near full' and writes data to disk
+
+  Functions calls (basic encoder steps):
+   1.audio:   codec_load();               load the encoder
+   2.encoder: enc_init_parameters();      set the encoder parameters (at load)
+   3.audio:   enc_callback();             configure encoder recording settings
+   4.audio:   codec_go();                 start encoding the new stream
+   5.encoder: enc_encbuf_get_buffer();    obtain an output buffer of size n
+   6.encoder: enc_pcmbuf_read();          read n bytes of unprocessed pcm data
+   7.encoder: enc_encbuf_finish_buffer(); add the obtained buffer to output
+   8.encoder: enc_pcmbuf_advance();       advance pcm by n samples
+   9.encoder: while more PCM available, repeat 5. to 9.
+  10.audio:   codec_finish_stream();      finish the output for current stream
+
+  Function calls (basic stream flushing steps through enc_callback()):
+   1.audio:   flush_stream_start();       stream flush destination is opening
+   2.audio:   flush_stream_data();        flush encoded audio to stream
+   3.audio:   while encoded data available, repeat 2.
+   4.audio:   flush_stream_end();         stream flush destination is closing
+
+**************************************************************************** Buffer parameters where incoming PCM data is placed * Convert byte sizes into buffer slot counts  Min margin to write stream split headers without overwrap risk  Root rec buffer pointer          Root rec buffer size             Circular buffer for PCM samples  Freeze DMA write position        Current DMA write position       Current PCM read position        Circular encoding buffer         Encoder chunk write index        Encoder chunk read index         Length of buffer in slots        Stream-to-disk write buffer      Stream write buffer occupancy    Buffer with next file to create  Samplerate used by encoder       All PCM chunks processed?        PCM memcpy or copy_buffer_mono   Encoder's recording callback    * File flushing * Rate of data per second          Last spinup time                 Max limit for data flush         Max limit for thread prio boost * Stream marking * Mark end current stream  Mark start of new stream  Insert split; orr of above values  Do prerecord data tally ************************************************************************* Buffer pointer (p) to PCM sample memory address  Buffer pointer (p) plus value (v), wrapped if necessary  Size of data in PCM buffer  Buffer pointer (p) to memory address of header  Buffer pointer (p) plus value (v), wrapped if necessary  Number of free buffer slots  Number of used buffer slots  Is the encoder buffer empty?  Buffer pointer (p) plus size (v), written to enc_widx, new widx
+ * zero-initialized  Buffer pointer (p) plus size of chunk at (p), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive increment result
+ *
+ * Returns NULL if it was a wrap marker  Wrap markers are not returned but caller may have to know that
+           the index was changed since it impacts available space  Buffer pointer (p) of contiguous free space (v), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive possible-adjusted p
+ *
+ * Returns header at (p) or wrapped header at (0) if wrap was
+ * required in order to provide contiguous space. Header is zero-
+ * initialized.
+ *
+ * Marks the wrap point if a wrap is required to make the allocation.  All other fields ignored  Post a flush request to audio thread, if none is currently queued  Set the error bits in (e): no lock  Clear the error bits in (e): no lock  Set the error bits in (e)  Clear the error bits in (e)  Set the warning bits in (w): no lock  Clear the warning bits in (w): no lock  Set the warning bits in (w)  Clear the warning bits in (w)  Callback for when more data is ready - called by DMA ISR  One empty chunk must remain after widx is advanced  Some error condition  Try again next transmission - frame is invalid  Start DMA transfer  Initialize the various recording buffers  Layout of recording buffer: |PCMBUF|STREAMBUF|FILENAME|ENCBUF|  PCMBUF  Line align  STREAMBUF  Also line-aligned  FILENAME  ENCBUF  Reset the circular buffers  PCM FIFO  Don't just empty but reset it  Encoder FIFO  No overflow-related warnings now  Initialize file statistics  Boost or unboost recording threads' priorities  Reset all relevant state  Set hardware samplerate and save it  PCM samplerate is either the same as the setting or the nearest
+       one hardware supports if using S/PDIF  HAVE_SPDIF_IN  Calculate the average data rate  If not yet calculable, start with uncompressed PCM byterate  Returns true if the watermarks should be updated due to data rate
+   change  Off by more than 1/2 FLUSH_MON_INTERVAL?  Get adjusted spinup time  Write at FLUSH_SECONDS + st remaining in enc_buffer - range fs+2s to
+       fs+10s total - default to 3.5s spinup.  default - cozy                 ludicrous - ramdisk?           do you have a functioning HD?  (CONFIG_STORAGE & STORAGE_ATA)  Returns true if the watermarks should be updated due to spinup time
+   change  Update buffer watermarks with spinup time compensation  Try to start writing with FLUSH_SECONDS remaining after disk spinup  Boost thread priority if enough ground is lost since flushing started
+       or is taking an unreasonably long time  HAVE_PRIORITY_SCHEDULING  Tell encoder the stream parameters and get information back  encoder can change these - init with defaults  Codec doesn't want to/can't use the setting and has chosen a
+           different sample rate  Return the S/PDIF sample rate closest to a value in the master list  Check the S/PDIF rate and compare to current setting. Apply the new
+ * rate if it changed.  HAVE_SPDIF_IN  Discard the stream buffer contents  Flush stream buffer to disk  Some was written; keep in sync  Close the output file  Creates or opens the current path  Any previous file should have been closed  Copy with mono conversion - output 1/2 size of input  mono = (L + R) / 2  Copy with mono conversion - output 1/2 size of input  mono = L  Copy with mono conversion - output 1/2 size of input  mono = R * pcm_rec_* group * Clear all errors and warnings  Check mode, errors and warnings  Return warnings that have occured since recording started  Return the currently-configured sample rate * audio_* group * Initializes recording - call before calling any other recording function  Closes recording - call audio_stop_recording first or risk data loss  Sets recording parameters  Start recording if not recording or else split  audio_record alias for API compatibility with HW codec  Stop current recording if recording  Pause current recording  Resume current recording if paused  Set the input source gain. For mono sources, only left gain is used * Information about current state * Return sample clock in HZ  Return current prerecorded time in ticks (playback equivalent time)  Return current recorded time in ticks (playback equivalent time)  Return number of bytes encoded to output * Data Flushing * Stream start chunk with path was encountered  Save filename; don't open file here which avoids creating files
+       with no audio content. Splitting while paused can create those
+       in large numbers.  Correct size if this was wrap-padded  Data chunk was encountered  First data chunk; create the file  Inherit some flags from initial data chunk  Just keep discarding  Stream end chunk was encountered  Discard remainder of stream in encoder buffer  Discard everything up until the next non-data chunk  Try to finish header by closing and reopening the file. A seek or
+       other operation will likely fail because buffers will need to be
+       flushed (here and in file code). That will likely fail but a close
+       will just close the fd and discard everything. We reopen with what
+       actually made it to disk. Modifying existing file contents will
+       more than likely succeed even on a full disk. The result might not
+       be entirely correct as far as the headers' sizes and counts unless
+       the codec can correct that but the sample format information
+       should be.  Synthesize a special end chunk here  Codec should try to correct anything that's off  Flush a chunk to disk
+ *
+ * Transitions state from REC_STATE_MONITOR to REC_STATE_FLUSH when buffer
+ * is filling. 'margin' is fullness threshold that transitions to flush state.
+ *
+ * Call with REC_STATE_IDLE to indicate a forced flush which flushes buffer
+ * to less than 'margin'.
+  Timeout for auto boost  HAVE_PRIORITY_SCHEDULING  Fall-through  As a hint for "forced"  Fall-through  HAVE_PRIORITY_SCHEDULING  Doesn't do stream writes  Monitor buffer and finish stream, freeing-up space at the same time  Start flush  Don't flood with pings  Start a new stream, transistion to a new one or end the current one  Prerecord: START marker goes first or before existing data  Adjust to occupy end of buffer and pad accordingly  Won't adjust p since enc_ridx is already set as non-wrapping  The usual: START marker goes first or after existing data  Tally-up and keep the required amount of prerecord data.
+ * Updates record stats accordingly.  Find out how much is there  Have too much? Discard oldest data. * Event handlers for recording thread * Q_AUDIO_INIT_RECORDING  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided
+     * FIXME: This buffer should play nicer and be shrinkable/movable  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Q_AUDIO_CLOSE_RECORDING  Simply shut down the recording system. Whatever wasn't saved is
+       lost.  Reset PCM to defaults  Q_AUDIO_RECORDING_OPTIONS  This would ruin things  Stop everything else that might be running  New format, new encoder; unload this one  Keep current encoder  Read recording options, remember the ones used elsewhere  Let caller go  Pick appropriate PCM copy routine  Get the hardware samplerate to be used  Determined by source  HAVE_SPDIF_IN  Set monitoring  Apply hardware setting to start monitoring now  Q_AUDIO_RECORD - start recording (not gapless)
+                    or split stream (gapless)  Copy path and let caller go  Already recording, just split the stream  Q_AUDIO_RECORD_STOP  Drain encoder and PCM buffers  End stream at last data and flush end marker  Q_AUDIO_RECORD_PAUSE  Q_AUDIO_RECORD_RESUME  Called by audio thread when recording is initialized  Get current priorities since they get changed  switch  HAVE_SPDIF_IN  while  Restore normal thread priorities * Encoder callbacks * Read a block of unprocessed PCM data, with mono conversion if
+ * num_channels == 1
+ *
+ * NOTE: Request must be less than the PCM buffer length in samples in order
+ *       to progress.
+ *       (ie. count <= PCM_NUM_CHUNKS*PCM_CHUNK_SAMP)
+  src offset -> dst offset  Filling up - boost threshold data available or more or 1/2 full
+               or more - boost codec  Not enough data available - encoder should idle  Sleep a little bit  Advance PCM buffer by count samples  Return encoder chunk at current write position, wrapping to 0 if
+ * requested size demands it.
+ *
+ * NOTE: No request should be more than 1/2 the buffer length, all elements
+ *       included, or progress will not be guaranteed.
+ *       (ie. CHUNK_DATA_COUNT(need) <= enc_buflen / 2)
+  Convert to buffer slot count, including the header  Must have the split margin as well but it does not have to be
+       continuous with the request  Prerecording - delete some old data  Empty but request larger than any possible space  Not yet even at high watermark but what's needed won't fit  Releases the current buffer into the available chunks  Encoder set error flag  Claims nothing was written  Claims it wrote too much?  Would exceed filesize limit; should have split sooner.
+           This chunk will be dropped. :'(  Read from the output stream  Seek the output steam  Write to the output stream  Too big to buffer  One-time init at startup  Init API **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Linus Nielsen Feltzing
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PCMREC_LOGQUEUES_SYS_TIMEOUT SIMULATOR * Target-related configuration **
+ * PCM_NUM_CHUNKS:    Number of PCM chunks
+ * PCM_CHUNK_SAMP:    Number of samples in a PCM chunk
+ * PCM_BOOST_SECONDS: PCM level at which to boost CPU
+ * PANIC_SECONDS:     Flood watermark time until full
+ * FLUSH_SECONDS:     Flush watermark time until full
+ * STREAM_BUF_SIZE:   Size of stream write buffer
+ * PRIO_SECONDS:      Max flush time before prio boost
+ *
+ * Total PCM buffer size should be mem aligned
+ *
+ * Fractions should be left without parentheses so the multiplier is
+ * multiplied by the numerator first.
+  MEMORYSIZE > 16  MEMORYSIZE  Default values if not overridden above  FAT limit for filesize. Recording will accept no further data from the
+ * codec if this limit is reached in order to preserve its own data
+ * integrity. A split should have made by the higher-ups long before this
+ * point.
+ *
+ * Leave a generous 64k margin for metadata being added to file. ************************************************************************* in codec_thread.c  in audio_thread.c  in audio_thread.c * General recording state * Recording action being performed  State of engine operations  Stopped or prerecording   Monitoring buffer status  Flushing buffer           An error has occured (bitmask)  Non-fatal warnings (bitmask)    Mirror of errors but private to
+                                          * avoid race with controlling
+                                          * thread. Engine uses this
+                                          * internally. * Stats on encoded data for current file * Currently open file descriptor  Number of bytes recorded        Number of PCM samples recorded  Count of slots written to buffer
+                                            for current file               * These apply to current settings * Current rec_source setting      Samplerate setting in HZ        Current number of channels      Current encoder configuration   Pre-record time in seconds     ***************************************************************************
+  Use 2 circular buffers:
+  pcm_buffer=DMA output buffer:    chunks (8192 Bytes) of raw pcm audio data
+  enc_buffer=encoded audio buffer: storage for encoder output data
+
+  Flow:
+  1. When entering recording_screen DMA feeds the ringbuffer pcm_buffer
+  2. If enough pcm data are available the encoder codec does encoding of pcm
+      chunks (4-8192 Bytes) into ringbuffer enc_buffer in codec_thread
+  3. pcmrec_callback detects enc_buffer 'near full' and writes data to disk
+
+  Functions calls (basic encoder steps):
+   1.audio:   codec_load();               load the encoder
+   2.encoder: enc_init_parameters();      set the encoder parameters (at load)
+   3.audio:   enc_callback();             configure encoder recording settings
+   4.audio:   codec_go();                 start encoding the new stream
+   5.encoder: enc_encbuf_get_buffer();    obtain an output buffer of size n
+   6.encoder: enc_pcmbuf_read();          read n bytes of unprocessed pcm data
+   7.encoder: enc_encbuf_finish_buffer(); add the obtained buffer to output
+   8.encoder: enc_pcmbuf_advance();       advance pcm by n samples
+   9.encoder: while more PCM available, repeat 5. to 9.
+  10.audio:   codec_finish_stream();      finish the output for current stream
+
+  Function calls (basic stream flushing steps through enc_callback()):
+   1.audio:   flush_stream_start();       stream flush destination is opening
+   2.audio:   flush_stream_data();        flush encoded audio to stream
+   3.audio:   while encoded data available, repeat 2.
+   4.audio:   flush_stream_end();         stream flush destination is closing
+
+**************************************************************************** Buffer parameters where incoming PCM data is placed * Convert byte sizes into buffer slot counts  Min margin to write stream split headers without overwrap risk  Root rec buffer pointer          Root rec buffer size             Circular buffer for PCM samples  Freeze DMA write position        Current DMA write position       Current PCM read position        Circular encoding buffer         Encoder chunk write index        Encoder chunk read index         Length of buffer in slots        Stream-to-disk write buffer      Stream write buffer occupancy    Buffer with next file to create  Samplerate used by encoder       All PCM chunks processed?        PCM memcpy or copy_buffer_mono   Encoder's recording callback    * File flushing * Rate of data per second          Last spinup time                 Max limit for data flush         Max limit for thread prio boost * Stream marking * Mark end current stream  Mark start of new stream  Insert split; orr of above values  Do prerecord data tally ************************************************************************* Buffer pointer (p) to PCM sample memory address  Buffer pointer (p) plus value (v), wrapped if necessary  Size of data in PCM buffer  Buffer pointer (p) to memory address of header  Buffer pointer (p) plus value (v), wrapped if necessary  Number of free buffer slots  Number of used buffer slots  Is the encoder buffer empty?  Buffer pointer (p) plus size (v), written to enc_widx, new widx
+ * zero-initialized  Buffer pointer (p) plus size of chunk at (p), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive increment result
+ *
+ * Returns NULL if it was a wrap marker  Wrap markers are not returned but caller may have to know that
+           the index was changed since it impacts available space  Buffer pointer (p) of contiguous free space (v), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive possible-adjusted p
+ *
+ * Returns header at (p) or wrapped header at (0) if wrap was
+ * required in order to provide contiguous space. Header is zero-
+ * initialized.
+ *
+ * Marks the wrap point if a wrap is required to make the allocation.  All other fields ignored  Post a flush request to audio thread, if none is currently queued  Set the error bits in (e): no lock  Clear the error bits in (e): no lock  Set the error bits in (e)  Clear the error bits in (e)  Set the warning bits in (w): no lock  Clear the warning bits in (w): no lock  Set the warning bits in (w)  Clear the warning bits in (w)  Callback for when more data is ready - called by DMA ISR  One empty chunk must remain after widx is advanced  Some error condition  Try again next transmission - frame is invalid  Start DMA transfer  Initialize the various recording buffers  Layout of recording buffer: |PCMBUF|STREAMBUF|FILENAME|ENCBUF|  PCMBUF  Line align  STREAMBUF  Also line-aligned  FILENAME  ENCBUF  Reset the circular buffers  PCM FIFO  Don't just empty but reset it  Encoder FIFO  No overflow-related warnings now  Initialize file statistics  Boost or unboost recording threads' priorities  Reset all relevant state  Set hardware samplerate and save it  PCM samplerate is either the same as the setting or the nearest
+       one hardware supports if using S/PDIF  HAVE_SPDIF_IN  Calculate the average data rate  If not yet calculable, start with uncompressed PCM byterate  Returns true if the watermarks should be updated due to data rate
+   change  Off by more than 1/2 FLUSH_MON_INTERVAL?  Get adjusted spinup time  Write at FLUSH_SECONDS + st remaining in enc_buffer - range fs+2s to
+       fs+10s total - default to 3.5s spinup.  default - cozy                 ludicrous - ramdisk?           do you have a functioning HD?  (CONFIG_STORAGE & STORAGE_ATA)  Returns true if the watermarks should be updated due to spinup time
+   change  Update buffer watermarks with spinup time compensation  Try to start writing with FLUSH_SECONDS remaining after disk spinup  Boost thread priority if enough ground is lost since flushing started
+       or is taking an unreasonably long time  HAVE_PRIORITY_SCHEDULING  Tell encoder the stream parameters and get information back  encoder can change these - init with defaults  Codec doesn't want to/can't use the setting and has chosen a
+           different sample rate  Return the S/PDIF sample rate closest to a value in the master list  Check the S/PDIF rate and compare to current setting. Apply the new
+ * rate if it changed.  HAVE_SPDIF_IN  Discard the stream buffer contents  Flush stream buffer to disk  Some was written; keep in sync  Close the output file  Creates or opens the current path  Any previous file should have been closed  Copy with mono conversion - output 1/2 size of input  mono = (L + R) / 2  Copy with mono conversion - output 1/2 size of input  mono = L  Copy with mono conversion - output 1/2 size of input  mono = R * pcm_rec_* group * Clear all errors and warnings  Check mode, errors and warnings  Return warnings that have occured since recording started  Return the currently-configured sample rate * audio_* group * Initializes recording - call before calling any other recording function  Closes recording - call audio_stop_recording first or risk data loss  Sets recording parameters  Start recording if not recording or else split  audio_record alias for API compatibility with HW codec  Stop current recording if recording  Pause current recording  Resume current recording if paused  Set the input source gain. For mono sources, only left gain is used * Information about current state * Return sample clock in HZ  Return current prerecorded time in ticks (playback equivalent time)  Return current recorded time in ticks (playback equivalent time)  Return number of bytes encoded to output * Data Flushing * Stream start chunk with path was encountered  Save filename; don't open file here which avoids creating files
+       with no audio content. Splitting while paused can create those
+       in large numbers.  Correct size if this was wrap-padded  Data chunk was encountered  First data chunk; create the file  Inherit some flags from initial data chunk  Just keep discarding  Stream end chunk was encountered  Discard remainder of stream in encoder buffer  Discard everything up until the next non-data chunk  Try to finish header by closing and reopening the file. A seek or
+       other operation will likely fail because buffers will need to be
+       flushed (here and in file code). That will likely fail but a close
+       will just close the fd and discard everything. We reopen with what
+       actually made it to disk. Modifying existing file contents will
+       more than likely succeed even on a full disk. The result might not
+       be entirely correct as far as the headers' sizes and counts unless
+       the codec can correct that but the sample format information
+       should be.  Synthesize a special end chunk here  Codec should try to correct anything that's off  Flush a chunk to disk
+ *
+ * Transitions state from REC_STATE_MONITOR to REC_STATE_FLUSH when buffer
+ * is filling. 'margin' is fullness threshold that transitions to flush state.
+ *
+ * Call with REC_STATE_IDLE to indicate a forced flush which flushes buffer
+ * to less than 'margin'.
+  Timeout for auto boost  HAVE_PRIORITY_SCHEDULING  Fall-through  As a hint for "forced"  Fall-through  HAVE_PRIORITY_SCHEDULING  Doesn't do stream writes  Monitor buffer and finish stream, freeing-up space at the same time  Start flush  Don't flood with pings  Start a new stream, transistion to a new one or end the current one  Prerecord: START marker goes first or before existing data  Adjust to occupy end of buffer and pad accordingly  Won't adjust p since enc_ridx is already set as non-wrapping  The usual: START marker goes first or after existing data  Tally-up and keep the required amount of prerecord data.
+ * Updates record stats accordingly.  Find out how much is there  Have too much? Discard oldest data. * Event handlers for recording thread * Q_AUDIO_INIT_RECORDING  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided
+     * FIXME: This buffer should play nicer and be shrinkable/movable  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Q_AUDIO_CLOSE_RECORDING  Simply shut down the recording system. Whatever wasn't saved is
+       lost.  Reset PCM to defaults  Q_AUDIO_RECORDING_OPTIONS  This would ruin things  Stop everything else that might be running  New format, new encoder; unload this one  Keep current encoder  Read recording options, remember the ones used elsewhere  Let caller go  Pick appropriate PCM copy routine  Get the hardware samplerate to be used  Determined by source  HAVE_SPDIF_IN  Set monitoring  Apply hardware setting to start monitoring now  Q_AUDIO_RECORD - start recording (not gapless)
+                    or split stream (gapless)  Copy path and let caller go  Already recording, just split the stream  Q_AUDIO_RECORD_STOP  Drain encoder and PCM buffers  End stream at last data and flush end marker  Q_AUDIO_RECORD_PAUSE  Q_AUDIO_RECORD_RESUME  Called by audio thread when recording is initialized  Get current priorities since they get changed  switch  HAVE_SPDIF_IN  while  Restore normal thread priorities * Encoder callbacks * Read a block of unprocessed PCM data, with mono conversion if
+ * num_channels == 1
+ *
+ * NOTE: Request must be less than the PCM buffer length in samples in order
+ *       to progress.
+ *       (ie. count <= PCM_NUM_CHUNKS*PCM_CHUNK_SAMP)
+  src offset -> dst offset  Filling up - boost threshold data available or more or 1/2 full
+               or more - boost codec  Not enough data available - encoder should idle  Sleep a little bit  Advance PCM buffer by count samples  Return encoder chunk at current write position, wrapping to 0 if
+ * requested size demands it.
+ *
+ * NOTE: No request should be more than 1/2 the buffer length, all elements
+ *       included, or progress will not be guaranteed.
+ *       (ie. CHUNK_DATA_COUNT(need) <= enc_buflen / 2)
+  Convert to buffer slot count, including the header  Must have the split margin as well but it does not have to be
+       continuous with the request  Prerecording - delete some old data  Empty but request larger than any possible space  Not yet even at high watermark but what's needed won't fit  Releases the current buffer into the available chunks  Encoder set error flag  Claims nothing was written  Claims it wrote too much?  Would exceed filesize limit; should have split sooner.
+           This chunk will be dropped. :'(  Read from the output stream  Seek the output steam  Write to the output stream  Too big to buffer  One-time init at startup  Init API **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Linus Nielsen Feltzing
+ * Copyright (C) 2006 Antonius Hellmann
+ * Copyright (C) 2006-2013 Michael Sevakis
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages #define PCMREC_LOGQUEUES_SYS_TIMEOUT SIMULATOR * Target-related configuration **
+ * PCM_NUM_CHUNKS:    Number of PCM chunks
+ * PCM_CHUNK_SAMP:    Number of samples in a PCM chunk
+ * PCM_BOOST_SECONDS: PCM level at which to boost CPU
+ * PANIC_SECONDS:     Flood watermark time until full
+ * FLUSH_SECONDS:     Flush watermark time until full
+ * STREAM_BUF_SIZE:   Size of stream write buffer
+ * PRIO_SECONDS:      Max flush time before prio boost
+ *
+ * Total PCM buffer size should be mem aligned
+ *
+ * Fractions should be left without parentheses so the multiplier is
+ * multiplied by the numerator first.
+  MEMORYSIZE > 16  MEMORYSIZE  Default values if not overridden above  FAT limit for filesize. Recording will accept no further data from the
+ * codec if this limit is reached in order to preserve its own data
+ * integrity. A split should have made by the higher-ups long before this
+ * point.
+ *
+ * Leave a generous 64k margin for metadata being added to file. ************************************************************************* in codec_thread.c  in audio_thread.c  in audio_thread.c * General recording state * Recording action being performed  State of engine operations  Stopped or prerecording   Monitoring buffer status  Flushing buffer           An error has occured (bitmask)  Non-fatal warnings (bitmask)    Mirror of errors but private to
+                                          * avoid race with controlling
+                                          * thread. Engine uses this
+                                          * internally. * Stats on encoded data for current file * Currently open file descriptor  Number of bytes recorded        Number of PCM samples recorded  Count of slots written to buffer
+                                            for current file               * These apply to current settings * Current rec_source setting      Samplerate setting in HZ        Current number of channels      Current encoder configuration   Pre-record time in seconds     ***************************************************************************
+  Use 2 circular buffers:
+  pcm_buffer=DMA output buffer:    chunks (8192 Bytes) of raw pcm audio data
+  enc_buffer=encoded audio buffer: storage for encoder output data
+
+  Flow:
+  1. When entering recording_screen DMA feeds the ringbuffer pcm_buffer
+  2. If enough pcm data are available the encoder codec does encoding of pcm
+      chunks (4-8192 Bytes) into ringbuffer enc_buffer in codec_thread
+  3. pcmrec_callback detects enc_buffer 'near full' and writes data to disk
+
+  Functions calls (basic encoder steps):
+   1.audio:   codec_load();               load the encoder
+   2.encoder: enc_init_parameters();      set the encoder parameters (at load)
+   3.audio:   enc_callback();             configure encoder recording settings
+   4.audio:   codec_go();                 start encoding the new stream
+   5.encoder: enc_encbuf_get_buffer();    obtain an output buffer of size n
+   6.encoder: enc_pcmbuf_read();          read n bytes of unprocessed pcm data
+   7.encoder: enc_encbuf_finish_buffer(); add the obtained buffer to output
+   8.encoder: enc_pcmbuf_advance();       advance pcm by n samples
+   9.encoder: while more PCM available, repeat 5. to 9.
+  10.audio:   codec_finish_stream();      finish the output for current stream
+
+  Function calls (basic stream flushing steps through enc_callback()):
+   1.audio:   flush_stream_start();       stream flush destination is opening
+   2.audio:   flush_stream_data();        flush encoded audio to stream
+   3.audio:   while encoded data available, repeat 2.
+   4.audio:   flush_stream_end();         stream flush destination is closing
+
+**************************************************************************** Buffer parameters where incoming PCM data is placed * Convert byte sizes into buffer slot counts  Min margin to write stream split headers without overwrap risk  Root rec buffer pointer          Root rec buffer size             Circular buffer for PCM samples  Freeze DMA write position        Current DMA write position       Current PCM read position        Circular encoding buffer         Encoder chunk write index        Encoder chunk read index         Length of buffer in slots        Stream-to-disk write buffer      Stream write buffer occupancy    Buffer with next file to create  Samplerate used by encoder       All PCM chunks processed?        PCM memcpy or copy_buffer_mono   Encoder's recording callback    * File flushing * Rate of data per second          Last spinup time                 Max limit for data flush         Max limit for thread prio boost * Stream marking * Mark end current stream  Mark start of new stream  Insert split; orr of above values  Do prerecord data tally ************************************************************************* Buffer pointer (p) to PCM sample memory address  Buffer pointer (p) plus value (v), wrapped if necessary  Size of data in PCM buffer  Buffer pointer (p) to memory address of header  Buffer pointer (p) plus value (v), wrapped if necessary  Number of free buffer slots  Number of used buffer slots  Is the encoder buffer empty?  Buffer pointer (p) plus size (v), written to enc_widx, new widx
+ * zero-initialized  Buffer pointer (p) plus size of chunk at (p), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive increment result
+ *
+ * Returns NULL if it was a wrap marker  Wrap markers are not returned but caller may have to know that
+           the index was changed since it impacts available space  Buffer pointer (p) of contiguous free space (v), wrapped to (0) if
+ * necessary.
+ *
+ * pout points to variable to receive possible-adjusted p
+ *
+ * Returns header at (p) or wrapped header at (0) if wrap was
+ * required in order to provide contiguous space. Header is zero-
+ * initialized.
+ *
+ * Marks the wrap point if a wrap is required to make the allocation.  All other fields ignored  Post a flush request to audio thread, if none is currently queued  Set the error bits in (e): no lock  Clear the error bits in (e): no lock  Set the error bits in (e)  Clear the error bits in (e)  Set the warning bits in (w): no lock  Clear the warning bits in (w): no lock  Set the warning bits in (w)  Clear the warning bits in (w)  Callback for when more data is ready - called by DMA ISR  One empty chunk must remain after widx is advanced  Some error condition  Try again next transmission - frame is invalid  Start DMA transfer  Initialize the various recording buffers  Layout of recording buffer: |PCMBUF|STREAMBUF|FILENAME|ENCBUF|  PCMBUF  Line align  STREAMBUF  Also line-aligned  FILENAME  ENCBUF  Reset the circular buffers  PCM FIFO  Don't just empty but reset it  Encoder FIFO  No overflow-related warnings now  Initialize file statistics  Boost or unboost recording threads' priorities  Reset all relevant state  Set hardware samplerate and save it  PCM samplerate is either the same as the setting or the nearest
+       one hardware supports if using S/PDIF  HAVE_SPDIF_IN  Calculate the average data rate  If not yet calculable, start with uncompressed PCM byterate  Returns true if the watermarks should be updated due to data rate
+   change  Off by more than 1/2 FLUSH_MON_INTERVAL?  Get adjusted spinup time  Write at FLUSH_SECONDS + st remaining in enc_buffer - range fs+2s to
+       fs+10s total - default to 3.5s spinup.  default - cozy                 ludicrous - ramdisk?           do you have a functioning HD?  (CONFIG_STORAGE & STORAGE_ATA)  Returns true if the watermarks should be updated due to spinup time
+   change  Update buffer watermarks with spinup time compensation  Try to start writing with FLUSH_SECONDS remaining after disk spinup  Boost thread priority if enough ground is lost since flushing started
+       or is taking an unreasonably long time  HAVE_PRIORITY_SCHEDULING  Tell encoder the stream parameters and get information back  encoder can change these - init with defaults  Codec doesn't want to/can't use the setting and has chosen a
+           different sample rate  Return the S/PDIF sample rate closest to a value in the master list  Check the S/PDIF rate and compare to current setting. Apply the new
+ * rate if it changed.  HAVE_SPDIF_IN  Discard the stream buffer contents  Flush stream buffer to disk  Some was written; keep in sync  Close the output file  Creates or opens the current path  Any previous file should have been closed  Copy with mono conversion - output 1/2 size of input  mono = (L + R) / 2  Copy with mono conversion - output 1/2 size of input  mono = L  Copy with mono conversion - output 1/2 size of input  mono = R * pcm_rec_* group * Clear all errors and warnings  Check mode, errors and warnings  Return warnings that have occured since recording started  Return the currently-configured sample rate * audio_* group * Initializes recording - call before calling any other recording function  Closes recording - call audio_stop_recording first or risk data loss  Sets recording parameters  Start recording if not recording or else split  audio_record alias for API compatibility with HW codec  Stop current recording if recording  Pause current recording  Resume current recording if paused  Set the input source gain. For mono sources, only left gain is used * Information about current state * Return sample clock in HZ  Return current prerecorded time in ticks (playback equivalent time)  Return current recorded time in ticks (playback equivalent time)  Return number of bytes encoded to output * Data Flushing * Stream start chunk with path was encountered  Save filename; don't open file here which avoids creating files
+       with no audio content. Splitting while paused can create those
+       in large numbers.  Correct size if this was wrap-padded  Data chunk was encountered  First data chunk; create the file  Inherit some flags from initial data chunk  Just keep discarding  Stream end chunk was encountered  Discard remainder of stream in encoder buffer  Discard everything up until the next non-data chunk  Try to finish header by closing and reopening the file. A seek or
+       other operation will likely fail because buffers will need to be
+       flushed (here and in file code). That will likely fail but a close
+       will just close the fd and discard everything. We reopen with what
+       actually made it to disk. Modifying existing file contents will
+       more than likely succeed even on a full disk. The result might not
+       be entirely correct as far as the headers' sizes and counts unless
+       the codec can correct that but the sample format information
+       should be.  Synthesize a special end chunk here  Codec should try to correct anything that's off  Flush a chunk to disk
+ *
+ * Transitions state from REC_STATE_MONITOR to REC_STATE_FLUSH when buffer
+ * is filling. 'margin' is fullness threshold that transitions to flush state.
+ *
+ * Call with REC_STATE_IDLE to indicate a forced flush which flushes buffer
+ * to less than 'margin'.
+  Timeout for auto boost  HAVE_PRIORITY_SCHEDULING  Fall-through  As a hint for "forced"  Fall-through  HAVE_PRIORITY_SCHEDULING  Doesn't do stream writes  Monitor buffer and finish stream, freeing-up space at the same time  Start flush  Don't flood with pings  Start a new stream, transistion to a new one or end the current one  Prerecord: START marker goes first or before existing data  Adjust to occupy end of buffer and pad accordingly  Won't adjust p since enc_ridx is already set as non-wrapping  The usual: START marker goes first or after existing data  Tally-up and keep the required amount of prerecord data.
+ * Updates record stats accordingly.  Find out how much is there  Have too much? Discard oldest data. * Event handlers for recording thread * Q_AUDIO_INIT_RECORDING  dummy ops with no callbacks, needed because by
+     * default buflib buffers can be moved around which must be avoided
+     * FIXME: This buffer should play nicer and be shrinkable/movable  someone is abusing core_alloc_maximum(). Fix this evil guy instead of
+     * trying to handle OOM without hope  Q_AUDIO_CLOSE_RECORDING  Simply shut down the recording system. Whatever wasn't saved is
+       lost.  Reset PCM to defaults  Q_AUDIO_RECORDING_OPTIONS  This would ruin things  Stop everything else that might be running  New format, new encoder; unload this one  Keep current encoder  Read recording options, remember the ones used elsewhere  Let caller go  Pick appropriate PCM copy routine  Get the hardware samplerate to be used  Determined by source  HAVE_SPDIF_IN  Set monitoring  Apply hardware setting to start monitoring now  Q_AUDIO_RECORD - start recording (not gapless)
+                    or split stream (gapless)  Copy path and let caller go  Already recording, just split the stream  Q_AUDIO_RECORD_STOP  Drain encoder and PCM buffers  End stream at last data and flush end marker  Q_AUDIO_RECORD_PAUSE  Q_AUDIO_RECORD_RESUME  Called by audio thread when recording is initialized  Get current priorities since they get changed  switch  HAVE_SPDIF_IN  while  Restore normal thread priorities * Encoder callbacks * Read a block of unprocessed PCM data, with mono conversion if
+ * num_channels == 1
+ *
+ * NOTE: Request must be less than the PCM buffer length in samples in order
+ *       to progress.
+ *       (ie. count <= PCM_NUM_CHUNKS*PCM_CHUNK_SAMP)
+  src offset -> dst offset  Filling up - boost threshold data available or more or 1/2 full
+               or more - boost codec  Not enough data available - encoder should idle  Sleep a little bit  Advance PCM buffer by count samples  Return encoder chunk at current write position, wrapping to 0 if
+ * requested size demands it.
+ *
+ * NOTE: No request should be more than 1/2 the buffer length, all elements
+ *       included, or progress will not be guaranteed.
+ *       (ie. CHUNK_DATA_COUNT(need) <= enc_buflen / 2)
+  Convert to buffer slot count, including the header  Must have the split margin as well but it does not have to be
+       continuous with the request  Prerecording - delete some old data  Empty but request larger than any possible space  Not yet even at high watermark but what's needed won't fit  Releases the current buffer into the available chunks  Encoder set error flag  Claims nothing was written  Claims it wrote too much?  Would exceed filesize limit; should have split sooner.
+           This chunk will be dropped. :'(  Read from the output stream  Seek the output steam  Write to the output stream  Too big to buffer  One-time init at startup  Init API 

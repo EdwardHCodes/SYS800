@@ -1,0 +1,220 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright © 2010 Tobias Diedrich
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE
+ * dma/setup descriptors and buffers should avoid sharing
+ * a cacheline with other data.
+ * dmadescs may share with each other, since we only access them uncached.
+  reuse unused EP2 OUT descriptor here  enable PLLB  wait until PLLB is locked  AS3525_MCLK_SEL != AS3525_CLK_PLLB  Nothing to do  PHY clock  enable  source = PLLB  UVDD on  reset  0x06180000; 
+     * OUT EP 2 is an alias for OUT EP 0 on this HW!
+     *
+     * Resonates with "3 bidirectional- plus 1 in-endpoints in device mode"
+     * from the datasheet, but why ep2 and not ep3?
+     *
+     * Reserve it here so we will skip over it in request_endpoint().
+     
+         * MPS sizes depending on speed:
+         * LS: 8 (control), no bulk available
+         * FS: 64 (control), 64 (bulk)
+         * HS: 64 (control), 512 (bulk)
+         *
+         * We don't need to handle LS since there is no low-speed only
+         * host AFAIK.
+          Skip the OUT EP0 alias  in bytes  We don't care about the 'IN token received' event  OF: 0x840  in dwords => mps*2 bytes  clear status  Skip the OUT EP0 alias  OF: 0x1800  Always 0 in OF trace?  clear status  we have external power, so boost cpu  length regulator: normal operation  AHB part  reset AHB  0x06180000;  bug workaround according to linux patch  full speed  enable soft disconnect  We don't care about SVC or SOF events  Right now we don't handle suspend, so mask those too  ep 0  clear pending interrupts  0x06180000;  one second timeout for enumeration  soft disconnect 
+     * mask all interrupts _before_ writing to VIC_INT_EN_CLEAR,
+     * or else the core might latch the interrupt while
+     * the write ot VIC_INT_EN_CLEAR is in the pipeline and
+     * so cause a fake spurious interrupt.
+      Disable UVDD generating LDO  skip the control EP  logf("usb_drv_request_endpoint(%d, %d): returning %02x\n", type, dir, i | dir); 
+     * Check for control EP and ignore it.
+     * Unfortunately the usb core calls
+     * usb_drv_release_endpoint() for ep=0..(USB_NUM_ENDPOINTS-1),
+     * but doesn't request a new control EP after that...
+      Don't mask control EP  See reset_endpoints(), EP2_OUT == EP0_OUT  logf("usb_drv_release_endpoint(%d, %d)\n", i, d);  remove data buffer from cache  DMA setup  clear status  Make sure receive DMA is on  Go!  Go!  don't pollute the cache 
+     * I'm seeing a problem where Linux sends two SETUP requests,
+     * but fails to read the response from the first one.
+     * We then have the response we wanted to send still in our fifo,
+     * so flush the fifo before sending on the control endpoint.
+      Make sure data is committed to memory  clear status  start transfer  HW automatically sets NAK bit later  Tell the HW we handled the request  ack  Buffer was not set up  ACK  Buffer was not set up 
+              * If parts of the just dmaed range are in cache, dump them now.
+               make sure NAK is set 
+ * This is a simplified version of the timer based RDE enable from
+ * the Linux amd5536udc.c driver.
+ * We need this because of the following hw issue:
+ * The usb_storage buffer is 63KB, but Linux sends 120KB.
+ * We get the first part, but upon re-enabling receive dma we
+ * get a 'buffer not available' error from the hardware, since
+ * we haven't gotten the next usb_drv_recv() from the stack yet.
+ * It seems the NAK bit is ignored here and the HW tries to dma
+ * the incoming data anyway.
+ * In theory I think the BNA error should be recoverable, but
+ * I haven't figured out how to do that yet and this approach seems
+ * to work for now.
+ 
+         * If the enum times out it's a charger, drop out of usb mode.
+          interrupt service routine  ACK interrupt sources  Handle endpoint interrupts  Handle general device interrupts  SET_INTERFACE received  SET_CONFIGURATION received 
+             * This is handled in HW, we have to fake a request here
+             * for usb_core.
+              idle >3ms detected  usb reset from host?  suspend req from host?  sof received  device status changed  speed enumeration complete  Enumerated Speed  (not essential? , not implemented in usb-tcc.c)  handled internally by controller **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright © 2010 Tobias Diedrich
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE
+ * dma/setup descriptors and buffers should avoid sharing
+ * a cacheline with other data.
+ * dmadescs may share with each other, since we only access them uncached.
+  reuse unused EP2 OUT descriptor here  enable PLLB  wait until PLLB is locked  AS3525_MCLK_SEL != AS3525_CLK_PLLB  Nothing to do  PHY clock  enable  source = PLLB  UVDD on  reset  0x06180000; 
+     * OUT EP 2 is an alias for OUT EP 0 on this HW!
+     *
+     * Resonates with "3 bidirectional- plus 1 in-endpoints in device mode"
+     * from the datasheet, but why ep2 and not ep3?
+     *
+     * Reserve it here so we will skip over it in request_endpoint().
+     
+         * MPS sizes depending on speed:
+         * LS: 8 (control), no bulk available
+         * FS: 64 (control), 64 (bulk)
+         * HS: 64 (control), 512 (bulk)
+         *
+         * We don't need to handle LS since there is no low-speed only
+         * host AFAIK.
+          Skip the OUT EP0 alias  in bytes  We don't care about the 'IN token received' event  OF: 0x840  in dwords => mps*2 bytes  clear status  Skip the OUT EP0 alias  OF: 0x1800  Always 0 in OF trace?  clear status  we have external power, so boost cpu  length regulator: normal operation  AHB part  reset AHB  0x06180000;  bug workaround according to linux patch  full speed  enable soft disconnect  We don't care about SVC or SOF events  Right now we don't handle suspend, so mask those too  ep 0  clear pending interrupts  0x06180000;  one second timeout for enumeration  soft disconnect 
+     * mask all interrupts _before_ writing to VIC_INT_EN_CLEAR,
+     * or else the core might latch the interrupt while
+     * the write ot VIC_INT_EN_CLEAR is in the pipeline and
+     * so cause a fake spurious interrupt.
+      Disable UVDD generating LDO  skip the control EP  logf("usb_drv_request_endpoint(%d, %d): returning %02x\n", type, dir, i | dir); 
+     * Check for control EP and ignore it.
+     * Unfortunately the usb core calls
+     * usb_drv_release_endpoint() for ep=0..(USB_NUM_ENDPOINTS-1),
+     * but doesn't request a new control EP after that...
+      Don't mask control EP  See reset_endpoints(), EP2_OUT == EP0_OUT  logf("usb_drv_release_endpoint(%d, %d)\n", i, d);  remove data buffer from cache  DMA setup  clear status  Make sure receive DMA is on  Go!  Go!  don't pollute the cache 
+     * I'm seeing a problem where Linux sends two SETUP requests,
+     * but fails to read the response from the first one.
+     * We then have the response we wanted to send still in our fifo,
+     * so flush the fifo before sending on the control endpoint.
+      Make sure data is committed to memory  clear status  start transfer  HW automatically sets NAK bit later  Tell the HW we handled the request  ack  Buffer was not set up  ACK  Buffer was not set up 
+              * If parts of the just dmaed range are in cache, dump them now.
+               make sure NAK is set 
+ * This is a simplified version of the timer based RDE enable from
+ * the Linux amd5536udc.c driver.
+ * We need this because of the following hw issue:
+ * The usb_storage buffer is 63KB, but Linux sends 120KB.
+ * We get the first part, but upon re-enabling receive dma we
+ * get a 'buffer not available' error from the hardware, since
+ * we haven't gotten the next usb_drv_recv() from the stack yet.
+ * It seems the NAK bit is ignored here and the HW tries to dma
+ * the incoming data anyway.
+ * In theory I think the BNA error should be recoverable, but
+ * I haven't figured out how to do that yet and this approach seems
+ * to work for now.
+ 
+         * If the enum times out it's a charger, drop out of usb mode.
+          interrupt service routine  ACK interrupt sources  Handle endpoint interrupts  Handle general device interrupts  SET_INTERFACE received  SET_CONFIGURATION received 
+             * This is handled in HW, we have to fake a request here
+             * for usb_core.
+              idle >3ms detected  usb reset from host?  suspend req from host?  sof received  device status changed  speed enumeration complete  Enumerated Speed  (not essential? , not implemented in usb-tcc.c)  handled internally by controller **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright © 2010 Tobias Diedrich
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE
+ * dma/setup descriptors and buffers should avoid sharing
+ * a cacheline with other data.
+ * dmadescs may share with each other, since we only access them uncached.
+  reuse unused EP2 OUT descriptor here  enable PLLB  wait until PLLB is locked  AS3525_MCLK_SEL != AS3525_CLK_PLLB  Nothing to do  PHY clock  enable  source = PLLB  UVDD on  reset  0x06180000; 
+     * OUT EP 2 is an alias for OUT EP 0 on this HW!
+     *
+     * Resonates with "3 bidirectional- plus 1 in-endpoints in device mode"
+     * from the datasheet, but why ep2 and not ep3?
+     *
+     * Reserve it here so we will skip over it in request_endpoint().
+     
+         * MPS sizes depending on speed:
+         * LS: 8 (control), no bulk available
+         * FS: 64 (control), 64 (bulk)
+         * HS: 64 (control), 512 (bulk)
+         *
+         * We don't need to handle LS since there is no low-speed only
+         * host AFAIK.
+          Skip the OUT EP0 alias  in bytes  We don't care about the 'IN token received' event  OF: 0x840  in dwords => mps*2 bytes  clear status  Skip the OUT EP0 alias  OF: 0x1800  Always 0 in OF trace?  clear status  we have external power, so boost cpu  length regulator: normal operation  AHB part  reset AHB  0x06180000;  bug workaround according to linux patch  full speed  enable soft disconnect  We don't care about SVC or SOF events  Right now we don't handle suspend, so mask those too  ep 0  clear pending interrupts  0x06180000;  one second timeout for enumeration  soft disconnect 
+     * mask all interrupts _before_ writing to VIC_INT_EN_CLEAR,
+     * or else the core might latch the interrupt while
+     * the write ot VIC_INT_EN_CLEAR is in the pipeline and
+     * so cause a fake spurious interrupt.
+      Disable UVDD generating LDO  skip the control EP  logf("usb_drv_request_endpoint(%d, %d): returning %02x\n", type, dir, i | dir); 
+     * Check for control EP and ignore it.
+     * Unfortunately the usb core calls
+     * usb_drv_release_endpoint() for ep=0..(USB_NUM_ENDPOINTS-1),
+     * but doesn't request a new control EP after that...
+      Don't mask control EP  See reset_endpoints(), EP2_OUT == EP0_OUT  logf("usb_drv_release_endpoint(%d, %d)\n", i, d);  remove data buffer from cache  DMA setup  clear status  Make sure receive DMA is on  Go!  Go!  don't pollute the cache 
+     * I'm seeing a problem where Linux sends two SETUP requests,
+     * but fails to read the response from the first one.
+     * We then have the response we wanted to send still in our fifo,
+     * so flush the fifo before sending on the control endpoint.
+      Make sure data is committed to memory  clear status  start transfer  HW automatically sets NAK bit later  Tell the HW we handled the request  ack  Buffer was not set up  ACK  Buffer was not set up 
+              * If parts of the just dmaed range are in cache, dump them now.
+               make sure NAK is set 
+ * This is a simplified version of the timer based RDE enable from
+ * the Linux amd5536udc.c driver.
+ * We need this because of the following hw issue:
+ * The usb_storage buffer is 63KB, but Linux sends 120KB.
+ * We get the first part, but upon re-enabling receive dma we
+ * get a 'buffer not available' error from the hardware, since
+ * we haven't gotten the next usb_drv_recv() from the stack yet.
+ * It seems the NAK bit is ignored here and the HW tries to dma
+ * the incoming data anyway.
+ * In theory I think the BNA error should be recoverable, but
+ * I haven't figured out how to do that yet and this approach seems
+ * to work for now.
+ 
+         * If the enum times out it's a charger, drop out of usb mode.
+          interrupt service routine  ACK interrupt sources  Handle endpoint interrupts  Handle general device interrupts  SET_INTERFACE received  SET_CONFIGURATION received 
+             * This is handled in HW, we have to fake a request here
+             * for usb_core.
+              idle >3ms detected  usb reset from host?  suspend req from host?  sof received  device status changed  speed enumeration complete  Enumerated Speed  (not essential? , not implemented in usb-tcc.c)  handled internally by controller 

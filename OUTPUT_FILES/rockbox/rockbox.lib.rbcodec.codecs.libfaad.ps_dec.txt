@@ -1,0 +1,214 @@
+
+** FAAD2 - Freeware Advanced Audio (AAC) Decoder including SBR and PS decoding
+** Copyright (C) 2003-2004 M. Bakker, Ahead Software AG, http://www.nero.com
+**
+** This program is free software; you can redistribute it and/or modify
+** it under the terms of the GNU General Public License as published by
+** the Free Software Foundation; either version 2 of the License, or
+** (at your option) any later version.
+**
+** This program is distributed in the hope that it will be useful,
+** but WITHOUT ANY WARRANTY; without even the implied warranty of
+** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+** GNU General Public License for more details.
+**
+** You should have received a copy of the GNU General Public License
+** along with this program; if not, write to the Free Software
+** Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+**
+** Any non-GPL usage of this software or parts of this software is strictly
+** forbidden.
+**
+** Commercial non-GPL licensing of this software is possible.
+** For more info contact Ahead Software through Mpeg4AAClicense@nero.com.
+**
+** $Id$
+* constants  tables  filters are mirrored in coef 6, second half left out  d_24kHz  d_48kHz  d_48kHz  a(m) = exp(-d_48kHz(m)/7)  6 subqmf subbands  2 subqmf subbands  2 subqmf subbands  12 subqmf subbands   8 subqmf subbands   4 subqmf subbands   4 subqmf subbands   4 subqmf subbands  static function declarations    real filter, size 2  q = 0  q = 1  complex filter, size 4  q == 0  q == 1  q == 2  q == 3  complex filter, size 8  complex filter, size 12  Hybrid analysis: further split up QMF subbands
+ * to improve frequency resolution
+  build working buffer  add new samples delaydelay store samples  Type B real filter, Q[p] = 2  Type A complex filter, Q[p] = 4  Type A complex filter, Q[p] = 8  Type A complex filter, Q[p] = 12  group hybrid channels 30? limits the value i to the range [min,max] int iid = 0; delta decode array  delta coded in frequency direction  delta coded in time direction int8_t tmp2;int8_t tmp = index[i];printf("%d %d\n", index_prev[i*stride], index[i]);printf("%d\n", index[i]);tmp2 = index[i];if (iid){    if (index[i] == 7)    {        printf("%d %d %d\n", index_prev[i*stride], tmp, tmp2);    }} set indices to zero  coarse  delta modulo decode array  in: log2 value of the modulo value to allow using AND instead of MOD  delta coded in frequency direction  delta coded in time direction  set indices to zero  coarse  parse the bitstream data decoded in ps_data()  ps data not available, use data from previous frame fine quant take last envelope from previous frame  take index values from previous envelope         iid = 1; delta decode iid parameters         iid = 0; delta decode icc parameters  delta modulo decode ipd parameters log2(8) delta modulo decode opd parameters log2(8) handle error case  force to 1  update previous indices  30 for 960?  30 for 960?  30 for 960?  30 for 960?  30 for 960?  make sure that the indices of all parameters can be mapped
+     * to the same hybrid synthesis filterbank
+      disable ipd/opd  decorrelate the mono signal using an allpass filter  chose hybrid filterbank: 20 or 34 band case  clear the energy values  calculate the energy in each parameter band b(k)  select the parameter index b(k) to which this group belongs  select the upper subband border for this group  input from hybrid subbands or QMF subbands  accumulate energy  NOTE: all input is scaled by 2^(-5) because of fixed point QMF
+                 * meaning that P will be scaled by 2^(-10) compared to floating point version
+                 /(float)REAL_PRECISION calculate transient reduction ratio for each parameter band b(k)  apply smoothing filter to peak decay energy  apply smoothing filter to energy  calculate transient ratio  apply stereo decorrelation filter to the signal  QMF channel  g_DecaySlope: [0..1]  -1/DECAY_SLOPE  decay(int)*decay_slope(frac) = g_DecaySlope(frac)  calculate g_DecaySlope_filt for every m multiplied by filter_a[m]  set delay indices  hybrid filterbank input  QMF filterbank input  delay  never hybrid subbands here, always QMF subbands  allpass filter  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  z^(-2) * Phi_Fract[k]  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  delay by a fraction  z^(-d(m)) * Q_Fract_allpass[k,m]  -a(m) * g_DecaySlope[k]  -a(m) * g_DecaySlope[k] * Q_Fract_allpass[k,m] * z^(-d(m))  store sample  store for next iteration (or as output value if last iteration)  select b(k) for reading the transient ratio  duck if a past transient is found  hybrid  QMF  Update delay buffer index  update delay indices  delay_D depends on the samplerate, it can hold the values 14 and 1  update delay indices  fixed point square root approximation  resolution  use one channel per group in the subqmf domain  type 'A' mixing as described in 8.6.4.6.2.1 
+                c_1 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps + iid_index] / 10.0)));
+                c_2 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps - iid_index] / 10.0)));
+                alpha = 0.5 * acos(quant_rho[icc_index]);
+                beta = alpha * ( c_1 - c_2 ) / sqrt(2.0);
+                printf("%d\n", ps->iid_index[env][bk]); calculate the scalefactors c_1 and c_2 from the intensity differences  calculate alpha and beta using the ICC parameters  h_xy: COEF  type 'B' mixing as described in 8.6.4.6.2.2 
+                real_t c, rho, mu, alpha, gamma;
+                uint8_t i;
+
+                i = ps->iid_index[env][bk];
+                c = (real_t)pow(10.0, ((i)?(((i>0)?1:-1)*quant_iid[((i>0)?i:-i)-1]):0.)/20.0);
+                rho = quant_rho[ps->icc_index[env][bk]];
+
+                if (rho == 0.0f && c == 1.)
+                {
+                    alpha = (real_t)M_PI/4.0f;
+                    rho = 0.05f;
+                } else {
+                    if (rho <= 0.05f)
+                    {
+                        rho = 0.05f;
+                    }
+                    alpha = 0.5f*(real_t)atan( (2.0f*c*rho) / (c*c-1.0f) );
+
+                    if (alpha < 0.)
+                    {
+                        alpha += (real_t)M_PI/2.0f;
+                    }
+                    if (rho < 0.)
+                    {
+                        alpha += (real_t)M_PI;
+                    }
+                }
+                mu = c+1.0f/c;
+                mu = 1+(4.0f*rho*rho-4.0f)/(mu*mu);
+                gamma = (real_t)atan(sqrt((1.0f-sqrt(mu))/(1.0f+sqrt(mu))));
+                 calculate phase rotation parameters H_xy  note that the imaginary part of these parameters are only calculated when
+               IPD and OPD are enabled
+              ringbuffer index  previous value  divide by 4, shift right 2 bits  save current value  add current value  ringbuffer index  get value before previous  dividing by 2, shift right 1 bit  original code  phase rotation  x = IM(tempLeft) y = RE(tempLeft) p = IM(tempRight) q = RE(tempRight) cos(atan2(x,y)) = 1/sqrt(1 + (x*x)/(y*y)) sin(atan2(x,y)) = x/(y*sqrt(1 + (x*x)/(y*y))) cos(atan2(x,y)-atan2(p,q)) = (y*q+x*p)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); sin(atan2(x,y)-atan2(p,q)) = (x*q-p*y)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); (x*x)/(y*y)  (REAL > 0)  1 + (x*x)/(y*y)  (REAL > 1)  1 / sqrt(1 + (x*x)/(y*y))  (FRAC <= 1)  COEF  MUL_C(FRAC,COEF) = FRAC  MUL_F(COEF, FRAC) = COEF  length of the envelope n_e+1 - n_e (in time samples)  0 < L <= 32: integer  obtain final H_xy by means of linear interpolation  only calculate imaginary part when needed  obtain final H_xy by means of linear interpolation  apply H_xy to the current envelope band of the decorrelated subband  addition finalises the interpolation over every n  channel is an alias to the subband  load decorrelated samples  apply mixing  only perform imaginary operations when needed  apply rotation  store final samples  shift phase smoother's circular buffer index  delay stuff >= 32 kHz THESE ARE CONSTANTS NOW  >= 32 kHz THESE ARE CONSTANTS NOW  THESE ARE CONSTANT NOW IF PS IS INDEPENDANT OF SAMPLERATE  mixing and phase  main Parametric Stereo decoding function  delta decoding of the bitstream data  set up some parameters depending on filterbank type  Perform further analysis on the lowest subbands to get a higher
+     * frequency resolution
+      decorrelate mono signal  apply mixing and phase parameters  hybrid synthesis, to rebuild the SBR QMF matrices 
+** FAAD2 - Freeware Advanced Audio (AAC) Decoder including SBR and PS decoding
+** Copyright (C) 2003-2004 M. Bakker, Ahead Software AG, http://www.nero.com
+**
+** This program is free software; you can redistribute it and/or modify
+** it under the terms of the GNU General Public License as published by
+** the Free Software Foundation; either version 2 of the License, or
+** (at your option) any later version.
+**
+** This program is distributed in the hope that it will be useful,
+** but WITHOUT ANY WARRANTY; without even the implied warranty of
+** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+** GNU General Public License for more details.
+**
+** You should have received a copy of the GNU General Public License
+** along with this program; if not, write to the Free Software
+** Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+**
+** Any non-GPL usage of this software or parts of this software is strictly
+** forbidden.
+**
+** Commercial non-GPL licensing of this software is possible.
+** For more info contact Ahead Software through Mpeg4AAClicense@nero.com.
+**
+** $Id$
+* constants  tables  filters are mirrored in coef 6, second half left out  d_24kHz  d_48kHz  d_48kHz  a(m) = exp(-d_48kHz(m)/7)  6 subqmf subbands  2 subqmf subbands  2 subqmf subbands  12 subqmf subbands   8 subqmf subbands   4 subqmf subbands   4 subqmf subbands   4 subqmf subbands  static function declarations    real filter, size 2  q = 0  q = 1  complex filter, size 4  q == 0  q == 1  q == 2  q == 3  complex filter, size 8  complex filter, size 12  Hybrid analysis: further split up QMF subbands
+ * to improve frequency resolution
+  build working buffer  add new samples delaydelay store samples  Type B real filter, Q[p] = 2  Type A complex filter, Q[p] = 4  Type A complex filter, Q[p] = 8  Type A complex filter, Q[p] = 12  group hybrid channels 30? limits the value i to the range [min,max] int iid = 0; delta decode array  delta coded in frequency direction  delta coded in time direction int8_t tmp2;int8_t tmp = index[i];printf("%d %d\n", index_prev[i*stride], index[i]);printf("%d\n", index[i]);tmp2 = index[i];if (iid){    if (index[i] == 7)    {        printf("%d %d %d\n", index_prev[i*stride], tmp, tmp2);    }} set indices to zero  coarse  delta modulo decode array  in: log2 value of the modulo value to allow using AND instead of MOD  delta coded in frequency direction  delta coded in time direction  set indices to zero  coarse  parse the bitstream data decoded in ps_data()  ps data not available, use data from previous frame fine quant take last envelope from previous frame  take index values from previous envelope         iid = 1; delta decode iid parameters         iid = 0; delta decode icc parameters  delta modulo decode ipd parameters log2(8) delta modulo decode opd parameters log2(8) handle error case  force to 1  update previous indices  30 for 960?  30 for 960?  30 for 960?  30 for 960?  30 for 960?  make sure that the indices of all parameters can be mapped
+     * to the same hybrid synthesis filterbank
+      disable ipd/opd  decorrelate the mono signal using an allpass filter  chose hybrid filterbank: 20 or 34 band case  clear the energy values  calculate the energy in each parameter band b(k)  select the parameter index b(k) to which this group belongs  select the upper subband border for this group  input from hybrid subbands or QMF subbands  accumulate energy  NOTE: all input is scaled by 2^(-5) because of fixed point QMF
+                 * meaning that P will be scaled by 2^(-10) compared to floating point version
+                 /(float)REAL_PRECISION calculate transient reduction ratio for each parameter band b(k)  apply smoothing filter to peak decay energy  apply smoothing filter to energy  calculate transient ratio  apply stereo decorrelation filter to the signal  QMF channel  g_DecaySlope: [0..1]  -1/DECAY_SLOPE  decay(int)*decay_slope(frac) = g_DecaySlope(frac)  calculate g_DecaySlope_filt for every m multiplied by filter_a[m]  set delay indices  hybrid filterbank input  QMF filterbank input  delay  never hybrid subbands here, always QMF subbands  allpass filter  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  z^(-2) * Phi_Fract[k]  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  delay by a fraction  z^(-d(m)) * Q_Fract_allpass[k,m]  -a(m) * g_DecaySlope[k]  -a(m) * g_DecaySlope[k] * Q_Fract_allpass[k,m] * z^(-d(m))  store sample  store for next iteration (or as output value if last iteration)  select b(k) for reading the transient ratio  duck if a past transient is found  hybrid  QMF  Update delay buffer index  update delay indices  delay_D depends on the samplerate, it can hold the values 14 and 1  update delay indices  fixed point square root approximation  resolution  use one channel per group in the subqmf domain  type 'A' mixing as described in 8.6.4.6.2.1 
+                c_1 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps + iid_index] / 10.0)));
+                c_2 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps - iid_index] / 10.0)));
+                alpha = 0.5 * acos(quant_rho[icc_index]);
+                beta = alpha * ( c_1 - c_2 ) / sqrt(2.0);
+                printf("%d\n", ps->iid_index[env][bk]); calculate the scalefactors c_1 and c_2 from the intensity differences  calculate alpha and beta using the ICC parameters  h_xy: COEF  type 'B' mixing as described in 8.6.4.6.2.2 
+                real_t c, rho, mu, alpha, gamma;
+                uint8_t i;
+
+                i = ps->iid_index[env][bk];
+                c = (real_t)pow(10.0, ((i)?(((i>0)?1:-1)*quant_iid[((i>0)?i:-i)-1]):0.)/20.0);
+                rho = quant_rho[ps->icc_index[env][bk]];
+
+                if (rho == 0.0f && c == 1.)
+                {
+                    alpha = (real_t)M_PI/4.0f;
+                    rho = 0.05f;
+                } else {
+                    if (rho <= 0.05f)
+                    {
+                        rho = 0.05f;
+                    }
+                    alpha = 0.5f*(real_t)atan( (2.0f*c*rho) / (c*c-1.0f) );
+
+                    if (alpha < 0.)
+                    {
+                        alpha += (real_t)M_PI/2.0f;
+                    }
+                    if (rho < 0.)
+                    {
+                        alpha += (real_t)M_PI;
+                    }
+                }
+                mu = c+1.0f/c;
+                mu = 1+(4.0f*rho*rho-4.0f)/(mu*mu);
+                gamma = (real_t)atan(sqrt((1.0f-sqrt(mu))/(1.0f+sqrt(mu))));
+                 calculate phase rotation parameters H_xy  note that the imaginary part of these parameters are only calculated when
+               IPD and OPD are enabled
+              ringbuffer index  previous value  divide by 4, shift right 2 bits  save current value  add current value  ringbuffer index  get value before previous  dividing by 2, shift right 1 bit  original code  phase rotation  x = IM(tempLeft) y = RE(tempLeft) p = IM(tempRight) q = RE(tempRight) cos(atan2(x,y)) = 1/sqrt(1 + (x*x)/(y*y)) sin(atan2(x,y)) = x/(y*sqrt(1 + (x*x)/(y*y))) cos(atan2(x,y)-atan2(p,q)) = (y*q+x*p)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); sin(atan2(x,y)-atan2(p,q)) = (x*q-p*y)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); (x*x)/(y*y)  (REAL > 0)  1 + (x*x)/(y*y)  (REAL > 1)  1 / sqrt(1 + (x*x)/(y*y))  (FRAC <= 1)  COEF  MUL_C(FRAC,COEF) = FRAC  MUL_F(COEF, FRAC) = COEF  length of the envelope n_e+1 - n_e (in time samples)  0 < L <= 32: integer  obtain final H_xy by means of linear interpolation  only calculate imaginary part when needed  obtain final H_xy by means of linear interpolation  apply H_xy to the current envelope band of the decorrelated subband  addition finalises the interpolation over every n  channel is an alias to the subband  load decorrelated samples  apply mixing  only perform imaginary operations when needed  apply rotation  store final samples  shift phase smoother's circular buffer index  delay stuff >= 32 kHz THESE ARE CONSTANTS NOW  >= 32 kHz THESE ARE CONSTANTS NOW  THESE ARE CONSTANT NOW IF PS IS INDEPENDANT OF SAMPLERATE  mixing and phase  main Parametric Stereo decoding function  delta decoding of the bitstream data  set up some parameters depending on filterbank type  Perform further analysis on the lowest subbands to get a higher
+     * frequency resolution
+      decorrelate mono signal  apply mixing and phase parameters  hybrid synthesis, to rebuild the SBR QMF matrices 
+** FAAD2 - Freeware Advanced Audio (AAC) Decoder including SBR and PS decoding
+** Copyright (C) 2003-2004 M. Bakker, Ahead Software AG, http://www.nero.com
+**
+** This program is free software; you can redistribute it and/or modify
+** it under the terms of the GNU General Public License as published by
+** the Free Software Foundation; either version 2 of the License, or
+** (at your option) any later version.
+**
+** This program is distributed in the hope that it will be useful,
+** but WITHOUT ANY WARRANTY; without even the implied warranty of
+** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+** GNU General Public License for more details.
+**
+** You should have received a copy of the GNU General Public License
+** along with this program; if not, write to the Free Software
+** Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+**
+** Any non-GPL usage of this software or parts of this software is strictly
+** forbidden.
+**
+** Commercial non-GPL licensing of this software is possible.
+** For more info contact Ahead Software through Mpeg4AAClicense@nero.com.
+**
+** $Id$
+* constants  tables  filters are mirrored in coef 6, second half left out  d_24kHz  d_48kHz  d_48kHz  a(m) = exp(-d_48kHz(m)/7)  6 subqmf subbands  2 subqmf subbands  2 subqmf subbands  12 subqmf subbands   8 subqmf subbands   4 subqmf subbands   4 subqmf subbands   4 subqmf subbands  static function declarations    real filter, size 2  q = 0  q = 1  complex filter, size 4  q == 0  q == 1  q == 2  q == 3  complex filter, size 8  complex filter, size 12  Hybrid analysis: further split up QMF subbands
+ * to improve frequency resolution
+  build working buffer  add new samples delaydelay store samples  Type B real filter, Q[p] = 2  Type A complex filter, Q[p] = 4  Type A complex filter, Q[p] = 8  Type A complex filter, Q[p] = 12  group hybrid channels 30? limits the value i to the range [min,max] int iid = 0; delta decode array  delta coded in frequency direction  delta coded in time direction int8_t tmp2;int8_t tmp = index[i];printf("%d %d\n", index_prev[i*stride], index[i]);printf("%d\n", index[i]);tmp2 = index[i];if (iid){    if (index[i] == 7)    {        printf("%d %d %d\n", index_prev[i*stride], tmp, tmp2);    }} set indices to zero  coarse  delta modulo decode array  in: log2 value of the modulo value to allow using AND instead of MOD  delta coded in frequency direction  delta coded in time direction  set indices to zero  coarse  parse the bitstream data decoded in ps_data()  ps data not available, use data from previous frame fine quant take last envelope from previous frame  take index values from previous envelope         iid = 1; delta decode iid parameters         iid = 0; delta decode icc parameters  delta modulo decode ipd parameters log2(8) delta modulo decode opd parameters log2(8) handle error case  force to 1  update previous indices  30 for 960?  30 for 960?  30 for 960?  30 for 960?  30 for 960?  make sure that the indices of all parameters can be mapped
+     * to the same hybrid synthesis filterbank
+      disable ipd/opd  decorrelate the mono signal using an allpass filter  chose hybrid filterbank: 20 or 34 band case  clear the energy values  calculate the energy in each parameter band b(k)  select the parameter index b(k) to which this group belongs  select the upper subband border for this group  input from hybrid subbands or QMF subbands  accumulate energy  NOTE: all input is scaled by 2^(-5) because of fixed point QMF
+                 * meaning that P will be scaled by 2^(-10) compared to floating point version
+                 /(float)REAL_PRECISION calculate transient reduction ratio for each parameter band b(k)  apply smoothing filter to peak decay energy  apply smoothing filter to energy  calculate transient ratio  apply stereo decorrelation filter to the signal  QMF channel  g_DecaySlope: [0..1]  -1/DECAY_SLOPE  decay(int)*decay_slope(frac) = g_DecaySlope(frac)  calculate g_DecaySlope_filt for every m multiplied by filter_a[m]  set delay indices  hybrid filterbank input  QMF filterbank input  delay  never hybrid subbands here, always QMF subbands  allpass filter  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  z^(-2) * Phi_Fract[k]  fetch parameters  select data from the hybrid subbands  select data from the QMF subbands  delay by a fraction  z^(-d(m)) * Q_Fract_allpass[k,m]  -a(m) * g_DecaySlope[k]  -a(m) * g_DecaySlope[k] * Q_Fract_allpass[k,m] * z^(-d(m))  store sample  store for next iteration (or as output value if last iteration)  select b(k) for reading the transient ratio  duck if a past transient is found  hybrid  QMF  Update delay buffer index  update delay indices  delay_D depends on the samplerate, it can hold the values 14 and 1  update delay indices  fixed point square root approximation  resolution  use one channel per group in the subqmf domain  type 'A' mixing as described in 8.6.4.6.2.1 
+                c_1 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps + iid_index] / 10.0)));
+                c_2 = sqrt(2.0 / (1.0 + pow(10.0, quant_iid[no_iid_steps - iid_index] / 10.0)));
+                alpha = 0.5 * acos(quant_rho[icc_index]);
+                beta = alpha * ( c_1 - c_2 ) / sqrt(2.0);
+                printf("%d\n", ps->iid_index[env][bk]); calculate the scalefactors c_1 and c_2 from the intensity differences  calculate alpha and beta using the ICC parameters  h_xy: COEF  type 'B' mixing as described in 8.6.4.6.2.2 
+                real_t c, rho, mu, alpha, gamma;
+                uint8_t i;
+
+                i = ps->iid_index[env][bk];
+                c = (real_t)pow(10.0, ((i)?(((i>0)?1:-1)*quant_iid[((i>0)?i:-i)-1]):0.)/20.0);
+                rho = quant_rho[ps->icc_index[env][bk]];
+
+                if (rho == 0.0f && c == 1.)
+                {
+                    alpha = (real_t)M_PI/4.0f;
+                    rho = 0.05f;
+                } else {
+                    if (rho <= 0.05f)
+                    {
+                        rho = 0.05f;
+                    }
+                    alpha = 0.5f*(real_t)atan( (2.0f*c*rho) / (c*c-1.0f) );
+
+                    if (alpha < 0.)
+                    {
+                        alpha += (real_t)M_PI/2.0f;
+                    }
+                    if (rho < 0.)
+                    {
+                        alpha += (real_t)M_PI;
+                    }
+                }
+                mu = c+1.0f/c;
+                mu = 1+(4.0f*rho*rho-4.0f)/(mu*mu);
+                gamma = (real_t)atan(sqrt((1.0f-sqrt(mu))/(1.0f+sqrt(mu))));
+                 calculate phase rotation parameters H_xy  note that the imaginary part of these parameters are only calculated when
+               IPD and OPD are enabled
+              ringbuffer index  previous value  divide by 4, shift right 2 bits  save current value  add current value  ringbuffer index  get value before previous  dividing by 2, shift right 1 bit  original code  phase rotation  x = IM(tempLeft) y = RE(tempLeft) p = IM(tempRight) q = RE(tempRight) cos(atan2(x,y)) = 1/sqrt(1 + (x*x)/(y*y)) sin(atan2(x,y)) = x/(y*sqrt(1 + (x*x)/(y*y))) cos(atan2(x,y)-atan2(p,q)) = (y*q+x*p)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); sin(atan2(x,y)-atan2(p,q)) = (x*q-p*y)/(y*q * sqrt(1 + (x*x)/(y*y)) * sqrt(1 + (p*p)/(q*q))); (x*x)/(y*y)  (REAL > 0)  1 + (x*x)/(y*y)  (REAL > 1)  1 / sqrt(1 + (x*x)/(y*y))  (FRAC <= 1)  COEF  MUL_C(FRAC,COEF) = FRAC  MUL_F(COEF, FRAC) = COEF  length of the envelope n_e+1 - n_e (in time samples)  0 < L <= 32: integer  obtain final H_xy by means of linear interpolation  only calculate imaginary part when needed  obtain final H_xy by means of linear interpolation  apply H_xy to the current envelope band of the decorrelated subband  addition finalises the interpolation over every n  channel is an alias to the subband  load decorrelated samples  apply mixing  only perform imaginary operations when needed  apply rotation  store final samples  shift phase smoother's circular buffer index  delay stuff >= 32 kHz THESE ARE CONSTANTS NOW  >= 32 kHz THESE ARE CONSTANTS NOW  THESE ARE CONSTANT NOW IF PS IS INDEPENDANT OF SAMPLERATE  mixing and phase  main Parametric Stereo decoding function  delta decoding of the bitstream data  set up some parameters depending on filterbank type  Perform further analysis on the lowest subbands to get a higher
+     * frequency resolution
+      decorrelate mono signal  apply mixing and phase parameters  hybrid synthesis, to rebuild the SBR QMF matrices 

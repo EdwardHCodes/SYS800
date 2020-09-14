@@ -1,0 +1,499 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Alan Korr & Nick Robinson
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** MS_TO_TICKS converts a milisecond time period into the
+ * corresponding amount of ticks. If the time period cannot
+ * be accurately measured in ticks it will round up.
+  IAP specifies a timeout of 25ms for traffic from a device to the iPod.
+ * Depending on HZ this cannot be accurately measured. Find out the next
+ * best thing.
+  Events in the iap_queue  The regular task timeout  A complete message has been received from the device  Allocate memory for the RX/TX buffers  This is set to true if a SYS_POWEROFF message is received,
+ * signalling impending power off
+  Used to make sure a button press is delivered to the processing
+ * backend. While this is !0, no new incoming messasges are processed.
+ * Counted down by remote_control_rx()
+  Used to time out button down events in case we miss the button up event
+ * from the device somehow.
+ * If a device sends a button down event it's required to repeat that event
+ * every 30 to 100ms as long as the button is pressed, and send an explicit
+ * button up event if the button is released.
+ * In case the button up event is lost any down events will time out after
+ * ~200ms.
+ * iap_periodic() will count down this variable and reset all buttons if
+ * it reaches 0
+  These are pointer used to manage a dynamically allocated buffer which
+ * will hold both the RX and TX side of things.
+ *
+ * iap_buffer_handle is the handle returned from core_alloc()
+ * iap_buffers points to the start of the complete buffer
+ *
+ * The buffer is partitioned as follows:
+ * - TX_BUFLEN+6 bytes for the TX buffer
+ *   The 6 extra bytes are for the sync byte, the SOP byte, the length indicators
+ *   (3 bytes) and the checksum byte.
+ *   iap_txstart points to the beginning of the TX buffer
+ *   iap_txpayload points to the beginning of the payload portion of the TX buffer
+ *   iap_txnext points to the position where the next byte will be placed
+ *
+ * - RX_BUFLEN+2 bytes for the RX buffer
+ *   The RX buffer can hold multiple packets at once, up to it's
+ *   maximum capacity. Every packet consists of a two byte length
+ *   indicator followed by the actual payload. The length indicator
+ *   is two bytes for every length, even for packets with a length <256
+ *   bytes.
+ *
+ *   Once a packet has been processed from the RX buffer the rest
+ *   of the buffer (and the pointers below) are shifted to the front
+ *   so that the next packet again starts at the beginning of the
+ *   buffer. This happens with interrupts disabled, to prevent
+ *   writing into the buffer during the move.
+ *
+ *   iap_rxstart points to the beginning of the RX buffer
+ *   iap_rxpayload starts to the beginning of the currently recieved
+ *   packet
+ *   iap_rxnext points to the position where the next incoming byte
+ *   will be placed
+ *   iap_rxlen is not a pointer, but an indicator of the free
+ *   space left in the RX buffer.
+ *
+ * The RX buffer is placed behind the TX buffer so that an eventual TX
+ * buffer overflow has some place to spill into where it will not cause
+ * immediate damage. See the comments for IAP_TX_* and iap_send_tx()
+  The versions of the various Lingoes we support. A major version
+ * of 0 means unsupported
+  General lingo, 0x00  Microphone lingo, 0x01  Microphone lingo, 0x01, disabled  Simple remote lingo, 0x02  Display remote lingo, 0x03  Extended Interface lingo, 0x04  RF/BT Transmitter lingo, 0x05  USB Host lingo, 0x06, disabled  RF Receiver lingo, 0x07  RF Receiver lingo, 0x07 disabled  every other lingo, disabled  states of the iap de-framing state machine  wait for 0xFF sync byte  wait for 0x55 start-of-frame byte  receive length byte (small packet)  receive length high byte (large packet)  receive length low byte (large packet)  receive data  verify checksum  current fsm state  payload data length  running checksum over [len,payload,check]  playload bytes counter  Convert a buffer into a printable string, perl style
+ * buf contains the data to be converted, len is the length
+ * of the buffer.
+ *
+ * This will convert at most 1024 bytes from buf
+  No truncation occured
+         * Account for the terminating \0
+          Truncation occured, the TX buffer is now full.  This thread is waiting for events posted to iap_queue and calls
+ * the appropriate subroutines in response
+  Handle the regular 100ms tick used for driving the
+             * authentication state machine and notifications
+              Handle a newly received message from the device  Handle memory allocation. This is used only once, during
+             * startup
+              Handle poweroff message  Ack USB thread  called by playback when the next track starts  Do general setup of the needed infrastructure.
+ *
+ * Please note that a lot of additional work is done by iap_start()
+  Actually bring up the message queue, message handler thread and
+ * notification timer
+ *
+ * NOTE: This is running in interrupt context
+  Since we cannot allocate memory while in interrupt context
+     * post a message to our own queue to get that done
+      Message format:
+   0xff
+   0x55
+   length
+   mode
+   command (2 bytes)
+   parameters (0-n bytes)
+   checksum (length+mode+parameters+checksum == 0)
+ Send the current content of the TX buffer.
+ * This will check for TX buffer overflow and panic, but it might
+ * be too late by then (although one would have to overflow the complete
+ * RX buffer as well)
+  Short packet  Long packet  This is just a compatibility wrapper around the new TX buffer
+ * infrastructure
+  Check the time since the last packet arrived.  Packet timeouts only make sense while not waiting for the
+         * sync byte  run state machine to detect and extract a valid frame  The IAP infrastructure is started by the first received sync
+             * byte. It takes a while to spin up, so do not advance the state
+             * machine until it has started.
+              received a valid sync/SOF pair  large packet  small packet  Packet too long for buffer  invalid length  done, received a valid frame  Invalid frame  return true while still hunting for the sync and start-of-frame byte  If the tracknumber is not the current one,
+       read id3 from disk  Handle pending authentication tasks  Send out GetDevAuthenticationInfo  Send out GetDevAuthenticationSignature, with
+             * 20 bytes of challenge and a retry counter of 1.
+             * Since we do not really care about the content of the
+             * challenge we just use the first 20 bytes of whatever
+             * is in the RX buffer right now.
+              Time out button down events  Handle power down messages.  NotifyiPodStateChange  No further actions, we're going down  Handle GetAccessoryInfo messages  GetAccessoryInfo  Do not send requests for device information while
+     * an authentication is still running, this seems to
+     * confuse some devices
+      Find the first bit set in the capabilities field,
+         * ignoring those we already asked for
+          Add bit to queried cababilities  Name  Firmware version  Hardware version  Manufacturer  Model number  Serial number  Maximum payload size  Minimum supported iPod firmware version  Minimum supported lingo version. Queries Lingo 0  Volume change notifications are sent every 100ms  Currently we do not track volume changes for BIT_N(16),
+         *
+          All other events are sent every 500ms  RemoteEventNotification  Mode 04 PlayStatusChangeNotification  Are we in Extended Mode  Return Track Position  Track position (ms)  or Track position (s)  Track index  Chapter index  Play status  If play_status = PAUSE/STOP we should mute else
+			 * we should unmute 
+			 * 0 = Stopped
+			 * 1 = Playing
+			 * 2 = Pause
+			 * 3 = Play/Pause
+			  Playing or paused  Paused  Playing  Not Playing  Playing  Power/Battery  Equalizer state
+     * This is not handled yet.
+     *
+     * TODO: Fix equalizer handling
+      Shuffle  Repeat  Date/Time  Month  Day  Hour  Minute  Alarm
+     * This is not supported yet.
+     *
+     * TODO: Fix alarm handling
+      Backlight
+     * This is not supported yet.
+     *
+     * TODO: Fix backlight handling
+      Hold switch  Sound check
+     * This is not supported yet.
+     *
+     * TODO: Fix sound check handling
+      Audiobook check
+     * This is not supported yet.
+     *
+     * TODO: Fix audiobook handling
+      Change the current interface state.
+ * On a change from IST_EXTENDED to IST_STANDARD, or from IST_STANDARD
+ * to IST_EXTENDED, pause playback, if playing
+  Sent from iPod Begin Transmission  RF Transmitter: Begin High Power transmission  Sent from iPod End High Power Transmission  RF Transmitter: End High Power transmission  Return Version Number ? do nothing  if we are waiting for a remote button to go out,
+       delay the handling of the new packet  handle command by mode  Remove the handled packet from the RX buffer
+     * This needs to be done with interrupts disabled, to make
+     * sure the buffer and the pointers into it are handled
+     * cleanly
+      poke the poweroff timer  Change the shuffle state  Set shuffle to enabled  Set shuffle to disabled  Change the repeat state  This function puts the current power/battery state
+ * into the TX buffer. The buffer is assumed to be initialized
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Alan Korr & Nick Robinson
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** MS_TO_TICKS converts a milisecond time period into the
+ * corresponding amount of ticks. If the time period cannot
+ * be accurately measured in ticks it will round up.
+  IAP specifies a timeout of 25ms for traffic from a device to the iPod.
+ * Depending on HZ this cannot be accurately measured. Find out the next
+ * best thing.
+  Events in the iap_queue  The regular task timeout  A complete message has been received from the device  Allocate memory for the RX/TX buffers  This is set to true if a SYS_POWEROFF message is received,
+ * signalling impending power off
+  Used to make sure a button press is delivered to the processing
+ * backend. While this is !0, no new incoming messasges are processed.
+ * Counted down by remote_control_rx()
+  Used to time out button down events in case we miss the button up event
+ * from the device somehow.
+ * If a device sends a button down event it's required to repeat that event
+ * every 30 to 100ms as long as the button is pressed, and send an explicit
+ * button up event if the button is released.
+ * In case the button up event is lost any down events will time out after
+ * ~200ms.
+ * iap_periodic() will count down this variable and reset all buttons if
+ * it reaches 0
+  These are pointer used to manage a dynamically allocated buffer which
+ * will hold both the RX and TX side of things.
+ *
+ * iap_buffer_handle is the handle returned from core_alloc()
+ * iap_buffers points to the start of the complete buffer
+ *
+ * The buffer is partitioned as follows:
+ * - TX_BUFLEN+6 bytes for the TX buffer
+ *   The 6 extra bytes are for the sync byte, the SOP byte, the length indicators
+ *   (3 bytes) and the checksum byte.
+ *   iap_txstart points to the beginning of the TX buffer
+ *   iap_txpayload points to the beginning of the payload portion of the TX buffer
+ *   iap_txnext points to the position where the next byte will be placed
+ *
+ * - RX_BUFLEN+2 bytes for the RX buffer
+ *   The RX buffer can hold multiple packets at once, up to it's
+ *   maximum capacity. Every packet consists of a two byte length
+ *   indicator followed by the actual payload. The length indicator
+ *   is two bytes for every length, even for packets with a length <256
+ *   bytes.
+ *
+ *   Once a packet has been processed from the RX buffer the rest
+ *   of the buffer (and the pointers below) are shifted to the front
+ *   so that the next packet again starts at the beginning of the
+ *   buffer. This happens with interrupts disabled, to prevent
+ *   writing into the buffer during the move.
+ *
+ *   iap_rxstart points to the beginning of the RX buffer
+ *   iap_rxpayload starts to the beginning of the currently recieved
+ *   packet
+ *   iap_rxnext points to the position where the next incoming byte
+ *   will be placed
+ *   iap_rxlen is not a pointer, but an indicator of the free
+ *   space left in the RX buffer.
+ *
+ * The RX buffer is placed behind the TX buffer so that an eventual TX
+ * buffer overflow has some place to spill into where it will not cause
+ * immediate damage. See the comments for IAP_TX_* and iap_send_tx()
+  The versions of the various Lingoes we support. A major version
+ * of 0 means unsupported
+  General lingo, 0x00  Microphone lingo, 0x01  Microphone lingo, 0x01, disabled  Simple remote lingo, 0x02  Display remote lingo, 0x03  Extended Interface lingo, 0x04  RF/BT Transmitter lingo, 0x05  USB Host lingo, 0x06, disabled  RF Receiver lingo, 0x07  RF Receiver lingo, 0x07 disabled  every other lingo, disabled  states of the iap de-framing state machine  wait for 0xFF sync byte  wait for 0x55 start-of-frame byte  receive length byte (small packet)  receive length high byte (large packet)  receive length low byte (large packet)  receive data  verify checksum  current fsm state  payload data length  running checksum over [len,payload,check]  playload bytes counter  Convert a buffer into a printable string, perl style
+ * buf contains the data to be converted, len is the length
+ * of the buffer.
+ *
+ * This will convert at most 1024 bytes from buf
+  No truncation occured
+         * Account for the terminating \0
+          Truncation occured, the TX buffer is now full.  This thread is waiting for events posted to iap_queue and calls
+ * the appropriate subroutines in response
+  Handle the regular 100ms tick used for driving the
+             * authentication state machine and notifications
+              Handle a newly received message from the device  Handle memory allocation. This is used only once, during
+             * startup
+              Handle poweroff message  Ack USB thread  called by playback when the next track starts  Do general setup of the needed infrastructure.
+ *
+ * Please note that a lot of additional work is done by iap_start()
+  Actually bring up the message queue, message handler thread and
+ * notification timer
+ *
+ * NOTE: This is running in interrupt context
+  Since we cannot allocate memory while in interrupt context
+     * post a message to our own queue to get that done
+      Message format:
+   0xff
+   0x55
+   length
+   mode
+   command (2 bytes)
+   parameters (0-n bytes)
+   checksum (length+mode+parameters+checksum == 0)
+ Send the current content of the TX buffer.
+ * This will check for TX buffer overflow and panic, but it might
+ * be too late by then (although one would have to overflow the complete
+ * RX buffer as well)
+  Short packet  Long packet  This is just a compatibility wrapper around the new TX buffer
+ * infrastructure
+  Check the time since the last packet arrived.  Packet timeouts only make sense while not waiting for the
+         * sync byte  run state machine to detect and extract a valid frame  The IAP infrastructure is started by the first received sync
+             * byte. It takes a while to spin up, so do not advance the state
+             * machine until it has started.
+              received a valid sync/SOF pair  large packet  small packet  Packet too long for buffer  invalid length  done, received a valid frame  Invalid frame  return true while still hunting for the sync and start-of-frame byte  If the tracknumber is not the current one,
+       read id3 from disk  Handle pending authentication tasks  Send out GetDevAuthenticationInfo  Send out GetDevAuthenticationSignature, with
+             * 20 bytes of challenge and a retry counter of 1.
+             * Since we do not really care about the content of the
+             * challenge we just use the first 20 bytes of whatever
+             * is in the RX buffer right now.
+              Time out button down events  Handle power down messages.  NotifyiPodStateChange  No further actions, we're going down  Handle GetAccessoryInfo messages  GetAccessoryInfo  Do not send requests for device information while
+     * an authentication is still running, this seems to
+     * confuse some devices
+      Find the first bit set in the capabilities field,
+         * ignoring those we already asked for
+          Add bit to queried cababilities  Name  Firmware version  Hardware version  Manufacturer  Model number  Serial number  Maximum payload size  Minimum supported iPod firmware version  Minimum supported lingo version. Queries Lingo 0  Volume change notifications are sent every 100ms  Currently we do not track volume changes for BIT_N(16),
+         *
+          All other events are sent every 500ms  RemoteEventNotification  Mode 04 PlayStatusChangeNotification  Are we in Extended Mode  Return Track Position  Track position (ms)  or Track position (s)  Track index  Chapter index  Play status  If play_status = PAUSE/STOP we should mute else
+			 * we should unmute 
+			 * 0 = Stopped
+			 * 1 = Playing
+			 * 2 = Pause
+			 * 3 = Play/Pause
+			  Playing or paused  Paused  Playing  Not Playing  Playing  Power/Battery  Equalizer state
+     * This is not handled yet.
+     *
+     * TODO: Fix equalizer handling
+      Shuffle  Repeat  Date/Time  Month  Day  Hour  Minute  Alarm
+     * This is not supported yet.
+     *
+     * TODO: Fix alarm handling
+      Backlight
+     * This is not supported yet.
+     *
+     * TODO: Fix backlight handling
+      Hold switch  Sound check
+     * This is not supported yet.
+     *
+     * TODO: Fix sound check handling
+      Audiobook check
+     * This is not supported yet.
+     *
+     * TODO: Fix audiobook handling
+      Change the current interface state.
+ * On a change from IST_EXTENDED to IST_STANDARD, or from IST_STANDARD
+ * to IST_EXTENDED, pause playback, if playing
+  Sent from iPod Begin Transmission  RF Transmitter: Begin High Power transmission  Sent from iPod End High Power Transmission  RF Transmitter: End High Power transmission  Return Version Number ? do nothing  if we are waiting for a remote button to go out,
+       delay the handling of the new packet  handle command by mode  Remove the handled packet from the RX buffer
+     * This needs to be done with interrupts disabled, to make
+     * sure the buffer and the pointers into it are handled
+     * cleanly
+      poke the poweroff timer  Change the shuffle state  Set shuffle to enabled  Set shuffle to disabled  Change the repeat state  This function puts the current power/battery state
+ * into the TX buffer. The buffer is assumed to be initialized
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Alan Korr & Nick Robinson
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** MS_TO_TICKS converts a milisecond time period into the
+ * corresponding amount of ticks. If the time period cannot
+ * be accurately measured in ticks it will round up.
+  IAP specifies a timeout of 25ms for traffic from a device to the iPod.
+ * Depending on HZ this cannot be accurately measured. Find out the next
+ * best thing.
+  Events in the iap_queue  The regular task timeout  A complete message has been received from the device  Allocate memory for the RX/TX buffers  This is set to true if a SYS_POWEROFF message is received,
+ * signalling impending power off
+  Used to make sure a button press is delivered to the processing
+ * backend. While this is !0, no new incoming messasges are processed.
+ * Counted down by remote_control_rx()
+  Used to time out button down events in case we miss the button up event
+ * from the device somehow.
+ * If a device sends a button down event it's required to repeat that event
+ * every 30 to 100ms as long as the button is pressed, and send an explicit
+ * button up event if the button is released.
+ * In case the button up event is lost any down events will time out after
+ * ~200ms.
+ * iap_periodic() will count down this variable and reset all buttons if
+ * it reaches 0
+  These are pointer used to manage a dynamically allocated buffer which
+ * will hold both the RX and TX side of things.
+ *
+ * iap_buffer_handle is the handle returned from core_alloc()
+ * iap_buffers points to the start of the complete buffer
+ *
+ * The buffer is partitioned as follows:
+ * - TX_BUFLEN+6 bytes for the TX buffer
+ *   The 6 extra bytes are for the sync byte, the SOP byte, the length indicators
+ *   (3 bytes) and the checksum byte.
+ *   iap_txstart points to the beginning of the TX buffer
+ *   iap_txpayload points to the beginning of the payload portion of the TX buffer
+ *   iap_txnext points to the position where the next byte will be placed
+ *
+ * - RX_BUFLEN+2 bytes for the RX buffer
+ *   The RX buffer can hold multiple packets at once, up to it's
+ *   maximum capacity. Every packet consists of a two byte length
+ *   indicator followed by the actual payload. The length indicator
+ *   is two bytes for every length, even for packets with a length <256
+ *   bytes.
+ *
+ *   Once a packet has been processed from the RX buffer the rest
+ *   of the buffer (and the pointers below) are shifted to the front
+ *   so that the next packet again starts at the beginning of the
+ *   buffer. This happens with interrupts disabled, to prevent
+ *   writing into the buffer during the move.
+ *
+ *   iap_rxstart points to the beginning of the RX buffer
+ *   iap_rxpayload starts to the beginning of the currently recieved
+ *   packet
+ *   iap_rxnext points to the position where the next incoming byte
+ *   will be placed
+ *   iap_rxlen is not a pointer, but an indicator of the free
+ *   space left in the RX buffer.
+ *
+ * The RX buffer is placed behind the TX buffer so that an eventual TX
+ * buffer overflow has some place to spill into where it will not cause
+ * immediate damage. See the comments for IAP_TX_* and iap_send_tx()
+  The versions of the various Lingoes we support. A major version
+ * of 0 means unsupported
+  General lingo, 0x00  Microphone lingo, 0x01  Microphone lingo, 0x01, disabled  Simple remote lingo, 0x02  Display remote lingo, 0x03  Extended Interface lingo, 0x04  RF/BT Transmitter lingo, 0x05  USB Host lingo, 0x06, disabled  RF Receiver lingo, 0x07  RF Receiver lingo, 0x07 disabled  every other lingo, disabled  states of the iap de-framing state machine  wait for 0xFF sync byte  wait for 0x55 start-of-frame byte  receive length byte (small packet)  receive length high byte (large packet)  receive length low byte (large packet)  receive data  verify checksum  current fsm state  payload data length  running checksum over [len,payload,check]  playload bytes counter  Convert a buffer into a printable string, perl style
+ * buf contains the data to be converted, len is the length
+ * of the buffer.
+ *
+ * This will convert at most 1024 bytes from buf
+  No truncation occured
+         * Account for the terminating \0
+          Truncation occured, the TX buffer is now full.  This thread is waiting for events posted to iap_queue and calls
+ * the appropriate subroutines in response
+  Handle the regular 100ms tick used for driving the
+             * authentication state machine and notifications
+              Handle a newly received message from the device  Handle memory allocation. This is used only once, during
+             * startup
+              Handle poweroff message  Ack USB thread  called by playback when the next track starts  Do general setup of the needed infrastructure.
+ *
+ * Please note that a lot of additional work is done by iap_start()
+  Actually bring up the message queue, message handler thread and
+ * notification timer
+ *
+ * NOTE: This is running in interrupt context
+  Since we cannot allocate memory while in interrupt context
+     * post a message to our own queue to get that done
+      Message format:
+   0xff
+   0x55
+   length
+   mode
+   command (2 bytes)
+   parameters (0-n bytes)
+   checksum (length+mode+parameters+checksum == 0)
+ Send the current content of the TX buffer.
+ * This will check for TX buffer overflow and panic, but it might
+ * be too late by then (although one would have to overflow the complete
+ * RX buffer as well)
+  Short packet  Long packet  This is just a compatibility wrapper around the new TX buffer
+ * infrastructure
+  Check the time since the last packet arrived.  Packet timeouts only make sense while not waiting for the
+         * sync byte  run state machine to detect and extract a valid frame  The IAP infrastructure is started by the first received sync
+             * byte. It takes a while to spin up, so do not advance the state
+             * machine until it has started.
+              received a valid sync/SOF pair  large packet  small packet  Packet too long for buffer  invalid length  done, received a valid frame  Invalid frame  return true while still hunting for the sync and start-of-frame byte  If the tracknumber is not the current one,
+       read id3 from disk  Handle pending authentication tasks  Send out GetDevAuthenticationInfo  Send out GetDevAuthenticationSignature, with
+             * 20 bytes of challenge and a retry counter of 1.
+             * Since we do not really care about the content of the
+             * challenge we just use the first 20 bytes of whatever
+             * is in the RX buffer right now.
+              Time out button down events  Handle power down messages.  NotifyiPodStateChange  No further actions, we're going down  Handle GetAccessoryInfo messages  GetAccessoryInfo  Do not send requests for device information while
+     * an authentication is still running, this seems to
+     * confuse some devices
+      Find the first bit set in the capabilities field,
+         * ignoring those we already asked for
+          Add bit to queried cababilities  Name  Firmware version  Hardware version  Manufacturer  Model number  Serial number  Maximum payload size  Minimum supported iPod firmware version  Minimum supported lingo version. Queries Lingo 0  Volume change notifications are sent every 100ms  Currently we do not track volume changes for BIT_N(16),
+         *
+          All other events are sent every 500ms  RemoteEventNotification  Mode 04 PlayStatusChangeNotification  Are we in Extended Mode  Return Track Position  Track position (ms)  or Track position (s)  Track index  Chapter index  Play status  If play_status = PAUSE/STOP we should mute else
+			 * we should unmute 
+			 * 0 = Stopped
+			 * 1 = Playing
+			 * 2 = Pause
+			 * 3 = Play/Pause
+			  Playing or paused  Paused  Playing  Not Playing  Playing  Power/Battery  Equalizer state
+     * This is not handled yet.
+     *
+     * TODO: Fix equalizer handling
+      Shuffle  Repeat  Date/Time  Month  Day  Hour  Minute  Alarm
+     * This is not supported yet.
+     *
+     * TODO: Fix alarm handling
+      Backlight
+     * This is not supported yet.
+     *
+     * TODO: Fix backlight handling
+      Hold switch  Sound check
+     * This is not supported yet.
+     *
+     * TODO: Fix sound check handling
+      Audiobook check
+     * This is not supported yet.
+     *
+     * TODO: Fix audiobook handling
+      Change the current interface state.
+ * On a change from IST_EXTENDED to IST_STANDARD, or from IST_STANDARD
+ * to IST_EXTENDED, pause playback, if playing
+  Sent from iPod Begin Transmission  RF Transmitter: Begin High Power transmission  Sent from iPod End High Power Transmission  RF Transmitter: End High Power transmission  Return Version Number ? do nothing  if we are waiting for a remote button to go out,
+       delay the handling of the new packet  handle command by mode  Remove the handled packet from the RX buffer
+     * This needs to be done with interrupts disabled, to make
+     * sure the buffer and the pointers into it are handled
+     * cleanly
+      poke the poweroff timer  Change the shuffle state  Set shuffle to enabled  Set shuffle to disabled  Change the repeat state  This function puts the current power/battery state
+ * into the TX buffer. The buffer is assumed to be initialized
+ 

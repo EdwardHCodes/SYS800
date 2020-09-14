@@ -1,0 +1,193 @@
+ This file is part of libmspack.
+ * (C) 2003-2004 Stuart Caie.
+ *
+ * The Quantum method was created by David Stafford, adapted by Microsoft
+ * Corporation.
+ *
+ * This decompressor is based on an implementation by Matthew Russotto, used
+ * with permission.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Quantum decompression implementation  This decompressor was researched and implemented by Matthew Russotto. It
+ * has since been tidied up by Stuart Caie. More information can be found at
+ * http://www.speakeasy.org/~russotto/quantumcomp.html
+  import bit-reading macros and code  Quantum static data tables:
+ *
+ * Quantum uses 'position slots' to represent match offsets.  For every
+ * match, a small 'position slot' number and a small offset from that slot
+ * are encoded instead of one large offset.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * length_base[] and length_extra[] are equivalent in function, but are
+ * used for encoding selector 6 (variable length match) match lengths,
+ * instead of match offsets.
+ *
+ * They are generated with the following code:
+ *   unsigned int i, offset;
+ *   for (i = 0, offset = 0; i < 42; i++) {
+ *     position_base[i] = offset;
+ *     extra_bits[i] = ((i < 2) ? 0 : (i - 2)) >> 1;
+ *     offset += 1 << extra_bits[i];
+ *   }
+ *   for (i = 0, offset = 0; i < 26; i++) {
+ *     length_base[i] = offset;
+ *     length_extra[i] = (i < 2 ? 0 : i - 2) >> 2;
+ *     offset += 1 << length_extra[i];
+ *   }
+ *   length_base[26] = 254; length_extra[26] = 0;
+  Arithmetic decoder:
+ * 
+ * GET_SYMBOL(model, var) fetches the next symbol from the stated model
+ * and puts it in var.
+ *
+ * If necessary, qtmd_update_model() is called.
+  underflow case  -1, not -2; the 0 entry saves this  no -1, want to include the 0 entry  this converts cumfreqs into frequencies, then shifts right  avoid losing things entirely  now sort by frequencies, decreasing order -- this must be an
+     * inplace selection sort, or a sort with the same (in)stability
+     * characteristics  then convert frequencies back to cumfreq  Initialises a model to decode symbols from [start] to [start]+[len]-1  actual symbol  current frequency of that symbol -------- main Quantum code -------- Quantum supports window sizes of 2^10 (1Kb) through 2^21 (2Mb)  round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  initialise arithmetic coding models
+   * - model 4    depends on window size, ranges from 20 to 24
+   * - model 5    depends on window size, ranges from 20 to 36
+   * - model 6pos depends on window size, ranges from 20 to 42
+    all ok  easy answers  flush out any stored-up bytes before we begin  restore local state  while we do not have enough decoded bytes in reserve:  read header if necessary. Initialises H, L and C  decode more, up to the number of bytes needed, the frame boundary,
+     * or the window boundary, whichever comes first  literal byte  match repeated string  selector 4 = fixed length match (3 bytes)  selector 5 = fixed length match (4 bytes)  selector 6 = variable length match  should be impossible, model7 can only return 0-6  does match destination wrap the window? This situation is possible
+         * where the window size is less than the 32k frame size, but matches
+         * must not go beyond a frame boundary  copy first part of match, before window end  flush currently stored data  this should not happen, but if it does then this code
+           * can't handle the situation (can't flush up to the end of
+           * the window, but can't break out either because we haven't
+           * finished writing the match). bail out in this case  copy second part of match, after window wrap  because "window_posn < frame_end" has now failed  normal match - output won't wrap window or frame end  does match _offset_ wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  if (window_posn+match_length > frame_end)  while (window_posn < frame_end)  if we subtracted too much from frame_todo, it will
+    * wrap around past zero and go above its max value  another frame completed?  re-align input  special Quantum hack -- cabd.c injects a trailer byte to allow the
+       * decompressor to realign itself. CAB Quantum blocks, unlike LZX
+       * blocks, can have anything from 0 to 4 trailing null bytes.  window wrap?  flush all currently stored data  break out if we have more than enough to finish this request  while (more bytes needed)  store local state  This file is part of libmspack.
+ * (C) 2003-2004 Stuart Caie.
+ *
+ * The Quantum method was created by David Stafford, adapted by Microsoft
+ * Corporation.
+ *
+ * This decompressor is based on an implementation by Matthew Russotto, used
+ * with permission.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Quantum decompression implementation  This decompressor was researched and implemented by Matthew Russotto. It
+ * has since been tidied up by Stuart Caie. More information can be found at
+ * http://www.speakeasy.org/~russotto/quantumcomp.html
+  import bit-reading macros and code  Quantum static data tables:
+ *
+ * Quantum uses 'position slots' to represent match offsets.  For every
+ * match, a small 'position slot' number and a small offset from that slot
+ * are encoded instead of one large offset.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * length_base[] and length_extra[] are equivalent in function, but are
+ * used for encoding selector 6 (variable length match) match lengths,
+ * instead of match offsets.
+ *
+ * They are generated with the following code:
+ *   unsigned int i, offset;
+ *   for (i = 0, offset = 0; i < 42; i++) {
+ *     position_base[i] = offset;
+ *     extra_bits[i] = ((i < 2) ? 0 : (i - 2)) >> 1;
+ *     offset += 1 << extra_bits[i];
+ *   }
+ *   for (i = 0, offset = 0; i < 26; i++) {
+ *     length_base[i] = offset;
+ *     length_extra[i] = (i < 2 ? 0 : i - 2) >> 2;
+ *     offset += 1 << length_extra[i];
+ *   }
+ *   length_base[26] = 254; length_extra[26] = 0;
+  Arithmetic decoder:
+ * 
+ * GET_SYMBOL(model, var) fetches the next symbol from the stated model
+ * and puts it in var.
+ *
+ * If necessary, qtmd_update_model() is called.
+  underflow case  -1, not -2; the 0 entry saves this  no -1, want to include the 0 entry  this converts cumfreqs into frequencies, then shifts right  avoid losing things entirely  now sort by frequencies, decreasing order -- this must be an
+     * inplace selection sort, or a sort with the same (in)stability
+     * characteristics  then convert frequencies back to cumfreq  Initialises a model to decode symbols from [start] to [start]+[len]-1  actual symbol  current frequency of that symbol -------- main Quantum code -------- Quantum supports window sizes of 2^10 (1Kb) through 2^21 (2Mb)  round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  initialise arithmetic coding models
+   * - model 4    depends on window size, ranges from 20 to 24
+   * - model 5    depends on window size, ranges from 20 to 36
+   * - model 6pos depends on window size, ranges from 20 to 42
+    all ok  easy answers  flush out any stored-up bytes before we begin  restore local state  while we do not have enough decoded bytes in reserve:  read header if necessary. Initialises H, L and C  decode more, up to the number of bytes needed, the frame boundary,
+     * or the window boundary, whichever comes first  literal byte  match repeated string  selector 4 = fixed length match (3 bytes)  selector 5 = fixed length match (4 bytes)  selector 6 = variable length match  should be impossible, model7 can only return 0-6  does match destination wrap the window? This situation is possible
+         * where the window size is less than the 32k frame size, but matches
+         * must not go beyond a frame boundary  copy first part of match, before window end  flush currently stored data  this should not happen, but if it does then this code
+           * can't handle the situation (can't flush up to the end of
+           * the window, but can't break out either because we haven't
+           * finished writing the match). bail out in this case  copy second part of match, after window wrap  because "window_posn < frame_end" has now failed  normal match - output won't wrap window or frame end  does match _offset_ wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  if (window_posn+match_length > frame_end)  while (window_posn < frame_end)  if we subtracted too much from frame_todo, it will
+    * wrap around past zero and go above its max value  another frame completed?  re-align input  special Quantum hack -- cabd.c injects a trailer byte to allow the
+       * decompressor to realign itself. CAB Quantum blocks, unlike LZX
+       * blocks, can have anything from 0 to 4 trailing null bytes.  window wrap?  flush all currently stored data  break out if we have more than enough to finish this request  while (more bytes needed)  store local state  This file is part of libmspack.
+ * (C) 2003-2004 Stuart Caie.
+ *
+ * The Quantum method was created by David Stafford, adapted by Microsoft
+ * Corporation.
+ *
+ * This decompressor is based on an implementation by Matthew Russotto, used
+ * with permission.
+ *
+ * libmspack is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License (LGPL) version 2.1
+ *
+ * For further details, see the file COPYING.LIB distributed with libmspack
+  Quantum decompression implementation  This decompressor was researched and implemented by Matthew Russotto. It
+ * has since been tidied up by Stuart Caie. More information can be found at
+ * http://www.speakeasy.org/~russotto/quantumcomp.html
+  import bit-reading macros and code  Quantum static data tables:
+ *
+ * Quantum uses 'position slots' to represent match offsets.  For every
+ * match, a small 'position slot' number and a small offset from that slot
+ * are encoded instead of one large offset.
+ *
+ * position_base[] is an index to the position slot bases
+ *
+ * extra_bits[] states how many bits of offset-from-base data is needed.
+ *
+ * length_base[] and length_extra[] are equivalent in function, but are
+ * used for encoding selector 6 (variable length match) match lengths,
+ * instead of match offsets.
+ *
+ * They are generated with the following code:
+ *   unsigned int i, offset;
+ *   for (i = 0, offset = 0; i < 42; i++) {
+ *     position_base[i] = offset;
+ *     extra_bits[i] = ((i < 2) ? 0 : (i - 2)) >> 1;
+ *     offset += 1 << extra_bits[i];
+ *   }
+ *   for (i = 0, offset = 0; i < 26; i++) {
+ *     length_base[i] = offset;
+ *     length_extra[i] = (i < 2 ? 0 : i - 2) >> 2;
+ *     offset += 1 << length_extra[i];
+ *   }
+ *   length_base[26] = 254; length_extra[26] = 0;
+  Arithmetic decoder:
+ * 
+ * GET_SYMBOL(model, var) fetches the next symbol from the stated model
+ * and puts it in var.
+ *
+ * If necessary, qtmd_update_model() is called.
+  underflow case  -1, not -2; the 0 entry saves this  no -1, want to include the 0 entry  this converts cumfreqs into frequencies, then shifts right  avoid losing things entirely  now sort by frequencies, decreasing order -- this must be an
+     * inplace selection sort, or a sort with the same (in)stability
+     * characteristics  then convert frequencies back to cumfreq  Initialises a model to decode symbols from [start] to [start]+[len]-1  actual symbol  current frequency of that symbol -------- main Quantum code -------- Quantum supports window sizes of 2^10 (1Kb) through 2^21 (2Mb)  round up input buffer size to multiple of two  allocate decompression state  allocate decompression window and input buffer  initialise decompression state  initialise arithmetic coding models
+   * - model 4    depends on window size, ranges from 20 to 24
+   * - model 5    depends on window size, ranges from 20 to 36
+   * - model 6pos depends on window size, ranges from 20 to 42
+    all ok  easy answers  flush out any stored-up bytes before we begin  restore local state  while we do not have enough decoded bytes in reserve:  read header if necessary. Initialises H, L and C  decode more, up to the number of bytes needed, the frame boundary,
+     * or the window boundary, whichever comes first  literal byte  match repeated string  selector 4 = fixed length match (3 bytes)  selector 5 = fixed length match (4 bytes)  selector 6 = variable length match  should be impossible, model7 can only return 0-6  does match destination wrap the window? This situation is possible
+         * where the window size is less than the 32k frame size, but matches
+         * must not go beyond a frame boundary  copy first part of match, before window end  flush currently stored data  this should not happen, but if it does then this code
+           * can't handle the situation (can't flush up to the end of
+           * the window, but can't break out either because we haven't
+           * finished writing the match). bail out in this case  copy second part of match, after window wrap  because "window_posn < frame_end" has now failed  normal match - output won't wrap window or frame end  does match _offset_ wrap the window?  j = length from match offset to end of window  if match goes over the window edge, do two copy runs  if (window_posn+match_length > frame_end)  while (window_posn < frame_end)  if we subtracted too much from frame_todo, it will
+    * wrap around past zero and go above its max value  another frame completed?  re-align input  special Quantum hack -- cabd.c injects a trailer byte to allow the
+       * decompressor to realign itself. CAB Quantum blocks, unlike LZX
+       * blocks, can have anything from 0 to 4 trailing null bytes.  window wrap?  flush all currently stored data  break out if we have more than enough to finish this request  while (more bytes needed)  store local state 

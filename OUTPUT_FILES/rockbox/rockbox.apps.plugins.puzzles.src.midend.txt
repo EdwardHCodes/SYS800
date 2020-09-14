@@ -1,0 +1,1384 @@
+
+ * midend.c: general middle fragment sitting between the
+ * platform-specific front end and game-specific back end.
+ * Maintains a move list, takes care of Undo and Redo commands, and
+ * processes standard keystrokes for undo/redo/new/quit.
+  for midend_game_id_int  for midend_state_entry.movetype  for midend_which_preset to check against 
+     * `desc' and `privdesc' deserve a comment.
+     * 
+     * `desc' is the game description as presented to the user when
+     * they ask for Game -> Specific. `privdesc', if non-NULL, is a
+     * different game description used to reconstruct the initial
+     * game_state when de-serialising. If privdesc is NULL, `desc'
+     * is used for both.
+     * 
+     * For almost all games, `privdesc' is NULL and never used. The
+     * exception (as usual) is Mines: the initial game state has no
+     * squares open at all, but after the first click `desc' is
+     * rewritten to describe a game state with an initial click and
+     * thus a bunch of squares open. If we used that desc to
+     * serialise and deserialise, then the initial game state after
+     * deserialisation would look unlike the initial game state
+     * beforehand, and worse still execute_move() might fail on the
+     * attempted first click. So `privdesc' is also used in this
+     * case, to provide a game description describing the same
+     * fixed mine layout _but_ no initial click. (These game IDs
+     * may also be typed directly into Mines if you like.)
+     
+ * Structure storing all the decoded data from reading a serialised
+ * game. We keep it in one of these while we check its sanity, and
+ * only once we're completely satisfied do we install it all in the
+ * midend structure proper.
+ 
+ * Forward reference.
+ 
+         * Allow an environment-based override for the default tile
+         * size by defining a variable along the lines of
+         * `NET_TILESIZE=15'.
+         
+     * Allow environment-based changing of the default settings by
+     * defining a variable along the lines of `NET_DEFAULT=25x25w'
+     * in which the value is an encoded parameter string.
+     
+     * Don't even bother, if we haven't worked out our tile size
+     * anyway yet.
+     
+     * We can't set the size on the same drawstate twice. So if
+     * we've already sized one drawstate, we must throw it away and
+     * create a new one.
+     
+     * Find the tile size that best fits within the given space. If
+     * `user_size' is true, we must actually find the _largest_ such
+     * tile size, in order to get as close to the user's explicit
+     * request as possible; otherwise, we bound above at the game's
+     * preferred tile size, so that the game gets what it wants
+     * provided that this doesn't break the constraint from the
+     * front-end (which is likely to be a screen size or similar).
+     
+     * Now binary-search between min and max. We're looking for a
+     * boundary rather than a value: the point at which tile sizes
+     * stop fitting within the given dimensions. Thus, we stop when
+     * max and min differ by exactly 1.
+     
+     * Now `min' is a valid size, and `max' isn't. So use `min'.
+      If the user requested a change in size, make it permanent. 
+         * Serialise the whole of the game that we're about to
+         * supersede, so that the 'New Game' action can be undone
+         * later.
+         *
+         * We omit this in various situations, such as if there
+         * _isn't_ a current game (not even a starting position)
+         * because this is the initial call to midend_new_game when
+         * the midend is first set up, or if the midend state has
+         * already begun to be overwritten by midend_set_config. In
+         * those situations, we want to avoid writing out any
+         * serialisation, because they will be either invalid, or
+         * worse, valid but wrong.
+         
+             * Generate a new random seed. 15 digits comes to about
+             * 48 bits, which should be more than enough.
+             * 
+             * I'll avoid putting a leading zero on the number,
+             * just in case it confuses anybody who thinks it's
+             * processed as an integer rather than a string.
+             
+	 * If this midend has been instantiated without providing a
+	 * drawing API, it is non-interactive. This means that it's
+	 * being used for bulk game generation, and hence we should
+	 * pass the non-interactive flag to new_desc.
+	 
+     * It might seem a bit odd that we're using me->params to
+     * create the initial game state, rather than me->curparams
+     * which is better tailored to this specific game and which we
+     * always know.
+     * 
+     * It's supposed to be an invariant in the midend that
+     * me->params and me->curparams differ in no aspect that is
+     * important after generation (i.e. after new_desc()). By
+     * deliberately passing the _less_ specific of these two
+     * parameter sets, we provoke play-time misbehaviour in the
+     * case where a game has failed to encode a play-time parameter
+     * in the non-full version of encode_params().
+     
+     * As part of our commitment to self-testing, test the aux
+     * string to make sure nothing ghastly went wrong.
+     
+     * Undoing a New Game operation is only permitted if it doesn't
+     * change the game parameters. The point of having the ability at
+     * all is to recover from the momentary finger error of having hit
+     * the 'n' key (perhaps in place of some other nearby key), or hit
+     * the New Game menu item by mistake when aiming for the adjacent
+     * Restart; in both those situations, the game params are the same
+     * before and after the new-game operation.
+     *
+     * In principle, we could generalise this so that _any_ call to
+     * midend_new_game could be undone, but that would need all front
+     * ends to be alert to the possibility that any keystroke passed
+     * to midend_process_key might (if it turns out to have been one
+     * of the synonyms for undo, which the frontend doesn't
+     * necessarily check for) have various knock-on effects like
+     * needing to select a different preset in the game type menu, or
+     * even resizing the window. At least for the moment, it's easier
+     * not to do that, and to simply disallow any newgame-undo that is
+     * disruptive in either of those ways.
+     *
+     * We check both params and cparams, to be as safe as possible.
+      Set a flag to distinguish this deserialise failure
+         * from one due to faulty decoding 
+     * Otherwise, fine, go ahead.
+     
+         * Serialise the current game so that you can later redo past
+         * this undo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_undo serialisation, so that we
+             * don't try to undo past the beginning of the game we've
+             * just gone back to and end up at the front of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can redo back into it later.
+             
+         * Serialise the current game so that you can later undo past
+         * this redo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_redo serialisation, so that we
+             * don't try to redo past the end of the game we've just
+             * come into and end up at the back of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can undo back into it later.
+             
+     * We do not flash if the later of the two states is special.
+     * This covers both forward Solve moves and backward (undone)
+     * Restart moves.
+      no point doing anything at all! 
+     * During restart, we reconstruct the game from the (public)
+     * game description rather than from states[0], because that
+     * way Mines gets slightly more sensible behaviour (restart
+     * goes to _after_ the first click so you don't have to
+     * remember where you clicked).
+     
+     * Now enter the restarted state as the next move.
+      never animate 
+             * make_move() is allowed to return its input state to
+             * indicate that although no move has been made, the UI
+             * state has been updated and a redraw is called for.
+             
+     * See if this move requires an animation.
+     
+     * Harmonise mouse drag and release messages.
+     * 
+     * Some front ends might accidentally switch from sending, say,
+     * RIGHT_DRAG messages to sending LEFT_DRAG, half way through a
+     * drag. (This can happen on the Mac, for example, since
+     * RIGHT_DRAG is usually done using Command+drag, and if the
+     * user accidentally releases Command half way through the drag
+     * then there will be trouble.)
+     * 
+     * It would be an O(number of front ends) annoyance to fix this
+     * in the front ends, but an O(number of back ends) annoyance
+     * to have each game capable of dealing with it. Therefore, we
+     * fix it _here_ in the common midend code so that it only has
+     * to be done once.
+     * 
+     * The possible ways in which things can go screwy in the front
+     * end are:
+     * 
+     *  - in a system containing multiple physical buttons button
+     *    presses can inadvertently overlap. We can see ABab (caps
+     *    meaning button-down and lowercase meaning button-up) when
+     *    the user had semantically intended AaBb.
+     * 
+     *  - in a system where one button is simulated by means of a
+     *    modifier key and another button, buttons can mutate
+     *    between press and release (possibly during drag). So we
+     *    can see Ab instead of Aa.
+     * 
+     * Definite requirements are:
+     * 
+     *  - button _presses_ must never be invented or destroyed. If
+     *    the user presses two buttons in succession, the button
+     *    presses must be transferred to the backend unchanged. So
+     *    if we see AaBb , that's fine; if we see ABab (the button
+     *    presses inadvertently overlapped) we must somehow
+     *    `correct' it to AaBb.
+     * 
+     *  - every mouse action must end up looking like a press, zero
+     *    or more drags, then a release. This allows back ends to
+     *    make the _assumption_ that incoming mouse data will be
+     *    sane in this regard, and not worry about the details.
+     * 
+     * So my policy will be:
+     * 
+     *  - treat any button-up as a button-up for the currently
+     *    pressed button, or ignore it if there is no currently
+     *    pressed button.
+     * 
+     *  - treat any drag as a drag for the currently pressed
+     *    button, or ignore it if there is no currently pressed
+     *    button.
+     * 
+     *  - if we see a button-down while another button is currently
+     *    pressed, invent a button-up for the first one and then
+     *    pass the button-down through as before.
+     * 
+     * 2005-05-31: An addendum to the above. Some games might want
+     * a `priority order' among buttons, such that if one button is
+     * pressed while another is down then a fixed one of the
+     * buttons takes priority no matter what order they're pressed
+     * in. Mines, in particular, wants to treat a left+right click
+     * like a left click for the benefit of users of other
+     * implementations. So the last of the above points is modified
+     * in the presence of an (optional) button priority order.
+     *
+     * A further addition: we translate certain keyboard presses to
+     * cursor key 'select' buttons, so that a) frontends don't have
+     * to translate these themselves (like they do for CURSOR_UP etc),
+     * and b) individual games don't have to hard-code button presses
+     * of '\n' etc for keyboard-based cursors. The choice of buttons
+     * here could eventually be controlled by a runtime configuration
+     * option.
+      ignore it 
+	 * If the new button has lower priority than the old one,
+	 * don't bother doing this.
+	  just ignore it 
+         * Fabricate a button-up for the previously pressed button.
+         
+     * Translate keyboard presses to cursor selection.
+     
+     * Normalise both backspace characters (8 and 127) to \b. Easier
+     * to do this once, here, than to require all front ends to
+     * carefully generate the same one - now each front end can
+     * generate whichever is easiest.
+     
+     * Now send on the event we originally received.
+     
+     * And update the currently pressed button.
+     shrug
+ * Nasty hacky function used to implement the --redo option in
+ * gtk.c. Only used for generating the puzzles' icons.
+ 
+         * Allow environment-based overrides for the standard
+         * colours by defining variables along the lines of
+         * `NET_COLOUR_4=6000c0'.
+         
+             * Special case: either open a new submenu with the given
+             * title, or terminate the current submenu.
+             
+                 * If we get a 'close submenu' indication at the top
+                 * level, there's not much we can do but quietly
+                 * ignore it.
+                  Drop this one from the list.  Expect the game to implement exactly one of the two preset APIs  Simple one-level menu  Hierarchical menu provided by the game backend 
+         * Allow user extensions to the preset list by defining an
+         * environment variable <gamename>_PRESETS whose value is a
+         * colon-separated list of items, alternating between textual
+         * titles in the menu and encoded parameter strings. For
+         * example, "SOLO_PRESETS=2x3 Advanced:2x3da" would define
+         * just one additional preset for Solo.
+         
+     * Finalise the menu: allocate an integer id to each entry, and
+     * store string encodings of the presets' parameters in
+     * me->encoded_presets.
+     
+         * For CFG_DESC the text going in here will be a string
+         * encoding of the restricted parameters, plus a colon,
+         * plus the game description. For CFG_SEED it will be the
+         * full parameters, plus a hash, plus the random seed data.
+         * Either of these is a valid full game ID (although only
+         * the former is likely to persist across many code
+         * changes).
+         
+         * We have a colon separating parameters from game
+         * description. So `par' now points to the parameters
+         * string, and `desc' to the description string.
+         
+         * We have a hash separating parameters from random seed.
+         * So `par' now points to the parameters string, and `seed'
+         * to the seed string.
+         
+         * We only have one string. Depending on `defmode', we take
+         * it to be either parameters, seed or description.
+         
+     * We must be reasonably careful here not to modify anything in
+     * `me' until we have finished validating things. This function
+     * must either return an error and do nothing to the midend, or
+     * return success and do everything; nothing in between is
+     * acceptable.
+     
+         * The params string may underspecify the game parameters, so
+         * we must first initialise newcurparams with a full set of
+         * params from somewhere else before we decode_params the
+         * input string over the top.
+         *
+         * But which set? It depends on what other data we have.
+         *
+         * If we've been given a _descriptive_ game id, then that may
+         * well underspecify by design, e.g. Solo game descriptions
+         * often start just '3x3:' without specifying one of Solo's
+         * difficulty settings, because it isn't necessary once a game
+         * has been generated (and you might not even know it, if
+         * you're manually transcribing a game description). In that
+         * situation, I've always felt that the best thing to set the
+         * difficulty to (for use if the user hits 'New Game' after
+         * pasting in that game id) is whatever it was previously set
+         * to. That is, we use whatever is already in me->params as
+         * the basis for our decoding of this input string.
+         *
+         * A random-seed based game id, however, should use the real,
+         * built-in default params, and not even check the
+         * <game>_DEFAULT environment setting, because when people
+         * paste each other random seeds - whether it's two users
+         * arranging to generate the same game at the same time to
+         * race solving them, or a user sending a bug report upstream
+         * - the whole point is for the random game id to always be
+         * interpreted the same way, even if it does underspecify.
+         *
+         * A parameter string typed in on its own, with no seed _or_
+         * description, gets treated the same way as a random seed,
+         * because again I think the most likely reason for doing that
+         * is to have a portable representation of a set of params.
+         
+         * Now filter only the persistent parts of this state into
+         * the long-term params structure, unless we've _only_
+         * received a params string in which case the whole lot is
+         * persistent.
+         
+     * Now we've got past all possible error points. Update the
+     * midend itself.
+      _shouldn't_ happen!  _shouldn't_ happen, but can 
+     * Now enter the solved state as the next move.
+     
+     * We should probably never be called when the state stack has no
+     * states on it at all - ideally, midends should never be left in
+     * that state for long enough to get put down and forgotten about.
+     * But if we are, I think we return _true_ - pedantically speaking
+     * a midend in that state is 'vacuously solved', and more
+     * practically, a user whose midend has been left in that state
+     * probably _does_ want the 'new game' option to be prominent.
+     
+     * An important special case is that we are occasionally called
+     * with our own laststatus, to update the timer.
+     
+     * Each line of the save file contains three components. First
+     * exactly 8 characters of header word indicating what type of
+     * data is contained on the line; then a colon followed by a
+     * decimal integer giving the length of the main string on the
+     * line; then a colon followed by the string itself (exactly as
+     * many bytes as previously specified, no matter what they
+     * contain). Then a newline (of reasonably flexible form).
+     
+     * Magic string identifying the file, and version number of the
+     * file format.
+     
+     * The game name. (Copied locally to avoid const annoyance.)
+     
+     * The current long-term parameters structure, in full.
+     
+     * The current short-term parameters structure, in full.
+     
+     * The current game description, the privdesc, and the random seed.
+     
+     * The game's aux_info. We obfuscate this to prevent spoilers
+     * (people are likely to run `head' or similar on a saved game
+     * file simply to find out what it is, and don't necessarily
+     * want to be told the answer to the puzzle!)
+     
+     * Any required serialisation of the game_ui.
+     
+     * The game time, if it's a timed game.
+     
+     * The length of, and position in, the states list.
+     
+     * For each state after the initial one (which we know is
+     * constructed from either privdesc or desc), enough
+     * information for execute_move() to reconstruct it from the
+     * previous one.
+      only state 0 
+ * Internal version of midend_deserialise, taking an extra check
+ * function to be called just before beginning to install things in
+ * the midend.
+ *
+ * Like midend_deserialise proper, this function returns NULL on
+ * success, or an error message.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time
+     * from the serialised stream, until we have enough game states
+     * to finish.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  length in bytes 
+         * The seed's no use with this version, but we can perfectly
+         * well use the rest of the data.
+         
+     * Run the externally provided check function, and abort if it
+     * returns an error message.
+      error message is already in ret 
+     * Now we've run out of possible error conditions, so we're
+     * ready to start overwriting the real data in the current
+     * midend. We'll do this by swapping things with the local
+     * variables, so that the same cleanup code will free the old
+     * stuff.
+     
+     * Don't save the "new game undo/redo" state.  So "new game" twice or
+     * (in some environments) switching away and back, will make a
+     * "new game" irreversible.  Maybe in the future we will have a
+     * more sophisticated way to decide when to discard the previous
+     * game state.
+      success! 
+ * This function examines a saved game file just far enough to
+ * determine which game type it contains. It returns NULL on success
+ * and the game name string in 'name' (which will be dynamically
+ * allocated and should be caller-freed), or an error message on
+ * failure.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time from
+     * the serialised stream, until we've found the game name.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  _shouldn't_ happen!  game _should_ overwrite on error 
+     * This call passes over ownership of the two game_states and
+     * the game_params. Hence we duplicate the ones we want to
+     * keep, and we don't have to bother freeing soln if it was
+     * non-NULL.
+     
+ * midend.c: general middle fragment sitting between the
+ * platform-specific front end and game-specific back end.
+ * Maintains a move list, takes care of Undo and Redo commands, and
+ * processes standard keystrokes for undo/redo/new/quit.
+  for midend_game_id_int  for midend_state_entry.movetype  for midend_which_preset to check against 
+     * `desc' and `privdesc' deserve a comment.
+     * 
+     * `desc' is the game description as presented to the user when
+     * they ask for Game -> Specific. `privdesc', if non-NULL, is a
+     * different game description used to reconstruct the initial
+     * game_state when de-serialising. If privdesc is NULL, `desc'
+     * is used for both.
+     * 
+     * For almost all games, `privdesc' is NULL and never used. The
+     * exception (as usual) is Mines: the initial game state has no
+     * squares open at all, but after the first click `desc' is
+     * rewritten to describe a game state with an initial click and
+     * thus a bunch of squares open. If we used that desc to
+     * serialise and deserialise, then the initial game state after
+     * deserialisation would look unlike the initial game state
+     * beforehand, and worse still execute_move() might fail on the
+     * attempted first click. So `privdesc' is also used in this
+     * case, to provide a game description describing the same
+     * fixed mine layout _but_ no initial click. (These game IDs
+     * may also be typed directly into Mines if you like.)
+     
+ * Structure storing all the decoded data from reading a serialised
+ * game. We keep it in one of these while we check its sanity, and
+ * only once we're completely satisfied do we install it all in the
+ * midend structure proper.
+ 
+ * Forward reference.
+ 
+         * Allow an environment-based override for the default tile
+         * size by defining a variable along the lines of
+         * `NET_TILESIZE=15'.
+         
+     * Allow environment-based changing of the default settings by
+     * defining a variable along the lines of `NET_DEFAULT=25x25w'
+     * in which the value is an encoded parameter string.
+     
+     * Don't even bother, if we haven't worked out our tile size
+     * anyway yet.
+     
+     * We can't set the size on the same drawstate twice. So if
+     * we've already sized one drawstate, we must throw it away and
+     * create a new one.
+     
+     * Find the tile size that best fits within the given space. If
+     * `user_size' is true, we must actually find the _largest_ such
+     * tile size, in order to get as close to the user's explicit
+     * request as possible; otherwise, we bound above at the game's
+     * preferred tile size, so that the game gets what it wants
+     * provided that this doesn't break the constraint from the
+     * front-end (which is likely to be a screen size or similar).
+     
+     * Now binary-search between min and max. We're looking for a
+     * boundary rather than a value: the point at which tile sizes
+     * stop fitting within the given dimensions. Thus, we stop when
+     * max and min differ by exactly 1.
+     
+     * Now `min' is a valid size, and `max' isn't. So use `min'.
+      If the user requested a change in size, make it permanent. 
+         * Serialise the whole of the game that we're about to
+         * supersede, so that the 'New Game' action can be undone
+         * later.
+         *
+         * We omit this in various situations, such as if there
+         * _isn't_ a current game (not even a starting position)
+         * because this is the initial call to midend_new_game when
+         * the midend is first set up, or if the midend state has
+         * already begun to be overwritten by midend_set_config. In
+         * those situations, we want to avoid writing out any
+         * serialisation, because they will be either invalid, or
+         * worse, valid but wrong.
+         
+             * Generate a new random seed. 15 digits comes to about
+             * 48 bits, which should be more than enough.
+             * 
+             * I'll avoid putting a leading zero on the number,
+             * just in case it confuses anybody who thinks it's
+             * processed as an integer rather than a string.
+             
+	 * If this midend has been instantiated without providing a
+	 * drawing API, it is non-interactive. This means that it's
+	 * being used for bulk game generation, and hence we should
+	 * pass the non-interactive flag to new_desc.
+	 
+     * It might seem a bit odd that we're using me->params to
+     * create the initial game state, rather than me->curparams
+     * which is better tailored to this specific game and which we
+     * always know.
+     * 
+     * It's supposed to be an invariant in the midend that
+     * me->params and me->curparams differ in no aspect that is
+     * important after generation (i.e. after new_desc()). By
+     * deliberately passing the _less_ specific of these two
+     * parameter sets, we provoke play-time misbehaviour in the
+     * case where a game has failed to encode a play-time parameter
+     * in the non-full version of encode_params().
+     
+     * As part of our commitment to self-testing, test the aux
+     * string to make sure nothing ghastly went wrong.
+     
+     * Undoing a New Game operation is only permitted if it doesn't
+     * change the game parameters. The point of having the ability at
+     * all is to recover from the momentary finger error of having hit
+     * the 'n' key (perhaps in place of some other nearby key), or hit
+     * the New Game menu item by mistake when aiming for the adjacent
+     * Restart; in both those situations, the game params are the same
+     * before and after the new-game operation.
+     *
+     * In principle, we could generalise this so that _any_ call to
+     * midend_new_game could be undone, but that would need all front
+     * ends to be alert to the possibility that any keystroke passed
+     * to midend_process_key might (if it turns out to have been one
+     * of the synonyms for undo, which the frontend doesn't
+     * necessarily check for) have various knock-on effects like
+     * needing to select a different preset in the game type menu, or
+     * even resizing the window. At least for the moment, it's easier
+     * not to do that, and to simply disallow any newgame-undo that is
+     * disruptive in either of those ways.
+     *
+     * We check both params and cparams, to be as safe as possible.
+      Set a flag to distinguish this deserialise failure
+         * from one due to faulty decoding 
+     * Otherwise, fine, go ahead.
+     
+         * Serialise the current game so that you can later redo past
+         * this undo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_undo serialisation, so that we
+             * don't try to undo past the beginning of the game we've
+             * just gone back to and end up at the front of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can redo back into it later.
+             
+         * Serialise the current game so that you can later undo past
+         * this redo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_redo serialisation, so that we
+             * don't try to redo past the end of the game we've just
+             * come into and end up at the back of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can undo back into it later.
+             
+     * We do not flash if the later of the two states is special.
+     * This covers both forward Solve moves and backward (undone)
+     * Restart moves.
+      no point doing anything at all! 
+     * During restart, we reconstruct the game from the (public)
+     * game description rather than from states[0], because that
+     * way Mines gets slightly more sensible behaviour (restart
+     * goes to _after_ the first click so you don't have to
+     * remember where you clicked).
+     
+     * Now enter the restarted state as the next move.
+      never animate 
+             * make_move() is allowed to return its input state to
+             * indicate that although no move has been made, the UI
+             * state has been updated and a redraw is called for.
+             
+     * See if this move requires an animation.
+     
+     * Harmonise mouse drag and release messages.
+     * 
+     * Some front ends might accidentally switch from sending, say,
+     * RIGHT_DRAG messages to sending LEFT_DRAG, half way through a
+     * drag. (This can happen on the Mac, for example, since
+     * RIGHT_DRAG is usually done using Command+drag, and if the
+     * user accidentally releases Command half way through the drag
+     * then there will be trouble.)
+     * 
+     * It would be an O(number of front ends) annoyance to fix this
+     * in the front ends, but an O(number of back ends) annoyance
+     * to have each game capable of dealing with it. Therefore, we
+     * fix it _here_ in the common midend code so that it only has
+     * to be done once.
+     * 
+     * The possible ways in which things can go screwy in the front
+     * end are:
+     * 
+     *  - in a system containing multiple physical buttons button
+     *    presses can inadvertently overlap. We can see ABab (caps
+     *    meaning button-down and lowercase meaning button-up) when
+     *    the user had semantically intended AaBb.
+     * 
+     *  - in a system where one button is simulated by means of a
+     *    modifier key and another button, buttons can mutate
+     *    between press and release (possibly during drag). So we
+     *    can see Ab instead of Aa.
+     * 
+     * Definite requirements are:
+     * 
+     *  - button _presses_ must never be invented or destroyed. If
+     *    the user presses two buttons in succession, the button
+     *    presses must be transferred to the backend unchanged. So
+     *    if we see AaBb , that's fine; if we see ABab (the button
+     *    presses inadvertently overlapped) we must somehow
+     *    `correct' it to AaBb.
+     * 
+     *  - every mouse action must end up looking like a press, zero
+     *    or more drags, then a release. This allows back ends to
+     *    make the _assumption_ that incoming mouse data will be
+     *    sane in this regard, and not worry about the details.
+     * 
+     * So my policy will be:
+     * 
+     *  - treat any button-up as a button-up for the currently
+     *    pressed button, or ignore it if there is no currently
+     *    pressed button.
+     * 
+     *  - treat any drag as a drag for the currently pressed
+     *    button, or ignore it if there is no currently pressed
+     *    button.
+     * 
+     *  - if we see a button-down while another button is currently
+     *    pressed, invent a button-up for the first one and then
+     *    pass the button-down through as before.
+     * 
+     * 2005-05-31: An addendum to the above. Some games might want
+     * a `priority order' among buttons, such that if one button is
+     * pressed while another is down then a fixed one of the
+     * buttons takes priority no matter what order they're pressed
+     * in. Mines, in particular, wants to treat a left+right click
+     * like a left click for the benefit of users of other
+     * implementations. So the last of the above points is modified
+     * in the presence of an (optional) button priority order.
+     *
+     * A further addition: we translate certain keyboard presses to
+     * cursor key 'select' buttons, so that a) frontends don't have
+     * to translate these themselves (like they do for CURSOR_UP etc),
+     * and b) individual games don't have to hard-code button presses
+     * of '\n' etc for keyboard-based cursors. The choice of buttons
+     * here could eventually be controlled by a runtime configuration
+     * option.
+      ignore it 
+	 * If the new button has lower priority than the old one,
+	 * don't bother doing this.
+	  just ignore it 
+         * Fabricate a button-up for the previously pressed button.
+         
+     * Translate keyboard presses to cursor selection.
+     
+     * Normalise both backspace characters (8 and 127) to \b. Easier
+     * to do this once, here, than to require all front ends to
+     * carefully generate the same one - now each front end can
+     * generate whichever is easiest.
+     
+     * Now send on the event we originally received.
+     
+     * And update the currently pressed button.
+     shrug
+ * Nasty hacky function used to implement the --redo option in
+ * gtk.c. Only used for generating the puzzles' icons.
+ 
+         * Allow environment-based overrides for the standard
+         * colours by defining variables along the lines of
+         * `NET_COLOUR_4=6000c0'.
+         
+             * Special case: either open a new submenu with the given
+             * title, or terminate the current submenu.
+             
+                 * If we get a 'close submenu' indication at the top
+                 * level, there's not much we can do but quietly
+                 * ignore it.
+                  Drop this one from the list.  Expect the game to implement exactly one of the two preset APIs  Simple one-level menu  Hierarchical menu provided by the game backend 
+         * Allow user extensions to the preset list by defining an
+         * environment variable <gamename>_PRESETS whose value is a
+         * colon-separated list of items, alternating between textual
+         * titles in the menu and encoded parameter strings. For
+         * example, "SOLO_PRESETS=2x3 Advanced:2x3da" would define
+         * just one additional preset for Solo.
+         
+     * Finalise the menu: allocate an integer id to each entry, and
+     * store string encodings of the presets' parameters in
+     * me->encoded_presets.
+     
+         * For CFG_DESC the text going in here will be a string
+         * encoding of the restricted parameters, plus a colon,
+         * plus the game description. For CFG_SEED it will be the
+         * full parameters, plus a hash, plus the random seed data.
+         * Either of these is a valid full game ID (although only
+         * the former is likely to persist across many code
+         * changes).
+         
+         * We have a colon separating parameters from game
+         * description. So `par' now points to the parameters
+         * string, and `desc' to the description string.
+         
+         * We have a hash separating parameters from random seed.
+         * So `par' now points to the parameters string, and `seed'
+         * to the seed string.
+         
+         * We only have one string. Depending on `defmode', we take
+         * it to be either parameters, seed or description.
+         
+     * We must be reasonably careful here not to modify anything in
+     * `me' until we have finished validating things. This function
+     * must either return an error and do nothing to the midend, or
+     * return success and do everything; nothing in between is
+     * acceptable.
+     
+         * The params string may underspecify the game parameters, so
+         * we must first initialise newcurparams with a full set of
+         * params from somewhere else before we decode_params the
+         * input string over the top.
+         *
+         * But which set? It depends on what other data we have.
+         *
+         * If we've been given a _descriptive_ game id, then that may
+         * well underspecify by design, e.g. Solo game descriptions
+         * often start just '3x3:' without specifying one of Solo's
+         * difficulty settings, because it isn't necessary once a game
+         * has been generated (and you might not even know it, if
+         * you're manually transcribing a game description). In that
+         * situation, I've always felt that the best thing to set the
+         * difficulty to (for use if the user hits 'New Game' after
+         * pasting in that game id) is whatever it was previously set
+         * to. That is, we use whatever is already in me->params as
+         * the basis for our decoding of this input string.
+         *
+         * A random-seed based game id, however, should use the real,
+         * built-in default params, and not even check the
+         * <game>_DEFAULT environment setting, because when people
+         * paste each other random seeds - whether it's two users
+         * arranging to generate the same game at the same time to
+         * race solving them, or a user sending a bug report upstream
+         * - the whole point is for the random game id to always be
+         * interpreted the same way, even if it does underspecify.
+         *
+         * A parameter string typed in on its own, with no seed _or_
+         * description, gets treated the same way as a random seed,
+         * because again I think the most likely reason for doing that
+         * is to have a portable representation of a set of params.
+         
+         * Now filter only the persistent parts of this state into
+         * the long-term params structure, unless we've _only_
+         * received a params string in which case the whole lot is
+         * persistent.
+         
+     * Now we've got past all possible error points. Update the
+     * midend itself.
+      _shouldn't_ happen!  _shouldn't_ happen, but can 
+     * Now enter the solved state as the next move.
+     
+     * We should probably never be called when the state stack has no
+     * states on it at all - ideally, midends should never be left in
+     * that state for long enough to get put down and forgotten about.
+     * But if we are, I think we return _true_ - pedantically speaking
+     * a midend in that state is 'vacuously solved', and more
+     * practically, a user whose midend has been left in that state
+     * probably _does_ want the 'new game' option to be prominent.
+     
+     * An important special case is that we are occasionally called
+     * with our own laststatus, to update the timer.
+     
+     * Each line of the save file contains three components. First
+     * exactly 8 characters of header word indicating what type of
+     * data is contained on the line; then a colon followed by a
+     * decimal integer giving the length of the main string on the
+     * line; then a colon followed by the string itself (exactly as
+     * many bytes as previously specified, no matter what they
+     * contain). Then a newline (of reasonably flexible form).
+     
+     * Magic string identifying the file, and version number of the
+     * file format.
+     
+     * The game name. (Copied locally to avoid const annoyance.)
+     
+     * The current long-term parameters structure, in full.
+     
+     * The current short-term parameters structure, in full.
+     
+     * The current game description, the privdesc, and the random seed.
+     
+     * The game's aux_info. We obfuscate this to prevent spoilers
+     * (people are likely to run `head' or similar on a saved game
+     * file simply to find out what it is, and don't necessarily
+     * want to be told the answer to the puzzle!)
+     
+     * Any required serialisation of the game_ui.
+     
+     * The game time, if it's a timed game.
+     
+     * The length of, and position in, the states list.
+     
+     * For each state after the initial one (which we know is
+     * constructed from either privdesc or desc), enough
+     * information for execute_move() to reconstruct it from the
+     * previous one.
+      only state 0 
+ * Internal version of midend_deserialise, taking an extra check
+ * function to be called just before beginning to install things in
+ * the midend.
+ *
+ * Like midend_deserialise proper, this function returns NULL on
+ * success, or an error message.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time
+     * from the serialised stream, until we have enough game states
+     * to finish.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  length in bytes 
+         * The seed's no use with this version, but we can perfectly
+         * well use the rest of the data.
+         
+     * Run the externally provided check function, and abort if it
+     * returns an error message.
+      error message is already in ret 
+     * Now we've run out of possible error conditions, so we're
+     * ready to start overwriting the real data in the current
+     * midend. We'll do this by swapping things with the local
+     * variables, so that the same cleanup code will free the old
+     * stuff.
+     
+     * Don't save the "new game undo/redo" state.  So "new game" twice or
+     * (in some environments) switching away and back, will make a
+     * "new game" irreversible.  Maybe in the future we will have a
+     * more sophisticated way to decide when to discard the previous
+     * game state.
+      success! 
+ * This function examines a saved game file just far enough to
+ * determine which game type it contains. It returns NULL on success
+ * and the game name string in 'name' (which will be dynamically
+ * allocated and should be caller-freed), or an error message on
+ * failure.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time from
+     * the serialised stream, until we've found the game name.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  _shouldn't_ happen!  game _should_ overwrite on error 
+     * This call passes over ownership of the two game_states and
+     * the game_params. Hence we duplicate the ones we want to
+     * keep, and we don't have to bother freeing soln if it was
+     * non-NULL.
+     
+ * midend.c: general middle fragment sitting between the
+ * platform-specific front end and game-specific back end.
+ * Maintains a move list, takes care of Undo and Redo commands, and
+ * processes standard keystrokes for undo/redo/new/quit.
+  for midend_game_id_int  for midend_state_entry.movetype  for midend_which_preset to check against 
+     * `desc' and `privdesc' deserve a comment.
+     * 
+     * `desc' is the game description as presented to the user when
+     * they ask for Game -> Specific. `privdesc', if non-NULL, is a
+     * different game description used to reconstruct the initial
+     * game_state when de-serialising. If privdesc is NULL, `desc'
+     * is used for both.
+     * 
+     * For almost all games, `privdesc' is NULL and never used. The
+     * exception (as usual) is Mines: the initial game state has no
+     * squares open at all, but after the first click `desc' is
+     * rewritten to describe a game state with an initial click and
+     * thus a bunch of squares open. If we used that desc to
+     * serialise and deserialise, then the initial game state after
+     * deserialisation would look unlike the initial game state
+     * beforehand, and worse still execute_move() might fail on the
+     * attempted first click. So `privdesc' is also used in this
+     * case, to provide a game description describing the same
+     * fixed mine layout _but_ no initial click. (These game IDs
+     * may also be typed directly into Mines if you like.)
+     
+ * Structure storing all the decoded data from reading a serialised
+ * game. We keep it in one of these while we check its sanity, and
+ * only once we're completely satisfied do we install it all in the
+ * midend structure proper.
+ 
+ * Forward reference.
+ 
+         * Allow an environment-based override for the default tile
+         * size by defining a variable along the lines of
+         * `NET_TILESIZE=15'.
+         
+     * Allow environment-based changing of the default settings by
+     * defining a variable along the lines of `NET_DEFAULT=25x25w'
+     * in which the value is an encoded parameter string.
+     
+     * Don't even bother, if we haven't worked out our tile size
+     * anyway yet.
+     
+     * We can't set the size on the same drawstate twice. So if
+     * we've already sized one drawstate, we must throw it away and
+     * create a new one.
+     
+     * Find the tile size that best fits within the given space. If
+     * `user_size' is true, we must actually find the _largest_ such
+     * tile size, in order to get as close to the user's explicit
+     * request as possible; otherwise, we bound above at the game's
+     * preferred tile size, so that the game gets what it wants
+     * provided that this doesn't break the constraint from the
+     * front-end (which is likely to be a screen size or similar).
+     
+     * Now binary-search between min and max. We're looking for a
+     * boundary rather than a value: the point at which tile sizes
+     * stop fitting within the given dimensions. Thus, we stop when
+     * max and min differ by exactly 1.
+     
+     * Now `min' is a valid size, and `max' isn't. So use `min'.
+      If the user requested a change in size, make it permanent. 
+         * Serialise the whole of the game that we're about to
+         * supersede, so that the 'New Game' action can be undone
+         * later.
+         *
+         * We omit this in various situations, such as if there
+         * _isn't_ a current game (not even a starting position)
+         * because this is the initial call to midend_new_game when
+         * the midend is first set up, or if the midend state has
+         * already begun to be overwritten by midend_set_config. In
+         * those situations, we want to avoid writing out any
+         * serialisation, because they will be either invalid, or
+         * worse, valid but wrong.
+         
+             * Generate a new random seed. 15 digits comes to about
+             * 48 bits, which should be more than enough.
+             * 
+             * I'll avoid putting a leading zero on the number,
+             * just in case it confuses anybody who thinks it's
+             * processed as an integer rather than a string.
+             
+	 * If this midend has been instantiated without providing a
+	 * drawing API, it is non-interactive. This means that it's
+	 * being used for bulk game generation, and hence we should
+	 * pass the non-interactive flag to new_desc.
+	 
+     * It might seem a bit odd that we're using me->params to
+     * create the initial game state, rather than me->curparams
+     * which is better tailored to this specific game and which we
+     * always know.
+     * 
+     * It's supposed to be an invariant in the midend that
+     * me->params and me->curparams differ in no aspect that is
+     * important after generation (i.e. after new_desc()). By
+     * deliberately passing the _less_ specific of these two
+     * parameter sets, we provoke play-time misbehaviour in the
+     * case where a game has failed to encode a play-time parameter
+     * in the non-full version of encode_params().
+     
+     * As part of our commitment to self-testing, test the aux
+     * string to make sure nothing ghastly went wrong.
+     
+     * Undoing a New Game operation is only permitted if it doesn't
+     * change the game parameters. The point of having the ability at
+     * all is to recover from the momentary finger error of having hit
+     * the 'n' key (perhaps in place of some other nearby key), or hit
+     * the New Game menu item by mistake when aiming for the adjacent
+     * Restart; in both those situations, the game params are the same
+     * before and after the new-game operation.
+     *
+     * In principle, we could generalise this so that _any_ call to
+     * midend_new_game could be undone, but that would need all front
+     * ends to be alert to the possibility that any keystroke passed
+     * to midend_process_key might (if it turns out to have been one
+     * of the synonyms for undo, which the frontend doesn't
+     * necessarily check for) have various knock-on effects like
+     * needing to select a different preset in the game type menu, or
+     * even resizing the window. At least for the moment, it's easier
+     * not to do that, and to simply disallow any newgame-undo that is
+     * disruptive in either of those ways.
+     *
+     * We check both params and cparams, to be as safe as possible.
+      Set a flag to distinguish this deserialise failure
+         * from one due to faulty decoding 
+     * Otherwise, fine, go ahead.
+     
+         * Serialise the current game so that you can later redo past
+         * this undo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_undo serialisation, so that we
+             * don't try to undo past the beginning of the game we've
+             * just gone back to and end up at the front of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can redo back into it later.
+             
+         * Serialise the current game so that you can later undo past
+         * this redo. Once we're committed to the undo actually
+         * happening, we'll copy this data into place.
+          copy for reentrancy safety 
+             * Our post-deserialisation check shows that we can't use
+             * this saved game after all. (deserialise_error will
+             * contain the dummy error message generated by our check
+             * function, which we ignore.)
+             
+             * There should never be any _other_ deserialisation
+             * error, because this serialised data has been held in
+             * our memory since it was created, and hasn't had any
+             * opportunity to be corrupted on disk, accidentally
+             * replaced by the wrong file, etc., by user error.
+             
+             * Clear the old newgame_redo serialisation, so that we
+             * don't try to redo past the end of the game we've just
+             * come into and end up at the back of it again.
+             
+             * Copy the serialisation of the game we've just left into
+             * the midend so that we can undo back into it later.
+             
+     * We do not flash if the later of the two states is special.
+     * This covers both forward Solve moves and backward (undone)
+     * Restart moves.
+      no point doing anything at all! 
+     * During restart, we reconstruct the game from the (public)
+     * game description rather than from states[0], because that
+     * way Mines gets slightly more sensible behaviour (restart
+     * goes to _after_ the first click so you don't have to
+     * remember where you clicked).
+     
+     * Now enter the restarted state as the next move.
+      never animate 
+             * make_move() is allowed to return its input state to
+             * indicate that although no move has been made, the UI
+             * state has been updated and a redraw is called for.
+             
+     * See if this move requires an animation.
+     
+     * Harmonise mouse drag and release messages.
+     * 
+     * Some front ends might accidentally switch from sending, say,
+     * RIGHT_DRAG messages to sending LEFT_DRAG, half way through a
+     * drag. (This can happen on the Mac, for example, since
+     * RIGHT_DRAG is usually done using Command+drag, and if the
+     * user accidentally releases Command half way through the drag
+     * then there will be trouble.)
+     * 
+     * It would be an O(number of front ends) annoyance to fix this
+     * in the front ends, but an O(number of back ends) annoyance
+     * to have each game capable of dealing with it. Therefore, we
+     * fix it _here_ in the common midend code so that it only has
+     * to be done once.
+     * 
+     * The possible ways in which things can go screwy in the front
+     * end are:
+     * 
+     *  - in a system containing multiple physical buttons button
+     *    presses can inadvertently overlap. We can see ABab (caps
+     *    meaning button-down and lowercase meaning button-up) when
+     *    the user had semantically intended AaBb.
+     * 
+     *  - in a system where one button is simulated by means of a
+     *    modifier key and another button, buttons can mutate
+     *    between press and release (possibly during drag). So we
+     *    can see Ab instead of Aa.
+     * 
+     * Definite requirements are:
+     * 
+     *  - button _presses_ must never be invented or destroyed. If
+     *    the user presses two buttons in succession, the button
+     *    presses must be transferred to the backend unchanged. So
+     *    if we see AaBb , that's fine; if we see ABab (the button
+     *    presses inadvertently overlapped) we must somehow
+     *    `correct' it to AaBb.
+     * 
+     *  - every mouse action must end up looking like a press, zero
+     *    or more drags, then a release. This allows back ends to
+     *    make the _assumption_ that incoming mouse data will be
+     *    sane in this regard, and not worry about the details.
+     * 
+     * So my policy will be:
+     * 
+     *  - treat any button-up as a button-up for the currently
+     *    pressed button, or ignore it if there is no currently
+     *    pressed button.
+     * 
+     *  - treat any drag as a drag for the currently pressed
+     *    button, or ignore it if there is no currently pressed
+     *    button.
+     * 
+     *  - if we see a button-down while another button is currently
+     *    pressed, invent a button-up for the first one and then
+     *    pass the button-down through as before.
+     * 
+     * 2005-05-31: An addendum to the above. Some games might want
+     * a `priority order' among buttons, such that if one button is
+     * pressed while another is down then a fixed one of the
+     * buttons takes priority no matter what order they're pressed
+     * in. Mines, in particular, wants to treat a left+right click
+     * like a left click for the benefit of users of other
+     * implementations. So the last of the above points is modified
+     * in the presence of an (optional) button priority order.
+     *
+     * A further addition: we translate certain keyboard presses to
+     * cursor key 'select' buttons, so that a) frontends don't have
+     * to translate these themselves (like they do for CURSOR_UP etc),
+     * and b) individual games don't have to hard-code button presses
+     * of '\n' etc for keyboard-based cursors. The choice of buttons
+     * here could eventually be controlled by a runtime configuration
+     * option.
+      ignore it 
+	 * If the new button has lower priority than the old one,
+	 * don't bother doing this.
+	  just ignore it 
+         * Fabricate a button-up for the previously pressed button.
+         
+     * Translate keyboard presses to cursor selection.
+     
+     * Normalise both backspace characters (8 and 127) to \b. Easier
+     * to do this once, here, than to require all front ends to
+     * carefully generate the same one - now each front end can
+     * generate whichever is easiest.
+     
+     * Now send on the event we originally received.
+     
+     * And update the currently pressed button.
+     shrug
+ * Nasty hacky function used to implement the --redo option in
+ * gtk.c. Only used for generating the puzzles' icons.
+ 
+         * Allow environment-based overrides for the standard
+         * colours by defining variables along the lines of
+         * `NET_COLOUR_4=6000c0'.
+         
+             * Special case: either open a new submenu with the given
+             * title, or terminate the current submenu.
+             
+                 * If we get a 'close submenu' indication at the top
+                 * level, there's not much we can do but quietly
+                 * ignore it.
+                  Drop this one from the list.  Expect the game to implement exactly one of the two preset APIs  Simple one-level menu  Hierarchical menu provided by the game backend 
+         * Allow user extensions to the preset list by defining an
+         * environment variable <gamename>_PRESETS whose value is a
+         * colon-separated list of items, alternating between textual
+         * titles in the menu and encoded parameter strings. For
+         * example, "SOLO_PRESETS=2x3 Advanced:2x3da" would define
+         * just one additional preset for Solo.
+         
+     * Finalise the menu: allocate an integer id to each entry, and
+     * store string encodings of the presets' parameters in
+     * me->encoded_presets.
+     
+         * For CFG_DESC the text going in here will be a string
+         * encoding of the restricted parameters, plus a colon,
+         * plus the game description. For CFG_SEED it will be the
+         * full parameters, plus a hash, plus the random seed data.
+         * Either of these is a valid full game ID (although only
+         * the former is likely to persist across many code
+         * changes).
+         
+         * We have a colon separating parameters from game
+         * description. So `par' now points to the parameters
+         * string, and `desc' to the description string.
+         
+         * We have a hash separating parameters from random seed.
+         * So `par' now points to the parameters string, and `seed'
+         * to the seed string.
+         
+         * We only have one string. Depending on `defmode', we take
+         * it to be either parameters, seed or description.
+         
+     * We must be reasonably careful here not to modify anything in
+     * `me' until we have finished validating things. This function
+     * must either return an error and do nothing to the midend, or
+     * return success and do everything; nothing in between is
+     * acceptable.
+     
+         * The params string may underspecify the game parameters, so
+         * we must first initialise newcurparams with a full set of
+         * params from somewhere else before we decode_params the
+         * input string over the top.
+         *
+         * But which set? It depends on what other data we have.
+         *
+         * If we've been given a _descriptive_ game id, then that may
+         * well underspecify by design, e.g. Solo game descriptions
+         * often start just '3x3:' without specifying one of Solo's
+         * difficulty settings, because it isn't necessary once a game
+         * has been generated (and you might not even know it, if
+         * you're manually transcribing a game description). In that
+         * situation, I've always felt that the best thing to set the
+         * difficulty to (for use if the user hits 'New Game' after
+         * pasting in that game id) is whatever it was previously set
+         * to. That is, we use whatever is already in me->params as
+         * the basis for our decoding of this input string.
+         *
+         * A random-seed based game id, however, should use the real,
+         * built-in default params, and not even check the
+         * <game>_DEFAULT environment setting, because when people
+         * paste each other random seeds - whether it's two users
+         * arranging to generate the same game at the same time to
+         * race solving them, or a user sending a bug report upstream
+         * - the whole point is for the random game id to always be
+         * interpreted the same way, even if it does underspecify.
+         *
+         * A parameter string typed in on its own, with no seed _or_
+         * description, gets treated the same way as a random seed,
+         * because again I think the most likely reason for doing that
+         * is to have a portable representation of a set of params.
+         
+         * Now filter only the persistent parts of this state into
+         * the long-term params structure, unless we've _only_
+         * received a params string in which case the whole lot is
+         * persistent.
+         
+     * Now we've got past all possible error points. Update the
+     * midend itself.
+      _shouldn't_ happen!  _shouldn't_ happen, but can 
+     * Now enter the solved state as the next move.
+     
+     * We should probably never be called when the state stack has no
+     * states on it at all - ideally, midends should never be left in
+     * that state for long enough to get put down and forgotten about.
+     * But if we are, I think we return _true_ - pedantically speaking
+     * a midend in that state is 'vacuously solved', and more
+     * practically, a user whose midend has been left in that state
+     * probably _does_ want the 'new game' option to be prominent.
+     
+     * An important special case is that we are occasionally called
+     * with our own laststatus, to update the timer.
+     
+     * Each line of the save file contains three components. First
+     * exactly 8 characters of header word indicating what type of
+     * data is contained on the line; then a colon followed by a
+     * decimal integer giving the length of the main string on the
+     * line; then a colon followed by the string itself (exactly as
+     * many bytes as previously specified, no matter what they
+     * contain). Then a newline (of reasonably flexible form).
+     
+     * Magic string identifying the file, and version number of the
+     * file format.
+     
+     * The game name. (Copied locally to avoid const annoyance.)
+     
+     * The current long-term parameters structure, in full.
+     
+     * The current short-term parameters structure, in full.
+     
+     * The current game description, the privdesc, and the random seed.
+     
+     * The game's aux_info. We obfuscate this to prevent spoilers
+     * (people are likely to run `head' or similar on a saved game
+     * file simply to find out what it is, and don't necessarily
+     * want to be told the answer to the puzzle!)
+     
+     * Any required serialisation of the game_ui.
+     
+     * The game time, if it's a timed game.
+     
+     * The length of, and position in, the states list.
+     
+     * For each state after the initial one (which we know is
+     * constructed from either privdesc or desc), enough
+     * information for execute_move() to reconstruct it from the
+     * previous one.
+      only state 0 
+ * Internal version of midend_deserialise, taking an extra check
+ * function to be called just before beginning to install things in
+ * the midend.
+ *
+ * Like midend_deserialise proper, this function returns NULL on
+ * success, or an error message.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time
+     * from the serialised stream, until we have enough game states
+     * to finish.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  length in bytes 
+         * The seed's no use with this version, but we can perfectly
+         * well use the rest of the data.
+         
+     * Run the externally provided check function, and abort if it
+     * returns an error message.
+      error message is already in ret 
+     * Now we've run out of possible error conditions, so we're
+     * ready to start overwriting the real data in the current
+     * midend. We'll do this by swapping things with the local
+     * variables, so that the same cleanup code will free the old
+     * stuff.
+     
+     * Don't save the "new game undo/redo" state.  So "new game" twice or
+     * (in some environments) switching away and back, will make a
+     * "new game" irreversible.  Maybe in the future we will have a
+     * more sophisticated way to decide when to discard the previous
+     * game state.
+      success! 
+ * This function examines a saved game file just far enough to
+ * determine which game type it contains. It returns NULL on success
+ * and the game name string in 'name' (which will be dynamically
+ * allocated and should be caller-freed), or an error message on
+ * failure.
+  Initially all errors give the same report 
+     * Loop round and round reading one key/value pair at a time from
+     * the serialised stream, until we've found the game name.
+      unexpected EOF  unexpected EOF  unexpected EOF  ret already has the right message in it  Now most errors are this one, unless otherwise specified  _shouldn't_ happen!  game _should_ overwrite on error 
+     * This call passes over ownership of the two game_states and
+     * the game_params. Hence we duplicate the ones we want to
+     * keep, and we don't have to bother freeing soln if it was
+     * non-NULL.
+     

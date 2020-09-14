@@ -1,0 +1,175 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2011 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE 2 channels * 2 bytes/sample, interleaved  This is the target fill size of chunks on the pcm buffer
+   Can be any number of samples but power of two sizes make for faster and
+   smaller math - must be < 65536 bytes  Small guard buf to give decent space near end  Mnemonics for common data commit thresholds  Size of the crossfade buffer where codec data is written to be faded
+   on commit  Maximum contiguous space that PCM buffer will allow (to avoid excessive
+   draining between inserts and observe low-latency mode)  Forced buffer insert constraint can thus be from 1KB to 32KB using 8KB
+   chunks  Return data level in 1/4-second increments  Number of bytes played per second  Keep watermark high for large memory target - at least (2s)  1 seconds of buffer is low data  0.25 seconds  under watermark is low data  Describes each audio packet - keep it small since there are many of them  Actual size (0 < size <= PCMBUF_CHUNK_SIZE)  Who put the position info in
+                               (undefined: 0, valid: 1..POSITION_KEY_MAX)  Elapsed time to use  Offset to use  General PCM buffer data  Fade effect  Voice  Crossfade related state  Crossfade is OFF  Crossfade is fading in  New crossfade is starting  Next track continues fade  Current volume factor to use  Saturating end factor  Twice the number of samples  Twice the range of factors  Current error accumulator  Quotient of fade range / sample range  Remainder of fade range / sample range  Base increment (-1 or +1)  Allocate blocks if needed else abort at EOB  Defines for operations on position info when mixing/fading -
+   passed in offset parameter  Keep position info in chunk  Ignore position info in chunk  Positive values cause stamping/restamping  HAVE_CROSSFADE  Thread  Callbacks into playback.c ************************************ start PCM if callback says it's alright  Return number of commited bytes in buffer (committed chunks count as
+   a full chunk even if only partially filled)  Returns TRUE if amount of data is under the target fill size  Return the next PCM chunk in the PCM buffer given a byte index into it  Convert a byte offset in the PCM buffer into a pointer in the buffer  Convert a pointer in the buffer into an index offset  Return a chunk descriptor for a byte index in the buffer  Return the first byte of a chunk for a byte index in the buffer, offset by 'offset'
+   chunks  remainder => modulus  Test if a buffer index lies within the committed data region  Snip the tail of buffer at chunk of specified index plus chunk offset  Call with PCM lockout  Kill crossfade if it would now be operating in the void  HAVE_CROSSFADE * Accept new PCM data  Split the uncommitted data as needed into chunks, stopping when uncommitted
+   data is below the threshold  Copy to the beginning of the buffer all data that must wrap  Fill in the values in the new buffer chunk  Advance the current write chunk and make it available to the
+           PCM callback  Reset it before using it  If uncommitted data count is above or equal to the threshold, commit it  Place positioning information in the chunk  One-time stamping of a given chunk by the same track - new track may
+       overwrite  Set priority of the codec thread 
+ * expects pcm_fill_state in tenth-% units (e.g. full pcm buffer is 10)    0 - 10%   10 - 20%   20 - 30%   30 - 40%   40 - 50%   50 - 60%   60 - 70%  raising priority above 70% shouldn't be needed   70 - 80%   80 - 90%   90 -100%       100%  Keep voice and codec threads at the same priority or else voice
+     * will starve if the codec thread's priority is boosted.  HAVE_PRIORITY_SCHEDULING  Get the next available buffer and size - assumes adequate space exists  Obtain current chunk fill address  Get count to the end of the buffer where a wrap will happen +
+       the guard  Return available unwrapped space  Commit outstanding data leaving less than a chunk size remaining  Add this data and commit if one or more chunks are ready  Request space in the buffer for writing output samples  We're going to crossfade to a new track, which is now on its way  If crossfade has begun, put the new track samples in the crossfade
+       buffer area  HAVE_CROSSFADE  constrain request  Need to have length bytes to prevent wrapping overwriting - leave one
+       descriptor free to guard so that 0 != full in ring buffer  Maintain the buffer level above the watermark  1/4s latency.  Boost CPU if necessary  !playing  Boost CPU for pre-buffer  If pre-buffered to the watermark, start playback  always CROSSFADE_BUFSIZE  Give the maximum amount available if there's more  Handle new samples to the buffer  Revert to position updates by PCM * Init  Initialize the ringbuffer state  Reset counters  Reset first descriptor  Clear change notification  Initialize the PCM buffer. The structure looks like this:
+ * ...|---------PCMBUF---------|GUARDBUF|DESCS|  Set up the buffers  Mem-align buffer chunks for more efficient handling in lower layers  HAVE_CROSSFADE * Track change  Place a track change notification in a specific descriptor or post it
+   immediately if the buffer is empty or the index is invalid  Call with PCM lockout  If monitoring, set flag for one previous to specified chunk  Ensure PCM playback hasn't already played this out  Post now if buffer is no longer coming up  Clear end of track and optionally the positioning info for all data  Call with PCM lockout  Place a track change notification at the end of the buffer or post it
+   immediately if the buffer is empty  Commit all outstanding data before starting next track - tracks don't
+       comingle inside a single buffer chunk  Fill might not have been above watermark  Update position key so that:
+       1) Positions are keyed to the track to which they belong for sync
+          purposes
+
+       2) Buffers stamped with the outgoing track's positions are restamped
+          to the incoming track's positions when crossfading
+     Fill might not have been above watermark  Determine whether this track change needs to crossfaded and how  Don't enable mix mode when skipping tracks manually  HAVE_CROSSFADE  The codec is moving on to the next track, but the current track will
+         * continue to play, so mark the last write chunk as the last one in
+         * the track  Discard old data; caller needs no transition notification * Playback  PCM driver callback - Process the chunk that just finished - If last chunk in the track, notify of track change  Free it for reuse - Process the new one - Positioning chunk - notify playback  Force playback  Stop channel, empty and reset buffer  Reset channel  Reset buffer  Revert to position updates by PCM  Fader OFF  Can unboost the codec thread here no matter who's calling,
+     * pretend full pcm buffer to unboost * Crossfade  Initialize a fader  Linear fade  No data; set up as if fader finished the fade  Query if the fader has finished its envelope  Step fader by one sample  Cancel crossfade operation  Find the buffer index that's 'size' bytes away from 'index'  Align the needed buffer area up to the end of existing data  Automatic track changes only modify the last part of the buffer,
+             * so find the right chunk and sample to start the crossfade  Manual skips occur immediately, but give 1/5s to process  Run a fader on some buffers  Stop position updates for the chunk  Keep position info as it is  Replace position info  Fade the input buffer into the new destination chunk  Fade the input buffer and mix into the destination chunk  Fade the chunk in place  Move destination to next chunk as needed  End of existing data  Initializes crossfader, calculates all necessary parameters and performs
+ * fade-out with the PCM buffer.   Initialize the crossfade buffer size to all of the buffered data that
+     * has not yet been sent to the DMA  Reject crossfade if less than .5s of data  Fading will happen  Get fade info from settings.  Forego fade-in delay on manual skip - do the best to preserve auto skip
+           relationship  Completely process the crossfade fade-out effect with current PCM buffer  Existing buffers are short  Truncate fade-out delay  Truncate fade-out and eliminate fade-out delay  Find the right chunk and sample to start fading out  Fade out the specified amount of the already processed audio  Zero-out the rest of the buffer  Initialize fade-in counters  Find the right chunk and sample to start fading in - redo from read
+       chunk in case original position were/was overrun in callback - the
+       track change event _must not_ ever fail to happen  Move track transistion to chunk before the first one of incoming track  Perform fade-in of new track  Mix the data  If no more fading-in to do, stop the crossfade  Copy the pending setting over now  If crossfading, try to keep the buffer full other than 1 second  Otherwise, just use the default  Next setting to be used, not applied now  if pcmbuf_buffer is NULL, then not set up yet even once so always  no buffer change needed, so finish crossfade setup now  HAVE_CROSSFADE * Debug menu, other metrics  Amount of bytes left in the buffer, accounting for uncommitted bytes  Data bytes allocated for buffer  Number of committed descriptors  Total number of descriptors allocated * Fading and channel volume control  Sync the channel amplitude to all states  Tick that does the fade for the playback channel  ~1/3 second for full range fade  Fade is complete  Tell PCM to stop at its earliest convenience  Fade channel in or out in the background  Must pause any active fade  Simply set the level  Set direction and resume fade from current point  Return 'true' if fade is in progress  Quiet-down the channel if 'shhh' is true or else play at normal level  Have to block the tick or improper order could leave volume in soft
+       mode if fading reads the old value first but updates after us. * Time and position  Return the current position key value  Set position updates to be synchronous and immediate in addition to during
+   PCM frames - cancelled upon first codec insert or upon stopping * Misc **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2011 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE 2 channels * 2 bytes/sample, interleaved  This is the target fill size of chunks on the pcm buffer
+   Can be any number of samples but power of two sizes make for faster and
+   smaller math - must be < 65536 bytes  Small guard buf to give decent space near end  Mnemonics for common data commit thresholds  Size of the crossfade buffer where codec data is written to be faded
+   on commit  Maximum contiguous space that PCM buffer will allow (to avoid excessive
+   draining between inserts and observe low-latency mode)  Forced buffer insert constraint can thus be from 1KB to 32KB using 8KB
+   chunks  Return data level in 1/4-second increments  Number of bytes played per second  Keep watermark high for large memory target - at least (2s)  1 seconds of buffer is low data  0.25 seconds  under watermark is low data  Describes each audio packet - keep it small since there are many of them  Actual size (0 < size <= PCMBUF_CHUNK_SIZE)  Who put the position info in
+                               (undefined: 0, valid: 1..POSITION_KEY_MAX)  Elapsed time to use  Offset to use  General PCM buffer data  Fade effect  Voice  Crossfade related state  Crossfade is OFF  Crossfade is fading in  New crossfade is starting  Next track continues fade  Current volume factor to use  Saturating end factor  Twice the number of samples  Twice the range of factors  Current error accumulator  Quotient of fade range / sample range  Remainder of fade range / sample range  Base increment (-1 or +1)  Allocate blocks if needed else abort at EOB  Defines for operations on position info when mixing/fading -
+   passed in offset parameter  Keep position info in chunk  Ignore position info in chunk  Positive values cause stamping/restamping  HAVE_CROSSFADE  Thread  Callbacks into playback.c ************************************ start PCM if callback says it's alright  Return number of commited bytes in buffer (committed chunks count as
+   a full chunk even if only partially filled)  Returns TRUE if amount of data is under the target fill size  Return the next PCM chunk in the PCM buffer given a byte index into it  Convert a byte offset in the PCM buffer into a pointer in the buffer  Convert a pointer in the buffer into an index offset  Return a chunk descriptor for a byte index in the buffer  Return the first byte of a chunk for a byte index in the buffer, offset by 'offset'
+   chunks  remainder => modulus  Test if a buffer index lies within the committed data region  Snip the tail of buffer at chunk of specified index plus chunk offset  Call with PCM lockout  Kill crossfade if it would now be operating in the void  HAVE_CROSSFADE * Accept new PCM data  Split the uncommitted data as needed into chunks, stopping when uncommitted
+   data is below the threshold  Copy to the beginning of the buffer all data that must wrap  Fill in the values in the new buffer chunk  Advance the current write chunk and make it available to the
+           PCM callback  Reset it before using it  If uncommitted data count is above or equal to the threshold, commit it  Place positioning information in the chunk  One-time stamping of a given chunk by the same track - new track may
+       overwrite  Set priority of the codec thread 
+ * expects pcm_fill_state in tenth-% units (e.g. full pcm buffer is 10)    0 - 10%   10 - 20%   20 - 30%   30 - 40%   40 - 50%   50 - 60%   60 - 70%  raising priority above 70% shouldn't be needed   70 - 80%   80 - 90%   90 -100%       100%  Keep voice and codec threads at the same priority or else voice
+     * will starve if the codec thread's priority is boosted.  HAVE_PRIORITY_SCHEDULING  Get the next available buffer and size - assumes adequate space exists  Obtain current chunk fill address  Get count to the end of the buffer where a wrap will happen +
+       the guard  Return available unwrapped space  Commit outstanding data leaving less than a chunk size remaining  Add this data and commit if one or more chunks are ready  Request space in the buffer for writing output samples  We're going to crossfade to a new track, which is now on its way  If crossfade has begun, put the new track samples in the crossfade
+       buffer area  HAVE_CROSSFADE  constrain request  Need to have length bytes to prevent wrapping overwriting - leave one
+       descriptor free to guard so that 0 != full in ring buffer  Maintain the buffer level above the watermark  1/4s latency.  Boost CPU if necessary  !playing  Boost CPU for pre-buffer  If pre-buffered to the watermark, start playback  always CROSSFADE_BUFSIZE  Give the maximum amount available if there's more  Handle new samples to the buffer  Revert to position updates by PCM * Init  Initialize the ringbuffer state  Reset counters  Reset first descriptor  Clear change notification  Initialize the PCM buffer. The structure looks like this:
+ * ...|---------PCMBUF---------|GUARDBUF|DESCS|  Set up the buffers  Mem-align buffer chunks for more efficient handling in lower layers  HAVE_CROSSFADE * Track change  Place a track change notification in a specific descriptor or post it
+   immediately if the buffer is empty or the index is invalid  Call with PCM lockout  If monitoring, set flag for one previous to specified chunk  Ensure PCM playback hasn't already played this out  Post now if buffer is no longer coming up  Clear end of track and optionally the positioning info for all data  Call with PCM lockout  Place a track change notification at the end of the buffer or post it
+   immediately if the buffer is empty  Commit all outstanding data before starting next track - tracks don't
+       comingle inside a single buffer chunk  Fill might not have been above watermark  Update position key so that:
+       1) Positions are keyed to the track to which they belong for sync
+          purposes
+
+       2) Buffers stamped with the outgoing track's positions are restamped
+          to the incoming track's positions when crossfading
+     Fill might not have been above watermark  Determine whether this track change needs to crossfaded and how  Don't enable mix mode when skipping tracks manually  HAVE_CROSSFADE  The codec is moving on to the next track, but the current track will
+         * continue to play, so mark the last write chunk as the last one in
+         * the track  Discard old data; caller needs no transition notification * Playback  PCM driver callback - Process the chunk that just finished - If last chunk in the track, notify of track change  Free it for reuse - Process the new one - Positioning chunk - notify playback  Force playback  Stop channel, empty and reset buffer  Reset channel  Reset buffer  Revert to position updates by PCM  Fader OFF  Can unboost the codec thread here no matter who's calling,
+     * pretend full pcm buffer to unboost * Crossfade  Initialize a fader  Linear fade  No data; set up as if fader finished the fade  Query if the fader has finished its envelope  Step fader by one sample  Cancel crossfade operation  Find the buffer index that's 'size' bytes away from 'index'  Align the needed buffer area up to the end of existing data  Automatic track changes only modify the last part of the buffer,
+             * so find the right chunk and sample to start the crossfade  Manual skips occur immediately, but give 1/5s to process  Run a fader on some buffers  Stop position updates for the chunk  Keep position info as it is  Replace position info  Fade the input buffer into the new destination chunk  Fade the input buffer and mix into the destination chunk  Fade the chunk in place  Move destination to next chunk as needed  End of existing data  Initializes crossfader, calculates all necessary parameters and performs
+ * fade-out with the PCM buffer.   Initialize the crossfade buffer size to all of the buffered data that
+     * has not yet been sent to the DMA  Reject crossfade if less than .5s of data  Fading will happen  Get fade info from settings.  Forego fade-in delay on manual skip - do the best to preserve auto skip
+           relationship  Completely process the crossfade fade-out effect with current PCM buffer  Existing buffers are short  Truncate fade-out delay  Truncate fade-out and eliminate fade-out delay  Find the right chunk and sample to start fading out  Fade out the specified amount of the already processed audio  Zero-out the rest of the buffer  Initialize fade-in counters  Find the right chunk and sample to start fading in - redo from read
+       chunk in case original position were/was overrun in callback - the
+       track change event _must not_ ever fail to happen  Move track transistion to chunk before the first one of incoming track  Perform fade-in of new track  Mix the data  If no more fading-in to do, stop the crossfade  Copy the pending setting over now  If crossfading, try to keep the buffer full other than 1 second  Otherwise, just use the default  Next setting to be used, not applied now  if pcmbuf_buffer is NULL, then not set up yet even once so always  no buffer change needed, so finish crossfade setup now  HAVE_CROSSFADE * Debug menu, other metrics  Amount of bytes left in the buffer, accounting for uncommitted bytes  Data bytes allocated for buffer  Number of committed descriptors  Total number of descriptors allocated * Fading and channel volume control  Sync the channel amplitude to all states  Tick that does the fade for the playback channel  ~1/3 second for full range fade  Fade is complete  Tell PCM to stop at its earliest convenience  Fade channel in or out in the background  Must pause any active fade  Simply set the level  Set direction and resume fade from current point  Return 'true' if fade is in progress  Quiet-down the channel if 'shhh' is true or else play at normal level  Have to block the tick or improper order could leave volume in soft
+       mode if fading reads the old value first but updates after us. * Time and position  Return the current position key value  Set position updates to be synchronous and immediate in addition to during
+   PCM frames - cancelled upon first codec insert or upon stopping * Misc **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2011 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file #define LOGF_ENABLE 2 channels * 2 bytes/sample, interleaved  This is the target fill size of chunks on the pcm buffer
+   Can be any number of samples but power of two sizes make for faster and
+   smaller math - must be < 65536 bytes  Small guard buf to give decent space near end  Mnemonics for common data commit thresholds  Size of the crossfade buffer where codec data is written to be faded
+   on commit  Maximum contiguous space that PCM buffer will allow (to avoid excessive
+   draining between inserts and observe low-latency mode)  Forced buffer insert constraint can thus be from 1KB to 32KB using 8KB
+   chunks  Return data level in 1/4-second increments  Number of bytes played per second  Keep watermark high for large memory target - at least (2s)  1 seconds of buffer is low data  0.25 seconds  under watermark is low data  Describes each audio packet - keep it small since there are many of them  Actual size (0 < size <= PCMBUF_CHUNK_SIZE)  Who put the position info in
+                               (undefined: 0, valid: 1..POSITION_KEY_MAX)  Elapsed time to use  Offset to use  General PCM buffer data  Fade effect  Voice  Crossfade related state  Crossfade is OFF  Crossfade is fading in  New crossfade is starting  Next track continues fade  Current volume factor to use  Saturating end factor  Twice the number of samples  Twice the range of factors  Current error accumulator  Quotient of fade range / sample range  Remainder of fade range / sample range  Base increment (-1 or +1)  Allocate blocks if needed else abort at EOB  Defines for operations on position info when mixing/fading -
+   passed in offset parameter  Keep position info in chunk  Ignore position info in chunk  Positive values cause stamping/restamping  HAVE_CROSSFADE  Thread  Callbacks into playback.c ************************************ start PCM if callback says it's alright  Return number of commited bytes in buffer (committed chunks count as
+   a full chunk even if only partially filled)  Returns TRUE if amount of data is under the target fill size  Return the next PCM chunk in the PCM buffer given a byte index into it  Convert a byte offset in the PCM buffer into a pointer in the buffer  Convert a pointer in the buffer into an index offset  Return a chunk descriptor for a byte index in the buffer  Return the first byte of a chunk for a byte index in the buffer, offset by 'offset'
+   chunks  remainder => modulus  Test if a buffer index lies within the committed data region  Snip the tail of buffer at chunk of specified index plus chunk offset  Call with PCM lockout  Kill crossfade if it would now be operating in the void  HAVE_CROSSFADE * Accept new PCM data  Split the uncommitted data as needed into chunks, stopping when uncommitted
+   data is below the threshold  Copy to the beginning of the buffer all data that must wrap  Fill in the values in the new buffer chunk  Advance the current write chunk and make it available to the
+           PCM callback  Reset it before using it  If uncommitted data count is above or equal to the threshold, commit it  Place positioning information in the chunk  One-time stamping of a given chunk by the same track - new track may
+       overwrite  Set priority of the codec thread 
+ * expects pcm_fill_state in tenth-% units (e.g. full pcm buffer is 10)    0 - 10%   10 - 20%   20 - 30%   30 - 40%   40 - 50%   50 - 60%   60 - 70%  raising priority above 70% shouldn't be needed   70 - 80%   80 - 90%   90 -100%       100%  Keep voice and codec threads at the same priority or else voice
+     * will starve if the codec thread's priority is boosted.  HAVE_PRIORITY_SCHEDULING  Get the next available buffer and size - assumes adequate space exists  Obtain current chunk fill address  Get count to the end of the buffer where a wrap will happen +
+       the guard  Return available unwrapped space  Commit outstanding data leaving less than a chunk size remaining  Add this data and commit if one or more chunks are ready  Request space in the buffer for writing output samples  We're going to crossfade to a new track, which is now on its way  If crossfade has begun, put the new track samples in the crossfade
+       buffer area  HAVE_CROSSFADE  constrain request  Need to have length bytes to prevent wrapping overwriting - leave one
+       descriptor free to guard so that 0 != full in ring buffer  Maintain the buffer level above the watermark  1/4s latency.  Boost CPU if necessary  !playing  Boost CPU for pre-buffer  If pre-buffered to the watermark, start playback  always CROSSFADE_BUFSIZE  Give the maximum amount available if there's more  Handle new samples to the buffer  Revert to position updates by PCM * Init  Initialize the ringbuffer state  Reset counters  Reset first descriptor  Clear change notification  Initialize the PCM buffer. The structure looks like this:
+ * ...|---------PCMBUF---------|GUARDBUF|DESCS|  Set up the buffers  Mem-align buffer chunks for more efficient handling in lower layers  HAVE_CROSSFADE * Track change  Place a track change notification in a specific descriptor or post it
+   immediately if the buffer is empty or the index is invalid  Call with PCM lockout  If monitoring, set flag for one previous to specified chunk  Ensure PCM playback hasn't already played this out  Post now if buffer is no longer coming up  Clear end of track and optionally the positioning info for all data  Call with PCM lockout  Place a track change notification at the end of the buffer or post it
+   immediately if the buffer is empty  Commit all outstanding data before starting next track - tracks don't
+       comingle inside a single buffer chunk  Fill might not have been above watermark  Update position key so that:
+       1) Positions are keyed to the track to which they belong for sync
+          purposes
+
+       2) Buffers stamped with the outgoing track's positions are restamped
+          to the incoming track's positions when crossfading
+     Fill might not have been above watermark  Determine whether this track change needs to crossfaded and how  Don't enable mix mode when skipping tracks manually  HAVE_CROSSFADE  The codec is moving on to the next track, but the current track will
+         * continue to play, so mark the last write chunk as the last one in
+         * the track  Discard old data; caller needs no transition notification * Playback  PCM driver callback - Process the chunk that just finished - If last chunk in the track, notify of track change  Free it for reuse - Process the new one - Positioning chunk - notify playback  Force playback  Stop channel, empty and reset buffer  Reset channel  Reset buffer  Revert to position updates by PCM  Fader OFF  Can unboost the codec thread here no matter who's calling,
+     * pretend full pcm buffer to unboost * Crossfade  Initialize a fader  Linear fade  No data; set up as if fader finished the fade  Query if the fader has finished its envelope  Step fader by one sample  Cancel crossfade operation  Find the buffer index that's 'size' bytes away from 'index'  Align the needed buffer area up to the end of existing data  Automatic track changes only modify the last part of the buffer,
+             * so find the right chunk and sample to start the crossfade  Manual skips occur immediately, but give 1/5s to process  Run a fader on some buffers  Stop position updates for the chunk  Keep position info as it is  Replace position info  Fade the input buffer into the new destination chunk  Fade the input buffer and mix into the destination chunk  Fade the chunk in place  Move destination to next chunk as needed  End of existing data  Initializes crossfader, calculates all necessary parameters and performs
+ * fade-out with the PCM buffer.   Initialize the crossfade buffer size to all of the buffered data that
+     * has not yet been sent to the DMA  Reject crossfade if less than .5s of data  Fading will happen  Get fade info from settings.  Forego fade-in delay on manual skip - do the best to preserve auto skip
+           relationship  Completely process the crossfade fade-out effect with current PCM buffer  Existing buffers are short  Truncate fade-out delay  Truncate fade-out and eliminate fade-out delay  Find the right chunk and sample to start fading out  Fade out the specified amount of the already processed audio  Zero-out the rest of the buffer  Initialize fade-in counters  Find the right chunk and sample to start fading in - redo from read
+       chunk in case original position were/was overrun in callback - the
+       track change event _must not_ ever fail to happen  Move track transistion to chunk before the first one of incoming track  Perform fade-in of new track  Mix the data  If no more fading-in to do, stop the crossfade  Copy the pending setting over now  If crossfading, try to keep the buffer full other than 1 second  Otherwise, just use the default  Next setting to be used, not applied now  if pcmbuf_buffer is NULL, then not set up yet even once so always  no buffer change needed, so finish crossfade setup now  HAVE_CROSSFADE * Debug menu, other metrics  Amount of bytes left in the buffer, accounting for uncommitted bytes  Data bytes allocated for buffer  Number of committed descriptors  Total number of descriptors allocated * Fading and channel volume control  Sync the channel amplitude to all states  Tick that does the fade for the playback channel  ~1/3 second for full range fade  Fade is complete  Tell PCM to stop at its earliest convenience  Fade channel in or out in the background  Must pause any active fade  Simply set the level  Set direction and resume fade from current point  Return 'true' if fade is in progress  Quiet-down the channel if 'shhh' is true or else play at normal level  Have to block the tick or improper order could leave volume in soft
+       mode if fading reads the old value first but updates after us. * Time and position  Return the current position key value  Set position updates to be synchronous and immediate in addition to during
+   PCM frames - cancelled upon first codec insert or upon stopping * Misc 

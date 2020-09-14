@@ -1,0 +1,247 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Based on zenutils by Rasmus Ry <rasmus.ry{at}gmail.com>
+ * Copyright (C) 2013 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Keys used by players
+  HMAC-SHA1 key  BlowFish key *
+ * Information on how to patch firmwares
+  Descriptive name of this model (must match player in zen_players[])  Model name used in the Rockbox header in ".zen" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".zen" files - these are the same as MODEL_NUMBER in config-target.h  Bootloader load address  Dualboot code for this model  Size of dualboot functions for this model  keep this consistent with the address in dualboot.lds *
+ * MD5 knowledge base
+  Device model  md5sum of the file  Version string * Zen Mozaic  Version 1.06.01  Version 1.06.01e * Zen X-Fi  Version 1.04.08e  Version 1.04.08 * Zen V  Version 1.32.01e * Zen  Version 1.21.03e  'rock' *
+ * Stolen from various places in our codebase
+ *
+ * EDOC file format
+ *
+ * How does patching code work
+ * ---------------------------
+ *
+ * All Creative firmwares work the same: they start at 0 and the code sequence at
+ * 0 always contains the vector table with ldr with offsets:
+ *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+ *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+ *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+ *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+ *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+ *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+ *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+ *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+ *  20:       0000dbd4        .word start
+ *  24:       0000dcac        .word undef_instr_handler
+ *  28:       0000dcb0        .word software_int_handler
+ *  2c:       0000dcb4        .word prefetch_abort_handler
+ *  30:       0000dcb8        .word data_abort_handler
+ *  34:       0000dcbc        .word reserved_handler
+ *  38:       0000dcc0        .word irq_handler
+ *  3c:       0000dd08        .word fiq_handler
+ *
+ * To build a dual-boot image, we modify the start address to point to some
+ * code we added to the image. Specifically we first add the stub, then
+ * the rockbox image. We also write the old start address to this
+ * stub so that it can either decide to run rockbox or patch back the
+ * start address and jump to 0.
+ * Singleboot and recovery is handled the same way except that both targets use
+ * the same address and we drop the OF, so we create a fake vector table!
+ * We need to create a fake EDOC image, so first a header and one section
+     * header with one data chunk. * The fake image is as follows:
+     *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+     *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+     *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+     *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+     *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+     *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+     *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+     *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+     *  20:       00000040        .word   hang
+     *  24:       00000040        .word   hang
+     *  28:       00000040        .word   hang
+     *  2c:       00000040        .word   hang
+     *  30:       00000040        .word   hang
+     *  34:       00000040        .word   hang
+     *  38:       00000040        .word   hang
+     *  3c:       00000040        .word   hang
+     *  40 <hang>:
+     *  40:       eafffffe        b       40 <hang>  check if dualboot stub is available  if not asked to dualboot, drop OF and create a fake image  compute final image size: add stub + bootloader in one block as a section  sanity check  validate image and find OF start addr  extract address  patch vector  fix checksum  add extra section  add extra data  locate and patch dualboot footer  fix image * find player info * Find Win32 PE .data section * look for firmware and key in data section * descramble firmware * decompress it * check format and resize the buffer  CIFF block + NULL block* look for firmware file * validate player if possible * decrypt firmware * sanity checks on firmware * decompress firmware * Copy OF because patching might modify it * Patch firmware * Rebuild archive  if we keep old stuff, keep everything up to LT block, otherwise just CIFF header  move the rest of the archive if keeping old stuff  if we keep the OF, put a copy of it after renaming it to Hcreativeos.jrm  put modified firmware * fix header * update checksum  find an entry into zen_sums which matches the MD5 sum of a file  determine firmware model  load rockbox file  validate checksum  produce file **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Based on zenutils by Rasmus Ry <rasmus.ry{at}gmail.com>
+ * Copyright (C) 2013 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Keys used by players
+  HMAC-SHA1 key  BlowFish key *
+ * Information on how to patch firmwares
+  Descriptive name of this model (must match player in zen_players[])  Model name used in the Rockbox header in ".zen" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".zen" files - these are the same as MODEL_NUMBER in config-target.h  Bootloader load address  Dualboot code for this model  Size of dualboot functions for this model  keep this consistent with the address in dualboot.lds *
+ * MD5 knowledge base
+  Device model  md5sum of the file  Version string * Zen Mozaic  Version 1.06.01  Version 1.06.01e * Zen X-Fi  Version 1.04.08e  Version 1.04.08 * Zen V  Version 1.32.01e * Zen  Version 1.21.03e  'rock' *
+ * Stolen from various places in our codebase
+ *
+ * EDOC file format
+ *
+ * How does patching code work
+ * ---------------------------
+ *
+ * All Creative firmwares work the same: they start at 0 and the code sequence at
+ * 0 always contains the vector table with ldr with offsets:
+ *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+ *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+ *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+ *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+ *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+ *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+ *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+ *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+ *  20:       0000dbd4        .word start
+ *  24:       0000dcac        .word undef_instr_handler
+ *  28:       0000dcb0        .word software_int_handler
+ *  2c:       0000dcb4        .word prefetch_abort_handler
+ *  30:       0000dcb8        .word data_abort_handler
+ *  34:       0000dcbc        .word reserved_handler
+ *  38:       0000dcc0        .word irq_handler
+ *  3c:       0000dd08        .word fiq_handler
+ *
+ * To build a dual-boot image, we modify the start address to point to some
+ * code we added to the image. Specifically we first add the stub, then
+ * the rockbox image. We also write the old start address to this
+ * stub so that it can either decide to run rockbox or patch back the
+ * start address and jump to 0.
+ * Singleboot and recovery is handled the same way except that both targets use
+ * the same address and we drop the OF, so we create a fake vector table!
+ * We need to create a fake EDOC image, so first a header and one section
+     * header with one data chunk. * The fake image is as follows:
+     *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+     *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+     *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+     *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+     *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+     *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+     *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+     *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+     *  20:       00000040        .word   hang
+     *  24:       00000040        .word   hang
+     *  28:       00000040        .word   hang
+     *  2c:       00000040        .word   hang
+     *  30:       00000040        .word   hang
+     *  34:       00000040        .word   hang
+     *  38:       00000040        .word   hang
+     *  3c:       00000040        .word   hang
+     *  40 <hang>:
+     *  40:       eafffffe        b       40 <hang>  check if dualboot stub is available  if not asked to dualboot, drop OF and create a fake image  compute final image size: add stub + bootloader in one block as a section  sanity check  validate image and find OF start addr  extract address  patch vector  fix checksum  add extra section  add extra data  locate and patch dualboot footer  fix image * find player info * Find Win32 PE .data section * look for firmware and key in data section * descramble firmware * decompress it * check format and resize the buffer  CIFF block + NULL block* look for firmware file * validate player if possible * decrypt firmware * sanity checks on firmware * decompress firmware * Copy OF because patching might modify it * Patch firmware * Rebuild archive  if we keep old stuff, keep everything up to LT block, otherwise just CIFF header  move the rest of the archive if keeping old stuff  if we keep the OF, put a copy of it after renaming it to Hcreativeos.jrm  put modified firmware * fix header * update checksum  find an entry into zen_sums which matches the MD5 sum of a file  determine firmware model  load rockbox file  validate checksum  produce file **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Based on zenutils by Rasmus Ry <rasmus.ry{at}gmail.com>
+ * Copyright (C) 2013 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Keys used by players
+  HMAC-SHA1 key  BlowFish key *
+ * Information on how to patch firmwares
+  Descriptive name of this model (must match player in zen_players[])  Model name used in the Rockbox header in ".zen" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".zen" files - these are the same as MODEL_NUMBER in config-target.h  Bootloader load address  Dualboot code for this model  Size of dualboot functions for this model  keep this consistent with the address in dualboot.lds *
+ * MD5 knowledge base
+  Device model  md5sum of the file  Version string * Zen Mozaic  Version 1.06.01  Version 1.06.01e * Zen X-Fi  Version 1.04.08e  Version 1.04.08 * Zen V  Version 1.32.01e * Zen  Version 1.21.03e  'rock' *
+ * Stolen from various places in our codebase
+ *
+ * EDOC file format
+ *
+ * How does patching code work
+ * ---------------------------
+ *
+ * All Creative firmwares work the same: they start at 0 and the code sequence at
+ * 0 always contains the vector table with ldr with offsets:
+ *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+ *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+ *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+ *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+ *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+ *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+ *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+ *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+ *  20:       0000dbd4        .word start
+ *  24:       0000dcac        .word undef_instr_handler
+ *  28:       0000dcb0        .word software_int_handler
+ *  2c:       0000dcb4        .word prefetch_abort_handler
+ *  30:       0000dcb8        .word data_abort_handler
+ *  34:       0000dcbc        .word reserved_handler
+ *  38:       0000dcc0        .word irq_handler
+ *  3c:       0000dd08        .word fiq_handler
+ *
+ * To build a dual-boot image, we modify the start address to point to some
+ * code we added to the image. Specifically we first add the stub, then
+ * the rockbox image. We also write the old start address to this
+ * stub so that it can either decide to run rockbox or patch back the
+ * start address and jump to 0.
+ * Singleboot and recovery is handled the same way except that both targets use
+ * the same address and we drop the OF, so we create a fake vector table!
+ * We need to create a fake EDOC image, so first a header and one section
+     * header with one data chunk. * The fake image is as follows:
+     *   0:       e59ff018        ldr     pc, [pc, #24]   ; 0x20
+     *   4:       e59ff018        ldr     pc, [pc, #24]   ; 0x24
+     *   8:       e59ff018        ldr     pc, [pc, #24]   ; 0x28
+     *   c:       e59ff018        ldr     pc, [pc, #24]   ; 0x2c
+     *  10:       e59ff018        ldr     pc, [pc, #24]   ; 0x30
+     *  14:       e59ff018        ldr     pc, [pc, #24]   ; 0x34
+     *  18:       e59ff018        ldr     pc, [pc, #24]   ; 0x38
+     *  1c:       e59ff018        ldr     pc, [pc, #24]   ; 0x3c
+     *  20:       00000040        .word   hang
+     *  24:       00000040        .word   hang
+     *  28:       00000040        .word   hang
+     *  2c:       00000040        .word   hang
+     *  30:       00000040        .word   hang
+     *  34:       00000040        .word   hang
+     *  38:       00000040        .word   hang
+     *  3c:       00000040        .word   hang
+     *  40 <hang>:
+     *  40:       eafffffe        b       40 <hang>  check if dualboot stub is available  if not asked to dualboot, drop OF and create a fake image  compute final image size: add stub + bootloader in one block as a section  sanity check  validate image and find OF start addr  extract address  patch vector  fix checksum  add extra section  add extra data  locate and patch dualboot footer  fix image * find player info * Find Win32 PE .data section * look for firmware and key in data section * descramble firmware * decompress it * check format and resize the buffer  CIFF block + NULL block* look for firmware file * validate player if possible * decrypt firmware * sanity checks on firmware * decompress firmware * Copy OF because patching might modify it * Patch firmware * Rebuild archive  if we keep old stuff, keep everything up to LT block, otherwise just CIFF header  move the rest of the archive if keeping old stuff  if we keep the OF, put a copy of it after renaming it to Hcreativeos.jrm  put modified firmware * fix header * update checksum  find an entry into zen_sums which matches the MD5 sum of a file  determine firmware model  load rockbox file  validate checksum  produce file 

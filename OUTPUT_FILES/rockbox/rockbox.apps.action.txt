@@ -1,0 +1,679 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Jonathan Gordon
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** HAVE_BACKLIGHT #define LOGF_ENABLE timeout between filtered actions SL/BL  holds the action state between calls to get_action \ get_action_custom)  allow the ipod wheel to
+                                                     work on startup  action_last_t action_last *****************************************************************************
+** INTERNAL ACTION FUNCTIONS **************************************************
+*******************************************************************************
+*****************************************
+* has_flag compares value to a (SINGLE) flag
+* returns true if set, false otherwise
+ HELPER FUNCTIONS selective softlock and backlight ***************************************************************
+* is_action_filtered, selective softlock and backlight use this
+* to lookup which actions are filtered, matches are only true if
+* action is found and supplied SEL_ACTION mask has the flag.
+* returns false if the action isn't found or isn't enabled,
+* true if the action is found and is enabled
+Actions that are not mapped will not turn on the backlight option NOUNMAPPEDFMSFMSFMSFMS display action code of unfiltered actions switch******************************************************************************
+* is_action_discarded:
+* Most every action takes two rounds through get_action_worker,
+* once for the keypress and once for the key release,
+* actions with pre_button codes take even more, some actions however, only
+* take once; actions defined with only a button and no release/repeat event,
+* these actions should be acted upon immediately except when we have
+* selective backlighting/softlock enabled and in this case we only act upon
+* them immediately if there is no chance they have another event tied to them
+* determined using !is_prebutton or if action is completed
+* returns true if event was discarded and false if it was kept
+ Scrollwheel doesn't generate release events  directly after a match a key release event may trigger another has button been released/repeat or is this the only action it could be  if the action is not filtered and this isn't just a
+        * key release event then return false
+        * keeping action, and reset tick
+        ******************************************************
+* action_handle_backlight is used to both delay
+* and activate the backlight if HAVE_BACKLIGHT
+* and SEL_ACTION_ENABLED; backlight state is
+* set true/false and ignore_next sets the backlight
+* driver to ignore backlight_on commands from
+* other modules for a finite duration;
+* Ignore is set each time the action system
+* handles the backlight as a precaution since, if
+* the action system was not triggered the device would
+* appear unresponsive to the user.
+* If a backlight_on event hasn't been handled in the
+* ignore duration it will timeout and the next call
+* to backlight_on will trigger as normal
+ HAVE_BACKLIGHT must be set everytime we handle bl as a precautionary fallback  HAVE_BUTTON_LIGHT  HAVE_BACKLIGHT defined(HAVE_BACKLIGHT) || !defined(HAS_BUTTON_HOLD) HELPER FUNCTIONS*****************************************************************
+* action_poll_button filters button presses for get_action_worker;
+* if button_get_w_tmo returns...
+* BUTTON_NONE, SYS_EVENTS, MULTIMEDIA BUTTONS, ACTION_REDRAW
+* they are allowed to pass immediately through to handler.
+* if waiting for button release ACTION_NONE is returned until
+* button is released/repeated.
+ **************************************************************************
+    * if action_wait_for_release() was called without a button being pressed
+    * then actually waiting for release would do the wrong thing, i.e.
+    * the next key press is entirely ignored. So, if here comes a normal
+    * button press (neither release nor repeat) the press is a fresh one and
+    * no point in waiting for release
+    *
+    * This logic doesn't work for touchscreen which can send normal
+    * button events repeatedly before the first repeat (as in BUTTON_REPEAT).
+    * These cannot be distinguished from the very first touch
+    * but there's nothing we can do about it here
+     ********************************************************
+    * Can return button immediately, sys_event & multimedia
+    * button presses don't use the action system, Data from
+    * sys events can be pulled with button_get_data.
+    * BUTTON_REDRAW should result in a screen refresh
+     screen refresh  *************************************************
+    * If waiting for release, Don't send any buttons
+    * through until we see the release event
+     remember the button for button eating on context change  *********************************************
+    * Scrollwheel doesn't generate release events
+    * further processing needed
+     *************************************************************
+    * On Context Changed eat all buttons until the previous button
+    * was |BUTTON_REL (also eat the |BUTTON_REL button)
+     "safest" return value  ****************************
+    * regular button press,
+    * further processing needed
+     current context might contain ALLOW_SOFTLOCK save prior to stripping it ********************************************
+* update_screen_has_lock sets screen_has_lock
+* if passed context contains ALLOW_SOFTLOCK
+* and removes ALLOW_SOFTLOCK from the passed
+* context flag
+**********************************************
+* get_action_touchscreen allows touchscreen
+* presses to have short_press and repeat events
+*****************************************************************************
+* button_flip_horizontally, passed button is horizontally inverted to support
+* RTL language if the given language and context combination require it
+* Affected contexts: CONTEXT_STD, CONTEXT_TREE, CONTEXT_LIST, CONTEXT_MAINMENU
+* Affected buttons with rtl language:
+* BUTTON_LEFT, BUTTON_RIGHT,
+* Affected buttons with rtl language and !simulator:
+* BUTTON_SCROLL_BACK, BUTTON_SCROLL_FWD, BUTTON_MINUS, BUTTON_PLUS
+ !SIMULATOR  !BOOTLOADER  button_flip_horizontally *********************************************************************
+* action_code_worker is the worker function for action_code_lookup.
+* returns ACTION_UNKNOWN or the requested return value from the list.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context
+*******************************************************
+            * { Action Code,   Button code,    Prereq button code }
+            * CAVEAT: This will allways return the action without
+            * pre_button_code (pre_button_code = BUTTON_NONE)
+            * if it is found before 'falling through'
+            * to a lower 'chained' context.
+            *
+            * Example: button = UP|REL, last_button = UP;
+            *  while looking in CONTEXT_WPS there is an action defined
+            *  {ACTION_FOO, BUTTON_UP|BUTTON_REL, BUTTON_NONE}
+            *  then ACTION_FOO in CONTEXT_WPS will be returned
+            *  EVEN THOUGH you are expecting a fully matched
+            *  ACTION_BAR from CONTEXT_STD
+            *  {ACTION_BAR, BUTTON_UP|BUTTON_REL, BUTTON_UP}
+             Always allow an exact match  Only allow Loose match if exact match wasn't found  This could be another action depending on next button press  There is already an exact match **************************************************************************
+* get_next_context returns the next CONTEXT to be searched for action_code
+* by action_code_lookup(); if needed it first continues incrementing till
+* the end of current context map is reached; If there is another
+* 'chained' context below the current context this new context is returned
+* if there is not a 'chained' context to return, CONTEXT_STD is returned;
+***********************************************************************
+* action_code_lookup passes current button, last button and is_prebutton
+* to action_code_worker() which uses the current button map to
+* lookup action_code.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+* places action into current_action
+ logf("context = %x",context);  No more items, action was found, or STOPSEARCHING was specified ************************************
+* do_key_lock (dis)/enables softlock
+* based on lock flag, last button and
+* buttons still in queue are purged
+* if HAVE_TOUCHSCREEN then depending
+* on user selection it will be locked
+* or unlocked as well
+ disable touch device on keylock if std behavior or selected disable touch *********************************************
+* do_auto_softlock when user selects autolock
+* unlock_combo stored for later unlock
+* activates autolock on backlight timeout
+* toggles autolock on / off by
+* ACTION_STD_KEYLOCK presses;
+ set unlock combo to allow unlock  If we don't wait for a moment for the backlight queue
+             *  to process, the user will never see the message  HAVE_BACKLIGHT  HAS_BUTTON_HOLD ****************************************************
+* do_softlock Handles softlock once action is known
+* selective softlock allows user selected actions to
+* bypass a currently locked state, special lock state
+* autolock is handled here as well if HAVE_BACKLIGHT
+ no need to check softlock return immediately  standard softlock behavior  Lock/Unlock toggled by ACTION_STD_KEYLOCK presses Allow remote actions through All non-std softlock options are set to 0 if advanced sl is disabled always true on standard softlock behavior catch blocked actions on fast repeated presses  keys_locked always notify if power button pressed while keys locked If we don't wait for a moment for the backlight queue to process,
+        * the user will never see the message
+        !HAS_BUTTON_HOLD*********************************************************************
+* update_action_last copies the current action values into action_last
+* saving the current state & allowing get_action_worker() to return
+* while waiting for the next button press; Since some actions take
+* multiple buttons, this allows those actions to be looked up and
+* returned in a non-blocking way;
+* Returns action, checks\sets repeated, plays keyclick (if applicable)
+ Produce keyclick *******************************************************
+* init_act_cur initializes passed struct action_cur_t
+* with context, timeout,and get_context_map.
+* other values set to default
+* if get_context_map is NULL standard
+* context mapping will be used
+******************************************************
+* do_backlight allows exemptions to the backlight on
+* user selected actions; Actions need to be looked up
+* before the decision to turn on backlight is made,
+* if selective backlighting is enabled then
+* filter first keypress events may need
+* to be taken into account as well
+* IF SEL_ACTION_ENABLED then:
+* Returns action or is FFKeypress is enabled,
+* ACTION_NONE on first keypress
+* delays backlight_on until action is known
+* handles backlight_on if needed
+ disable if on external power  skip if backlight on | incorrect context | SEL_ACTION_NOEXT + ext pwr  standard backlight behaviour  Handle first keypress enables backlight only  set ignore next true  !HAVE_BACKLIGHT *******************************************************************
+* get_action_worker() searches the button list of the passed context
+* for the just pressed button. If there is a match it returns the
+* value from the list. If there is no match, the last item in the
+* list "points" to the next context in a chain so the "chain" is
+* followed until the button is found. ACTION_NONE int the button
+* list will get CONTEXT_STD which is always the last list checked.
+*
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+*
+*   Timeout can be: TIMEOUT_NOBLOCK to return immediatly
+*                   TIMEOUT_BLOCK   to wait for a button press
+*                   Any number >0   to wait that many ticks for a press
+if button = none/special; returns immediately
+*******************************************************************************
+* END INTERNAL ACTION FUNCTIONS ***********************************************
+***********************************************************************************************************************************************************
+* EXPORTED ACTION FUNCTIONS ***************************************************
+*******************************************************************************
+ return BUTTON_NONE               on error
+ *        BUTTON_REPEAT             if repeated press
+ *        BUTTON_REPEAT|BUTTON_REL  if release after repeated press
+ *        BUTTON_REL                if it's a short press = release after press
+ *        BUTTON_TOUCHSCREEN        if press
+  This is to return a BUTTON_REL after a BUTTON_REPEAT.  Enable selected actions to leave the backlight off  we will handle filter_first_keypress here so turn it off turnoff ffkp in button.c  HAVE_BACKLIGHT  Enable selected actions to bypass a locked state  !HAS_BUTTON_HOLD 
+*******************************************************************************
+* END EXPORTED ACTION FUNCTIONS ***********************************************
+********************************************************************************************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Jonathan Gordon
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** HAVE_BACKLIGHT #define LOGF_ENABLE timeout between filtered actions SL/BL  holds the action state between calls to get_action \ get_action_custom)  allow the ipod wheel to
+                                                     work on startup  action_last_t action_last *****************************************************************************
+** INTERNAL ACTION FUNCTIONS **************************************************
+*******************************************************************************
+*****************************************
+* has_flag compares value to a (SINGLE) flag
+* returns true if set, false otherwise
+ HELPER FUNCTIONS selective softlock and backlight ***************************************************************
+* is_action_filtered, selective softlock and backlight use this
+* to lookup which actions are filtered, matches are only true if
+* action is found and supplied SEL_ACTION mask has the flag.
+* returns false if the action isn't found or isn't enabled,
+* true if the action is found and is enabled
+Actions that are not mapped will not turn on the backlight option NOUNMAPPEDFMSFMSFMSFMS display action code of unfiltered actions switch******************************************************************************
+* is_action_discarded:
+* Most every action takes two rounds through get_action_worker,
+* once for the keypress and once for the key release,
+* actions with pre_button codes take even more, some actions however, only
+* take once; actions defined with only a button and no release/repeat event,
+* these actions should be acted upon immediately except when we have
+* selective backlighting/softlock enabled and in this case we only act upon
+* them immediately if there is no chance they have another event tied to them
+* determined using !is_prebutton or if action is completed
+* returns true if event was discarded and false if it was kept
+ Scrollwheel doesn't generate release events  directly after a match a key release event may trigger another has button been released/repeat or is this the only action it could be  if the action is not filtered and this isn't just a
+        * key release event then return false
+        * keeping action, and reset tick
+        ******************************************************
+* action_handle_backlight is used to both delay
+* and activate the backlight if HAVE_BACKLIGHT
+* and SEL_ACTION_ENABLED; backlight state is
+* set true/false and ignore_next sets the backlight
+* driver to ignore backlight_on commands from
+* other modules for a finite duration;
+* Ignore is set each time the action system
+* handles the backlight as a precaution since, if
+* the action system was not triggered the device would
+* appear unresponsive to the user.
+* If a backlight_on event hasn't been handled in the
+* ignore duration it will timeout and the next call
+* to backlight_on will trigger as normal
+ HAVE_BACKLIGHT must be set everytime we handle bl as a precautionary fallback  HAVE_BUTTON_LIGHT  HAVE_BACKLIGHT defined(HAVE_BACKLIGHT) || !defined(HAS_BUTTON_HOLD) HELPER FUNCTIONS*****************************************************************
+* action_poll_button filters button presses for get_action_worker;
+* if button_get_w_tmo returns...
+* BUTTON_NONE, SYS_EVENTS, MULTIMEDIA BUTTONS, ACTION_REDRAW
+* they are allowed to pass immediately through to handler.
+* if waiting for button release ACTION_NONE is returned until
+* button is released/repeated.
+ **************************************************************************
+    * if action_wait_for_release() was called without a button being pressed
+    * then actually waiting for release would do the wrong thing, i.e.
+    * the next key press is entirely ignored. So, if here comes a normal
+    * button press (neither release nor repeat) the press is a fresh one and
+    * no point in waiting for release
+    *
+    * This logic doesn't work for touchscreen which can send normal
+    * button events repeatedly before the first repeat (as in BUTTON_REPEAT).
+    * These cannot be distinguished from the very first touch
+    * but there's nothing we can do about it here
+     ********************************************************
+    * Can return button immediately, sys_event & multimedia
+    * button presses don't use the action system, Data from
+    * sys events can be pulled with button_get_data.
+    * BUTTON_REDRAW should result in a screen refresh
+     screen refresh  *************************************************
+    * If waiting for release, Don't send any buttons
+    * through until we see the release event
+     remember the button for button eating on context change  *********************************************
+    * Scrollwheel doesn't generate release events
+    * further processing needed
+     *************************************************************
+    * On Context Changed eat all buttons until the previous button
+    * was |BUTTON_REL (also eat the |BUTTON_REL button)
+     "safest" return value  ****************************
+    * regular button press,
+    * further processing needed
+     current context might contain ALLOW_SOFTLOCK save prior to stripping it ********************************************
+* update_screen_has_lock sets screen_has_lock
+* if passed context contains ALLOW_SOFTLOCK
+* and removes ALLOW_SOFTLOCK from the passed
+* context flag
+**********************************************
+* get_action_touchscreen allows touchscreen
+* presses to have short_press and repeat events
+*****************************************************************************
+* button_flip_horizontally, passed button is horizontally inverted to support
+* RTL language if the given language and context combination require it
+* Affected contexts: CONTEXT_STD, CONTEXT_TREE, CONTEXT_LIST, CONTEXT_MAINMENU
+* Affected buttons with rtl language:
+* BUTTON_LEFT, BUTTON_RIGHT,
+* Affected buttons with rtl language and !simulator:
+* BUTTON_SCROLL_BACK, BUTTON_SCROLL_FWD, BUTTON_MINUS, BUTTON_PLUS
+ !SIMULATOR  !BOOTLOADER  button_flip_horizontally *********************************************************************
+* action_code_worker is the worker function for action_code_lookup.
+* returns ACTION_UNKNOWN or the requested return value from the list.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context
+*******************************************************
+            * { Action Code,   Button code,    Prereq button code }
+            * CAVEAT: This will allways return the action without
+            * pre_button_code (pre_button_code = BUTTON_NONE)
+            * if it is found before 'falling through'
+            * to a lower 'chained' context.
+            *
+            * Example: button = UP|REL, last_button = UP;
+            *  while looking in CONTEXT_WPS there is an action defined
+            *  {ACTION_FOO, BUTTON_UP|BUTTON_REL, BUTTON_NONE}
+            *  then ACTION_FOO in CONTEXT_WPS will be returned
+            *  EVEN THOUGH you are expecting a fully matched
+            *  ACTION_BAR from CONTEXT_STD
+            *  {ACTION_BAR, BUTTON_UP|BUTTON_REL, BUTTON_UP}
+             Always allow an exact match  Only allow Loose match if exact match wasn't found  This could be another action depending on next button press  There is already an exact match **************************************************************************
+* get_next_context returns the next CONTEXT to be searched for action_code
+* by action_code_lookup(); if needed it first continues incrementing till
+* the end of current context map is reached; If there is another
+* 'chained' context below the current context this new context is returned
+* if there is not a 'chained' context to return, CONTEXT_STD is returned;
+***********************************************************************
+* action_code_lookup passes current button, last button and is_prebutton
+* to action_code_worker() which uses the current button map to
+* lookup action_code.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+* places action into current_action
+ logf("context = %x",context);  No more items, action was found, or STOPSEARCHING was specified ************************************
+* do_key_lock (dis)/enables softlock
+* based on lock flag, last button and
+* buttons still in queue are purged
+* if HAVE_TOUCHSCREEN then depending
+* on user selection it will be locked
+* or unlocked as well
+ disable touch device on keylock if std behavior or selected disable touch *********************************************
+* do_auto_softlock when user selects autolock
+* unlock_combo stored for later unlock
+* activates autolock on backlight timeout
+* toggles autolock on / off by
+* ACTION_STD_KEYLOCK presses;
+ set unlock combo to allow unlock  If we don't wait for a moment for the backlight queue
+             *  to process, the user will never see the message  HAVE_BACKLIGHT  HAS_BUTTON_HOLD ****************************************************
+* do_softlock Handles softlock once action is known
+* selective softlock allows user selected actions to
+* bypass a currently locked state, special lock state
+* autolock is handled here as well if HAVE_BACKLIGHT
+ no need to check softlock return immediately  standard softlock behavior  Lock/Unlock toggled by ACTION_STD_KEYLOCK presses Allow remote actions through All non-std softlock options are set to 0 if advanced sl is disabled always true on standard softlock behavior catch blocked actions on fast repeated presses  keys_locked always notify if power button pressed while keys locked If we don't wait for a moment for the backlight queue to process,
+        * the user will never see the message
+        !HAS_BUTTON_HOLD*********************************************************************
+* update_action_last copies the current action values into action_last
+* saving the current state & allowing get_action_worker() to return
+* while waiting for the next button press; Since some actions take
+* multiple buttons, this allows those actions to be looked up and
+* returned in a non-blocking way;
+* Returns action, checks\sets repeated, plays keyclick (if applicable)
+ Produce keyclick *******************************************************
+* init_act_cur initializes passed struct action_cur_t
+* with context, timeout,and get_context_map.
+* other values set to default
+* if get_context_map is NULL standard
+* context mapping will be used
+******************************************************
+* do_backlight allows exemptions to the backlight on
+* user selected actions; Actions need to be looked up
+* before the decision to turn on backlight is made,
+* if selective backlighting is enabled then
+* filter first keypress events may need
+* to be taken into account as well
+* IF SEL_ACTION_ENABLED then:
+* Returns action or is FFKeypress is enabled,
+* ACTION_NONE on first keypress
+* delays backlight_on until action is known
+* handles backlight_on if needed
+ disable if on external power  skip if backlight on | incorrect context | SEL_ACTION_NOEXT + ext pwr  standard backlight behaviour  Handle first keypress enables backlight only  set ignore next true  !HAVE_BACKLIGHT *******************************************************************
+* get_action_worker() searches the button list of the passed context
+* for the just pressed button. If there is a match it returns the
+* value from the list. If there is no match, the last item in the
+* list "points" to the next context in a chain so the "chain" is
+* followed until the button is found. ACTION_NONE int the button
+* list will get CONTEXT_STD which is always the last list checked.
+*
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+*
+*   Timeout can be: TIMEOUT_NOBLOCK to return immediatly
+*                   TIMEOUT_BLOCK   to wait for a button press
+*                   Any number >0   to wait that many ticks for a press
+if button = none/special; returns immediately
+*******************************************************************************
+* END INTERNAL ACTION FUNCTIONS ***********************************************
+***********************************************************************************************************************************************************
+* EXPORTED ACTION FUNCTIONS ***************************************************
+*******************************************************************************
+ return BUTTON_NONE               on error
+ *        BUTTON_REPEAT             if repeated press
+ *        BUTTON_REPEAT|BUTTON_REL  if release after repeated press
+ *        BUTTON_REL                if it's a short press = release after press
+ *        BUTTON_TOUCHSCREEN        if press
+  This is to return a BUTTON_REL after a BUTTON_REPEAT.  Enable selected actions to leave the backlight off  we will handle filter_first_keypress here so turn it off turnoff ffkp in button.c  HAVE_BACKLIGHT  Enable selected actions to bypass a locked state  !HAS_BUTTON_HOLD 
+*******************************************************************************
+* END EXPORTED ACTION FUNCTIONS ***********************************************
+********************************************************************************************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006 Jonathan Gordon
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** HAVE_BACKLIGHT #define LOGF_ENABLE timeout between filtered actions SL/BL  holds the action state between calls to get_action \ get_action_custom)  allow the ipod wheel to
+                                                     work on startup  action_last_t action_last *****************************************************************************
+** INTERNAL ACTION FUNCTIONS **************************************************
+*******************************************************************************
+*****************************************
+* has_flag compares value to a (SINGLE) flag
+* returns true if set, false otherwise
+ HELPER FUNCTIONS selective softlock and backlight ***************************************************************
+* is_action_filtered, selective softlock and backlight use this
+* to lookup which actions are filtered, matches are only true if
+* action is found and supplied SEL_ACTION mask has the flag.
+* returns false if the action isn't found or isn't enabled,
+* true if the action is found and is enabled
+Actions that are not mapped will not turn on the backlight option NOUNMAPPEDFMSFMSFMSFMS display action code of unfiltered actions switch******************************************************************************
+* is_action_discarded:
+* Most every action takes two rounds through get_action_worker,
+* once for the keypress and once for the key release,
+* actions with pre_button codes take even more, some actions however, only
+* take once; actions defined with only a button and no release/repeat event,
+* these actions should be acted upon immediately except when we have
+* selective backlighting/softlock enabled and in this case we only act upon
+* them immediately if there is no chance they have another event tied to them
+* determined using !is_prebutton or if action is completed
+* returns true if event was discarded and false if it was kept
+ Scrollwheel doesn't generate release events  directly after a match a key release event may trigger another has button been released/repeat or is this the only action it could be  if the action is not filtered and this isn't just a
+        * key release event then return false
+        * keeping action, and reset tick
+        ******************************************************
+* action_handle_backlight is used to both delay
+* and activate the backlight if HAVE_BACKLIGHT
+* and SEL_ACTION_ENABLED; backlight state is
+* set true/false and ignore_next sets the backlight
+* driver to ignore backlight_on commands from
+* other modules for a finite duration;
+* Ignore is set each time the action system
+* handles the backlight as a precaution since, if
+* the action system was not triggered the device would
+* appear unresponsive to the user.
+* If a backlight_on event hasn't been handled in the
+* ignore duration it will timeout and the next call
+* to backlight_on will trigger as normal
+ HAVE_BACKLIGHT must be set everytime we handle bl as a precautionary fallback  HAVE_BUTTON_LIGHT  HAVE_BACKLIGHT defined(HAVE_BACKLIGHT) || !defined(HAS_BUTTON_HOLD) HELPER FUNCTIONS*****************************************************************
+* action_poll_button filters button presses for get_action_worker;
+* if button_get_w_tmo returns...
+* BUTTON_NONE, SYS_EVENTS, MULTIMEDIA BUTTONS, ACTION_REDRAW
+* they are allowed to pass immediately through to handler.
+* if waiting for button release ACTION_NONE is returned until
+* button is released/repeated.
+ **************************************************************************
+    * if action_wait_for_release() was called without a button being pressed
+    * then actually waiting for release would do the wrong thing, i.e.
+    * the next key press is entirely ignored. So, if here comes a normal
+    * button press (neither release nor repeat) the press is a fresh one and
+    * no point in waiting for release
+    *
+    * This logic doesn't work for touchscreen which can send normal
+    * button events repeatedly before the first repeat (as in BUTTON_REPEAT).
+    * These cannot be distinguished from the very first touch
+    * but there's nothing we can do about it here
+     ********************************************************
+    * Can return button immediately, sys_event & multimedia
+    * button presses don't use the action system, Data from
+    * sys events can be pulled with button_get_data.
+    * BUTTON_REDRAW should result in a screen refresh
+     screen refresh  *************************************************
+    * If waiting for release, Don't send any buttons
+    * through until we see the release event
+     remember the button for button eating on context change  *********************************************
+    * Scrollwheel doesn't generate release events
+    * further processing needed
+     *************************************************************
+    * On Context Changed eat all buttons until the previous button
+    * was |BUTTON_REL (also eat the |BUTTON_REL button)
+     "safest" return value  ****************************
+    * regular button press,
+    * further processing needed
+     current context might contain ALLOW_SOFTLOCK save prior to stripping it ********************************************
+* update_screen_has_lock sets screen_has_lock
+* if passed context contains ALLOW_SOFTLOCK
+* and removes ALLOW_SOFTLOCK from the passed
+* context flag
+**********************************************
+* get_action_touchscreen allows touchscreen
+* presses to have short_press and repeat events
+*****************************************************************************
+* button_flip_horizontally, passed button is horizontally inverted to support
+* RTL language if the given language and context combination require it
+* Affected contexts: CONTEXT_STD, CONTEXT_TREE, CONTEXT_LIST, CONTEXT_MAINMENU
+* Affected buttons with rtl language:
+* BUTTON_LEFT, BUTTON_RIGHT,
+* Affected buttons with rtl language and !simulator:
+* BUTTON_SCROLL_BACK, BUTTON_SCROLL_FWD, BUTTON_MINUS, BUTTON_PLUS
+ !SIMULATOR  !BOOTLOADER  button_flip_horizontally *********************************************************************
+* action_code_worker is the worker function for action_code_lookup.
+* returns ACTION_UNKNOWN or the requested return value from the list.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context
+*******************************************************
+            * { Action Code,   Button code,    Prereq button code }
+            * CAVEAT: This will allways return the action without
+            * pre_button_code (pre_button_code = BUTTON_NONE)
+            * if it is found before 'falling through'
+            * to a lower 'chained' context.
+            *
+            * Example: button = UP|REL, last_button = UP;
+            *  while looking in CONTEXT_WPS there is an action defined
+            *  {ACTION_FOO, BUTTON_UP|BUTTON_REL, BUTTON_NONE}
+            *  then ACTION_FOO in CONTEXT_WPS will be returned
+            *  EVEN THOUGH you are expecting a fully matched
+            *  ACTION_BAR from CONTEXT_STD
+            *  {ACTION_BAR, BUTTON_UP|BUTTON_REL, BUTTON_UP}
+             Always allow an exact match  Only allow Loose match if exact match wasn't found  This could be another action depending on next button press  There is already an exact match **************************************************************************
+* get_next_context returns the next CONTEXT to be searched for action_code
+* by action_code_lookup(); if needed it first continues incrementing till
+* the end of current context map is reached; If there is another
+* 'chained' context below the current context this new context is returned
+* if there is not a 'chained' context to return, CONTEXT_STD is returned;
+***********************************************************************
+* action_code_lookup passes current button, last button and is_prebutton
+* to action_code_worker() which uses the current button map to
+* lookup action_code.
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+* places action into current_action
+ logf("context = %x",context);  No more items, action was found, or STOPSEARCHING was specified ************************************
+* do_key_lock (dis)/enables softlock
+* based on lock flag, last button and
+* buttons still in queue are purged
+* if HAVE_TOUCHSCREEN then depending
+* on user selection it will be locked
+* or unlocked as well
+ disable touch device on keylock if std behavior or selected disable touch *********************************************
+* do_auto_softlock when user selects autolock
+* unlock_combo stored for later unlock
+* activates autolock on backlight timeout
+* toggles autolock on / off by
+* ACTION_STD_KEYLOCK presses;
+ set unlock combo to allow unlock  If we don't wait for a moment for the backlight queue
+             *  to process, the user will never see the message  HAVE_BACKLIGHT  HAS_BUTTON_HOLD ****************************************************
+* do_softlock Handles softlock once action is known
+* selective softlock allows user selected actions to
+* bypass a currently locked state, special lock state
+* autolock is handled here as well if HAVE_BACKLIGHT
+ no need to check softlock return immediately  standard softlock behavior  Lock/Unlock toggled by ACTION_STD_KEYLOCK presses Allow remote actions through All non-std softlock options are set to 0 if advanced sl is disabled always true on standard softlock behavior catch blocked actions on fast repeated presses  keys_locked always notify if power button pressed while keys locked If we don't wait for a moment for the backlight queue to process,
+        * the user will never see the message
+        !HAS_BUTTON_HOLD*********************************************************************
+* update_action_last copies the current action values into action_last
+* saving the current state & allowing get_action_worker() to return
+* while waiting for the next button press; Since some actions take
+* multiple buttons, this allows those actions to be looked up and
+* returned in a non-blocking way;
+* Returns action, checks\sets repeated, plays keyclick (if applicable)
+ Produce keyclick *******************************************************
+* init_act_cur initializes passed struct action_cur_t
+* with context, timeout,and get_context_map.
+* other values set to default
+* if get_context_map is NULL standard
+* context mapping will be used
+******************************************************
+* do_backlight allows exemptions to the backlight on
+* user selected actions; Actions need to be looked up
+* before the decision to turn on backlight is made,
+* if selective backlighting is enabled then
+* filter first keypress events may need
+* to be taken into account as well
+* IF SEL_ACTION_ENABLED then:
+* Returns action or is FFKeypress is enabled,
+* ACTION_NONE on first keypress
+* delays backlight_on until action is known
+* handles backlight_on if needed
+ disable if on external power  skip if backlight on | incorrect context | SEL_ACTION_NOEXT + ext pwr  standard backlight behaviour  Handle first keypress enables backlight only  set ignore next true  !HAVE_BACKLIGHT *******************************************************************
+* get_action_worker() searches the button list of the passed context
+* for the just pressed button. If there is a match it returns the
+* value from the list. If there is no match, the last item in the
+* list "points" to the next context in a chain so the "chain" is
+* followed until the button is found. ACTION_NONE int the button
+* list will get CONTEXT_STD which is always the last list checked.
+*
+* BE AWARE IF YOUR DESIRED ACTION IS IN A LOWER 'CHAINED' CONTEXT::
+* *** is_prebutton can miss pre_buttons
+* ** An action without pre_button_code (pre_button_code = BUTTON_NONE)
+* *  will be returned from the higher context see action_code_worker()
+*  for a more in-depth explanation
+*
+*   Timeout can be: TIMEOUT_NOBLOCK to return immediatly
+*                   TIMEOUT_BLOCK   to wait for a button press
+*                   Any number >0   to wait that many ticks for a press
+if button = none/special; returns immediately
+*******************************************************************************
+* END INTERNAL ACTION FUNCTIONS ***********************************************
+***********************************************************************************************************************************************************
+* EXPORTED ACTION FUNCTIONS ***************************************************
+*******************************************************************************
+ return BUTTON_NONE               on error
+ *        BUTTON_REPEAT             if repeated press
+ *        BUTTON_REPEAT|BUTTON_REL  if release after repeated press
+ *        BUTTON_REL                if it's a short press = release after press
+ *        BUTTON_TOUCHSCREEN        if press
+  This is to return a BUTTON_REL after a BUTTON_REPEAT.  Enable selected actions to leave the backlight off  we will handle filter_first_keypress here so turn it off turnoff ffkp in button.c  HAVE_BACKLIGHT  Enable selected actions to bypass a locked state  !HAS_BUTTON_HOLD 
+*******************************************************************************
+* END EXPORTED ACTION FUNCTIONS ***********************************************
+******************************************************************************

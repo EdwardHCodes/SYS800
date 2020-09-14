@@ -1,0 +1,679 @@
+
+ * separate.c: Implementation of `Block Puzzle', a Japanese-only
+ * Nikoli puzzle seen at
+ *   http://www.nikoli.co.jp/ja/puzzles/block_puzzle/
+ * 
+ * It's difficult to be absolutely sure of the rules since online
+ * Japanese translators are so bad, but looking at the sample
+ * puzzle it seems fairly clear that the rules of this one are
+ * very simple. You have an mxn grid in which every square
+ * contains a letter, there are k distinct letters with k dividing
+ * mn, and every letter occurs the same number of times; your aim
+ * is to find a partition of the grid into disjoint k-ominoes such
+ * that each k-omino contains exactly one of each letter.
+ * 
+ * (It may be that Nikoli always have m,n,k equal to one another.
+ * However, I don't see that that's critical to the puzzle; k|mn
+ * is the only really important constraint, and even that could
+ * probably be dispensed with if some squares were marked as
+ * unused.)
+ 
+ * Current status: only the solver/generator is yet written, and
+ * although working in principle it's _very_ slow. It generates
+ * 5x5n5 or 6x6n4 readily enough, 6x6n6 with a bit of effort, and
+ * 7x7n7 only with a serious strain. I haven't dared try it higher
+ * than that yet.
+ * 
+ * One idea to speed it up is to implement more of the solver.
+ * Ideas I've so far had include:
+ * 
+ *  - Generalise the deduction currently expressed as `an
+ *    undersized chain with only one direction to extend must take
+ *    it'. More generally, the deduction should say `if all the
+ *    possible k-ominoes containing a given chain also contain
+ *    square x, then mark square x as part of that k-omino'.
+ *     + For example, consider this case:
+ * 
+ *         a ? b    This represents the top left of a board; the letters
+ *         ? ? ?    a,b,c do not represent the letters used in the puzzle,
+ *         c ? ?    but indicate that those three squares are known to be
+ *                  of different ominoes. Now if k >= 4, we can immediately
+ *         deduce that the square midway between b and c belongs to the
+ *         same omino as a, because there is no way we can make a 4-or-
+ *         more-omino containing a which does not also contain that square.
+ *         (Most easily seen by imagining cutting that square out of the 
+ *         grid; then, clearly, the omino containing a has only two
+ *         squares to expand into, and needs at least three.)
+ * 
+ *    The key difficulty with this mode of reasoning is
+ *    identifying such squares. I can't immediately think of a
+ *    simple algorithm for finding them on a wholesale basis.
+ * 
+ *  - Bfs out from a chain looking for the letters it lacks. For
+ *    example, in this situation (top three rows of a 7x7n7 grid):
+ * 
+ *        +-----------+-+
+ *        |E-A-F-B-C D|D|
+ *        +-------     ||
+ *        |E-C-G-D G|G E|
+ *        +-+---        |
+ *        |E|E G A B F A|
+ *
+ *    In this situation we can be sure that the top left chain
+ *    E-A-F-B-C does extend rightwards to the D, because there is
+ *    no other D within reach of that chain. Note also that the
+ *    bfs can skip squares which are known to belong to other
+ *    ominoes than this one.
+ * 
+ *    (This deduction, I fear, should only be used in an
+ *    emergency, because it relies on _all_ squares within range
+ *    of the bfs having particular values and so using it during
+ *    incremental generation rather nails down a lot of the grid.)
+ * 
+ * It's conceivable that another thing we could do would be to
+ * increase the flexibility in the grid generator: instead of
+ * nailing down the _value_ of any square depended on, merely nail
+ * down its equivalence to other squares. Unfortunately this turns
+ * the letter-selection phase of generation into a general graph
+ * colouring problem (we must draw a graph with equivalence
+ * classes of squares as the vertices, and an edge between any two
+ * vertices representing equivalence classes which contain squares
+ * that share an omino, and then k-colour the result) and hence
+ * requires recursion, which bodes ill for something we're doing
+ * that many times per generation.
+ * 
+ * I suppose a simple thing I could try would be tuning the retry
+ * count, just in case it's set too high or too low for efficient
+ * generation.
+  FIXME: a bit bigger?  structure copy  ----------------------------------------------------------------------
+ * Solver and generator.
+ 
+     * Tracks connectedness between squares.
+     
+     * size[dsf_canonify(dsf, yx)] tracks the size of the
+     * connected component containing yx.
+     
+     * contents[dsf_canonify(dsf, yx)*k+i] tracks whether or not
+     * the connected component containing yx includes letter i. If
+     * the value is -1, it doesn't; otherwise its value is the
+     * index in the main grid of the square which contributes that
+     * letter to the component.
+     
+     * disconnect[dsf_canonify(dsf, yx1)*w*h + dsf_canonify(dsf, yx2)]
+     * tracks whether or not the connected components containing
+     * yx1 and yx2 are known to be distinct.
+     
+     * Temporary space used only inside particular solver loops.
+     
+     * To connect two components together into a bigger one, we
+     * start by merging them in the dsf itself.
+     
+     * The size of the new component is the sum of the sizes of the
+     * old ones.
+     
+     * The contents bitmap of the new component is the union of the
+     * contents of the old ones.
+     * 
+     * Given two numbers at most one of which is not -1, we can
+     * find the other one by adding the two and adding 1; this
+     * will yield -1 if both were -1 to begin with, otherwise the
+     * other.
+     * 
+     * (A neater approach would be to take their bitwise AND, but
+     * this is unfortunately not well-defined standard C when done
+     * to signed integers.)
+     
+     * We must combine the rows _and_ the columns in the disconnect
+     * matrix.
+     
+     * Mark the components as disconnected from each other in the
+     * disconnect matrix.
+     
+     * Set up most of the scratch space. We don't set up the
+     * contents array, however, because this will change if we
+     * adjust the letter arrangement and re-run the solver.
+     
+     * Set up the contents array from the grid.
+     
+	 * Go over the grid looking for reasons to add to the
+	 * disconnect matrix. We're after pairs of squares which:
+	 * 
+	 *  - are adjacent in the grid
+	 *  - belong to distinct dsf components
+	 *  - their components are not already marked as
+	 *    disconnected
+	 *  - their components share a letter in common.
+	  one square is outside the grid  same dsf component  already known disconnected  no letter in common 
+		     * We've found one. Mark yx and yx2 as
+		     * disconnected from each other.
+		     
+		     * We have just made a deduction which hinges
+		     * on two particular grid squares being the
+		     * same. If we are feeding back to a generator
+		     * loop, we must therefore mark those squares
+		     * as fixed in the generator, so that future
+		     * rearrangement of the grid will not break
+		     * the information on which we have already
+		     * based deductions.
+		     
+	 * Now go over the grid looking for dsf components which
+	 * are below maximum size and only have one way to extend,
+	 * and extending them.
+	 
+			 * Component yx can be extended into square
+			 * yx2.
+			  multiple choices found 
+		 * Make sure we haven't connected the two already
+		 * during this loop (which could happen if for
+		 * _both_ components this was the only way to
+		 * extend them).
+		 
+     * Return 0 if we haven't made any progress; 1 if we've done
+     * something but not solved it completely; 2 if we've solved
+     * it completely.
+     
+	 * Go through the dsf and find the indices of all the
+	 * squares involved in each omino, in a manner conducive
+	 * to per-omino indexing. We set permutation[i*k+j] to be
+	 * the index of the jth square (ordered arbitrarily) in
+	 * omino i.
+	 
+		 * During this loop and the following one, we use
+		 * the last element of each row of permutation[]
+		 * as a counter of the number of indices so far
+		 * placed in it. When we place the final index of
+		 * an omino, that counter is overwritten, but that
+		 * doesn't matter because we'll never use it
+		 * again. Of course this depends critically on
+		 * divvy_rectangle() having returned correct
+		 * results, or else chaos would ensue.
+		 
+	 * Track which squares' letters we have already depended
+	 * on for deductions. This is gradually updated by
+	 * solver_attempt().
+	 
+	 * Now repeatedly fill the grid with letters, and attempt
+	 * to solve it. If the solver makes progress but does not
+	 * fail completely, then gen_lock will have been updated
+	 * and we try again. On a complete failure, though, we
+	 * have no option but to give up and abandon this set of
+	 * ominoes.
+	 
+	     * Fill the grid with letters. We can safely use
+	     * sc->tmp to hold the set of letters required at each
+	     * stage, since it's at least size k and is currently
+	     * unused.
+	     
+		 * First, determine the set of letters already
+		 * placed in this omino by gen_lock.
+		 
+		 * Now collect together all the remaining letters
+		 * and randomly shuffle them.
+		 
+		 * Finally, write the shuffled letters into the
+		 * grid.
+		 
+	     * Now we have a candidate grid. Attempt to progress
+	     * the solution.
+	      success  failure  reset this counter, and continue  ----------------------------------------------------------------------
+ * End of solver/generator code.
+  ----------------------------------------------------------------------
+ * Drawing routines.
+  FIXME 
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+      game_request_keys  FIXME  wants_statusbar  flags 
+ * separate.c: Implementation of `Block Puzzle', a Japanese-only
+ * Nikoli puzzle seen at
+ *   http://www.nikoli.co.jp/ja/puzzles/block_puzzle/
+ * 
+ * It's difficult to be absolutely sure of the rules since online
+ * Japanese translators are so bad, but looking at the sample
+ * puzzle it seems fairly clear that the rules of this one are
+ * very simple. You have an mxn grid in which every square
+ * contains a letter, there are k distinct letters with k dividing
+ * mn, and every letter occurs the same number of times; your aim
+ * is to find a partition of the grid into disjoint k-ominoes such
+ * that each k-omino contains exactly one of each letter.
+ * 
+ * (It may be that Nikoli always have m,n,k equal to one another.
+ * However, I don't see that that's critical to the puzzle; k|mn
+ * is the only really important constraint, and even that could
+ * probably be dispensed with if some squares were marked as
+ * unused.)
+ 
+ * Current status: only the solver/generator is yet written, and
+ * although working in principle it's _very_ slow. It generates
+ * 5x5n5 or 6x6n4 readily enough, 6x6n6 with a bit of effort, and
+ * 7x7n7 only with a serious strain. I haven't dared try it higher
+ * than that yet.
+ * 
+ * One idea to speed it up is to implement more of the solver.
+ * Ideas I've so far had include:
+ * 
+ *  - Generalise the deduction currently expressed as `an
+ *    undersized chain with only one direction to extend must take
+ *    it'. More generally, the deduction should say `if all the
+ *    possible k-ominoes containing a given chain also contain
+ *    square x, then mark square x as part of that k-omino'.
+ *     + For example, consider this case:
+ * 
+ *         a ? b    This represents the top left of a board; the letters
+ *         ? ? ?    a,b,c do not represent the letters used in the puzzle,
+ *         c ? ?    but indicate that those three squares are known to be
+ *                  of different ominoes. Now if k >= 4, we can immediately
+ *         deduce that the square midway between b and c belongs to the
+ *         same omino as a, because there is no way we can make a 4-or-
+ *         more-omino containing a which does not also contain that square.
+ *         (Most easily seen by imagining cutting that square out of the 
+ *         grid; then, clearly, the omino containing a has only two
+ *         squares to expand into, and needs at least three.)
+ * 
+ *    The key difficulty with this mode of reasoning is
+ *    identifying such squares. I can't immediately think of a
+ *    simple algorithm for finding them on a wholesale basis.
+ * 
+ *  - Bfs out from a chain looking for the letters it lacks. For
+ *    example, in this situation (top three rows of a 7x7n7 grid):
+ * 
+ *        +-----------+-+
+ *        |E-A-F-B-C D|D|
+ *        +-------     ||
+ *        |E-C-G-D G|G E|
+ *        +-+---        |
+ *        |E|E G A B F A|
+ *
+ *    In this situation we can be sure that the top left chain
+ *    E-A-F-B-C does extend rightwards to the D, because there is
+ *    no other D within reach of that chain. Note also that the
+ *    bfs can skip squares which are known to belong to other
+ *    ominoes than this one.
+ * 
+ *    (This deduction, I fear, should only be used in an
+ *    emergency, because it relies on _all_ squares within range
+ *    of the bfs having particular values and so using it during
+ *    incremental generation rather nails down a lot of the grid.)
+ * 
+ * It's conceivable that another thing we could do would be to
+ * increase the flexibility in the grid generator: instead of
+ * nailing down the _value_ of any square depended on, merely nail
+ * down its equivalence to other squares. Unfortunately this turns
+ * the letter-selection phase of generation into a general graph
+ * colouring problem (we must draw a graph with equivalence
+ * classes of squares as the vertices, and an edge between any two
+ * vertices representing equivalence classes which contain squares
+ * that share an omino, and then k-colour the result) and hence
+ * requires recursion, which bodes ill for something we're doing
+ * that many times per generation.
+ * 
+ * I suppose a simple thing I could try would be tuning the retry
+ * count, just in case it's set too high or too low for efficient
+ * generation.
+  FIXME: a bit bigger?  structure copy  ----------------------------------------------------------------------
+ * Solver and generator.
+ 
+     * Tracks connectedness between squares.
+     
+     * size[dsf_canonify(dsf, yx)] tracks the size of the
+     * connected component containing yx.
+     
+     * contents[dsf_canonify(dsf, yx)*k+i] tracks whether or not
+     * the connected component containing yx includes letter i. If
+     * the value is -1, it doesn't; otherwise its value is the
+     * index in the main grid of the square which contributes that
+     * letter to the component.
+     
+     * disconnect[dsf_canonify(dsf, yx1)*w*h + dsf_canonify(dsf, yx2)]
+     * tracks whether or not the connected components containing
+     * yx1 and yx2 are known to be distinct.
+     
+     * Temporary space used only inside particular solver loops.
+     
+     * To connect two components together into a bigger one, we
+     * start by merging them in the dsf itself.
+     
+     * The size of the new component is the sum of the sizes of the
+     * old ones.
+     
+     * The contents bitmap of the new component is the union of the
+     * contents of the old ones.
+     * 
+     * Given two numbers at most one of which is not -1, we can
+     * find the other one by adding the two and adding 1; this
+     * will yield -1 if both were -1 to begin with, otherwise the
+     * other.
+     * 
+     * (A neater approach would be to take their bitwise AND, but
+     * this is unfortunately not well-defined standard C when done
+     * to signed integers.)
+     
+     * We must combine the rows _and_ the columns in the disconnect
+     * matrix.
+     
+     * Mark the components as disconnected from each other in the
+     * disconnect matrix.
+     
+     * Set up most of the scratch space. We don't set up the
+     * contents array, however, because this will change if we
+     * adjust the letter arrangement and re-run the solver.
+     
+     * Set up the contents array from the grid.
+     
+	 * Go over the grid looking for reasons to add to the
+	 * disconnect matrix. We're after pairs of squares which:
+	 * 
+	 *  - are adjacent in the grid
+	 *  - belong to distinct dsf components
+	 *  - their components are not already marked as
+	 *    disconnected
+	 *  - their components share a letter in common.
+	  one square is outside the grid  same dsf component  already known disconnected  no letter in common 
+		     * We've found one. Mark yx and yx2 as
+		     * disconnected from each other.
+		     
+		     * We have just made a deduction which hinges
+		     * on two particular grid squares being the
+		     * same. If we are feeding back to a generator
+		     * loop, we must therefore mark those squares
+		     * as fixed in the generator, so that future
+		     * rearrangement of the grid will not break
+		     * the information on which we have already
+		     * based deductions.
+		     
+	 * Now go over the grid looking for dsf components which
+	 * are below maximum size and only have one way to extend,
+	 * and extending them.
+	 
+			 * Component yx can be extended into square
+			 * yx2.
+			  multiple choices found 
+		 * Make sure we haven't connected the two already
+		 * during this loop (which could happen if for
+		 * _both_ components this was the only way to
+		 * extend them).
+		 
+     * Return 0 if we haven't made any progress; 1 if we've done
+     * something but not solved it completely; 2 if we've solved
+     * it completely.
+     
+	 * Go through the dsf and find the indices of all the
+	 * squares involved in each omino, in a manner conducive
+	 * to per-omino indexing. We set permutation[i*k+j] to be
+	 * the index of the jth square (ordered arbitrarily) in
+	 * omino i.
+	 
+		 * During this loop and the following one, we use
+		 * the last element of each row of permutation[]
+		 * as a counter of the number of indices so far
+		 * placed in it. When we place the final index of
+		 * an omino, that counter is overwritten, but that
+		 * doesn't matter because we'll never use it
+		 * again. Of course this depends critically on
+		 * divvy_rectangle() having returned correct
+		 * results, or else chaos would ensue.
+		 
+	 * Track which squares' letters we have already depended
+	 * on for deductions. This is gradually updated by
+	 * solver_attempt().
+	 
+	 * Now repeatedly fill the grid with letters, and attempt
+	 * to solve it. If the solver makes progress but does not
+	 * fail completely, then gen_lock will have been updated
+	 * and we try again. On a complete failure, though, we
+	 * have no option but to give up and abandon this set of
+	 * ominoes.
+	 
+	     * Fill the grid with letters. We can safely use
+	     * sc->tmp to hold the set of letters required at each
+	     * stage, since it's at least size k and is currently
+	     * unused.
+	     
+		 * First, determine the set of letters already
+		 * placed in this omino by gen_lock.
+		 
+		 * Now collect together all the remaining letters
+		 * and randomly shuffle them.
+		 
+		 * Finally, write the shuffled letters into the
+		 * grid.
+		 
+	     * Now we have a candidate grid. Attempt to progress
+	     * the solution.
+	      success  failure  reset this counter, and continue  ----------------------------------------------------------------------
+ * End of solver/generator code.
+  ----------------------------------------------------------------------
+ * Drawing routines.
+  FIXME 
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+      game_request_keys  FIXME  wants_statusbar  flags 
+ * separate.c: Implementation of `Block Puzzle', a Japanese-only
+ * Nikoli puzzle seen at
+ *   http://www.nikoli.co.jp/ja/puzzles/block_puzzle/
+ * 
+ * It's difficult to be absolutely sure of the rules since online
+ * Japanese translators are so bad, but looking at the sample
+ * puzzle it seems fairly clear that the rules of this one are
+ * very simple. You have an mxn grid in which every square
+ * contains a letter, there are k distinct letters with k dividing
+ * mn, and every letter occurs the same number of times; your aim
+ * is to find a partition of the grid into disjoint k-ominoes such
+ * that each k-omino contains exactly one of each letter.
+ * 
+ * (It may be that Nikoli always have m,n,k equal to one another.
+ * However, I don't see that that's critical to the puzzle; k|mn
+ * is the only really important constraint, and even that could
+ * probably be dispensed with if some squares were marked as
+ * unused.)
+ 
+ * Current status: only the solver/generator is yet written, and
+ * although working in principle it's _very_ slow. It generates
+ * 5x5n5 or 6x6n4 readily enough, 6x6n6 with a bit of effort, and
+ * 7x7n7 only with a serious strain. I haven't dared try it higher
+ * than that yet.
+ * 
+ * One idea to speed it up is to implement more of the solver.
+ * Ideas I've so far had include:
+ * 
+ *  - Generalise the deduction currently expressed as `an
+ *    undersized chain with only one direction to extend must take
+ *    it'. More generally, the deduction should say `if all the
+ *    possible k-ominoes containing a given chain also contain
+ *    square x, then mark square x as part of that k-omino'.
+ *     + For example, consider this case:
+ * 
+ *         a ? b    This represents the top left of a board; the letters
+ *         ? ? ?    a,b,c do not represent the letters used in the puzzle,
+ *         c ? ?    but indicate that those three squares are known to be
+ *                  of different ominoes. Now if k >= 4, we can immediately
+ *         deduce that the square midway between b and c belongs to the
+ *         same omino as a, because there is no way we can make a 4-or-
+ *         more-omino containing a which does not also contain that square.
+ *         (Most easily seen by imagining cutting that square out of the 
+ *         grid; then, clearly, the omino containing a has only two
+ *         squares to expand into, and needs at least three.)
+ * 
+ *    The key difficulty with this mode of reasoning is
+ *    identifying such squares. I can't immediately think of a
+ *    simple algorithm for finding them on a wholesale basis.
+ * 
+ *  - Bfs out from a chain looking for the letters it lacks. For
+ *    example, in this situation (top three rows of a 7x7n7 grid):
+ * 
+ *        +-----------+-+
+ *        |E-A-F-B-C D|D|
+ *        +-------     ||
+ *        |E-C-G-D G|G E|
+ *        +-+---        |
+ *        |E|E G A B F A|
+ *
+ *    In this situation we can be sure that the top left chain
+ *    E-A-F-B-C does extend rightwards to the D, because there is
+ *    no other D within reach of that chain. Note also that the
+ *    bfs can skip squares which are known to belong to other
+ *    ominoes than this one.
+ * 
+ *    (This deduction, I fear, should only be used in an
+ *    emergency, because it relies on _all_ squares within range
+ *    of the bfs having particular values and so using it during
+ *    incremental generation rather nails down a lot of the grid.)
+ * 
+ * It's conceivable that another thing we could do would be to
+ * increase the flexibility in the grid generator: instead of
+ * nailing down the _value_ of any square depended on, merely nail
+ * down its equivalence to other squares. Unfortunately this turns
+ * the letter-selection phase of generation into a general graph
+ * colouring problem (we must draw a graph with equivalence
+ * classes of squares as the vertices, and an edge between any two
+ * vertices representing equivalence classes which contain squares
+ * that share an omino, and then k-colour the result) and hence
+ * requires recursion, which bodes ill for something we're doing
+ * that many times per generation.
+ * 
+ * I suppose a simple thing I could try would be tuning the retry
+ * count, just in case it's set too high or too low for efficient
+ * generation.
+  FIXME: a bit bigger?  structure copy  ----------------------------------------------------------------------
+ * Solver and generator.
+ 
+     * Tracks connectedness between squares.
+     
+     * size[dsf_canonify(dsf, yx)] tracks the size of the
+     * connected component containing yx.
+     
+     * contents[dsf_canonify(dsf, yx)*k+i] tracks whether or not
+     * the connected component containing yx includes letter i. If
+     * the value is -1, it doesn't; otherwise its value is the
+     * index in the main grid of the square which contributes that
+     * letter to the component.
+     
+     * disconnect[dsf_canonify(dsf, yx1)*w*h + dsf_canonify(dsf, yx2)]
+     * tracks whether or not the connected components containing
+     * yx1 and yx2 are known to be distinct.
+     
+     * Temporary space used only inside particular solver loops.
+     
+     * To connect two components together into a bigger one, we
+     * start by merging them in the dsf itself.
+     
+     * The size of the new component is the sum of the sizes of the
+     * old ones.
+     
+     * The contents bitmap of the new component is the union of the
+     * contents of the old ones.
+     * 
+     * Given two numbers at most one of which is not -1, we can
+     * find the other one by adding the two and adding 1; this
+     * will yield -1 if both were -1 to begin with, otherwise the
+     * other.
+     * 
+     * (A neater approach would be to take their bitwise AND, but
+     * this is unfortunately not well-defined standard C when done
+     * to signed integers.)
+     
+     * We must combine the rows _and_ the columns in the disconnect
+     * matrix.
+     
+     * Mark the components as disconnected from each other in the
+     * disconnect matrix.
+     
+     * Set up most of the scratch space. We don't set up the
+     * contents array, however, because this will change if we
+     * adjust the letter arrangement and re-run the solver.
+     
+     * Set up the contents array from the grid.
+     
+	 * Go over the grid looking for reasons to add to the
+	 * disconnect matrix. We're after pairs of squares which:
+	 * 
+	 *  - are adjacent in the grid
+	 *  - belong to distinct dsf components
+	 *  - their components are not already marked as
+	 *    disconnected
+	 *  - their components share a letter in common.
+	  one square is outside the grid  same dsf component  already known disconnected  no letter in common 
+		     * We've found one. Mark yx and yx2 as
+		     * disconnected from each other.
+		     
+		     * We have just made a deduction which hinges
+		     * on two particular grid squares being the
+		     * same. If we are feeding back to a generator
+		     * loop, we must therefore mark those squares
+		     * as fixed in the generator, so that future
+		     * rearrangement of the grid will not break
+		     * the information on which we have already
+		     * based deductions.
+		     
+	 * Now go over the grid looking for dsf components which
+	 * are below maximum size and only have one way to extend,
+	 * and extending them.
+	 
+			 * Component yx can be extended into square
+			 * yx2.
+			  multiple choices found 
+		 * Make sure we haven't connected the two already
+		 * during this loop (which could happen if for
+		 * _both_ components this was the only way to
+		 * extend them).
+		 
+     * Return 0 if we haven't made any progress; 1 if we've done
+     * something but not solved it completely; 2 if we've solved
+     * it completely.
+     
+	 * Go through the dsf and find the indices of all the
+	 * squares involved in each omino, in a manner conducive
+	 * to per-omino indexing. We set permutation[i*k+j] to be
+	 * the index of the jth square (ordered arbitrarily) in
+	 * omino i.
+	 
+		 * During this loop and the following one, we use
+		 * the last element of each row of permutation[]
+		 * as a counter of the number of indices so far
+		 * placed in it. When we place the final index of
+		 * an omino, that counter is overwritten, but that
+		 * doesn't matter because we'll never use it
+		 * again. Of course this depends critically on
+		 * divvy_rectangle() having returned correct
+		 * results, or else chaos would ensue.
+		 
+	 * Track which squares' letters we have already depended
+	 * on for deductions. This is gradually updated by
+	 * solver_attempt().
+	 
+	 * Now repeatedly fill the grid with letters, and attempt
+	 * to solve it. If the solver makes progress but does not
+	 * fail completely, then gen_lock will have been updated
+	 * and we try again. On a complete failure, though, we
+	 * have no option but to give up and abandon this set of
+	 * ominoes.
+	 
+	     * Fill the grid with letters. We can safely use
+	     * sc->tmp to hold the set of letters required at each
+	     * stage, since it's at least size k and is currently
+	     * unused.
+	     
+		 * First, determine the set of letters already
+		 * placed in this omino by gen_lock.
+		 
+		 * Now collect together all the remaining letters
+		 * and randomly shuffle them.
+		 
+		 * Finally, write the shuffled letters into the
+		 * grid.
+		 
+	     * Now we have a candidate grid. Attempt to progress
+	     * the solution.
+	      success  failure  reset this counter, and continue  ----------------------------------------------------------------------
+ * End of solver/generator code.
+  ----------------------------------------------------------------------
+ * Drawing routines.
+  FIXME 
+     * The initial contents of the window are not guaranteed and
+     * can vary with front ends. To be on the safe side, all games
+     * should start by drawing a big background-colour rectangle
+     * covering the whole window.
+      game_request_keys  FIXME  wants_statusbar  flags 

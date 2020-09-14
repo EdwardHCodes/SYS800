@@ -1,0 +1,130 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for ARC USBOTG Device Controller
+ *
+ * Copyright (C) 2007 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE USB device mode registers (Little Endian)  Frame Index Register Bit Masks  USB CMD  Register Bit Masks  bit 15,3,2 are frame list size  bit 9-8 are async schedule park mode count  bit 23-16 are interrupt threshold control  USB STS Register Bit Masks  not used  USB INTR Register Bit Masks  ULPI Register Bit Masks  Device Address bit masks  endpoint list address bit masks  PORTSCX  Register Bit Masks  bit 11-10 are line status  bit 15-14 are port indicator control  bit 19-16 are port test control  bit 27-26 are port speed  bit 28 is parallel transceiver width for UTMI interface  bit 31-30 are port transceiver select  USB MODE Register Bit Masks  Endpoint Flush Register  Endpoint Setup Status bit masks  ENDPOINTCTRLx  Register Bit Masks  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  bit 19-18 and 3-2 are endpoint type  pri_ctrl Register Bit Masks  si_ctrl Register Bit Masks  control Register Bit Masks  OTGSC Register Bit Masks ------------------------------------------------------------------------- 4 transfer descriptors per endpoint allow 64k transfers, which is the usual MSC
+   transfer size, so it seems like a good size  manual: 32.13.2 Endpoint Transfer Descriptor (dTD)  Next TD pointer(31-5), T(0) set
+                                           indicate invalid  Total bytes (30-16), IOC (15),
+                                           MultO(11-10), STS (7-0)   Buffer pointer Page 0  Buffer pointer Page 1  Buffer pointer Page 2  Buffer pointer Page 3  Buffer pointer Page 4  manual: 32.13.1 Endpoint Queue Head (dQH)  Mult(31-30) , Zlt(29) , Max Pkt len
+                                       and IOS(15)  Current dTD Pointer(31-5)  dTD overlay  Setup data 8 bytes  for software use, pointer to the first TD  for software use, status of chain in progress  for software use, transfered bytes of chain in progress  for softwate use, indicates if the transfer is blocking -------------------------------------------------------------------------------------------------------------------------------------------------- disable interrupts  stop usb controller (disconnect)  If a PHY type is specified, set it now  On a CPU which identifies as a PP5022, this
+       initialization must be done after USB is reset.
+      One-time driver startup init  Initialize all the signal objects once  manual: 32.14.1 Device Controller Initialization  USB core decides  Force device to full speed  See 32.9.5.9.2  enable USB interrupts  go go go  now a bus reset will occur. see bus_reset()  TODO : is one of these needed to save power ?
+    REG_PORTSC1 |= PORTSCX_PHY_LOW_POWER_SPD;
+    REG_USBCMD |= USBCMD_CTRL_RESET;
+     Only watch enabled ints  usb transaction interrupt  a control packet?  error interrupt  reset interrupt  tell mom  port change logf("usbrecv(%x, %d)", ptr, length); true = bus 4V4 ok ------------------------------------------------------------------------- manual: 32.14.5.2 
+    if (send && ep_num > EP_CONTROL) {
+        logf("usb: sent %d bytes", len);
+    }
+logf("starting ep %d %s",ep_num,send?"send":"receive"); 32.14.3.2.2  32.14.3.2.2  wait for transfer to finish  No need to cancel wait here since it was done and the signal
+             * came. logf("all tds done"); Error status must make sure an abandoned wakeup signal isn't left  Cancel wait  Make sure to remove any signal if interrupt fired before we zeroed
+         * qh->wait. Could happen during a bus reset for example.  Safety  Find an available ep/dir pair logf("adding a td : %d",len); FIXME td allow iso packets per frame override but we don't use it here  copy setup data from packet  acknowledge packet recieved  Stop pending control transfers  It seems that the controller sets the pipe bit to one even if the TD
+                     * dosn't have the IOC bit set. So we have the rely the active status bit
+                     * to check that all the TDs of the transfer are really finished and let
+                     * the transfer continue if it's no the case  manual: 32.14.2.1 Bus Reset  manual: 32.14.4.1 Queue Head Initialization ** control ** manual: 32.14.4.1 Queue Head Initialization  FIXME the packetsize for isochronous transfers is 1023 : 1024 but
+     * the current code only support one type of packet size so we restrict
+     * isochronous packet size for now also  TODO: this should take ep_allocation into account  OUT  FIXME: we can adjust the number of packets per frame, currently use one  IN  FIXME: we can adjust the number of packets per frame, currently use one  RX/TX from the device POV: OUT/IN, respectively  manual: 32.9.5.18 (Caution): Leaving an unconfigured endpoint control
+         * will cause undefined behavior for the data pid tracking on the active
+         * endpoint/direction. **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for ARC USBOTG Device Controller
+ *
+ * Copyright (C) 2007 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE USB device mode registers (Little Endian)  Frame Index Register Bit Masks  USB CMD  Register Bit Masks  bit 15,3,2 are frame list size  bit 9-8 are async schedule park mode count  bit 23-16 are interrupt threshold control  USB STS Register Bit Masks  not used  USB INTR Register Bit Masks  ULPI Register Bit Masks  Device Address bit masks  endpoint list address bit masks  PORTSCX  Register Bit Masks  bit 11-10 are line status  bit 15-14 are port indicator control  bit 19-16 are port test control  bit 27-26 are port speed  bit 28 is parallel transceiver width for UTMI interface  bit 31-30 are port transceiver select  USB MODE Register Bit Masks  Endpoint Flush Register  Endpoint Setup Status bit masks  ENDPOINTCTRLx  Register Bit Masks  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  bit 19-18 and 3-2 are endpoint type  pri_ctrl Register Bit Masks  si_ctrl Register Bit Masks  control Register Bit Masks  OTGSC Register Bit Masks ------------------------------------------------------------------------- 4 transfer descriptors per endpoint allow 64k transfers, which is the usual MSC
+   transfer size, so it seems like a good size  manual: 32.13.2 Endpoint Transfer Descriptor (dTD)  Next TD pointer(31-5), T(0) set
+                                           indicate invalid  Total bytes (30-16), IOC (15),
+                                           MultO(11-10), STS (7-0)   Buffer pointer Page 0  Buffer pointer Page 1  Buffer pointer Page 2  Buffer pointer Page 3  Buffer pointer Page 4  manual: 32.13.1 Endpoint Queue Head (dQH)  Mult(31-30) , Zlt(29) , Max Pkt len
+                                       and IOS(15)  Current dTD Pointer(31-5)  dTD overlay  Setup data 8 bytes  for software use, pointer to the first TD  for software use, status of chain in progress  for software use, transfered bytes of chain in progress  for softwate use, indicates if the transfer is blocking -------------------------------------------------------------------------------------------------------------------------------------------------- disable interrupts  stop usb controller (disconnect)  If a PHY type is specified, set it now  On a CPU which identifies as a PP5022, this
+       initialization must be done after USB is reset.
+      One-time driver startup init  Initialize all the signal objects once  manual: 32.14.1 Device Controller Initialization  USB core decides  Force device to full speed  See 32.9.5.9.2  enable USB interrupts  go go go  now a bus reset will occur. see bus_reset()  TODO : is one of these needed to save power ?
+    REG_PORTSC1 |= PORTSCX_PHY_LOW_POWER_SPD;
+    REG_USBCMD |= USBCMD_CTRL_RESET;
+     Only watch enabled ints  usb transaction interrupt  a control packet?  error interrupt  reset interrupt  tell mom  port change logf("usbrecv(%x, %d)", ptr, length); true = bus 4V4 ok ------------------------------------------------------------------------- manual: 32.14.5.2 
+    if (send && ep_num > EP_CONTROL) {
+        logf("usb: sent %d bytes", len);
+    }
+logf("starting ep %d %s",ep_num,send?"send":"receive"); 32.14.3.2.2  32.14.3.2.2  wait for transfer to finish  No need to cancel wait here since it was done and the signal
+             * came. logf("all tds done"); Error status must make sure an abandoned wakeup signal isn't left  Cancel wait  Make sure to remove any signal if interrupt fired before we zeroed
+         * qh->wait. Could happen during a bus reset for example.  Safety  Find an available ep/dir pair logf("adding a td : %d",len); FIXME td allow iso packets per frame override but we don't use it here  copy setup data from packet  acknowledge packet recieved  Stop pending control transfers  It seems that the controller sets the pipe bit to one even if the TD
+                     * dosn't have the IOC bit set. So we have the rely the active status bit
+                     * to check that all the TDs of the transfer are really finished and let
+                     * the transfer continue if it's no the case  manual: 32.14.2.1 Bus Reset  manual: 32.14.4.1 Queue Head Initialization ** control ** manual: 32.14.4.1 Queue Head Initialization  FIXME the packetsize for isochronous transfers is 1023 : 1024 but
+     * the current code only support one type of packet size so we restrict
+     * isochronous packet size for now also  TODO: this should take ep_allocation into account  OUT  FIXME: we can adjust the number of packets per frame, currently use one  IN  FIXME: we can adjust the number of packets per frame, currently use one  RX/TX from the device POV: OUT/IN, respectively  manual: 32.9.5.18 (Caution): Leaving an unconfigured endpoint control
+         * will cause undefined behavior for the data pid tracking on the active
+         * endpoint/direction. **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for ARC USBOTG Device Controller
+ *
+ * Copyright (C) 2007 by Björn Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define LOGF_ENABLE USB device mode registers (Little Endian)  Frame Index Register Bit Masks  USB CMD  Register Bit Masks  bit 15,3,2 are frame list size  bit 9-8 are async schedule park mode count  bit 23-16 are interrupt threshold control  USB STS Register Bit Masks  not used  USB INTR Register Bit Masks  ULPI Register Bit Masks  Device Address bit masks  endpoint list address bit masks  PORTSCX  Register Bit Masks  bit 11-10 are line status  bit 15-14 are port indicator control  bit 19-16 are port test control  bit 27-26 are port speed  bit 28 is parallel transceiver width for UTMI interface  bit 31-30 are port transceiver select  USB MODE Register Bit Masks  Endpoint Flush Register  Endpoint Setup Status bit masks  ENDPOINTCTRLx  Register Bit Masks  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  Not EP0  bit 19-18 and 3-2 are endpoint type  pri_ctrl Register Bit Masks  si_ctrl Register Bit Masks  control Register Bit Masks  OTGSC Register Bit Masks ------------------------------------------------------------------------- 4 transfer descriptors per endpoint allow 64k transfers, which is the usual MSC
+   transfer size, so it seems like a good size  manual: 32.13.2 Endpoint Transfer Descriptor (dTD)  Next TD pointer(31-5), T(0) set
+                                           indicate invalid  Total bytes (30-16), IOC (15),
+                                           MultO(11-10), STS (7-0)   Buffer pointer Page 0  Buffer pointer Page 1  Buffer pointer Page 2  Buffer pointer Page 3  Buffer pointer Page 4  manual: 32.13.1 Endpoint Queue Head (dQH)  Mult(31-30) , Zlt(29) , Max Pkt len
+                                       and IOS(15)  Current dTD Pointer(31-5)  dTD overlay  Setup data 8 bytes  for software use, pointer to the first TD  for software use, status of chain in progress  for software use, transfered bytes of chain in progress  for softwate use, indicates if the transfer is blocking -------------------------------------------------------------------------------------------------------------------------------------------------- disable interrupts  stop usb controller (disconnect)  If a PHY type is specified, set it now  On a CPU which identifies as a PP5022, this
+       initialization must be done after USB is reset.
+      One-time driver startup init  Initialize all the signal objects once  manual: 32.14.1 Device Controller Initialization  USB core decides  Force device to full speed  See 32.9.5.9.2  enable USB interrupts  go go go  now a bus reset will occur. see bus_reset()  TODO : is one of these needed to save power ?
+    REG_PORTSC1 |= PORTSCX_PHY_LOW_POWER_SPD;
+    REG_USBCMD |= USBCMD_CTRL_RESET;
+     Only watch enabled ints  usb transaction interrupt  a control packet?  error interrupt  reset interrupt  tell mom  port change logf("usbrecv(%x, %d)", ptr, length); true = bus 4V4 ok ------------------------------------------------------------------------- manual: 32.14.5.2 
+    if (send && ep_num > EP_CONTROL) {
+        logf("usb: sent %d bytes", len);
+    }
+logf("starting ep %d %s",ep_num,send?"send":"receive"); 32.14.3.2.2  32.14.3.2.2  wait for transfer to finish  No need to cancel wait here since it was done and the signal
+             * came. logf("all tds done"); Error status must make sure an abandoned wakeup signal isn't left  Cancel wait  Make sure to remove any signal if interrupt fired before we zeroed
+         * qh->wait. Could happen during a bus reset for example.  Safety  Find an available ep/dir pair logf("adding a td : %d",len); FIXME td allow iso packets per frame override but we don't use it here  copy setup data from packet  acknowledge packet recieved  Stop pending control transfers  It seems that the controller sets the pipe bit to one even if the TD
+                     * dosn't have the IOC bit set. So we have the rely the active status bit
+                     * to check that all the TDs of the transfer are really finished and let
+                     * the transfer continue if it's no the case  manual: 32.14.2.1 Bus Reset  manual: 32.14.4.1 Queue Head Initialization ** control ** manual: 32.14.4.1 Queue Head Initialization  FIXME the packetsize for isochronous transfers is 1023 : 1024 but
+     * the current code only support one type of packet size so we restrict
+     * isochronous packet size for now also  TODO: this should take ep_allocation into account  OUT  FIXME: we can adjust the number of packets per frame, currently use one  IN  FIXME: we can adjust the number of packets per frame, currently use one  RX/TX from the device POV: OUT/IN, respectively  manual: 32.9.5.18 (Caution): Leaving an unconfigured endpoint control
+         * will cause undefined behavior for the data pid tracking on the active
+         * endpoint/direction. 

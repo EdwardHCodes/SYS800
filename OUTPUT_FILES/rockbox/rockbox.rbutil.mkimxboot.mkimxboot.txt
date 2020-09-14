@@ -1,0 +1,163 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** abstract structure to represent a Rockbox firmware. It can be a scrambled file
+ * or an ELF file or whatever.  A firmware upgrade can contains several variants like recovery image, or
+ * images for different models  Offset within file  Total size of the firmware  Map a MD5 sum of the whole file to a model and describe the variants in it  Device model  md5sum of the file  Version string  Variant descriptions  Describe how to produce a bootloader image for a specific model  Descriptive name of this model  Dualboot code for this model  Size of dualboot functions for this model  Model name used in the Rockbox header in ".sansa" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".sansa" files - these are the same as MODEL_NUMBER in config-target.h  Array of NULL-terminated keys  Dualboot load address  Bootloader load address  Friendly names for variants  List of known MD5 sums for firmware upgrades * Fuze+  Version 2.38.6 * Zen X-Fi2  Version 1.23.01  Version 1.23.01e * Zen X-Fi3  Version 1.00.15e  Version 1.00.22e  Version 1.00.25  Version 1.00.25e * Zen X-Fi Style  Version 1.03.04e  Version 1.03.04e  Version 1.03.04e * Sony NWZ-E370  Version 1.00.00  Version 1.00.01 * Sony NWZ-E360  Version 1.00.00 * Sony NWZ-E380  Version 1.00.00  Version 1.00.200  'rock'  'chrg'  fill sb instruction for the firmware, fill fill rb_fw_get_sb_inst_count() instructions  copy data if needed  replace call argument of the entry point  We assume the file has three boot sections: ____, host, play and one
+     * resource section rsrc.
+     *
+     * Dual Boot:
+     * ----------
+     * We patch the file by inserting the dualboot code before the <jump_before>th
+     * call in the ____ section. We give it as argument the section name 'rock'
+     * and add a section called 'rock' after rsrc which contains the bootloader.
+     *
+     * Single Boot & Recovery:
+     * -----------------------
+     * We patch the file by inserting the bootloader code after the <jump_before>th
+     * call in the ____ section and get rid of everything else. In recovery mode,
+     * we give 0xfee1dead as argument  used to manipulate entries  first locate the good instruction  create a new instruction array with a hole for two instructions  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  create a new section  section can have any number of instructions  remove everything after the call and add instructions for firmware  remove all other sections  throw away everything except the dualboot stub with a special argument  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  remove all other sections  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find rockbox section * 1) remove rockbox section  free rockbox section  create a new array of sections  copy all sections exception rockbox  free old array and replace it * 2) remove patch instructions in boot section  free two instructions  create a new array of instructions  copy all instructions except the two patch to remove  free old array and replace it  keep consistent with patch_firmware  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find an entry into imx_sums which matches the MD5 sum of a file  read a file to a buffer  write a file from a buffer  compute MD5 sum of a buffer  compute MD5 sum of a buffer  various header fiels  ignore them totally because they are used for padding  compute MD5 of a file  compute soft MD5 of a file  read file  compute sum  release file  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using our scramble format.  check model name  check checksum  two instructions: load and jump  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using ELF format.  Load a rockbox firwmare from a buffer. Data is copied.  detect file format  load a rockbox firmware from a file.  free rockbox firmware  modify sb_file to produce requested boot image  things went smoothly, we have a SB image but it may not be suitable as an
+     * input image: if it contains a rockbox bootloader, we need to remove it  if asked to produce OF, don't do anything more  load rockbox file  produce file  sanity check  dump tables  load file  compute MD5 sum of the file  find model  is this a known firmware upgrade ?  check the model is the expected one  use database values  special case: if we need to produce the OF, just bypass read/write of
+         * the SB file and output this chunk of the file. This is faster and it
+         * also avoids modifying the OF by reconstructing it  image didn't match, so we expect the file to be a raw SB image, either
+        * produced by mkimxboot when uninstalling bootloader or after installing RB,
+        * so load all known keys and go on  To be more user friendly, give a nice error message if we detect
+         * the file is not a SB file  to proceed further, we need to know the model  load image  modify image  write image  cleanup **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** abstract structure to represent a Rockbox firmware. It can be a scrambled file
+ * or an ELF file or whatever.  A firmware upgrade can contains several variants like recovery image, or
+ * images for different models  Offset within file  Total size of the firmware  Map a MD5 sum of the whole file to a model and describe the variants in it  Device model  md5sum of the file  Version string  Variant descriptions  Describe how to produce a bootloader image for a specific model  Descriptive name of this model  Dualboot code for this model  Size of dualboot functions for this model  Model name used in the Rockbox header in ".sansa" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".sansa" files - these are the same as MODEL_NUMBER in config-target.h  Array of NULL-terminated keys  Dualboot load address  Bootloader load address  Friendly names for variants  List of known MD5 sums for firmware upgrades * Fuze+  Version 2.38.6 * Zen X-Fi2  Version 1.23.01  Version 1.23.01e * Zen X-Fi3  Version 1.00.15e  Version 1.00.22e  Version 1.00.25  Version 1.00.25e * Zen X-Fi Style  Version 1.03.04e  Version 1.03.04e  Version 1.03.04e * Sony NWZ-E370  Version 1.00.00  Version 1.00.01 * Sony NWZ-E360  Version 1.00.00 * Sony NWZ-E380  Version 1.00.00  Version 1.00.200  'rock'  'chrg'  fill sb instruction for the firmware, fill fill rb_fw_get_sb_inst_count() instructions  copy data if needed  replace call argument of the entry point  We assume the file has three boot sections: ____, host, play and one
+     * resource section rsrc.
+     *
+     * Dual Boot:
+     * ----------
+     * We patch the file by inserting the dualboot code before the <jump_before>th
+     * call in the ____ section. We give it as argument the section name 'rock'
+     * and add a section called 'rock' after rsrc which contains the bootloader.
+     *
+     * Single Boot & Recovery:
+     * -----------------------
+     * We patch the file by inserting the bootloader code after the <jump_before>th
+     * call in the ____ section and get rid of everything else. In recovery mode,
+     * we give 0xfee1dead as argument  used to manipulate entries  first locate the good instruction  create a new instruction array with a hole for two instructions  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  create a new section  section can have any number of instructions  remove everything after the call and add instructions for firmware  remove all other sections  throw away everything except the dualboot stub with a special argument  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  remove all other sections  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find rockbox section * 1) remove rockbox section  free rockbox section  create a new array of sections  copy all sections exception rockbox  free old array and replace it * 2) remove patch instructions in boot section  free two instructions  create a new array of instructions  copy all instructions except the two patch to remove  free old array and replace it  keep consistent with patch_firmware  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find an entry into imx_sums which matches the MD5 sum of a file  read a file to a buffer  write a file from a buffer  compute MD5 sum of a buffer  compute MD5 sum of a buffer  various header fiels  ignore them totally because they are used for padding  compute MD5 of a file  compute soft MD5 of a file  read file  compute sum  release file  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using our scramble format.  check model name  check checksum  two instructions: load and jump  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using ELF format.  Load a rockbox firwmare from a buffer. Data is copied.  detect file format  load a rockbox firmware from a file.  free rockbox firmware  modify sb_file to produce requested boot image  things went smoothly, we have a SB image but it may not be suitable as an
+     * input image: if it contains a rockbox bootloader, we need to remove it  if asked to produce OF, don't do anything more  load rockbox file  produce file  sanity check  dump tables  load file  compute MD5 sum of the file  find model  is this a known firmware upgrade ?  check the model is the expected one  use database values  special case: if we need to produce the OF, just bypass read/write of
+         * the SB file and output this chunk of the file. This is faster and it
+         * also avoids modifying the OF by reconstructing it  image didn't match, so we expect the file to be a raw SB image, either
+        * produced by mkimxboot when uninstalling bootloader or after installing RB,
+        * so load all known keys and go on  To be more user friendly, give a nice error message if we detect
+         * the file is not a SB file  to proceed further, we need to know the model  load image  modify image  write image  cleanup **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** abstract structure to represent a Rockbox firmware. It can be a scrambled file
+ * or an ELF file or whatever.  A firmware upgrade can contains several variants like recovery image, or
+ * images for different models  Offset within file  Total size of the firmware  Map a MD5 sum of the whole file to a model and describe the variants in it  Device model  md5sum of the file  Version string  Variant descriptions  Describe how to produce a bootloader image for a specific model  Descriptive name of this model  Dualboot code for this model  Size of dualboot functions for this model  Model name used in the Rockbox header in ".sansa" files - these match the
+       -add parameter to the "scramble" tool  Model number used to initialise the checksum in the Rockbox header in
+       ".sansa" files - these are the same as MODEL_NUMBER in config-target.h  Array of NULL-terminated keys  Dualboot load address  Bootloader load address  Friendly names for variants  List of known MD5 sums for firmware upgrades * Fuze+  Version 2.38.6 * Zen X-Fi2  Version 1.23.01  Version 1.23.01e * Zen X-Fi3  Version 1.00.15e  Version 1.00.22e  Version 1.00.25  Version 1.00.25e * Zen X-Fi Style  Version 1.03.04e  Version 1.03.04e  Version 1.03.04e * Sony NWZ-E370  Version 1.00.00  Version 1.00.01 * Sony NWZ-E360  Version 1.00.00 * Sony NWZ-E380  Version 1.00.00  Version 1.00.200  'rock'  'chrg'  fill sb instruction for the firmware, fill fill rb_fw_get_sb_inst_count() instructions  copy data if needed  replace call argument of the entry point  We assume the file has three boot sections: ____, host, play and one
+     * resource section rsrc.
+     *
+     * Dual Boot:
+     * ----------
+     * We patch the file by inserting the dualboot code before the <jump_before>th
+     * call in the ____ section. We give it as argument the section name 'rock'
+     * and add a section called 'rock' after rsrc which contains the bootloader.
+     *
+     * Single Boot & Recovery:
+     * -----------------------
+     * We patch the file by inserting the bootloader code after the <jump_before>th
+     * call in the ____ section and get rid of everything else. In recovery mode,
+     * we give 0xfee1dead as argument  used to manipulate entries  first locate the good instruction  create a new instruction array with a hole for two instructions  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  create a new section  section can have any number of instructions  remove everything after the call and add instructions for firmware  remove all other sections  throw away everything except the dualboot stub with a special argument  first instruction is be a load  duplicate memory because it will be free'd  second instruction is a call  free old instruction array  remove all other sections  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find rockbox section * 1) remove rockbox section  free rockbox section  create a new array of sections  copy all sections exception rockbox  free old array and replace it * 2) remove patch instructions in boot section  free two instructions  create a new array of instructions  copy all instructions except the two patch to remove  free old array and replace it  keep consistent with patch_firmware  The Fuze+ uses the standard ____, host, play sections, patch after third
+             * call in ____ section  The ZEN X-Fi3 uses the standard ____, hSst, pSay sections, patch after third
+             * call in ____ section. Although sections names use the S variant, they are standard.  The NWZ-E360/E370 uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  The ZEN X-Fi2 has two types of firmware: recovery and normal.
+             * Normal uses the standard ___, host, play sections and recovery only ____  The ZEN X-Fi Style uses the standard ____, host, play sections, patch after first
+             * call in ____ section.  find an entry into imx_sums which matches the MD5 sum of a file  read a file to a buffer  write a file from a buffer  compute MD5 sum of a buffer  compute MD5 sum of a buffer  various header fiels  ignore them totally because they are used for padding  compute MD5 of a file  compute soft MD5 of a file  read file  compute sum  release file  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using our scramble format.  check model name  check checksum  two instructions: load and jump  Load a rockbox firwmare from a buffer. Data is copied. Assume firmware is
+ * using ELF format.  Load a rockbox firwmare from a buffer. Data is copied.  detect file format  load a rockbox firmware from a file.  free rockbox firmware  modify sb_file to produce requested boot image  things went smoothly, we have a SB image but it may not be suitable as an
+     * input image: if it contains a rockbox bootloader, we need to remove it  if asked to produce OF, don't do anything more  load rockbox file  produce file  sanity check  dump tables  load file  compute MD5 sum of the file  find model  is this a known firmware upgrade ?  check the model is the expected one  use database values  special case: if we need to produce the OF, just bypass read/write of
+         * the SB file and output this chunk of the file. This is faster and it
+         * also avoids modifying the OF by reconstructing it  image didn't match, so we expect the file to be a raw SB image, either
+        * produced by mkimxboot when uninstalling bootloader or after installing RB,
+        * so load all known keys and go on  To be more user friendly, give a nice error message if we detect
+         * the file is not a SB file  to proceed further, we need to know the model  load image  modify image  write image  cleanup 

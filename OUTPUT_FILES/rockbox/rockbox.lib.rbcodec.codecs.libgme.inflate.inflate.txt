@@ -1,0 +1,241 @@
+
+ * gunzip implementation for wikiviewer (c) Frederik M.J.V., 2006.
+ * some bug fixes by Adam Gashlin gunzip implementation for busybox
+ *
+ * Based on GNU gzip v1.2.4 Copyright (C) 1992-1993 Jean-loup Gailly.
+ *
+ * Originally adjusted for busybox by Sven Rudolph <sr1@inf.tu-dresden.de>
+ * based on gzip sources
+ *
+ * Adjusted further by Erik Andersen <andersen@codepoet.org> to support files as
+ *well as stdin/stdout, and to generally behave itself wrt command line
+ *handling.
+ *
+ * General cleanup to better adhere to the style guide and make use of standard
+ *busybox functions by Glenn McGrath <bug1@iinet.net.au>
+ *
+ * read_gz interface + associated hacking by Laurence Anderson
+ *
+ * Fixed huft_build() so decoding end-of-block code does not grab more bits than
+ *necessary (this is required by unzip applet), added inflate_cleanup() to free
+ *leaked bytebuffer memory (used in unzip.c), and some minor style guide
+ *cleanups by Ed Clark
+ *
+ * gzip (GNU zip) -- compress files with zip algorithm and 'compress' interface
+ *Copyright (C) 1992-1993 Jean-loup Gailly The unzip code was written and put in
+ *the public domain by Mark Adler. Portions of the lzw code are derived from the
+ *public domain 'compress'
+ * written by Spencer Thomas, Joe Orost, James Woods, Jim McKie, Steve Davies,
+ *Ken Turkowski, Dave Mack and Peter Jannesen.
+ *
+ *
+ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  number of extra bits or operation  number of bits in this code or subcode  literal, length base, or distance base  pointer to next level of table static void *mainmembuf; number of output bytes  bytes in output buffer  gunzip_window size--must be a power of two, and at least 32K for zip's
+   deflate method  If BMAX needs to be larger than 16, then h and x[] should be ulg.  maximum bit length of any code (16 for explode)  maximum number of codes in any set  bitbuffer  bit buffer  bits in bit buffer  These control the size of the bytebuffer  Copy lengths for literal codes 257..285  note: see note #13 above about the 258 in this list.  Extra bits for literal codes 257..285  99==invalid  Copy offsets for distance codes 0..29  Extra bits for distance codes  Tables for deflate from PKZIP's appnote.txt.  Order of the bit length code lengths  Leave the first 4 bytes empty so we can always unwind the
+               bitbuffer to the front of the bytebuffer, leave 4 bytes free at
+               end of tail so we can easily top up buffer in
+               check_trailer_gzip() 
+ * Free the malloc'ed tables built by huft_build(), which makes a linked list of
+ *the tables it made, with the links in a dummy first entry of each table.
+ * t: table to free
+  Given a list of code lengths and a maximum table size, make a set of tables
+   to decode that set of codes.  Return zero on success, one if the given code
+   set is incomplete (the tables are still built in this case), two if the input
+   is invalid (all zero length codes or an oversubscribed set of lengths), and
+   three if not enough memory.
+ *
+ * b:    code lengths in bits (all assumed <= BMAX) n:    number of codes
+ *(assumed <= N_MAX) s:    number of simple-valued codes (0..s-1) d:    list of
+ *base values for non-simple codes e:    list of extra bits for non-simple codes
+ *t:    result: starting table m:    maximum lookup bits, returns actual bufnum:
+ *the number of the memory pool to fetch memory from
+  counter for codes of length k  bit length count table  length of end-of-block code (value 256)  i repeats in table every f entries  maximum code length  table level  counter, current code  counter  number of bits in current code  pointer into c[], b[], or v[]  points to current table  table entry for structure assignment  table stack  values in order of bit length  bits decoded stack  bits decoded  bit offsets, then code stack  pointer into x  number of dummy codes added  number of entries in current table  Length of EOB code, if any  Generate counts for each bit length  assume all entries <= BMAX  Can't combine with above line (Solaris bug)  null input--all zero length codes  Find minimum and maximum length, bound *m by those  minimum code length  maximum code length  Adjust last length count to fill out codes, if needed  bad input: more codes than bits  Generate starting offsets into the value table for each length  note that i == g from above  Make a table of values in order of bit lengths  Generate the Huffman codes and for each, make the table entries  first Huffman code is zero  grab values in bit order  no tables yet--level -1  bits decoded  just to keep compilers happy  ditto  ditto  go through the bit lengths (k already is bits in shortest code)  here i is the Huffman code of length k bits for value *p  make tables up to required level  compute minimum size table less than or equal to *m bits  upper limit on table size  try a k-w bit table  too few codes for k-w bit table  deduct codes from patterns left  try smaller tables up to z bits  enough codes to use up j bits  else deduct codes from patterns  make EOB code end at table  table entries for j-bit table  set bits decoded in stack  allocate and link in new table  link to list for huft_free()  table starts after link  connect to last table, if there is one  save pattern for backing up  bits to dump before this table  bits in this table  pointer to this table  connect to last table  set up table entry in r  out of values--invalid code  256 is EOB
+                                                                  code  simple code is just the
+                                                    value  non-simple--look up in lists
+                                                   fill code-like entries with r  backwards increment the k-bit code i  backup over finished tables  return actual size of base table  Return true (1) if we were given an incomplete table 
+ * inflate (decompress) the codes in a deflated (compressed) block. Return an
+ *error code or zero if it all goes ok.
+ *
+ * tl, td: literal/length and distance decoder tables bl, bd: number of bits
+ *decoded by tl[] and td[]
+  table entry flag/number of extra bits  length and index for copy  current gunzip_window position  pointer to table entry  masks for bl and bd bits  bit buffer  number of bits in bit buffer  1st time we are called, copy in variables  make local copies of globals  initialize bit buffer  initialize gunzip_window position
+                                              inflate the coded data  precompute masks for speed  Don't actually do anything the first time  do until end of block  then it's a literal  We have a block to read  it's an EOB or a length  exit if end of block  get length of block to copy  decode distance of block to copy  do the copy  copy to new buffer to prevent possible overwrite  (this test assumes unsigned comparison)
+                                       do it slow to avoid memcpy() overlap  !NOMEMCPY  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  normally just after call to inflate_codes, but save code by putting it
+       here  free the decoding tables, return  done  initialize gunzip_window position  Don't do anything first time  read and output the compressed data  We have a block  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  Finished 
+ * decompress an inflated block e: last block flag
+ *
+ * GLOBAL VARIABLES: bb, kk,
+  Return values: -1 = inflate_stored, -2 = inflate_codes  block type  bit buffer  number of bits in bit buffer  make local bit buffer  read in last block bit  read in block type  restore the global bit buffer  inflate that block type  Inflate stored  number of bytes in block  make local copies of globals  bit buffer  number of bits in bit buffer  go to byte boundary  get the length and its complement  error in compressed data  Setup inflate_stored  Inflate fixed decompress an inflated type 1 (fixed
+                          Huffman codes) block.  We should either replace this
+                          with a custom decoder, or at least precompute the
+                          Huffman tables.
+                         temporary variable  literal/length code table  distance code table  lookup bits for tl  lookup bits for td  length list for huft_build  set up literal table  make a complete, but wrong code set  set up distance table  make an incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  Inflate dynamic  bits in base distance lookup table  bits in base literal/length lookup table  literal/length code table  distance code table  temporary variables  last length  mask for bit lengths table  number of lengths to get  lookup bits for tl  lookup bits for td  number of bit length codes  number of literal/length codes  number of distance codes  literal/length and distance code
+                                         lengths  bit buffer  number of bits in bit buffer  make local bit buffer  read in table lengths  number of
+                                                            literal/length codes
+                                                           number of distance
+                                                          codes  number of bit length
+                                                         codes  bad lengths  read in bit-length-code lengths  build decoding table for trees--single level, 7 bit lookup  incomplete code set  read in literal and distance code lengths  length of code in bits (0..15)  save last length in l  repeat last length 3 to 6 times  3 to 10 zero length codes  j == 18: 11 to 138 zero length codes  free decoding table for trees  restore the global bit buffer  build the decoding tables for literal/length and distance codes  incomplete code set  incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  bad block type  Method == -1 for stored, -2
+                                                   for codes  Last block  More data left  End of that
+                                                                 block  Doesnt get here  Initialise bytebuffer, be careful not to overfill the buffer  Set the bytebuffer size, default is same as gunzip_wsize  free(bytebuffer);  Allocate all global buffers (for DYN_ALLOC option)  initialize gunzip_window, bit buffer  Create the crc table  Allocate space for buffer  Store unused bytes in a global buffer so calling applets can access it  Undo too much lookahead. The next read will be byte aligned so we can
+           discard unused bits in the last meaningful byte.  top up the input buffer with the rest of the trailer  Validate decompression - crc  Validate decompression - size An allocated memory buffer at least 0x13100 (72448) bytes long reset statics  Method == -1 for stored, -2 for
+                                            codes  init Memory init Initialize memory buffer reader  FIXME: xfunc? _or_die? 
+ * gunzip implementation for wikiviewer (c) Frederik M.J.V., 2006.
+ * some bug fixes by Adam Gashlin gunzip implementation for busybox
+ *
+ * Based on GNU gzip v1.2.4 Copyright (C) 1992-1993 Jean-loup Gailly.
+ *
+ * Originally adjusted for busybox by Sven Rudolph <sr1@inf.tu-dresden.de>
+ * based on gzip sources
+ *
+ * Adjusted further by Erik Andersen <andersen@codepoet.org> to support files as
+ *well as stdin/stdout, and to generally behave itself wrt command line
+ *handling.
+ *
+ * General cleanup to better adhere to the style guide and make use of standard
+ *busybox functions by Glenn McGrath <bug1@iinet.net.au>
+ *
+ * read_gz interface + associated hacking by Laurence Anderson
+ *
+ * Fixed huft_build() so decoding end-of-block code does not grab more bits than
+ *necessary (this is required by unzip applet), added inflate_cleanup() to free
+ *leaked bytebuffer memory (used in unzip.c), and some minor style guide
+ *cleanups by Ed Clark
+ *
+ * gzip (GNU zip) -- compress files with zip algorithm and 'compress' interface
+ *Copyright (C) 1992-1993 Jean-loup Gailly The unzip code was written and put in
+ *the public domain by Mark Adler. Portions of the lzw code are derived from the
+ *public domain 'compress'
+ * written by Spencer Thomas, Joe Orost, James Woods, Jim McKie, Steve Davies,
+ *Ken Turkowski, Dave Mack and Peter Jannesen.
+ *
+ *
+ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  number of extra bits or operation  number of bits in this code or subcode  literal, length base, or distance base  pointer to next level of table static void *mainmembuf; number of output bytes  bytes in output buffer  gunzip_window size--must be a power of two, and at least 32K for zip's
+   deflate method  If BMAX needs to be larger than 16, then h and x[] should be ulg.  maximum bit length of any code (16 for explode)  maximum number of codes in any set  bitbuffer  bit buffer  bits in bit buffer  These control the size of the bytebuffer  Copy lengths for literal codes 257..285  note: see note #13 above about the 258 in this list.  Extra bits for literal codes 257..285  99==invalid  Copy offsets for distance codes 0..29  Extra bits for distance codes  Tables for deflate from PKZIP's appnote.txt.  Order of the bit length code lengths  Leave the first 4 bytes empty so we can always unwind the
+               bitbuffer to the front of the bytebuffer, leave 4 bytes free at
+               end of tail so we can easily top up buffer in
+               check_trailer_gzip() 
+ * Free the malloc'ed tables built by huft_build(), which makes a linked list of
+ *the tables it made, with the links in a dummy first entry of each table.
+ * t: table to free
+  Given a list of code lengths and a maximum table size, make a set of tables
+   to decode that set of codes.  Return zero on success, one if the given code
+   set is incomplete (the tables are still built in this case), two if the input
+   is invalid (all zero length codes or an oversubscribed set of lengths), and
+   three if not enough memory.
+ *
+ * b:    code lengths in bits (all assumed <= BMAX) n:    number of codes
+ *(assumed <= N_MAX) s:    number of simple-valued codes (0..s-1) d:    list of
+ *base values for non-simple codes e:    list of extra bits for non-simple codes
+ *t:    result: starting table m:    maximum lookup bits, returns actual bufnum:
+ *the number of the memory pool to fetch memory from
+  counter for codes of length k  bit length count table  length of end-of-block code (value 256)  i repeats in table every f entries  maximum code length  table level  counter, current code  counter  number of bits in current code  pointer into c[], b[], or v[]  points to current table  table entry for structure assignment  table stack  values in order of bit length  bits decoded stack  bits decoded  bit offsets, then code stack  pointer into x  number of dummy codes added  number of entries in current table  Length of EOB code, if any  Generate counts for each bit length  assume all entries <= BMAX  Can't combine with above line (Solaris bug)  null input--all zero length codes  Find minimum and maximum length, bound *m by those  minimum code length  maximum code length  Adjust last length count to fill out codes, if needed  bad input: more codes than bits  Generate starting offsets into the value table for each length  note that i == g from above  Make a table of values in order of bit lengths  Generate the Huffman codes and for each, make the table entries  first Huffman code is zero  grab values in bit order  no tables yet--level -1  bits decoded  just to keep compilers happy  ditto  ditto  go through the bit lengths (k already is bits in shortest code)  here i is the Huffman code of length k bits for value *p  make tables up to required level  compute minimum size table less than or equal to *m bits  upper limit on table size  try a k-w bit table  too few codes for k-w bit table  deduct codes from patterns left  try smaller tables up to z bits  enough codes to use up j bits  else deduct codes from patterns  make EOB code end at table  table entries for j-bit table  set bits decoded in stack  allocate and link in new table  link to list for huft_free()  table starts after link  connect to last table, if there is one  save pattern for backing up  bits to dump before this table  bits in this table  pointer to this table  connect to last table  set up table entry in r  out of values--invalid code  256 is EOB
+                                                                  code  simple code is just the
+                                                    value  non-simple--look up in lists
+                                                   fill code-like entries with r  backwards increment the k-bit code i  backup over finished tables  return actual size of base table  Return true (1) if we were given an incomplete table 
+ * inflate (decompress) the codes in a deflated (compressed) block. Return an
+ *error code or zero if it all goes ok.
+ *
+ * tl, td: literal/length and distance decoder tables bl, bd: number of bits
+ *decoded by tl[] and td[]
+  table entry flag/number of extra bits  length and index for copy  current gunzip_window position  pointer to table entry  masks for bl and bd bits  bit buffer  number of bits in bit buffer  1st time we are called, copy in variables  make local copies of globals  initialize bit buffer  initialize gunzip_window position
+                                              inflate the coded data  precompute masks for speed  Don't actually do anything the first time  do until end of block  then it's a literal  We have a block to read  it's an EOB or a length  exit if end of block  get length of block to copy  decode distance of block to copy  do the copy  copy to new buffer to prevent possible overwrite  (this test assumes unsigned comparison)
+                                       do it slow to avoid memcpy() overlap  !NOMEMCPY  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  normally just after call to inflate_codes, but save code by putting it
+       here  free the decoding tables, return  done  initialize gunzip_window position  Don't do anything first time  read and output the compressed data  We have a block  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  Finished 
+ * decompress an inflated block e: last block flag
+ *
+ * GLOBAL VARIABLES: bb, kk,
+  Return values: -1 = inflate_stored, -2 = inflate_codes  block type  bit buffer  number of bits in bit buffer  make local bit buffer  read in last block bit  read in block type  restore the global bit buffer  inflate that block type  Inflate stored  number of bytes in block  make local copies of globals  bit buffer  number of bits in bit buffer  go to byte boundary  get the length and its complement  error in compressed data  Setup inflate_stored  Inflate fixed decompress an inflated type 1 (fixed
+                          Huffman codes) block.  We should either replace this
+                          with a custom decoder, or at least precompute the
+                          Huffman tables.
+                         temporary variable  literal/length code table  distance code table  lookup bits for tl  lookup bits for td  length list for huft_build  set up literal table  make a complete, but wrong code set  set up distance table  make an incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  Inflate dynamic  bits in base distance lookup table  bits in base literal/length lookup table  literal/length code table  distance code table  temporary variables  last length  mask for bit lengths table  number of lengths to get  lookup bits for tl  lookup bits for td  number of bit length codes  number of literal/length codes  number of distance codes  literal/length and distance code
+                                         lengths  bit buffer  number of bits in bit buffer  make local bit buffer  read in table lengths  number of
+                                                            literal/length codes
+                                                           number of distance
+                                                          codes  number of bit length
+                                                         codes  bad lengths  read in bit-length-code lengths  build decoding table for trees--single level, 7 bit lookup  incomplete code set  read in literal and distance code lengths  length of code in bits (0..15)  save last length in l  repeat last length 3 to 6 times  3 to 10 zero length codes  j == 18: 11 to 138 zero length codes  free decoding table for trees  restore the global bit buffer  build the decoding tables for literal/length and distance codes  incomplete code set  incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  bad block type  Method == -1 for stored, -2
+                                                   for codes  Last block  More data left  End of that
+                                                                 block  Doesnt get here  Initialise bytebuffer, be careful not to overfill the buffer  Set the bytebuffer size, default is same as gunzip_wsize  free(bytebuffer);  Allocate all global buffers (for DYN_ALLOC option)  initialize gunzip_window, bit buffer  Create the crc table  Allocate space for buffer  Store unused bytes in a global buffer so calling applets can access it  Undo too much lookahead. The next read will be byte aligned so we can
+           discard unused bits in the last meaningful byte.  top up the input buffer with the rest of the trailer  Validate decompression - crc  Validate decompression - size An allocated memory buffer at least 0x13100 (72448) bytes long reset statics  Method == -1 for stored, -2 for
+                                            codes  init Memory init Initialize memory buffer reader  FIXME: xfunc? _or_die? 
+ * gunzip implementation for wikiviewer (c) Frederik M.J.V., 2006.
+ * some bug fixes by Adam Gashlin gunzip implementation for busybox
+ *
+ * Based on GNU gzip v1.2.4 Copyright (C) 1992-1993 Jean-loup Gailly.
+ *
+ * Originally adjusted for busybox by Sven Rudolph <sr1@inf.tu-dresden.de>
+ * based on gzip sources
+ *
+ * Adjusted further by Erik Andersen <andersen@codepoet.org> to support files as
+ *well as stdin/stdout, and to generally behave itself wrt command line
+ *handling.
+ *
+ * General cleanup to better adhere to the style guide and make use of standard
+ *busybox functions by Glenn McGrath <bug1@iinet.net.au>
+ *
+ * read_gz interface + associated hacking by Laurence Anderson
+ *
+ * Fixed huft_build() so decoding end-of-block code does not grab more bits than
+ *necessary (this is required by unzip applet), added inflate_cleanup() to free
+ *leaked bytebuffer memory (used in unzip.c), and some minor style guide
+ *cleanups by Ed Clark
+ *
+ * gzip (GNU zip) -- compress files with zip algorithm and 'compress' interface
+ *Copyright (C) 1992-1993 Jean-loup Gailly The unzip code was written and put in
+ *the public domain by Mark Adler. Portions of the lzw code are derived from the
+ *public domain 'compress'
+ * written by Spencer Thomas, Joe Orost, James Woods, Jim McKie, Steve Davies,
+ *Ken Turkowski, Dave Mack and Peter Jannesen.
+ *
+ *
+ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  number of extra bits or operation  number of bits in this code or subcode  literal, length base, or distance base  pointer to next level of table static void *mainmembuf; number of output bytes  bytes in output buffer  gunzip_window size--must be a power of two, and at least 32K for zip's
+   deflate method  If BMAX needs to be larger than 16, then h and x[] should be ulg.  maximum bit length of any code (16 for explode)  maximum number of codes in any set  bitbuffer  bit buffer  bits in bit buffer  These control the size of the bytebuffer  Copy lengths for literal codes 257..285  note: see note #13 above about the 258 in this list.  Extra bits for literal codes 257..285  99==invalid  Copy offsets for distance codes 0..29  Extra bits for distance codes  Tables for deflate from PKZIP's appnote.txt.  Order of the bit length code lengths  Leave the first 4 bytes empty so we can always unwind the
+               bitbuffer to the front of the bytebuffer, leave 4 bytes free at
+               end of tail so we can easily top up buffer in
+               check_trailer_gzip() 
+ * Free the malloc'ed tables built by huft_build(), which makes a linked list of
+ *the tables it made, with the links in a dummy first entry of each table.
+ * t: table to free
+  Given a list of code lengths and a maximum table size, make a set of tables
+   to decode that set of codes.  Return zero on success, one if the given code
+   set is incomplete (the tables are still built in this case), two if the input
+   is invalid (all zero length codes or an oversubscribed set of lengths), and
+   three if not enough memory.
+ *
+ * b:    code lengths in bits (all assumed <= BMAX) n:    number of codes
+ *(assumed <= N_MAX) s:    number of simple-valued codes (0..s-1) d:    list of
+ *base values for non-simple codes e:    list of extra bits for non-simple codes
+ *t:    result: starting table m:    maximum lookup bits, returns actual bufnum:
+ *the number of the memory pool to fetch memory from
+  counter for codes of length k  bit length count table  length of end-of-block code (value 256)  i repeats in table every f entries  maximum code length  table level  counter, current code  counter  number of bits in current code  pointer into c[], b[], or v[]  points to current table  table entry for structure assignment  table stack  values in order of bit length  bits decoded stack  bits decoded  bit offsets, then code stack  pointer into x  number of dummy codes added  number of entries in current table  Length of EOB code, if any  Generate counts for each bit length  assume all entries <= BMAX  Can't combine with above line (Solaris bug)  null input--all zero length codes  Find minimum and maximum length, bound *m by those  minimum code length  maximum code length  Adjust last length count to fill out codes, if needed  bad input: more codes than bits  Generate starting offsets into the value table for each length  note that i == g from above  Make a table of values in order of bit lengths  Generate the Huffman codes and for each, make the table entries  first Huffman code is zero  grab values in bit order  no tables yet--level -1  bits decoded  just to keep compilers happy  ditto  ditto  go through the bit lengths (k already is bits in shortest code)  here i is the Huffman code of length k bits for value *p  make tables up to required level  compute minimum size table less than or equal to *m bits  upper limit on table size  try a k-w bit table  too few codes for k-w bit table  deduct codes from patterns left  try smaller tables up to z bits  enough codes to use up j bits  else deduct codes from patterns  make EOB code end at table  table entries for j-bit table  set bits decoded in stack  allocate and link in new table  link to list for huft_free()  table starts after link  connect to last table, if there is one  save pattern for backing up  bits to dump before this table  bits in this table  pointer to this table  connect to last table  set up table entry in r  out of values--invalid code  256 is EOB
+                                                                  code  simple code is just the
+                                                    value  non-simple--look up in lists
+                                                   fill code-like entries with r  backwards increment the k-bit code i  backup over finished tables  return actual size of base table  Return true (1) if we were given an incomplete table 
+ * inflate (decompress) the codes in a deflated (compressed) block. Return an
+ *error code or zero if it all goes ok.
+ *
+ * tl, td: literal/length and distance decoder tables bl, bd: number of bits
+ *decoded by tl[] and td[]
+  table entry flag/number of extra bits  length and index for copy  current gunzip_window position  pointer to table entry  masks for bl and bd bits  bit buffer  number of bits in bit buffer  1st time we are called, copy in variables  make local copies of globals  initialize bit buffer  initialize gunzip_window position
+                                              inflate the coded data  precompute masks for speed  Don't actually do anything the first time  do until end of block  then it's a literal  We have a block to read  it's an EOB or a length  exit if end of block  get length of block to copy  decode distance of block to copy  do the copy  copy to new buffer to prevent possible overwrite  (this test assumes unsigned comparison)
+                                       do it slow to avoid memcpy() overlap  !NOMEMCPY  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  normally just after call to inflate_codes, but save code by putting it
+       here  free the decoding tables, return  done  initialize gunzip_window position  Don't do anything first time  read and output the compressed data  We have a block  restore the globals from the locals  restore global gunzip_window pointer  restore global bit buffer  Finished 
+ * decompress an inflated block e: last block flag
+ *
+ * GLOBAL VARIABLES: bb, kk,
+  Return values: -1 = inflate_stored, -2 = inflate_codes  block type  bit buffer  number of bits in bit buffer  make local bit buffer  read in last block bit  read in block type  restore the global bit buffer  inflate that block type  Inflate stored  number of bytes in block  make local copies of globals  bit buffer  number of bits in bit buffer  go to byte boundary  get the length and its complement  error in compressed data  Setup inflate_stored  Inflate fixed decompress an inflated type 1 (fixed
+                          Huffman codes) block.  We should either replace this
+                          with a custom decoder, or at least precompute the
+                          Huffman tables.
+                         temporary variable  literal/length code table  distance code table  lookup bits for tl  lookup bits for td  length list for huft_build  set up literal table  make a complete, but wrong code set  set up distance table  make an incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  Inflate dynamic  bits in base distance lookup table  bits in base literal/length lookup table  literal/length code table  distance code table  temporary variables  last length  mask for bit lengths table  number of lengths to get  lookup bits for tl  lookup bits for td  number of bit length codes  number of literal/length codes  number of distance codes  literal/length and distance code
+                                         lengths  bit buffer  number of bits in bit buffer  make local bit buffer  read in table lengths  number of
+                                                            literal/length codes
+                                                           number of distance
+                                                          codes  number of bit length
+                                                         codes  bad lengths  read in bit-length-code lengths  build decoding table for trees--single level, 7 bit lookup  incomplete code set  read in literal and distance code lengths  length of code in bits (0..15)  save last length in l  repeat last length 3 to 6 times  3 to 10 zero length codes  j == 18: 11 to 138 zero length codes  free decoding table for trees  restore the global bit buffer  build the decoding tables for literal/length and distance codes  incomplete code set  incomplete code set  decompress until an end-of-block code  Setup inflate_codes  huft_free code moved into inflate_codes  bad block type  Method == -1 for stored, -2
+                                                   for codes  Last block  More data left  End of that
+                                                                 block  Doesnt get here  Initialise bytebuffer, be careful not to overfill the buffer  Set the bytebuffer size, default is same as gunzip_wsize  free(bytebuffer);  Allocate all global buffers (for DYN_ALLOC option)  initialize gunzip_window, bit buffer  Create the crc table  Allocate space for buffer  Store unused bytes in a global buffer so calling applets can access it  Undo too much lookahead. The next read will be byte aligned so we can
+           discard unused bits in the last meaningful byte.  top up the input buffer with the rest of the trailer  Validate decompression - crc  Validate decompression - size An allocated memory buffer at least 0x13100 (72448) bytes long reset statics  Method == -1 for stored, -2 for
+                                            codes  init Memory init Initialize memory buffer reader  FIXME: xfunc? _or_die? 

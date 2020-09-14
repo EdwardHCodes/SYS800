@@ -1,0 +1,124 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Rockbox driver for Sansa e200 LCDs
+ *
+ * Based on reverse engineering done my MrH
+ *
+ * Copyright (c) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Power and display status  lcd-memframe.c  Is the power turned on?  Reverse Flag  Flipping  Taken from HD66789 datasheet and seems similar enough.
+   Definitely a Renesas chip though with a perfect register index
+   match but at least one bit seems to be set that that datasheet
+   doesn't show. It says T.B.D. on the regmap anyway.  We don't know how to receive a DMA finished signal from the LCD controller.
+ * To avoid problems with flickering, we double-buffer the framebuffer.
+ * Align as in lcd-16bit.c and not cached.  Run the powerup sequence for the driver IC  Clear standby bit * Power ON Sequence * 10ms or more for oscillation circuit to stabilize  SAP2-0=100, BT2-0=100, AP2-0=100, DK=1, SLP=0, STB=0  DC12-10=000, DC2-0=000, VC2-0=001  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM3-0=11001  PON=1, VRH3-0=0011  SAP2-0=100, BT2-0=100, AP2-0=100, DK=0, SLP=0, STB=0  VCOMG=1, VDV4-0=10001, VCM3-0=11001  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x, NL4-0=11011  FLD=0, FLD0=1, B/C=1, EOR=1, NW5-0=000000  TRI=0, DFM1-0=11, BGR=0, HWM=1, ID1-0=10, AM=0, LG2-0=000
+     * AM: horizontal update direction
+     * ID1-0: H decrement, V increment
+      FP3-0=0010, BP3-0=0010  PTG1-0=00 (normal scan), ISC3-0=0000 (ignored)  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  RM=1, DM1-0=01, RIM1-0=00  SCN4-0=00000 - G1 if GS=0, G240 if GS=1  VL7-0=00000000 (0 lines)  SE17-10=219, SS17-10=0 - 220 gates  SE27-10=0, SS27-10=0 - no second screen  HEA=175, HSA=0 = H window from 0-175  VEA=219, VSA=0 = V window from 0-219  PKP12-10=000, PKP02-00=000  PKP32-30=111, PKP22-20=100  PKP52-50=001, PKP42-40=111  PRP12-10=111, PRP02-00=100  PKN12-10=001, PKN02-00=111  PKN32-30=000, PKN22-20=010  PKN52-50=111, PKN42-40=111  PRN12-10=101, PRN02-00=011  VRP14-10=00000, VRP03-00=0000  WRN14-10=00000, VRN03-00=0000  AD15-0=175 (upper right corner)  RM=1, DM1-0=01, RIM1-0=00  Run the display on sequence for the driver IC  Power has been turned off so full reinit is needed  Restore what we fiddled with when turning display off  PON=1, VRH3-0=0011  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  VCOMG=1, VDV4-0=10001, VCM3-0=11001  SAP2-0=100, BT2-0=111, AP2-0=100, DK=1, SLP=0, STB=0  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=0, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=11  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=11  Go into write data mode  tell that we're on now  Turn off visible display operations  block drawing operations and changing of first  NO2-0=01, SDT1-0=00, EQ1-0=00, DIV1-0=00, RTN3-0=0000  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=0, GON=0, DTE=0, CL=0,
+       REV=0, D1-0=00  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STBY=0  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM4-0=11001  All this is magic worked out by MrH  Stop any DMA which is in progress  Bother at all to do this again?  Init GPIO ports  Controller init  Enable controller  Reset controller  Clear reset  X-Y Geometry?  lcd_driver_framebuffer is uncached therefore at the physical address  LCD init  Pull RESET low, then high to reset driver IC  Power and display already ON - switch framebuffer address and reset
+       settings  lcd_driver_framebuffer is uncached therefore at the physical address  Start DMA  Enable LCD controller  Turn on display  Resync display  Restart DMA  Wait for a frame to be written  Disable DMA  Wait for dma end (assuming 50Hz)  Turn off display  Disable LCD controller  Turn off display  Set standby mode  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STB=1 ** hardware configuration ** TODO: Implement lcd_set_contrast()  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, CL=0,
+           DTE=1, REV=x, D1-0=11  Enable LCD controller  Set to RAM write mode  Restart DMA  turn the display upside down (call lcd_update() afterwards)  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x,
+           NL4-0=11011 (G1-G224)  Enable LCD controller  Set to RAM write mode  Restart DMA **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Rockbox driver for Sansa e200 LCDs
+ *
+ * Based on reverse engineering done my MrH
+ *
+ * Copyright (c) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Power and display status  lcd-memframe.c  Is the power turned on?  Reverse Flag  Flipping  Taken from HD66789 datasheet and seems similar enough.
+   Definitely a Renesas chip though with a perfect register index
+   match but at least one bit seems to be set that that datasheet
+   doesn't show. It says T.B.D. on the regmap anyway.  We don't know how to receive a DMA finished signal from the LCD controller.
+ * To avoid problems with flickering, we double-buffer the framebuffer.
+ * Align as in lcd-16bit.c and not cached.  Run the powerup sequence for the driver IC  Clear standby bit * Power ON Sequence * 10ms or more for oscillation circuit to stabilize  SAP2-0=100, BT2-0=100, AP2-0=100, DK=1, SLP=0, STB=0  DC12-10=000, DC2-0=000, VC2-0=001  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM3-0=11001  PON=1, VRH3-0=0011  SAP2-0=100, BT2-0=100, AP2-0=100, DK=0, SLP=0, STB=0  VCOMG=1, VDV4-0=10001, VCM3-0=11001  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x, NL4-0=11011  FLD=0, FLD0=1, B/C=1, EOR=1, NW5-0=000000  TRI=0, DFM1-0=11, BGR=0, HWM=1, ID1-0=10, AM=0, LG2-0=000
+     * AM: horizontal update direction
+     * ID1-0: H decrement, V increment
+      FP3-0=0010, BP3-0=0010  PTG1-0=00 (normal scan), ISC3-0=0000 (ignored)  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  RM=1, DM1-0=01, RIM1-0=00  SCN4-0=00000 - G1 if GS=0, G240 if GS=1  VL7-0=00000000 (0 lines)  SE17-10=219, SS17-10=0 - 220 gates  SE27-10=0, SS27-10=0 - no second screen  HEA=175, HSA=0 = H window from 0-175  VEA=219, VSA=0 = V window from 0-219  PKP12-10=000, PKP02-00=000  PKP32-30=111, PKP22-20=100  PKP52-50=001, PKP42-40=111  PRP12-10=111, PRP02-00=100  PKN12-10=001, PKN02-00=111  PKN32-30=000, PKN22-20=010  PKN52-50=111, PKN42-40=111  PRN12-10=101, PRN02-00=011  VRP14-10=00000, VRP03-00=0000  WRN14-10=00000, VRN03-00=0000  AD15-0=175 (upper right corner)  RM=1, DM1-0=01, RIM1-0=00  Run the display on sequence for the driver IC  Power has been turned off so full reinit is needed  Restore what we fiddled with when turning display off  PON=1, VRH3-0=0011  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  VCOMG=1, VDV4-0=10001, VCM3-0=11001  SAP2-0=100, BT2-0=111, AP2-0=100, DK=1, SLP=0, STB=0  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=0, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=11  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=11  Go into write data mode  tell that we're on now  Turn off visible display operations  block drawing operations and changing of first  NO2-0=01, SDT1-0=00, EQ1-0=00, DIV1-0=00, RTN3-0=0000  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=0, GON=0, DTE=0, CL=0,
+       REV=0, D1-0=00  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STBY=0  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM4-0=11001  All this is magic worked out by MrH  Stop any DMA which is in progress  Bother at all to do this again?  Init GPIO ports  Controller init  Enable controller  Reset controller  Clear reset  X-Y Geometry?  lcd_driver_framebuffer is uncached therefore at the physical address  LCD init  Pull RESET low, then high to reset driver IC  Power and display already ON - switch framebuffer address and reset
+       settings  lcd_driver_framebuffer is uncached therefore at the physical address  Start DMA  Enable LCD controller  Turn on display  Resync display  Restart DMA  Wait for a frame to be written  Disable DMA  Wait for dma end (assuming 50Hz)  Turn off display  Disable LCD controller  Turn off display  Set standby mode  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STB=1 ** hardware configuration ** TODO: Implement lcd_set_contrast()  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, CL=0,
+           DTE=1, REV=x, D1-0=11  Enable LCD controller  Set to RAM write mode  Restart DMA  turn the display upside down (call lcd_update() afterwards)  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x,
+           NL4-0=11011 (G1-G224)  Enable LCD controller  Set to RAM write mode  Restart DMA **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Rockbox driver for Sansa e200 LCDs
+ *
+ * Based on reverse engineering done my MrH
+ *
+ * Copyright (c) 2006 Daniel Ankers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Power and display status  lcd-memframe.c  Is the power turned on?  Reverse Flag  Flipping  Taken from HD66789 datasheet and seems similar enough.
+   Definitely a Renesas chip though with a perfect register index
+   match but at least one bit seems to be set that that datasheet
+   doesn't show. It says T.B.D. on the regmap anyway.  We don't know how to receive a DMA finished signal from the LCD controller.
+ * To avoid problems with flickering, we double-buffer the framebuffer.
+ * Align as in lcd-16bit.c and not cached.  Run the powerup sequence for the driver IC  Clear standby bit * Power ON Sequence * 10ms or more for oscillation circuit to stabilize  SAP2-0=100, BT2-0=100, AP2-0=100, DK=1, SLP=0, STB=0  DC12-10=000, DC2-0=000, VC2-0=001  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM3-0=11001  PON=1, VRH3-0=0011  SAP2-0=100, BT2-0=100, AP2-0=100, DK=0, SLP=0, STB=0  VCOMG=1, VDV4-0=10001, VCM3-0=11001  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x, NL4-0=11011  FLD=0, FLD0=1, B/C=1, EOR=1, NW5-0=000000  TRI=0, DFM1-0=11, BGR=0, HWM=1, ID1-0=10, AM=0, LG2-0=000
+     * AM: horizontal update direction
+     * ID1-0: H decrement, V increment
+      FP3-0=0010, BP3-0=0010  PTG1-0=00 (normal scan), ISC3-0=0000 (ignored)  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  RM=1, DM1-0=01, RIM1-0=00  SCN4-0=00000 - G1 if GS=0, G240 if GS=1  VL7-0=00000000 (0 lines)  SE17-10=219, SS17-10=0 - 220 gates  SE27-10=0, SS27-10=0 - no second screen  HEA=175, HSA=0 = H window from 0-175  VEA=219, VSA=0 = V window from 0-219  PKP12-10=000, PKP02-00=000  PKP32-30=111, PKP22-20=100  PKP52-50=001, PKP42-40=111  PRP12-10=111, PRP02-00=100  PKN12-10=001, PKN02-00=111  PKN32-30=000, PKN22-20=010  PKN52-50=111, PKN42-40=111  PRN12-10=101, PRN02-00=011  VRP14-10=00000, VRP03-00=0000  WRN14-10=00000, VRN03-00=0000  AD15-0=175 (upper right corner)  RM=1, DM1-0=01, RIM1-0=00  Run the display on sequence for the driver IC  Power has been turned off so full reinit is needed  Restore what we fiddled with when turning display off  PON=1, VRH3-0=0011  NO2-0=01, SDT1-0=00, EQ1-0=01, DIV1-0=00, RTN3-0=0000  VCOMG=1, VDV4-0=10001, VCM3-0=11001  SAP2-0=100, BT2-0=111, AP2-0=100, DK=1, SLP=0, STB=0  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=0, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=01  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=11  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=11  Go into write data mode  tell that we're on now  Turn off visible display operations  block drawing operations and changing of first  NO2-0=01, SDT1-0=00, EQ1-0=00, DIV1-0=00, RTN3-0=0000  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=1, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, DTE=0, CL=0,
+       REV=x, D1-0=10  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=0, GON=0, DTE=0, CL=0,
+       REV=0, D1-0=00  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STBY=0  PON=0, VRH3-0=0011  VCOMG=0, VDV4-0=10001, VCM4-0=11001  All this is magic worked out by MrH  Stop any DMA which is in progress  Bother at all to do this again?  Init GPIO ports  Controller init  Enable controller  Reset controller  Clear reset  X-Y Geometry?  lcd_driver_framebuffer is uncached therefore at the physical address  LCD init  Pull RESET low, then high to reset driver IC  Power and display already ON - switch framebuffer address and reset
+       settings  lcd_driver_framebuffer is uncached therefore at the physical address  Start DMA  Enable LCD controller  Turn on display  Resync display  Restart DMA  Wait for a frame to be written  Disable DMA  Wait for dma end (assuming 50Hz)  Turn off display  Disable LCD controller  Turn off display  Set standby mode  SAP2-0=000, BT2-0=000, AP2-0=000, DK=0, SLP=0, STB=1 ** hardware configuration ** TODO: Implement lcd_set_contrast()  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  PT1-0=00, VLE2-1=00, SPT=0, IB6(??)=1, GON=1, CL=0,
+           DTE=1, REV=x, D1-0=11  Enable LCD controller  Set to RAM write mode  Restart DMA  turn the display upside down (call lcd_update() afterwards)  Disable DMA  Wait for dma end (assuming 50Hz)  Disable LCD controller  VSPL=0, HSPL=0, DPL=1, EPL=0, SM=0, GS=x, SS=x,
+           NL4-0=11011 (G1-G224)  Enable LCD controller  Set to RAM write mode  Restart DMA 

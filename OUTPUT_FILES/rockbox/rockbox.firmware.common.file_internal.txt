@@ -1,0 +1,118 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Internal common filesystem service functions  * for internal functions' scanning use to save quite a bit of stack space -
+   access must be serialized by the writer lock  otherwise, out of IRAM * File stream sector caching * initialize a new cache structure  discard and mark the cache buffer as unused  allocate resources attached to the cache  if this fails, it is a bug; check for leaks and that the cache has
+       enough buffers for the worst case  free resources attached to the cache * Stream base APIs * actually late-allocate the assigned cache  free the stream's cache buffer if it's its own  assign a cache to the stream  assign own cache  duplicate a cache into a stream's local cache  discard cache contents and invalidate it  Initialize the base descriptor  free base descriptor resources * Internal directory service functions * read the next directory entry and return its FS info  rewind the FS directory to the beginning  check if the directory is empty (ie. only "." and/or ".." entries
+   exist at most)  no OEM decoding is recessary for this simple check  iso decode the name to UTF-8  This MUST be the default codepage thus not something that could be
+       loaded on call  nullify all the fields of the struct dirent  fill the native dirinfo from the static dir_fatent  HAVE_DIRCACHE  FAT driver clears the struct fat_dirent if nothing is returned  rewind the FS directory pointer * open_stream_internal() helpers and types * current location in input path  callflags parameter  compinfo parameter  size of the file  basic file information  component name location in path  length of name of component  attributes of this component  parent if in use else next free  successfully not found (aid for file creation)  found and opened  found and opened sys/volume root  continue at root level  return another struct pathwalk_component from the pool, or NULL if the
+   pool is completely used  static pool that goes to a depth of STATIC_COMP_NUM before allocating
+       elements from the stack  root  allocates components from the pool or stack depending upon the depth  fill in the details of the struct path_component_info for caller  this component wasn't found; see if more of them exist or path
+           has trailing separators; if it does, this component should be
+           interpreted as a directory even if it doesn't exist and it's the
+           final one; also, this has to be the last part or it's an error successfully not found  open the final stream itself, if found  this may make adjustments to things; do it first  type must match what is called for  FF_ANYTYPE: basically, ignore FF_FILE/FF_DIR  FO_DIRECTORY must match type  make open official if not simply probing for presence - must do it here
+       or compp->info on stack will get destroyed before it was copied  check the component against the prefix test info  opens the component named by 'comp' in the directory 'parent'  create a null-terminated copy of the component name  children inherit the prefix coloring from the parent  most of the next would be abstracted elsewhere if doing other
+       filesystems  scan parent for name; stream is converted to this parent  parse a path component, open it and process the next  alloca is used in a loop, but we reuse any blocks previously allocated
+       if we went up then back down; if the path takes us back to the root, then
+       everything is cleaned automatically  whatever is to be a parent must be a directory  check for "." and ".."  is "."  is ".."  return info below  open a stream given a path to the resource  while this supports relative components, there is currently no
+           current working directory concept at this level by which to
+           fully qualify the path (though that would not be excessively
+           difficult to add)  if !compinfo then these cannot be returned anyway  This lets it be passed quietly to directory scanning  HAVE_MULTIVOLUME  this seamlessly integrates secondary filesystems into the
+           root namespace (e.g. "/<0>/../../<1>/../foo/." :<=> "/foo")  the root of this subpath is the system root  this subpath specifies a mount point  HAVE_MULTIVOLUME  set name to start at last leading separator; names of volume
+           specifiers will be returned as "/<fooN>"  not mounted  FF_PROBE leaves nothing for caller to clean up  utter, abject failure :`(  close the stream referenced by 'stream'  nothing is referencing it so now remove the file's data  close no matter what  create a new stream in the parent directory  assumes an attempt was made beforehand to open *stream with
+       open_stream_internal() which returned zero (successfully not found),
+       so does not initialize it here  dir_fatent is implicit arg  removes files and directories - back-end to remove() and rmdir()  Only FF_* flags should be in callflags  no stream provided so open local one  else ignore the 'path' argument  directory to be removed must be empty  save old info since fat_remove() will destroy the dir info  will do removal of data below if this is the only reference  test file/directory existence with constraints  only FF_* flags should be in callflags  one-time init at startup **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Internal common filesystem service functions  * for internal functions' scanning use to save quite a bit of stack space -
+   access must be serialized by the writer lock  otherwise, out of IRAM * File stream sector caching * initialize a new cache structure  discard and mark the cache buffer as unused  allocate resources attached to the cache  if this fails, it is a bug; check for leaks and that the cache has
+       enough buffers for the worst case  free resources attached to the cache * Stream base APIs * actually late-allocate the assigned cache  free the stream's cache buffer if it's its own  assign a cache to the stream  assign own cache  duplicate a cache into a stream's local cache  discard cache contents and invalidate it  Initialize the base descriptor  free base descriptor resources * Internal directory service functions * read the next directory entry and return its FS info  rewind the FS directory to the beginning  check if the directory is empty (ie. only "." and/or ".." entries
+   exist at most)  no OEM decoding is recessary for this simple check  iso decode the name to UTF-8  This MUST be the default codepage thus not something that could be
+       loaded on call  nullify all the fields of the struct dirent  fill the native dirinfo from the static dir_fatent  HAVE_DIRCACHE  FAT driver clears the struct fat_dirent if nothing is returned  rewind the FS directory pointer * open_stream_internal() helpers and types * current location in input path  callflags parameter  compinfo parameter  size of the file  basic file information  component name location in path  length of name of component  attributes of this component  parent if in use else next free  successfully not found (aid for file creation)  found and opened  found and opened sys/volume root  continue at root level  return another struct pathwalk_component from the pool, or NULL if the
+   pool is completely used  static pool that goes to a depth of STATIC_COMP_NUM before allocating
+       elements from the stack  root  allocates components from the pool or stack depending upon the depth  fill in the details of the struct path_component_info for caller  this component wasn't found; see if more of them exist or path
+           has trailing separators; if it does, this component should be
+           interpreted as a directory even if it doesn't exist and it's the
+           final one; also, this has to be the last part or it's an error successfully not found  open the final stream itself, if found  this may make adjustments to things; do it first  type must match what is called for  FF_ANYTYPE: basically, ignore FF_FILE/FF_DIR  FO_DIRECTORY must match type  make open official if not simply probing for presence - must do it here
+       or compp->info on stack will get destroyed before it was copied  check the component against the prefix test info  opens the component named by 'comp' in the directory 'parent'  create a null-terminated copy of the component name  children inherit the prefix coloring from the parent  most of the next would be abstracted elsewhere if doing other
+       filesystems  scan parent for name; stream is converted to this parent  parse a path component, open it and process the next  alloca is used in a loop, but we reuse any blocks previously allocated
+       if we went up then back down; if the path takes us back to the root, then
+       everything is cleaned automatically  whatever is to be a parent must be a directory  check for "." and ".."  is "."  is ".."  return info below  open a stream given a path to the resource  while this supports relative components, there is currently no
+           current working directory concept at this level by which to
+           fully qualify the path (though that would not be excessively
+           difficult to add)  if !compinfo then these cannot be returned anyway  This lets it be passed quietly to directory scanning  HAVE_MULTIVOLUME  this seamlessly integrates secondary filesystems into the
+           root namespace (e.g. "/<0>/../../<1>/../foo/." :<=> "/foo")  the root of this subpath is the system root  this subpath specifies a mount point  HAVE_MULTIVOLUME  set name to start at last leading separator; names of volume
+           specifiers will be returned as "/<fooN>"  not mounted  FF_PROBE leaves nothing for caller to clean up  utter, abject failure :`(  close the stream referenced by 'stream'  nothing is referencing it so now remove the file's data  close no matter what  create a new stream in the parent directory  assumes an attempt was made beforehand to open *stream with
+       open_stream_internal() which returned zero (successfully not found),
+       so does not initialize it here  dir_fatent is implicit arg  removes files and directories - back-end to remove() and rmdir()  Only FF_* flags should be in callflags  no stream provided so open local one  else ignore the 'path' argument  directory to be removed must be empty  save old info since fat_remove() will destroy the dir info  will do removal of data below if this is the only reference  test file/directory existence with constraints  only FF_* flags should be in callflags  one-time init at startup **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ **************************************************************************** Internal common filesystem service functions  * for internal functions' scanning use to save quite a bit of stack space -
+   access must be serialized by the writer lock  otherwise, out of IRAM * File stream sector caching * initialize a new cache structure  discard and mark the cache buffer as unused  allocate resources attached to the cache  if this fails, it is a bug; check for leaks and that the cache has
+       enough buffers for the worst case  free resources attached to the cache * Stream base APIs * actually late-allocate the assigned cache  free the stream's cache buffer if it's its own  assign a cache to the stream  assign own cache  duplicate a cache into a stream's local cache  discard cache contents and invalidate it  Initialize the base descriptor  free base descriptor resources * Internal directory service functions * read the next directory entry and return its FS info  rewind the FS directory to the beginning  check if the directory is empty (ie. only "." and/or ".." entries
+   exist at most)  no OEM decoding is recessary for this simple check  iso decode the name to UTF-8  This MUST be the default codepage thus not something that could be
+       loaded on call  nullify all the fields of the struct dirent  fill the native dirinfo from the static dir_fatent  HAVE_DIRCACHE  FAT driver clears the struct fat_dirent if nothing is returned  rewind the FS directory pointer * open_stream_internal() helpers and types * current location in input path  callflags parameter  compinfo parameter  size of the file  basic file information  component name location in path  length of name of component  attributes of this component  parent if in use else next free  successfully not found (aid for file creation)  found and opened  found and opened sys/volume root  continue at root level  return another struct pathwalk_component from the pool, or NULL if the
+   pool is completely used  static pool that goes to a depth of STATIC_COMP_NUM before allocating
+       elements from the stack  root  allocates components from the pool or stack depending upon the depth  fill in the details of the struct path_component_info for caller  this component wasn't found; see if more of them exist or path
+           has trailing separators; if it does, this component should be
+           interpreted as a directory even if it doesn't exist and it's the
+           final one; also, this has to be the last part or it's an error successfully not found  open the final stream itself, if found  this may make adjustments to things; do it first  type must match what is called for  FF_ANYTYPE: basically, ignore FF_FILE/FF_DIR  FO_DIRECTORY must match type  make open official if not simply probing for presence - must do it here
+       or compp->info on stack will get destroyed before it was copied  check the component against the prefix test info  opens the component named by 'comp' in the directory 'parent'  create a null-terminated copy of the component name  children inherit the prefix coloring from the parent  most of the next would be abstracted elsewhere if doing other
+       filesystems  scan parent for name; stream is converted to this parent  parse a path component, open it and process the next  alloca is used in a loop, but we reuse any blocks previously allocated
+       if we went up then back down; if the path takes us back to the root, then
+       everything is cleaned automatically  whatever is to be a parent must be a directory  check for "." and ".."  is "."  is ".."  return info below  open a stream given a path to the resource  while this supports relative components, there is currently no
+           current working directory concept at this level by which to
+           fully qualify the path (though that would not be excessively
+           difficult to add)  if !compinfo then these cannot be returned anyway  This lets it be passed quietly to directory scanning  HAVE_MULTIVOLUME  this seamlessly integrates secondary filesystems into the
+           root namespace (e.g. "/<0>/../../<1>/../foo/." :<=> "/foo")  the root of this subpath is the system root  this subpath specifies a mount point  HAVE_MULTIVOLUME  set name to start at last leading separator; names of volume
+           specifiers will be returned as "/<fooN>"  not mounted  FF_PROBE leaves nothing for caller to clean up  utter, abject failure :`(  close the stream referenced by 'stream'  nothing is referencing it so now remove the file's data  close no matter what  create a new stream in the parent directory  assumes an attempt was made beforehand to open *stream with
+       open_stream_internal() which returned zero (successfully not found),
+       so does not initialize it here  dir_fatent is implicit arg  removes files and directories - back-end to remove() and rmdir()  Only FF_* flags should be in callflags  no stream provided so open local one  else ignore the 'path' argument  directory to be removed must be empty  save old info since fat_remove() will destroy the dir info  will do removal of data below if this is the only reference  test file/directory existence with constraints  only FF_* flags should be in callflags  one-time init at startup 

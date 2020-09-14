@@ -1,0 +1,304 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Tomasz Moń
+ * Copyright (C) 2007 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The entry address is equal to base address plus an offset.
+ * The offset is based on the priority of the interrupt. So if
+ * the priority of an interrupt is changed, the user should also
+ * change the offset for the interrupt in the entry table.
+  IRQ priorities, ranging from highest to lowest 
+     * Based on: linux/arch/arm/kernel/entry-armv.S and system-meg-fx.c
+      Code taken from linux/include/asm-arm/arch-itdm320-20/system.h at NeuroSVN  Mask all Interrupts.  Wait for power button  Holding power button for a while makes avr system reset  Pin 33 is connected to a buzzer, for an annoying sound set 
+     *  PWM0C == 0x3264
+     *  PWM0H == 0x1932
+     *  Function to 1
+     *  Since this is not used in the FW, set it to a normal output at a zero
+     *  level.  taken from linux/arch/arm/mach-itdm320-20/irq.c  Clearing all FIQs and IRQs.  Masking all Interrupts.  Setting INTC to all IRQs.  Only initially needed clocks should be turned on  Agressive clock setup for newer parts (ES11) - this is actually lower
+         *  power also.
+          Setup the EMIF interface timings  ATA interface:
+         * If this is the newer silicon the timings need to be slowed down some
+         * for reliable access due to the faster ARM clock.
+          OE width, WE width, CS width, Cycle width  14: Width (16), 12: Idles, 8: OE setup, 4: WE Setup, CS setup  USB interface:
+         * The following EMIF timing values are from the OF:
+         *      IO_EMIF_CS4CTRL1 = 0x66AB;
+         *      IO_EMIF_CS4CTRL2 = 0x4220;
+         *
+         * More agressive numbers may be possible, but it depends on the clocking
+         *  setup. 
+          27 MHz input clock:
+         *  PLLA: 27 * 15 / 2 = 202.5 MHz
+         *  PLLB: 27 *  9 / 2 = 121.5 MHz (off: bit 12)
+          Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 50.625 MHz )
+         *  AHB div  = 1    ( 50.625 MHz )
+         * Fast Setup:
+         *  ARM div  = 1    ( 202.5  MHz )
+         *  AHB div  = 2    ( 101.25 MHz )
+          SDRAM div= 2     ( 101.25 MHz )
+         * AXL div  = 1     ( 202.5  MHz )
+          MS div   = 15    ( 13.5 MHz )
+         * DSP div  = 4     ( 50.625 MHz - could be double, but this saves power)
+          MMC div  = 256   ( slow )
+         * VENC div = 32    ( 843.75 KHz )
+          I2C div  = 1     ( 48 MHz if M48XI is running )
+         * VLNQ div = 32
+          Feed everything from PLLA  Setting AHB divisor to 0 increases power consumption  Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 87.5 MHz )
+         *  AHB div  = 1    ( 87.5 MHz )
+         * Fast Setup:
+         *  ARM div  = 2    ( 175  MHz )
+         *  AHB div  = 2    ( 87.5 MHz )
+          M48XI disabled, USB buffer powerdown  I2C wodn't work with this disabled  IRQENTRY only reflects enabled interrupts (short) vector_addr & ~0x000F;(short) (vector_addr >> 16); Set interrupt priorities to predefined values  IO_INTC_PRIORITYx  Turn off all timers  UART1 is not used on Sansa Connect - don't power it up  Initialization is done so shut the front LED off so that the battery
+     * can charge.
+      keep WIFI CS and reset high to save power  CS  reset  Disable External Memory interface (used for accessing NOR flash)  Unknown GIOs - set them to save power  GIO40 - output 0
+     * GIO28 - output 0
+      If these variables have not been changed since startup then boosting
+     *  should not be used.
+     
+ * Waits for specified amount of microseconds (or longer, but NEVER less)
+ *
+ * Maximum supported usec value is 10000, use sleep() for longer delays.
+ 
+     * count and prev_tick must be initialized as soon as posible (right
+     * after function entry)
+     *
+     * count must be initialized before prev_count
+      initialization time/sequence of these values is not critical 
+         * Interrupts are disabled
+         *
+         * Clear TIMER1 interrupt to prevent returning from this fuction
+         * before specified amount of time has passed
+         * In worst case this makes udelay() take one tick longer
+         
+     * On Sansa Connect tick timer counts from 0 to 26999
+     * in this case stop will overflow only if usec > 10000
+     * such long delays shouldn't be blocking (use sleep() instead)
+      stop values over TMDIV won't ever be reached 
+     * Status in IO_INTC_IRQ0 is changed even when interrupts are
+     * masked. If bit 1 in IO_INTC_IRQ0 is set to 0, then
+     * there is pending current_tick update.
+     *
+     * Relaying solely on current_tick value when interrupts are disabled
+     * can lead to lockup.
+     * Interrupt status bit check below is used to prevent this lockup.
+      udelay will end after counter reset (tick)  ensure new tick  prevent lock  udelay will end before counter reset (tick) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Tomasz Moń
+ * Copyright (C) 2007 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The entry address is equal to base address plus an offset.
+ * The offset is based on the priority of the interrupt. So if
+ * the priority of an interrupt is changed, the user should also
+ * change the offset for the interrupt in the entry table.
+  IRQ priorities, ranging from highest to lowest 
+     * Based on: linux/arch/arm/kernel/entry-armv.S and system-meg-fx.c
+      Code taken from linux/include/asm-arm/arch-itdm320-20/system.h at NeuroSVN  Mask all Interrupts.  Wait for power button  Holding power button for a while makes avr system reset  Pin 33 is connected to a buzzer, for an annoying sound set 
+     *  PWM0C == 0x3264
+     *  PWM0H == 0x1932
+     *  Function to 1
+     *  Since this is not used in the FW, set it to a normal output at a zero
+     *  level.  taken from linux/arch/arm/mach-itdm320-20/irq.c  Clearing all FIQs and IRQs.  Masking all Interrupts.  Setting INTC to all IRQs.  Only initially needed clocks should be turned on  Agressive clock setup for newer parts (ES11) - this is actually lower
+         *  power also.
+          Setup the EMIF interface timings  ATA interface:
+         * If this is the newer silicon the timings need to be slowed down some
+         * for reliable access due to the faster ARM clock.
+          OE width, WE width, CS width, Cycle width  14: Width (16), 12: Idles, 8: OE setup, 4: WE Setup, CS setup  USB interface:
+         * The following EMIF timing values are from the OF:
+         *      IO_EMIF_CS4CTRL1 = 0x66AB;
+         *      IO_EMIF_CS4CTRL2 = 0x4220;
+         *
+         * More agressive numbers may be possible, but it depends on the clocking
+         *  setup. 
+          27 MHz input clock:
+         *  PLLA: 27 * 15 / 2 = 202.5 MHz
+         *  PLLB: 27 *  9 / 2 = 121.5 MHz (off: bit 12)
+          Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 50.625 MHz )
+         *  AHB div  = 1    ( 50.625 MHz )
+         * Fast Setup:
+         *  ARM div  = 1    ( 202.5  MHz )
+         *  AHB div  = 2    ( 101.25 MHz )
+          SDRAM div= 2     ( 101.25 MHz )
+         * AXL div  = 1     ( 202.5  MHz )
+          MS div   = 15    ( 13.5 MHz )
+         * DSP div  = 4     ( 50.625 MHz - could be double, but this saves power)
+          MMC div  = 256   ( slow )
+         * VENC div = 32    ( 843.75 KHz )
+          I2C div  = 1     ( 48 MHz if M48XI is running )
+         * VLNQ div = 32
+          Feed everything from PLLA  Setting AHB divisor to 0 increases power consumption  Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 87.5 MHz )
+         *  AHB div  = 1    ( 87.5 MHz )
+         * Fast Setup:
+         *  ARM div  = 2    ( 175  MHz )
+         *  AHB div  = 2    ( 87.5 MHz )
+          M48XI disabled, USB buffer powerdown  I2C wodn't work with this disabled  IRQENTRY only reflects enabled interrupts (short) vector_addr & ~0x000F;(short) (vector_addr >> 16); Set interrupt priorities to predefined values  IO_INTC_PRIORITYx  Turn off all timers  UART1 is not used on Sansa Connect - don't power it up  Initialization is done so shut the front LED off so that the battery
+     * can charge.
+      keep WIFI CS and reset high to save power  CS  reset  Disable External Memory interface (used for accessing NOR flash)  Unknown GIOs - set them to save power  GIO40 - output 0
+     * GIO28 - output 0
+      If these variables have not been changed since startup then boosting
+     *  should not be used.
+     
+ * Waits for specified amount of microseconds (or longer, but NEVER less)
+ *
+ * Maximum supported usec value is 10000, use sleep() for longer delays.
+ 
+     * count and prev_tick must be initialized as soon as posible (right
+     * after function entry)
+     *
+     * count must be initialized before prev_count
+      initialization time/sequence of these values is not critical 
+         * Interrupts are disabled
+         *
+         * Clear TIMER1 interrupt to prevent returning from this fuction
+         * before specified amount of time has passed
+         * In worst case this makes udelay() take one tick longer
+         
+     * On Sansa Connect tick timer counts from 0 to 26999
+     * in this case stop will overflow only if usec > 10000
+     * such long delays shouldn't be blocking (use sleep() instead)
+      stop values over TMDIV won't ever be reached 
+     * Status in IO_INTC_IRQ0 is changed even when interrupts are
+     * masked. If bit 1 in IO_INTC_IRQ0 is set to 0, then
+     * there is pending current_tick update.
+     *
+     * Relaying solely on current_tick value when interrupts are disabled
+     * can lead to lockup.
+     * Interrupt status bit check below is used to prevent this lockup.
+      udelay will end after counter reset (tick)  ensure new tick  prevent lock  udelay will end before counter reset (tick) **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Tomasz Moń
+ * Copyright (C) 2007 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The entry address is equal to base address plus an offset.
+ * The offset is based on the priority of the interrupt. So if
+ * the priority of an interrupt is changed, the user should also
+ * change the offset for the interrupt in the entry table.
+  IRQ priorities, ranging from highest to lowest 
+     * Based on: linux/arch/arm/kernel/entry-armv.S and system-meg-fx.c
+      Code taken from linux/include/asm-arm/arch-itdm320-20/system.h at NeuroSVN  Mask all Interrupts.  Wait for power button  Holding power button for a while makes avr system reset  Pin 33 is connected to a buzzer, for an annoying sound set 
+     *  PWM0C == 0x3264
+     *  PWM0H == 0x1932
+     *  Function to 1
+     *  Since this is not used in the FW, set it to a normal output at a zero
+     *  level.  taken from linux/arch/arm/mach-itdm320-20/irq.c  Clearing all FIQs and IRQs.  Masking all Interrupts.  Setting INTC to all IRQs.  Only initially needed clocks should be turned on  Agressive clock setup for newer parts (ES11) - this is actually lower
+         *  power also.
+          Setup the EMIF interface timings  ATA interface:
+         * If this is the newer silicon the timings need to be slowed down some
+         * for reliable access due to the faster ARM clock.
+          OE width, WE width, CS width, Cycle width  14: Width (16), 12: Idles, 8: OE setup, 4: WE Setup, CS setup  USB interface:
+         * The following EMIF timing values are from the OF:
+         *      IO_EMIF_CS4CTRL1 = 0x66AB;
+         *      IO_EMIF_CS4CTRL2 = 0x4220;
+         *
+         * More agressive numbers may be possible, but it depends on the clocking
+         *  setup. 
+          27 MHz input clock:
+         *  PLLA: 27 * 15 / 2 = 202.5 MHz
+         *  PLLB: 27 *  9 / 2 = 121.5 MHz (off: bit 12)
+          Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 50.625 MHz )
+         *  AHB div  = 1    ( 50.625 MHz )
+         * Fast Setup:
+         *  ARM div  = 1    ( 202.5  MHz )
+         *  AHB div  = 2    ( 101.25 MHz )
+          SDRAM div= 2     ( 101.25 MHz )
+         * AXL div  = 1     ( 202.5  MHz )
+          MS div   = 15    ( 13.5 MHz )
+         * DSP div  = 4     ( 50.625 MHz - could be double, but this saves power)
+          MMC div  = 256   ( slow )
+         * VENC div = 32    ( 843.75 KHz )
+          I2C div  = 1     ( 48 MHz if M48XI is running )
+         * VLNQ div = 32
+          Feed everything from PLLA  Setting AHB divisor to 0 increases power consumption  Set the slow and fast clock speeds used for boosting
+         * Slow Setup:
+         *  ARM div  = 4    ( 87.5 MHz )
+         *  AHB div  = 1    ( 87.5 MHz )
+         * Fast Setup:
+         *  ARM div  = 2    ( 175  MHz )
+         *  AHB div  = 2    ( 87.5 MHz )
+          M48XI disabled, USB buffer powerdown  I2C wodn't work with this disabled  IRQENTRY only reflects enabled interrupts (short) vector_addr & ~0x000F;(short) (vector_addr >> 16); Set interrupt priorities to predefined values  IO_INTC_PRIORITYx  Turn off all timers  UART1 is not used on Sansa Connect - don't power it up  Initialization is done so shut the front LED off so that the battery
+     * can charge.
+      keep WIFI CS and reset high to save power  CS  reset  Disable External Memory interface (used for accessing NOR flash)  Unknown GIOs - set them to save power  GIO40 - output 0
+     * GIO28 - output 0
+      If these variables have not been changed since startup then boosting
+     *  should not be used.
+     
+ * Waits for specified amount of microseconds (or longer, but NEVER less)
+ *
+ * Maximum supported usec value is 10000, use sleep() for longer delays.
+ 
+     * count and prev_tick must be initialized as soon as posible (right
+     * after function entry)
+     *
+     * count must be initialized before prev_count
+      initialization time/sequence of these values is not critical 
+         * Interrupts are disabled
+         *
+         * Clear TIMER1 interrupt to prevent returning from this fuction
+         * before specified amount of time has passed
+         * In worst case this makes udelay() take one tick longer
+         
+     * On Sansa Connect tick timer counts from 0 to 26999
+     * in this case stop will overflow only if usec > 10000
+     * such long delays shouldn't be blocking (use sleep() instead)
+      stop values over TMDIV won't ever be reached 
+     * Status in IO_INTC_IRQ0 is changed even when interrupts are
+     * masked. If bit 1 in IO_INTC_IRQ0 is set to 0, then
+     * there is pending current_tick update.
+     *
+     * Relaying solely on current_tick value when interrupts are disabled
+     * can lead to lockup.
+     * Interrupt status bit check below is used to prevent this lockup.
+      udelay will end after counter reset (tick)  ensure new tick  prevent lock  udelay will end before counter reset (tick) 

@@ -1,0 +1,697 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Nicolas Pennequin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file  #define LOGF_ENABLE  macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages  #define BUFFERING_LOGQUEUES_SYS_TIMEOUT  amount of data to read in one read() call  Handle data may wrap in buffer  All data must be allocated up front  Data is fixed in position  Handle list node (first!)  MRU list node (second!)  Size of this structure + its auxilliary data  A unique ID for the handle  Type of data buffered with this handle  Handle property flags  Count of pinnings  Stop any attempt at waiting to get the data  File descriptor to path (-1 if closed)  Start index of the handle's data buffer  Read pointer, relative to the main buffer  Write pointer, relative to the main buffer  File total length (possibly trimmed at tail)  Offset at which we started reading the file  Read position in file  Offset at which we stopped reading the file  Path if data originated in a file  Minimum allowed handle movement  Configuration  Level to trigger filebuf fill  High watermark for rebuffer  buffer-order handle list  MRU-ordered list of handles  number of handles in the lists  Main lock for adding / removing handles  Amount of data needing to be buffered  Amount of data currently in the buffer  Amount of data still useful to the user  Messages available to communicate with the buffering thread  Request buffering of a handle, this should not be
+                            used in a low buffer situation.  Request reset and rebuffering of a handle at a new
+                            file starting position.  Request closing a handle  Configuration:  Request that the buffering thread initiate a buffer
+                            fill at its earliest convenience  Inform the buffering thread that a handle was added,
+                            (which means the disk is spinning)  Buffering thread  Ring buffer helper functions  Buffer pointer (p) plus value (v), wrapped if necessary  wrap if necssary  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as empty  wrap  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as full  wrap  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as empty  wrap if necessary  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as full  wrap if necessary  Real buffer watermark 
+LINKED LIST MANAGEMENT
+======================
+
+add_handle    : Create a new handle
+link_handle   : Add a handle to the list
+unlink_handle : Remove a handle from the list
+find_handle   : Get a handle pointer from an ID
+move_handle   : Move a handle in the buffer (with or without its data)
+
+These functions only handle the linked list structure. They don't touch the
+contents of the struct memory_handle headers.
+
+Doubly-linked list, not circular.
+New handles are added at the tail.
+
+num_handles = N
+       NULL <- h0 <-> h1 <-> h2 -> ... <- hN-1 -> NULL
+head=> --------^                          ^
+tail=> -----------------------------------+
+
+MRU cache is similar except new handles are added at the head and the most-
+recently-accessed handle is always moved to the head (if not already there).
+
+ Wrap signed int is safe and 0 doesn't happen  Adds the handle to the linked list  Delete a given memory handle from the linked list  Adjusts handle list pointers _before_ it's actually moved  Add a new handle to the linked list and return it. It will have become the
+   new current handle.
+   flags contains information on how this may be allocated
+   data_size must contain the size of what will be in the handle.
+   widx_out points to variable to receive first available byte of data area
+   returns a valid memory handle if all conditions for allocation are met.
+           NULL if there memory_handle itself cannot be allocated or if the
+           data_size cannot be allocated and alloc_all is set.  Gives each handle a unique id  Buffer is not empty  the current handle hasn't finished buffering. We can only add
+           a new one if there is already enough free space to finish
+           the buffering.  Not enough space to finish allocation  Apply all the needed reserve  Align to align size up  First, will the handle wrap?  If the handle would wrap, move to the beginning of the buffer,
+     * or if the data must not but would wrap, move it to the beginning  How far we shifted index to align things, must be < buffer_len  How much space are we short in the actual ring buffer?  Not enough space for required allocations  There is enough space for the required data, initialize the struct  Can be moved  Data can be waited for  Save the provided path  Return the start of the data area  Return a pointer to the memory handle of given ID.
+   NULL if the handle wasn't found  Move a memory handle and data_size of its data delta bytes along the buffer.
+   delta maximum bytes available to move the handle.  If the move is performed
+         it is set to the actual distance moved.
+   data_size is the amount of data to move along with the struct.
+   returns true if the move is successful and false if the handle is NULL,
+           the  move would be less than the size of a memory_handle after
+           correcting for wraps or if the handle is not found in the linked
+           list for adjustment.  This function has no side effects if false
+           is returned.  Align to align size down  It's not legal to move less than MIN_MOVE_DELTA  Some part of the struct + data would wrap, maybe ok  If the overlap lands inside the memory_handle  Otherwise the overlap falls in the data area and must all be
+             * backed out.  This may become conditional if ever we move
+             * data that is allowed to wrap (ie audio)  Correct the position and real delta to prevent the struct from
+             * wrapping, this guarantees an aligned delta if the struct size is
+             * aligned and the buffer is aligned  Align correction to align size up  Delta cannot end up less than MIN_MOVE_DELTA  Used below to know how to split the data  Adjust list pointers  x = handle(s) following this one...
+     * ...if last handle, unmoveable if metadata, only shrinkable if audio.
+     * In other words, no legal move can be made that would have the src head
+     * and dest tail of the data overlap itself. These facts reduce the
+     * problem to four essential permutations.
+     *
+     * movement: always "clockwise" >>>>
+     *
+     * (src nowrap, dest nowrap)
+     * |0123  x |
+     * |  0123x | etc...
+     * move: "0123"
+     *
+     * (src nowrap, dest wrap)
+     * |  x0123 |
+     * |23x   01|
+     * move: "23", "01"
+     *
+     * (src wrap, dest nowrap)
+     * |23   x01|
+     * | 0123x  |
+     * move: "23", "01"
+     *
+     * (src wrap, dest wrap)
+     * |23 x  01|
+     * |123x   0|
+     * move: "23", "1", "0"
+      Move over already wrapped data by the final delta  Move data that now wraps to the beginning  Move leading fragment containing handle struct  Update the caller with the new location of h and the distance moved 
+BUFFER SPACE MANAGEMENT
+=======================
+
+update_data_counters: Updates the values in data_counters
+buffer_handle   : Buffer data for a handle
+rebuffer_handle : Seek to a nonbuffered part of a handle by rebuffering the data
+shrink_handle   : Free buffer space by moving a handle
+fill_buffer     : Call buffer_handle for all handles that have data to buffer
+
+These functions are used by the buffering thread to manage buffer space.
+ Q_BUFFER_HANDLE event and buffer data for the given handle.
+   Return whether or not the buffering should continue explicitly.   nothing left to buffer  file closed, reopen  could not open the file, truncate it where it is  metadata parsing failed: clear the buffer.  max amount to copy  read only up to available space and stop if it would overwrite
+           the next handle; stop one byte early to avoid empty/full alias
+           (or else do more complicated arithmetic to differentiate)  no space for read  rc is the actual amount read  Some kind of filesystem error, maybe recoverable if not codec  Advance buffer and make data available to users  Normal buffering - check queue  Done  finished buffering the file  Close the specified handle id and free its allocation.  Q_CLOSE_HANDLE  If the handle is not found, it is closed  Free buffer space by moving the handle struct right before the useful
+   part of its data buffer or by moving all the data.  only move the handle struct  data is pinned by default - if we start moving packet audio,
+           the semantics will determine whether or not data is movable
+           but the handle will remain movable in either case  The value of delta might change for alignment reasons  metadata handle: we can move all of it  Pinned, last handle  The value of delta might change for alignment reasons  when moving an mp3entry we need to readjust its pointers  adjust the bitmap's pointer  Fill the buffer by buffering as much data as possible for handles that still
+   have data left to buffer
+   Return whether or not to continue filling after this  only spin the disk down if the filling wasn't interrupted by an
+           event arriving in the queue.  Given a file descriptor to a bitmap file, write the bitmap data to the
+   buffer, with a struct bitmap and the actual data immediately following.
+   Return value is the total size (struct + data).  get the desired image size  FIXME: alignment may be needed for the data buffer.  HAVE_ALBUMART 
+MAIN BUFFERING API CALLS
+========================
+
+bufopen     : Request the opening of a new handle for a file
+bufalloc    : Open a new handle for data other than a file.
+bufclose    : Close an open handle
+bufseek     : Set the read pointer in a handle
+bufadvance  : Move the read pointer in a handle
+bufread     : Copy data from a handle into a given buffer
+bufgetdata  : Give a pointer to the handle's data
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Reserve space in the buffer for a file.
+   filename: name of the file to open
+   offset: offset at which to start buffering the file, useful when the first
+           offset bytes of the file aren't needed.
+   type: one of the data types supported (audio, image, cuesheet, others
+   user_data: user data passed possibly passed in subcalls specific to a
+              data_type (only used for image (albumart) buffering so far )
+   return value: <0 if the file cannot be opened, or one file already
+   queued to be opened, otherwise the handle for the file in the buffer
+ No buffer refs until after the mutex_lock call!  ID3 case: allocate space, init the handle and return.  Inform the buffering thread that we added a handle  Loading code from memory is not supported in application builds  Other cases: there is a little more work.  If albumart is embedded, the complete file is not buffered,
+         * but only the jpeg part; filesize() would be wrong  Reserve extra space because alignment can move data forward  Don't bother to storage align bitmaps because they are not
+     * loaded directly into the buffer.
+      Align to desired storage alignment  STORAGE_WANTS_ALIGN  Bitmap file: we load the data instead of the file  Immediately start buffering those  Other types will get buffered in the course of normal operations  Inform the buffering thread that we added a handle  Currently only used for aa loading  Open a new handle from data that needs to be copied from memory.
+   src is the source buffer from which to copy data. It can be NULL to simply
+   reserve buffer space.
+   size is the requested size. The call will only be successful if the
+   requested amount of data can entirely fit in the buffer without wrapping.
+   Return value is the handle id for success or <0 for failure.
+ specially take care of struct mp3entry  Close the handle. Return true for success and false for failure  Backend to bufseek and bufadvance. Call only in response to
+   Q_REBUFFER_HANDLE!  Check that we still need to do this since the request could have
+       possibly been met by this time  When seeking foward off of the buffer, if it is a short seek attempt to
+       avoid rebuffering the whole track, just read enough to satisfy  It really did succeed  Ok, try the rest  Data collision or other file error - must reset  file truncation happened above  Strip alignment padding then redo  Align to desired storage alignment if space permits - handle could
+       have been shrunken too close to the following one after a previous
+       rebuffer.  Forego storage alignment this time  Just clear the data buffer  STORAGE_WANTS_ALIGN  Reset the handle to its new position  There isn't enough space to rebuffer all of the track from its new
+           offset, so we ask the user to free some  Now we do the rebuffer  Backend to bufseek and bufadvance  access before or after buffered data and not to end of file or file
+           is not buffered to the end-- a rebuffer is needed.  Set reading index in handle (relatively to the start of the file).
+   Access before the available data will trigger a rebuffer.
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was beyond the end of
+     the file
+ Advance the reading index in a handle (relatively to its current position).
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was before the beginning
+     or beyond the end of the file
+  Get the read position from the start of the file
+   Returns the offset from byte 0 of the file and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+  Used by bufread and bufgetdata to prepare the buffer and retrieve the
+ * actual amount of data available for reading. It does range checks on
+ * size and returns a valid (and explicit) amount of data for reading  File is finished reading  clip to eof  If more than the size of the guardbuf is requested and this is a
+         * bufgetdata, limit to guard_bufsize over the end of the buffer  this ensures *size <= buffer_len - h->ridx + GUARD_BUFSIZE  Wait for the data to be ready  Data (still) isn't ready; ping buffering thread  it is not safe for a non-buffering thread to sleep while
+             * holding a handle  Wait must be abandoned  Note: It is safe for the thread responsible for handling the rebuffer
+ * cleanup request to call bufread or bufgetdata only when the data will
+ * be available-- not if it could be blocked waiting for it in prep_bufdata.
+ * It should be apparent that if said thread is being forced to wait for
+ * buffering but has not yet responded to the cleanup request, the space
+ * can never be cleared to allow further reading of the file because it is
+ * not listening to callbacks any longer.  Copy data from the given handle to the dest buffer.
+   Return the number of bytes copied or < 0 for failure (handle not found).
+   The caller is blocked until the requested amount of data is available.
+ the data wraps around the end of the buffer  Update the "data" pointer to make the handle's data available to the caller.
+   Return the length of the available linear data or < 0 for failure (handle
+   not found).
+   The caller is blocked until the requested amount of data is available.
+   size is the amount of linear data requested. it can be 0 to get as
+   much as possible.
+   The guard buffer may be used to provide the requested size. This means it's
+   unsafe to request more than the size of the guard buffer.
+ the data wraps around the end of the buffer :
+           use the guard buffer to provide the requested amount of data.  prep_bufdata ensures
+           adjusted_size <= buffer_len - h->ridx + GUARD_BUFSIZE,
+           so copy_n <= GUARD_BUFSIZE  only from buffering thread  We don't support tail requests of > guardbuf_size, for simplicity  only from buffering thread  Cannot trim to before read position 
+SECONDARY EXPORTED FUNCTIONS
+============================
+
+buf_handle_offset
+buf_set_base_handle
+buf_handle_data_type
+buf_is_handle
+buf_pin_handle
+buf_signal_handle
+buf_length
+buf_used
+buf_set_watermark
+buf_get_watermark
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Return the size of the ringbuffer  Set the handle from which useful data is counted  Return the amount of buffer space used * -- buffer thread helpers -- * A handle was added: the disk is spinning, so we can fill  The buffer is low and we're idle, just watching the levels
+                   - call the callbacks to get new data  Continue anything else we haven't finished - it might
+                   get booted off or stop early because the receiver hasn't
+                   had a chance to clear anything yet  Thread should absolutely not respond to USB because if it waits first,
+       then it cannot properly service the handles and leaks will happen -
+       this is a worker thread and shouldn't need to care about any system
+       notifications.
+                                      ***
+       Whoever is using buffering should be responsible enough to clear all
+       the handles at the right time.  Initialise the buffering subsystem  Wraps of storage-aligned data must also be storage aligned,
+       thus buf and buflen must be a aligned to an integer multiple of
+       the storage alignment  If handles weren't closed above, just do it  Set the high watermark as 75% full...or 25% empty :)
+       This is the greatest fullness that will trigger low-buffer events
+       no matter what the setting because high-bitrate files can have
+       ludicrous margins that even exceed the buffer size - most common
+       with a huge anti-skip buffer but even without that setting,
+       staying constantly active in buffering is pointless **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Nicolas Pennequin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file  #define LOGF_ENABLE  macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages  #define BUFFERING_LOGQUEUES_SYS_TIMEOUT  amount of data to read in one read() call  Handle data may wrap in buffer  All data must be allocated up front  Data is fixed in position  Handle list node (first!)  MRU list node (second!)  Size of this structure + its auxilliary data  A unique ID for the handle  Type of data buffered with this handle  Handle property flags  Count of pinnings  Stop any attempt at waiting to get the data  File descriptor to path (-1 if closed)  Start index of the handle's data buffer  Read pointer, relative to the main buffer  Write pointer, relative to the main buffer  File total length (possibly trimmed at tail)  Offset at which we started reading the file  Read position in file  Offset at which we stopped reading the file  Path if data originated in a file  Minimum allowed handle movement  Configuration  Level to trigger filebuf fill  High watermark for rebuffer  buffer-order handle list  MRU-ordered list of handles  number of handles in the lists  Main lock for adding / removing handles  Amount of data needing to be buffered  Amount of data currently in the buffer  Amount of data still useful to the user  Messages available to communicate with the buffering thread  Request buffering of a handle, this should not be
+                            used in a low buffer situation.  Request reset and rebuffering of a handle at a new
+                            file starting position.  Request closing a handle  Configuration:  Request that the buffering thread initiate a buffer
+                            fill at its earliest convenience  Inform the buffering thread that a handle was added,
+                            (which means the disk is spinning)  Buffering thread  Ring buffer helper functions  Buffer pointer (p) plus value (v), wrapped if necessary  wrap if necssary  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as empty  wrap  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as full  wrap  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as empty  wrap if necessary  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as full  wrap if necessary  Real buffer watermark 
+LINKED LIST MANAGEMENT
+======================
+
+add_handle    : Create a new handle
+link_handle   : Add a handle to the list
+unlink_handle : Remove a handle from the list
+find_handle   : Get a handle pointer from an ID
+move_handle   : Move a handle in the buffer (with or without its data)
+
+These functions only handle the linked list structure. They don't touch the
+contents of the struct memory_handle headers.
+
+Doubly-linked list, not circular.
+New handles are added at the tail.
+
+num_handles = N
+       NULL <- h0 <-> h1 <-> h2 -> ... <- hN-1 -> NULL
+head=> --------^                          ^
+tail=> -----------------------------------+
+
+MRU cache is similar except new handles are added at the head and the most-
+recently-accessed handle is always moved to the head (if not already there).
+
+ Wrap signed int is safe and 0 doesn't happen  Adds the handle to the linked list  Delete a given memory handle from the linked list  Adjusts handle list pointers _before_ it's actually moved  Add a new handle to the linked list and return it. It will have become the
+   new current handle.
+   flags contains information on how this may be allocated
+   data_size must contain the size of what will be in the handle.
+   widx_out points to variable to receive first available byte of data area
+   returns a valid memory handle if all conditions for allocation are met.
+           NULL if there memory_handle itself cannot be allocated or if the
+           data_size cannot be allocated and alloc_all is set.  Gives each handle a unique id  Buffer is not empty  the current handle hasn't finished buffering. We can only add
+           a new one if there is already enough free space to finish
+           the buffering.  Not enough space to finish allocation  Apply all the needed reserve  Align to align size up  First, will the handle wrap?  If the handle would wrap, move to the beginning of the buffer,
+     * or if the data must not but would wrap, move it to the beginning  How far we shifted index to align things, must be < buffer_len  How much space are we short in the actual ring buffer?  Not enough space for required allocations  There is enough space for the required data, initialize the struct  Can be moved  Data can be waited for  Save the provided path  Return the start of the data area  Return a pointer to the memory handle of given ID.
+   NULL if the handle wasn't found  Move a memory handle and data_size of its data delta bytes along the buffer.
+   delta maximum bytes available to move the handle.  If the move is performed
+         it is set to the actual distance moved.
+   data_size is the amount of data to move along with the struct.
+   returns true if the move is successful and false if the handle is NULL,
+           the  move would be less than the size of a memory_handle after
+           correcting for wraps or if the handle is not found in the linked
+           list for adjustment.  This function has no side effects if false
+           is returned.  Align to align size down  It's not legal to move less than MIN_MOVE_DELTA  Some part of the struct + data would wrap, maybe ok  If the overlap lands inside the memory_handle  Otherwise the overlap falls in the data area and must all be
+             * backed out.  This may become conditional if ever we move
+             * data that is allowed to wrap (ie audio)  Correct the position and real delta to prevent the struct from
+             * wrapping, this guarantees an aligned delta if the struct size is
+             * aligned and the buffer is aligned  Align correction to align size up  Delta cannot end up less than MIN_MOVE_DELTA  Used below to know how to split the data  Adjust list pointers  x = handle(s) following this one...
+     * ...if last handle, unmoveable if metadata, only shrinkable if audio.
+     * In other words, no legal move can be made that would have the src head
+     * and dest tail of the data overlap itself. These facts reduce the
+     * problem to four essential permutations.
+     *
+     * movement: always "clockwise" >>>>
+     *
+     * (src nowrap, dest nowrap)
+     * |0123  x |
+     * |  0123x | etc...
+     * move: "0123"
+     *
+     * (src nowrap, dest wrap)
+     * |  x0123 |
+     * |23x   01|
+     * move: "23", "01"
+     *
+     * (src wrap, dest nowrap)
+     * |23   x01|
+     * | 0123x  |
+     * move: "23", "01"
+     *
+     * (src wrap, dest wrap)
+     * |23 x  01|
+     * |123x   0|
+     * move: "23", "1", "0"
+      Move over already wrapped data by the final delta  Move data that now wraps to the beginning  Move leading fragment containing handle struct  Update the caller with the new location of h and the distance moved 
+BUFFER SPACE MANAGEMENT
+=======================
+
+update_data_counters: Updates the values in data_counters
+buffer_handle   : Buffer data for a handle
+rebuffer_handle : Seek to a nonbuffered part of a handle by rebuffering the data
+shrink_handle   : Free buffer space by moving a handle
+fill_buffer     : Call buffer_handle for all handles that have data to buffer
+
+These functions are used by the buffering thread to manage buffer space.
+ Q_BUFFER_HANDLE event and buffer data for the given handle.
+   Return whether or not the buffering should continue explicitly.   nothing left to buffer  file closed, reopen  could not open the file, truncate it where it is  metadata parsing failed: clear the buffer.  max amount to copy  read only up to available space and stop if it would overwrite
+           the next handle; stop one byte early to avoid empty/full alias
+           (or else do more complicated arithmetic to differentiate)  no space for read  rc is the actual amount read  Some kind of filesystem error, maybe recoverable if not codec  Advance buffer and make data available to users  Normal buffering - check queue  Done  finished buffering the file  Close the specified handle id and free its allocation.  Q_CLOSE_HANDLE  If the handle is not found, it is closed  Free buffer space by moving the handle struct right before the useful
+   part of its data buffer or by moving all the data.  only move the handle struct  data is pinned by default - if we start moving packet audio,
+           the semantics will determine whether or not data is movable
+           but the handle will remain movable in either case  The value of delta might change for alignment reasons  metadata handle: we can move all of it  Pinned, last handle  The value of delta might change for alignment reasons  when moving an mp3entry we need to readjust its pointers  adjust the bitmap's pointer  Fill the buffer by buffering as much data as possible for handles that still
+   have data left to buffer
+   Return whether or not to continue filling after this  only spin the disk down if the filling wasn't interrupted by an
+           event arriving in the queue.  Given a file descriptor to a bitmap file, write the bitmap data to the
+   buffer, with a struct bitmap and the actual data immediately following.
+   Return value is the total size (struct + data).  get the desired image size  FIXME: alignment may be needed for the data buffer.  HAVE_ALBUMART 
+MAIN BUFFERING API CALLS
+========================
+
+bufopen     : Request the opening of a new handle for a file
+bufalloc    : Open a new handle for data other than a file.
+bufclose    : Close an open handle
+bufseek     : Set the read pointer in a handle
+bufadvance  : Move the read pointer in a handle
+bufread     : Copy data from a handle into a given buffer
+bufgetdata  : Give a pointer to the handle's data
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Reserve space in the buffer for a file.
+   filename: name of the file to open
+   offset: offset at which to start buffering the file, useful when the first
+           offset bytes of the file aren't needed.
+   type: one of the data types supported (audio, image, cuesheet, others
+   user_data: user data passed possibly passed in subcalls specific to a
+              data_type (only used for image (albumart) buffering so far )
+   return value: <0 if the file cannot be opened, or one file already
+   queued to be opened, otherwise the handle for the file in the buffer
+ No buffer refs until after the mutex_lock call!  ID3 case: allocate space, init the handle and return.  Inform the buffering thread that we added a handle  Loading code from memory is not supported in application builds  Other cases: there is a little more work.  If albumart is embedded, the complete file is not buffered,
+         * but only the jpeg part; filesize() would be wrong  Reserve extra space because alignment can move data forward  Don't bother to storage align bitmaps because they are not
+     * loaded directly into the buffer.
+      Align to desired storage alignment  STORAGE_WANTS_ALIGN  Bitmap file: we load the data instead of the file  Immediately start buffering those  Other types will get buffered in the course of normal operations  Inform the buffering thread that we added a handle  Currently only used for aa loading  Open a new handle from data that needs to be copied from memory.
+   src is the source buffer from which to copy data. It can be NULL to simply
+   reserve buffer space.
+   size is the requested size. The call will only be successful if the
+   requested amount of data can entirely fit in the buffer without wrapping.
+   Return value is the handle id for success or <0 for failure.
+ specially take care of struct mp3entry  Close the handle. Return true for success and false for failure  Backend to bufseek and bufadvance. Call only in response to
+   Q_REBUFFER_HANDLE!  Check that we still need to do this since the request could have
+       possibly been met by this time  When seeking foward off of the buffer, if it is a short seek attempt to
+       avoid rebuffering the whole track, just read enough to satisfy  It really did succeed  Ok, try the rest  Data collision or other file error - must reset  file truncation happened above  Strip alignment padding then redo  Align to desired storage alignment if space permits - handle could
+       have been shrunken too close to the following one after a previous
+       rebuffer.  Forego storage alignment this time  Just clear the data buffer  STORAGE_WANTS_ALIGN  Reset the handle to its new position  There isn't enough space to rebuffer all of the track from its new
+           offset, so we ask the user to free some  Now we do the rebuffer  Backend to bufseek and bufadvance  access before or after buffered data and not to end of file or file
+           is not buffered to the end-- a rebuffer is needed.  Set reading index in handle (relatively to the start of the file).
+   Access before the available data will trigger a rebuffer.
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was beyond the end of
+     the file
+ Advance the reading index in a handle (relatively to its current position).
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was before the beginning
+     or beyond the end of the file
+  Get the read position from the start of the file
+   Returns the offset from byte 0 of the file and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+  Used by bufread and bufgetdata to prepare the buffer and retrieve the
+ * actual amount of data available for reading. It does range checks on
+ * size and returns a valid (and explicit) amount of data for reading  File is finished reading  clip to eof  If more than the size of the guardbuf is requested and this is a
+         * bufgetdata, limit to guard_bufsize over the end of the buffer  this ensures *size <= buffer_len - h->ridx + GUARD_BUFSIZE  Wait for the data to be ready  Data (still) isn't ready; ping buffering thread  it is not safe for a non-buffering thread to sleep while
+             * holding a handle  Wait must be abandoned  Note: It is safe for the thread responsible for handling the rebuffer
+ * cleanup request to call bufread or bufgetdata only when the data will
+ * be available-- not if it could be blocked waiting for it in prep_bufdata.
+ * It should be apparent that if said thread is being forced to wait for
+ * buffering but has not yet responded to the cleanup request, the space
+ * can never be cleared to allow further reading of the file because it is
+ * not listening to callbacks any longer.  Copy data from the given handle to the dest buffer.
+   Return the number of bytes copied or < 0 for failure (handle not found).
+   The caller is blocked until the requested amount of data is available.
+ the data wraps around the end of the buffer  Update the "data" pointer to make the handle's data available to the caller.
+   Return the length of the available linear data or < 0 for failure (handle
+   not found).
+   The caller is blocked until the requested amount of data is available.
+   size is the amount of linear data requested. it can be 0 to get as
+   much as possible.
+   The guard buffer may be used to provide the requested size. This means it's
+   unsafe to request more than the size of the guard buffer.
+ the data wraps around the end of the buffer :
+           use the guard buffer to provide the requested amount of data.  prep_bufdata ensures
+           adjusted_size <= buffer_len - h->ridx + GUARD_BUFSIZE,
+           so copy_n <= GUARD_BUFSIZE  only from buffering thread  We don't support tail requests of > guardbuf_size, for simplicity  only from buffering thread  Cannot trim to before read position 
+SECONDARY EXPORTED FUNCTIONS
+============================
+
+buf_handle_offset
+buf_set_base_handle
+buf_handle_data_type
+buf_is_handle
+buf_pin_handle
+buf_signal_handle
+buf_length
+buf_used
+buf_set_watermark
+buf_get_watermark
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Return the size of the ringbuffer  Set the handle from which useful data is counted  Return the amount of buffer space used * -- buffer thread helpers -- * A handle was added: the disk is spinning, so we can fill  The buffer is low and we're idle, just watching the levels
+                   - call the callbacks to get new data  Continue anything else we haven't finished - it might
+                   get booted off or stop early because the receiver hasn't
+                   had a chance to clear anything yet  Thread should absolutely not respond to USB because if it waits first,
+       then it cannot properly service the handles and leaks will happen -
+       this is a worker thread and shouldn't need to care about any system
+       notifications.
+                                      ***
+       Whoever is using buffering should be responsible enough to clear all
+       the handles at the right time.  Initialise the buffering subsystem  Wraps of storage-aligned data must also be storage aligned,
+       thus buf and buflen must be a aligned to an integer multiple of
+       the storage alignment  If handles weren't closed above, just do it  Set the high watermark as 75% full...or 25% empty :)
+       This is the greatest fullness that will trigger low-buffer events
+       no matter what the setting because high-bitrate files can have
+       ludicrous margins that even exceed the buffer size - most common
+       with a huge anti-skip buffer but even without that setting,
+       staying constantly active in buffering is pointless **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 Nicolas Pennequin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file  #define LOGF_ENABLE  macros to enable logf for queues
+   logging on SYS_TIMEOUT can be disabled  Define this for logf output of all queuing except SYS_TIMEOUT  Define this to logf SYS_TIMEOUT messages  #define BUFFERING_LOGQUEUES_SYS_TIMEOUT  amount of data to read in one read() call  Handle data may wrap in buffer  All data must be allocated up front  Data is fixed in position  Handle list node (first!)  MRU list node (second!)  Size of this structure + its auxilliary data  A unique ID for the handle  Type of data buffered with this handle  Handle property flags  Count of pinnings  Stop any attempt at waiting to get the data  File descriptor to path (-1 if closed)  Start index of the handle's data buffer  Read pointer, relative to the main buffer  Write pointer, relative to the main buffer  File total length (possibly trimmed at tail)  Offset at which we started reading the file  Read position in file  Offset at which we stopped reading the file  Path if data originated in a file  Minimum allowed handle movement  Configuration  Level to trigger filebuf fill  High watermark for rebuffer  buffer-order handle list  MRU-ordered list of handles  number of handles in the lists  Main lock for adding / removing handles  Amount of data needing to be buffered  Amount of data currently in the buffer  Amount of data still useful to the user  Messages available to communicate with the buffering thread  Request buffering of a handle, this should not be
+                            used in a low buffer situation.  Request reset and rebuffering of a handle at a new
+                            file starting position.  Request closing a handle  Configuration:  Request that the buffering thread initiate a buffer
+                            fill at its earliest convenience  Inform the buffering thread that a handle was added,
+                            (which means the disk is spinning)  Buffering thread  Ring buffer helper functions  Buffer pointer (p) plus value (v), wrapped if necessary  wrap if necssary  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as empty  wrap  Buffer pointer (p) minus value (v), wrapped if necessary  Interprets p == v as full  wrap  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as empty  wrap if necessary  How far value (v) plus buffer pointer (p1) will cross buffer pointer (p2)  Interprets p1 == p2 as full  wrap if necessary  Real buffer watermark 
+LINKED LIST MANAGEMENT
+======================
+
+add_handle    : Create a new handle
+link_handle   : Add a handle to the list
+unlink_handle : Remove a handle from the list
+find_handle   : Get a handle pointer from an ID
+move_handle   : Move a handle in the buffer (with or without its data)
+
+These functions only handle the linked list structure. They don't touch the
+contents of the struct memory_handle headers.
+
+Doubly-linked list, not circular.
+New handles are added at the tail.
+
+num_handles = N
+       NULL <- h0 <-> h1 <-> h2 -> ... <- hN-1 -> NULL
+head=> --------^                          ^
+tail=> -----------------------------------+
+
+MRU cache is similar except new handles are added at the head and the most-
+recently-accessed handle is always moved to the head (if not already there).
+
+ Wrap signed int is safe and 0 doesn't happen  Adds the handle to the linked list  Delete a given memory handle from the linked list  Adjusts handle list pointers _before_ it's actually moved  Add a new handle to the linked list and return it. It will have become the
+   new current handle.
+   flags contains information on how this may be allocated
+   data_size must contain the size of what will be in the handle.
+   widx_out points to variable to receive first available byte of data area
+   returns a valid memory handle if all conditions for allocation are met.
+           NULL if there memory_handle itself cannot be allocated or if the
+           data_size cannot be allocated and alloc_all is set.  Gives each handle a unique id  Buffer is not empty  the current handle hasn't finished buffering. We can only add
+           a new one if there is already enough free space to finish
+           the buffering.  Not enough space to finish allocation  Apply all the needed reserve  Align to align size up  First, will the handle wrap?  If the handle would wrap, move to the beginning of the buffer,
+     * or if the data must not but would wrap, move it to the beginning  How far we shifted index to align things, must be < buffer_len  How much space are we short in the actual ring buffer?  Not enough space for required allocations  There is enough space for the required data, initialize the struct  Can be moved  Data can be waited for  Save the provided path  Return the start of the data area  Return a pointer to the memory handle of given ID.
+   NULL if the handle wasn't found  Move a memory handle and data_size of its data delta bytes along the buffer.
+   delta maximum bytes available to move the handle.  If the move is performed
+         it is set to the actual distance moved.
+   data_size is the amount of data to move along with the struct.
+   returns true if the move is successful and false if the handle is NULL,
+           the  move would be less than the size of a memory_handle after
+           correcting for wraps or if the handle is not found in the linked
+           list for adjustment.  This function has no side effects if false
+           is returned.  Align to align size down  It's not legal to move less than MIN_MOVE_DELTA  Some part of the struct + data would wrap, maybe ok  If the overlap lands inside the memory_handle  Otherwise the overlap falls in the data area and must all be
+             * backed out.  This may become conditional if ever we move
+             * data that is allowed to wrap (ie audio)  Correct the position and real delta to prevent the struct from
+             * wrapping, this guarantees an aligned delta if the struct size is
+             * aligned and the buffer is aligned  Align correction to align size up  Delta cannot end up less than MIN_MOVE_DELTA  Used below to know how to split the data  Adjust list pointers  x = handle(s) following this one...
+     * ...if last handle, unmoveable if metadata, only shrinkable if audio.
+     * In other words, no legal move can be made that would have the src head
+     * and dest tail of the data overlap itself. These facts reduce the
+     * problem to four essential permutations.
+     *
+     * movement: always "clockwise" >>>>
+     *
+     * (src nowrap, dest nowrap)
+     * |0123  x |
+     * |  0123x | etc...
+     * move: "0123"
+     *
+     * (src nowrap, dest wrap)
+     * |  x0123 |
+     * |23x   01|
+     * move: "23", "01"
+     *
+     * (src wrap, dest nowrap)
+     * |23   x01|
+     * | 0123x  |
+     * move: "23", "01"
+     *
+     * (src wrap, dest wrap)
+     * |23 x  01|
+     * |123x   0|
+     * move: "23", "1", "0"
+      Move over already wrapped data by the final delta  Move data that now wraps to the beginning  Move leading fragment containing handle struct  Update the caller with the new location of h and the distance moved 
+BUFFER SPACE MANAGEMENT
+=======================
+
+update_data_counters: Updates the values in data_counters
+buffer_handle   : Buffer data for a handle
+rebuffer_handle : Seek to a nonbuffered part of a handle by rebuffering the data
+shrink_handle   : Free buffer space by moving a handle
+fill_buffer     : Call buffer_handle for all handles that have data to buffer
+
+These functions are used by the buffering thread to manage buffer space.
+ Q_BUFFER_HANDLE event and buffer data for the given handle.
+   Return whether or not the buffering should continue explicitly.   nothing left to buffer  file closed, reopen  could not open the file, truncate it where it is  metadata parsing failed: clear the buffer.  max amount to copy  read only up to available space and stop if it would overwrite
+           the next handle; stop one byte early to avoid empty/full alias
+           (or else do more complicated arithmetic to differentiate)  no space for read  rc is the actual amount read  Some kind of filesystem error, maybe recoverable if not codec  Advance buffer and make data available to users  Normal buffering - check queue  Done  finished buffering the file  Close the specified handle id and free its allocation.  Q_CLOSE_HANDLE  If the handle is not found, it is closed  Free buffer space by moving the handle struct right before the useful
+   part of its data buffer or by moving all the data.  only move the handle struct  data is pinned by default - if we start moving packet audio,
+           the semantics will determine whether or not data is movable
+           but the handle will remain movable in either case  The value of delta might change for alignment reasons  metadata handle: we can move all of it  Pinned, last handle  The value of delta might change for alignment reasons  when moving an mp3entry we need to readjust its pointers  adjust the bitmap's pointer  Fill the buffer by buffering as much data as possible for handles that still
+   have data left to buffer
+   Return whether or not to continue filling after this  only spin the disk down if the filling wasn't interrupted by an
+           event arriving in the queue.  Given a file descriptor to a bitmap file, write the bitmap data to the
+   buffer, with a struct bitmap and the actual data immediately following.
+   Return value is the total size (struct + data).  get the desired image size  FIXME: alignment may be needed for the data buffer.  HAVE_ALBUMART 
+MAIN BUFFERING API CALLS
+========================
+
+bufopen     : Request the opening of a new handle for a file
+bufalloc    : Open a new handle for data other than a file.
+bufclose    : Close an open handle
+bufseek     : Set the read pointer in a handle
+bufadvance  : Move the read pointer in a handle
+bufread     : Copy data from a handle into a given buffer
+bufgetdata  : Give a pointer to the handle's data
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Reserve space in the buffer for a file.
+   filename: name of the file to open
+   offset: offset at which to start buffering the file, useful when the first
+           offset bytes of the file aren't needed.
+   type: one of the data types supported (audio, image, cuesheet, others
+   user_data: user data passed possibly passed in subcalls specific to a
+              data_type (only used for image (albumart) buffering so far )
+   return value: <0 if the file cannot be opened, or one file already
+   queued to be opened, otherwise the handle for the file in the buffer
+ No buffer refs until after the mutex_lock call!  ID3 case: allocate space, init the handle and return.  Inform the buffering thread that we added a handle  Loading code from memory is not supported in application builds  Other cases: there is a little more work.  If albumart is embedded, the complete file is not buffered,
+         * but only the jpeg part; filesize() would be wrong  Reserve extra space because alignment can move data forward  Don't bother to storage align bitmaps because they are not
+     * loaded directly into the buffer.
+      Align to desired storage alignment  STORAGE_WANTS_ALIGN  Bitmap file: we load the data instead of the file  Immediately start buffering those  Other types will get buffered in the course of normal operations  Inform the buffering thread that we added a handle  Currently only used for aa loading  Open a new handle from data that needs to be copied from memory.
+   src is the source buffer from which to copy data. It can be NULL to simply
+   reserve buffer space.
+   size is the requested size. The call will only be successful if the
+   requested amount of data can entirely fit in the buffer without wrapping.
+   Return value is the handle id for success or <0 for failure.
+ specially take care of struct mp3entry  Close the handle. Return true for success and false for failure  Backend to bufseek and bufadvance. Call only in response to
+   Q_REBUFFER_HANDLE!  Check that we still need to do this since the request could have
+       possibly been met by this time  When seeking foward off of the buffer, if it is a short seek attempt to
+       avoid rebuffering the whole track, just read enough to satisfy  It really did succeed  Ok, try the rest  Data collision or other file error - must reset  file truncation happened above  Strip alignment padding then redo  Align to desired storage alignment if space permits - handle could
+       have been shrunken too close to the following one after a previous
+       rebuffer.  Forego storage alignment this time  Just clear the data buffer  STORAGE_WANTS_ALIGN  Reset the handle to its new position  There isn't enough space to rebuffer all of the track from its new
+           offset, so we ask the user to free some  Now we do the rebuffer  Backend to bufseek and bufadvance  access before or after buffered data and not to end of file or file
+           is not buffered to the end-- a rebuffer is needed.  Set reading index in handle (relatively to the start of the file).
+   Access before the available data will trigger a rebuffer.
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was beyond the end of
+     the file
+ Advance the reading index in a handle (relatively to its current position).
+   Return 0 for success and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+     ERR_INVALID_VALUE if the new requested position was before the beginning
+     or beyond the end of the file
+  Get the read position from the start of the file
+   Returns the offset from byte 0 of the file and for failure:
+     ERR_HANDLE_NOT_FOUND if the handle wasn't found
+  Used by bufread and bufgetdata to prepare the buffer and retrieve the
+ * actual amount of data available for reading. It does range checks on
+ * size and returns a valid (and explicit) amount of data for reading  File is finished reading  clip to eof  If more than the size of the guardbuf is requested and this is a
+         * bufgetdata, limit to guard_bufsize over the end of the buffer  this ensures *size <= buffer_len - h->ridx + GUARD_BUFSIZE  Wait for the data to be ready  Data (still) isn't ready; ping buffering thread  it is not safe for a non-buffering thread to sleep while
+             * holding a handle  Wait must be abandoned  Note: It is safe for the thread responsible for handling the rebuffer
+ * cleanup request to call bufread or bufgetdata only when the data will
+ * be available-- not if it could be blocked waiting for it in prep_bufdata.
+ * It should be apparent that if said thread is being forced to wait for
+ * buffering but has not yet responded to the cleanup request, the space
+ * can never be cleared to allow further reading of the file because it is
+ * not listening to callbacks any longer.  Copy data from the given handle to the dest buffer.
+   Return the number of bytes copied or < 0 for failure (handle not found).
+   The caller is blocked until the requested amount of data is available.
+ the data wraps around the end of the buffer  Update the "data" pointer to make the handle's data available to the caller.
+   Return the length of the available linear data or < 0 for failure (handle
+   not found).
+   The caller is blocked until the requested amount of data is available.
+   size is the amount of linear data requested. it can be 0 to get as
+   much as possible.
+   The guard buffer may be used to provide the requested size. This means it's
+   unsafe to request more than the size of the guard buffer.
+ the data wraps around the end of the buffer :
+           use the guard buffer to provide the requested amount of data.  prep_bufdata ensures
+           adjusted_size <= buffer_len - h->ridx + GUARD_BUFSIZE,
+           so copy_n <= GUARD_BUFSIZE  only from buffering thread  We don't support tail requests of > guardbuf_size, for simplicity  only from buffering thread  Cannot trim to before read position 
+SECONDARY EXPORTED FUNCTIONS
+============================
+
+buf_handle_offset
+buf_set_base_handle
+buf_handle_data_type
+buf_is_handle
+buf_pin_handle
+buf_signal_handle
+buf_length
+buf_used
+buf_set_watermark
+buf_get_watermark
+
+These functions are exported, to allow interaction with the buffer.
+They take care of the content of the structs, and rely on the linked list
+management functions for all the actual handle management work.
+ Return the size of the ringbuffer  Set the handle from which useful data is counted  Return the amount of buffer space used * -- buffer thread helpers -- * A handle was added: the disk is spinning, so we can fill  The buffer is low and we're idle, just watching the levels
+                   - call the callbacks to get new data  Continue anything else we haven't finished - it might
+                   get booted off or stop early because the receiver hasn't
+                   had a chance to clear anything yet  Thread should absolutely not respond to USB because if it waits first,
+       then it cannot properly service the handles and leaks will happen -
+       this is a worker thread and shouldn't need to care about any system
+       notifications.
+                                      ***
+       Whoever is using buffering should be responsible enough to clear all
+       the handles at the right time.  Initialise the buffering subsystem  Wraps of storage-aligned data must also be storage aligned,
+       thus buf and buflen must be a aligned to an integer multiple of
+       the storage alignment  If handles weren't closed above, just do it  Set the high watermark as 75% full...or 25% empty :)
+       This is the greatest fullness that will trigger low-buffer events
+       no matter what the setting because high-bitrate files can have
+       ludicrous margins that even exceed the buffer size - most common
+       with a huge anti-skip buffer but even without that setting,
+       staying constantly active in buffering is pointless 

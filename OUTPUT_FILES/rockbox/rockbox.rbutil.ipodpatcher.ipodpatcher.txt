@@ -1,0 +1,232 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following string appears at the start of the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a 
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with ipod_alloc_buf() 
+ Partition table parsing code taken from Rockbox  DOS partition table  parse partitions  extended?  not handled yet  Apple Partition Map  APM parsing code based on the check_mac_partitions() function in
+           ipodloader2 - written by Thomas Tempelmann and released
+           under the GPL.  # of blks in partition map  physical start blk of partition  # of blks in this partition  see if it's a partition entry  end of partition table -> leave the loop  Extract the interesting entries  update the number of part map blocks  A Firmware partition  A HFS partition  read next partition map entry  Check that the partition table looks like an ipod:
+           1) Partition 1 is of type 0 (Empty) but isn't empty.
+           2) Partition 2 is of type 0xb or 0xc (winpod) or -1 (macpod)
+     We need to pad the last write to a multiple of SECTOR_SIZE  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Write directory back to disk  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Delete directory entry  Write directory back to disk  Header for .ipod file  First check that the input file is the correct type for this ipod.  TODO: Check if we have enough space in the partition for the new image  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+       preceeding the firmware contains hashes that need to be
+       preserved.  Nano 2G images include these extra 2048 (0x800)
+       bytes 
+      Now we need to create a new directory entry 
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Create a new directory entry  Copy OSOS or OSBK details - we assume one of them exists  Copy directory image  Modify directory.  devOffset  len  checksum  Write directory  The 2nd gen Nano is installed differently  Check if we have an OSBK image 
+    Bootloader installation on the Nano2G consists of renaming the
+    OSOS image to OSBK and then writing the Rockbox bootloader as a
+    new OSOS image.
+
+    Maybe this approach can/should be adapted for other ipods, as it
+    prevents the Apple bootloader loading the original firmware into
+    RAM along with the Rockbox bootloader (and hence will give a
+    faster boot when the user just wants to start Rockbox).
+
+ Check if we already have an OSBK image  First-time install - rename OSOS to OSBK and create new OSOS for bootloader  Add our bootloader as a brand new image  This is an update, just replace OSOS with our bootloader  Check if we have an OSBK image  Delete our bootloader image  Header for .ipod file  The 2nd gen Nano is installed differently  Calculate the position in the OSOS image where our bootloader will go.  Keep the same entryOffset  First check that the input file is the correct type for this ipod.  Now read our bootloader - we need to check it before modifying the partition Calculate and confirm bootloader checksum  add 8 unsigned bits but keep a 32 bit sum  Check if we have enough space  TODO: Check the size of the partition.  We have moved the partitions, now we can write our bootloader  Firstly read the original firmware into ipod->sectorbuf  Calculate new checksum for combined image  Now write the combined firmware image to the disk  Read directory  Update entries for image 0  loadAddr  Update devOffset entries for other images, if we have moved them  Write directory  32 bit checksum - Rockbox .ipod style The 2nd gen Nano is installed differently  Removing the bootloader involves adjusting the "length",
+       "chksum" and "entryOffset" values in the osos image's directory
+       entry.  Firstly check we have a bootloader...  Read the firmware so we can calculate the checksum  add 8 unsigned bits but keep a 32 bit sum  Now write back the updated directory entry  Read directory  Update entries for image 0  Write directory  Header for .ipod file  First check that the input file is the correct type for this ipod.  Check if we have enough space  TODO: Check the size of the partition.  TODO: Implement image movement  We now know we have enough space, so write it.  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+           preceeding the firmware contains hashes that need to be
+           preserved.  Nano 2G images include these extra 2048 (0x800)
+           bytes 
+         TODO: The above checks need to take into account this 0x800 bytes  Now we need to update the "len", "entryOffset" and "chksum" fields
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Update entries for image  Write directory  32 bit checksum - Rockbox .ipod style Header for .ipod file  We have a bootloader...  2nd Gen Nano has encrypted firmware, and we need to dump the
+           sector preceeding the image - it contains hashes  add 8 unsigned bits but keep a 32 bit sum  Read firmware partition header (first 512 bytes of disk - but 
+       let's read a whole sector)  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  The 3g firmware image doesn't appear to have a version, so
+           let's make one up... Note that this is never written back to the
+           ipod, so it's OK to do.  returns number of found ipods or -1 if no ipods found and permission
+ * for raw disc access was denied.  Windows requires the ipod in R/W mode for SCSI Inquiry.
+          * ipod_reopen_rw does unmount the player on OS X so do this on
+          * W32 only during scanning.  save the complete ipod_t structure for match. The for loop might
+          * overwrite it, so we need to restore it later if only one found.  restore the ipod_t structure, it might have been overwritten  Only support 512-byte sectors at the moment  Firstly zero the entire MBR  Now add the partition info  Ensure first partition is type 0, and second is 0xb  Finally add the magic  Write MBR  Get the XML Device Information, as documented here:
+
+   http://www.ipodlinux.org/wiki/Device_Information
+ Reading directly into hdr[] causes problems (for an unknown reason) on 
+       win32  Hopefully this is enough.  NULL-terminate the XML info  testMarker and GetSecurityBlockKey based on code from BadBlocks and
+   Kingstone, posted at http://ipodlinux.org/Flash_Decryption
+
+ Invert key, little endian Firstly read the security block and find the RC4 key.  This is
+       in the sector preceeding the AUPD image.  Perform the decryption - this is standard (A)RC4  add 8 unsigned bits but keep a 32 bit sum  First check that the input file is the correct type for this ipod.  Find aupd image number  We now know we have enough space, so write it.  Pad the data with zeros  Calculate the new checksum (before we encrypt)  add 8 unsigned bits but keep a 32 bit sum  Perform the encryption - this is standard (A)RC4  Read directory  Update checksum  Write directory **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following string appears at the start of the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a 
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with ipod_alloc_buf() 
+ Partition table parsing code taken from Rockbox  DOS partition table  parse partitions  extended?  not handled yet  Apple Partition Map  APM parsing code based on the check_mac_partitions() function in
+           ipodloader2 - written by Thomas Tempelmann and released
+           under the GPL.  # of blks in partition map  physical start blk of partition  # of blks in this partition  see if it's a partition entry  end of partition table -> leave the loop  Extract the interesting entries  update the number of part map blocks  A Firmware partition  A HFS partition  read next partition map entry  Check that the partition table looks like an ipod:
+           1) Partition 1 is of type 0 (Empty) but isn't empty.
+           2) Partition 2 is of type 0xb or 0xc (winpod) or -1 (macpod)
+     We need to pad the last write to a multiple of SECTOR_SIZE  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Write directory back to disk  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Delete directory entry  Write directory back to disk  Header for .ipod file  First check that the input file is the correct type for this ipod.  TODO: Check if we have enough space in the partition for the new image  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+       preceeding the firmware contains hashes that need to be
+       preserved.  Nano 2G images include these extra 2048 (0x800)
+       bytes 
+      Now we need to create a new directory entry 
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Create a new directory entry  Copy OSOS or OSBK details - we assume one of them exists  Copy directory image  Modify directory.  devOffset  len  checksum  Write directory  The 2nd gen Nano is installed differently  Check if we have an OSBK image 
+    Bootloader installation on the Nano2G consists of renaming the
+    OSOS image to OSBK and then writing the Rockbox bootloader as a
+    new OSOS image.
+
+    Maybe this approach can/should be adapted for other ipods, as it
+    prevents the Apple bootloader loading the original firmware into
+    RAM along with the Rockbox bootloader (and hence will give a
+    faster boot when the user just wants to start Rockbox).
+
+ Check if we already have an OSBK image  First-time install - rename OSOS to OSBK and create new OSOS for bootloader  Add our bootloader as a brand new image  This is an update, just replace OSOS with our bootloader  Check if we have an OSBK image  Delete our bootloader image  Header for .ipod file  The 2nd gen Nano is installed differently  Calculate the position in the OSOS image where our bootloader will go.  Keep the same entryOffset  First check that the input file is the correct type for this ipod.  Now read our bootloader - we need to check it before modifying the partition Calculate and confirm bootloader checksum  add 8 unsigned bits but keep a 32 bit sum  Check if we have enough space  TODO: Check the size of the partition.  We have moved the partitions, now we can write our bootloader  Firstly read the original firmware into ipod->sectorbuf  Calculate new checksum for combined image  Now write the combined firmware image to the disk  Read directory  Update entries for image 0  loadAddr  Update devOffset entries for other images, if we have moved them  Write directory  32 bit checksum - Rockbox .ipod style The 2nd gen Nano is installed differently  Removing the bootloader involves adjusting the "length",
+       "chksum" and "entryOffset" values in the osos image's directory
+       entry.  Firstly check we have a bootloader...  Read the firmware so we can calculate the checksum  add 8 unsigned bits but keep a 32 bit sum  Now write back the updated directory entry  Read directory  Update entries for image 0  Write directory  Header for .ipod file  First check that the input file is the correct type for this ipod.  Check if we have enough space  TODO: Check the size of the partition.  TODO: Implement image movement  We now know we have enough space, so write it.  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+           preceeding the firmware contains hashes that need to be
+           preserved.  Nano 2G images include these extra 2048 (0x800)
+           bytes 
+         TODO: The above checks need to take into account this 0x800 bytes  Now we need to update the "len", "entryOffset" and "chksum" fields
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Update entries for image  Write directory  32 bit checksum - Rockbox .ipod style Header for .ipod file  We have a bootloader...  2nd Gen Nano has encrypted firmware, and we need to dump the
+           sector preceeding the image - it contains hashes  add 8 unsigned bits but keep a 32 bit sum  Read firmware partition header (first 512 bytes of disk - but 
+       let's read a whole sector)  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  The 3g firmware image doesn't appear to have a version, so
+           let's make one up... Note that this is never written back to the
+           ipod, so it's OK to do.  returns number of found ipods or -1 if no ipods found and permission
+ * for raw disc access was denied.  Windows requires the ipod in R/W mode for SCSI Inquiry.
+          * ipod_reopen_rw does unmount the player on OS X so do this on
+          * W32 only during scanning.  save the complete ipod_t structure for match. The for loop might
+          * overwrite it, so we need to restore it later if only one found.  restore the ipod_t structure, it might have been overwritten  Only support 512-byte sectors at the moment  Firstly zero the entire MBR  Now add the partition info  Ensure first partition is type 0, and second is 0xb  Finally add the magic  Write MBR  Get the XML Device Information, as documented here:
+
+   http://www.ipodlinux.org/wiki/Device_Information
+ Reading directly into hdr[] causes problems (for an unknown reason) on 
+       win32  Hopefully this is enough.  NULL-terminate the XML info  testMarker and GetSecurityBlockKey based on code from BadBlocks and
+   Kingstone, posted at http://ipodlinux.org/Flash_Decryption
+
+ Invert key, little endian Firstly read the security block and find the RC4 key.  This is
+       in the sector preceeding the AUPD image.  Perform the decryption - this is standard (A)RC4  add 8 unsigned bits but keep a 32 bit sum  First check that the input file is the correct type for this ipod.  Find aupd image number  We now know we have enough space, so write it.  Pad the data with zeros  Calculate the new checksum (before we encrypt)  add 8 unsigned bits but keep a 32 bit sum  Perform the encryption - this is standard (A)RC4  Read directory  Update checksum  Write directory **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following string appears at the start of the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a 
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with ipod_alloc_buf() 
+ Partition table parsing code taken from Rockbox  DOS partition table  parse partitions  extended?  not handled yet  Apple Partition Map  APM parsing code based on the check_mac_partitions() function in
+           ipodloader2 - written by Thomas Tempelmann and released
+           under the GPL.  # of blks in partition map  physical start blk of partition  # of blks in this partition  see if it's a partition entry  end of partition table -> leave the loop  Extract the interesting entries  update the number of part map blocks  A Firmware partition  A HFS partition  read next partition map entry  Check that the partition table looks like an ipod:
+           1) Partition 1 is of type 0 (Empty) but isn't empty.
+           2) Partition 2 is of type 0xb or 0xc (winpod) or -1 (macpod)
+     We need to pad the last write to a multiple of SECTOR_SIZE  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Write directory back to disk  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  Delete directory entry  Write directory back to disk  Header for .ipod file  First check that the input file is the correct type for this ipod.  TODO: Check if we have enough space in the partition for the new image  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+       preceeding the firmware contains hashes that need to be
+       preserved.  Nano 2G images include these extra 2048 (0x800)
+       bytes 
+      Now we need to create a new directory entry 
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Create a new directory entry  Copy OSOS or OSBK details - we assume one of them exists  Copy directory image  Modify directory.  devOffset  len  checksum  Write directory  The 2nd gen Nano is installed differently  Check if we have an OSBK image 
+    Bootloader installation on the Nano2G consists of renaming the
+    OSOS image to OSBK and then writing the Rockbox bootloader as a
+    new OSOS image.
+
+    Maybe this approach can/should be adapted for other ipods, as it
+    prevents the Apple bootloader loading the original firmware into
+    RAM along with the Rockbox bootloader (and hence will give a
+    faster boot when the user just wants to start Rockbox).
+
+ Check if we already have an OSBK image  First-time install - rename OSOS to OSBK and create new OSOS for bootloader  Add our bootloader as a brand new image  This is an update, just replace OSOS with our bootloader  Check if we have an OSBK image  Delete our bootloader image  Header for .ipod file  The 2nd gen Nano is installed differently  Calculate the position in the OSOS image where our bootloader will go.  Keep the same entryOffset  First check that the input file is the correct type for this ipod.  Now read our bootloader - we need to check it before modifying the partition Calculate and confirm bootloader checksum  add 8 unsigned bits but keep a 32 bit sum  Check if we have enough space  TODO: Check the size of the partition.  We have moved the partitions, now we can write our bootloader  Firstly read the original firmware into ipod->sectorbuf  Calculate new checksum for combined image  Now write the combined firmware image to the disk  Read directory  Update entries for image 0  loadAddr  Update devOffset entries for other images, if we have moved them  Write directory  32 bit checksum - Rockbox .ipod style The 2nd gen Nano is installed differently  Removing the bootloader involves adjusting the "length",
+       "chksum" and "entryOffset" values in the osos image's directory
+       entry.  Firstly check we have a bootloader...  Read the firmware so we can calculate the checksum  add 8 unsigned bits but keep a 32 bit sum  Now write back the updated directory entry  Read directory  Update entries for image 0  Write directory  Header for .ipod file  First check that the input file is the correct type for this ipod.  Check if we have enough space  TODO: Check the size of the partition.  TODO: Implement image movement  We now know we have enough space, so write it.  Pad the data with zeros  add 8 unsigned bits but keep a 32 bit sum  2nd Gen Nano has encrypted firmware, and the sector
+           preceeding the firmware contains hashes that need to be
+           preserved.  Nano 2G images include these extra 2048 (0x800)
+           bytes 
+         TODO: The above checks need to take into account this 0x800 bytes  Now we need to update the "len", "entryOffset" and "chksum" fields
+
+       NOTE: On the Nano 2G, the checksum is the checksum of the
+             unencrypted firmware.  But this isn't checked by the NOR
+             bootloader (there are cryptographic hashes in the
+             firmware itself), so it doesn't matter that this is
+             wrong.
+       add 8 unsigned bits but keep a 32 bit sum  Read directory  Update entries for image  Write directory  32 bit checksum - Rockbox .ipod style Header for .ipod file  We have a bootloader...  2nd Gen Nano has encrypted firmware, and we need to dump the
+           sector preceeding the image - it contains hashes  add 8 unsigned bits but keep a 32 bit sum  Read firmware partition header (first 512 bytes of disk - but 
+       let's read a whole sector)  diroffset may not be sector-aligned  Read directory  A hack to detect 2nd gen Nanos - maybe there is a better way?  Adjust diroffset  The 3g firmware image doesn't appear to have a version, so
+           let's make one up... Note that this is never written back to the
+           ipod, so it's OK to do.  returns number of found ipods or -1 if no ipods found and permission
+ * for raw disc access was denied.  Windows requires the ipod in R/W mode for SCSI Inquiry.
+          * ipod_reopen_rw does unmount the player on OS X so do this on
+          * W32 only during scanning.  save the complete ipod_t structure for match. The for loop might
+          * overwrite it, so we need to restore it later if only one found.  restore the ipod_t structure, it might have been overwritten  Only support 512-byte sectors at the moment  Firstly zero the entire MBR  Now add the partition info  Ensure first partition is type 0, and second is 0xb  Finally add the magic  Write MBR  Get the XML Device Information, as documented here:
+
+   http://www.ipodlinux.org/wiki/Device_Information
+ Reading directly into hdr[] causes problems (for an unknown reason) on 
+       win32  Hopefully this is enough.  NULL-terminate the XML info  testMarker and GetSecurityBlockKey based on code from BadBlocks and
+   Kingstone, posted at http://ipodlinux.org/Flash_Decryption
+
+ Invert key, little endian Firstly read the security block and find the RC4 key.  This is
+       in the sector preceeding the AUPD image.  Perform the decryption - this is standard (A)RC4  add 8 unsigned bits but keep a 32 bit sum  First check that the input file is the correct type for this ipod.  Find aupd image number  We now know we have enough space, so write it.  Pad the data with zeros  Calculate the new checksum (before we encrypt)  add 8 unsigned bits but keep a 32 bit sum  Perform the encryption - this is standard (A)RC4  Read directory  Update checksum  Write directory 

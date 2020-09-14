@@ -1,0 +1,154 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Catalin Patulea
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Copyright (C) 2009 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Size of data buffer in words (16 bit)  Put the "data" buffer in it's own .dma section so that it can
+ *  be handled in the linker.cmd.  This is the "data" buffer on the DSP side used for SARAM to McBSP (IIS)  These two describe the location of the buffer on the ARM (set in DSPHINT)  This is the size of the ARM buffer (set in DSPHINT)  These two variables keep track of the buffer level in the DSP, dsp_level,
+ *  (SARAM to McBSP) and the level on the ARM buffer (sdem_level). 
+ * sdem_level is used in the main firmware to keep track of the current 
+ *  playback status.  dsp_level is only used in this function.  This is used to keep track of the last SDRAM to SARAM transfer  This tells us which half of the DSP buffer (data) is free  This is used by the ARM to flag playback status and start/stop the DMA 
+ *  transfers.  This is used to effectively flag whether the ARM has new data ready or not  rebuffer sets up the next SDRAM to SARAM transfer and tells the ARM when DMA
+ *  needs a new buffer.
+ *
+ * Note: The upper limit on larger buffers is the size of a short.  If larger 
+ *  buffer sizes are needed the code on the ARM side needs to be changed to 
+ *  update a full long.
+  Stop / Pause  Stop MCBSP DMA0  Shut the transmitter down  Stop the HPIB transfer if it is running  Reset the following variables for DMA restart  If the sdem_level is equal to the buffer size the ARM code gave
+     *  (sdem_dsp_size) then reset the size and ask the arm for another buffer
+      Get a new buffer (location and size) from ARM  trigger DSPHINT on the ARM  Size is in bytes (but forced 32 bit transfers).  Comparison is
+         *  against DSP_BUFFER_SIZE because it is in words and this needs to
+         *  compare against half the total size in bytes.  DSP addresses are 16 bit (word). dsp_level is in bytes so it needs to 
+         *  be converted to words.  SDRAM addresses are 8 bit (byte)
+         * Warning: These addresses are forced to 32 bit alignment!
+          Set the size of the SDRAM to SARAM transfer (demac transfer)  These are just debug signals that are not used/needed right now  Start the demac transfer  This interupt handler is for the SARAM (on DSP) to McBSP IIS DMA transfer.
+ * It interupts at 1/2 empty and empty so that we can start filling a new buffer
+ * from SDRAM when a half is free. dsp_level should always be full when this
+ * interupt occurs except for the initial start.  Byte offset to half-buffer locked by DMA0.
+            0 for top, DSP_BUFFER_SIZE/2 for bottom  DMSRC0 is the beginning of the DMA0-locked SARAM half-buffer.  DMSRC0 (banked register, see page 133 of SPRU302B  Note that these address offsets (dma0_locked and dma0_unlocked are in 
+     *  words.  Start the SDRAM to SARAM copy  This interupt handler runs every time a DMA transfer is complete from SDRAM 
+ *  to the SARAM buffer.  It is used to update the SARAM buffer level 
+ *  (dsp_level), the SDRAM buffer level (sdem_level) and to rebuffer if the dsp
+ *  buffer is not full.  Clear interrupt  dsp_level and sdem_level are in bytes  compare to DSP_BUFFER_SIZE without a divide because it is in words and 
+     *  we want half the total size in bytes.  Make sure that DMPREC is clear  Configure SARAM to McBSP DMA  Event XEVT0, 32-bit transfers, 0 frame count  Interrupts generated, Half and full buffer.
+     * ABU mode, From data space with postincrement, to data space with no 
+     *  change
+      Set the source (incrementing) location  Set the destination (static) location to the McBSP IIS interface  Set the size of the buffer  Set the interrupt mux **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Catalin Patulea
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Copyright (C) 2009 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Size of data buffer in words (16 bit)  Put the "data" buffer in it's own .dma section so that it can
+ *  be handled in the linker.cmd.  This is the "data" buffer on the DSP side used for SARAM to McBSP (IIS)  These two describe the location of the buffer on the ARM (set in DSPHINT)  This is the size of the ARM buffer (set in DSPHINT)  These two variables keep track of the buffer level in the DSP, dsp_level,
+ *  (SARAM to McBSP) and the level on the ARM buffer (sdem_level). 
+ * sdem_level is used in the main firmware to keep track of the current 
+ *  playback status.  dsp_level is only used in this function.  This is used to keep track of the last SDRAM to SARAM transfer  This tells us which half of the DSP buffer (data) is free  This is used by the ARM to flag playback status and start/stop the DMA 
+ *  transfers.  This is used to effectively flag whether the ARM has new data ready or not  rebuffer sets up the next SDRAM to SARAM transfer and tells the ARM when DMA
+ *  needs a new buffer.
+ *
+ * Note: The upper limit on larger buffers is the size of a short.  If larger 
+ *  buffer sizes are needed the code on the ARM side needs to be changed to 
+ *  update a full long.
+  Stop / Pause  Stop MCBSP DMA0  Shut the transmitter down  Stop the HPIB transfer if it is running  Reset the following variables for DMA restart  If the sdem_level is equal to the buffer size the ARM code gave
+     *  (sdem_dsp_size) then reset the size and ask the arm for another buffer
+      Get a new buffer (location and size) from ARM  trigger DSPHINT on the ARM  Size is in bytes (but forced 32 bit transfers).  Comparison is
+         *  against DSP_BUFFER_SIZE because it is in words and this needs to
+         *  compare against half the total size in bytes.  DSP addresses are 16 bit (word). dsp_level is in bytes so it needs to 
+         *  be converted to words.  SDRAM addresses are 8 bit (byte)
+         * Warning: These addresses are forced to 32 bit alignment!
+          Set the size of the SDRAM to SARAM transfer (demac transfer)  These are just debug signals that are not used/needed right now  Start the demac transfer  This interupt handler is for the SARAM (on DSP) to McBSP IIS DMA transfer.
+ * It interupts at 1/2 empty and empty so that we can start filling a new buffer
+ * from SDRAM when a half is free. dsp_level should always be full when this
+ * interupt occurs except for the initial start.  Byte offset to half-buffer locked by DMA0.
+            0 for top, DSP_BUFFER_SIZE/2 for bottom  DMSRC0 is the beginning of the DMA0-locked SARAM half-buffer.  DMSRC0 (banked register, see page 133 of SPRU302B  Note that these address offsets (dma0_locked and dma0_unlocked are in 
+     *  words.  Start the SDRAM to SARAM copy  This interupt handler runs every time a DMA transfer is complete from SDRAM 
+ *  to the SARAM buffer.  It is used to update the SARAM buffer level 
+ *  (dsp_level), the SDRAM buffer level (sdem_level) and to rebuffer if the dsp
+ *  buffer is not full.  Clear interrupt  dsp_level and sdem_level are in bytes  compare to DSP_BUFFER_SIZE without a divide because it is in words and 
+     *  we want half the total size in bytes.  Make sure that DMPREC is clear  Configure SARAM to McBSP DMA  Event XEVT0, 32-bit transfers, 0 frame count  Interrupts generated, Half and full buffer.
+     * ABU mode, From data space with postincrement, to data space with no 
+     *  change
+      Set the source (incrementing) location  Set the destination (static) location to the McBSP IIS interface  Set the size of the buffer  Set the interrupt mux **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Catalin Patulea
+ * Copyright (C) 2008 by Maurus Cuelenaere
+ * Copyright (C) 2009 by Karl Kurbjun
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Size of data buffer in words (16 bit)  Put the "data" buffer in it's own .dma section so that it can
+ *  be handled in the linker.cmd.  This is the "data" buffer on the DSP side used for SARAM to McBSP (IIS)  These two describe the location of the buffer on the ARM (set in DSPHINT)  This is the size of the ARM buffer (set in DSPHINT)  These two variables keep track of the buffer level in the DSP, dsp_level,
+ *  (SARAM to McBSP) and the level on the ARM buffer (sdem_level). 
+ * sdem_level is used in the main firmware to keep track of the current 
+ *  playback status.  dsp_level is only used in this function.  This is used to keep track of the last SDRAM to SARAM transfer  This tells us which half of the DSP buffer (data) is free  This is used by the ARM to flag playback status and start/stop the DMA 
+ *  transfers.  This is used to effectively flag whether the ARM has new data ready or not  rebuffer sets up the next SDRAM to SARAM transfer and tells the ARM when DMA
+ *  needs a new buffer.
+ *
+ * Note: The upper limit on larger buffers is the size of a short.  If larger 
+ *  buffer sizes are needed the code on the ARM side needs to be changed to 
+ *  update a full long.
+  Stop / Pause  Stop MCBSP DMA0  Shut the transmitter down  Stop the HPIB transfer if it is running  Reset the following variables for DMA restart  If the sdem_level is equal to the buffer size the ARM code gave
+     *  (sdem_dsp_size) then reset the size and ask the arm for another buffer
+      Get a new buffer (location and size) from ARM  trigger DSPHINT on the ARM  Size is in bytes (but forced 32 bit transfers).  Comparison is
+         *  against DSP_BUFFER_SIZE because it is in words and this needs to
+         *  compare against half the total size in bytes.  DSP addresses are 16 bit (word). dsp_level is in bytes so it needs to 
+         *  be converted to words.  SDRAM addresses are 8 bit (byte)
+         * Warning: These addresses are forced to 32 bit alignment!
+          Set the size of the SDRAM to SARAM transfer (demac transfer)  These are just debug signals that are not used/needed right now  Start the demac transfer  This interupt handler is for the SARAM (on DSP) to McBSP IIS DMA transfer.
+ * It interupts at 1/2 empty and empty so that we can start filling a new buffer
+ * from SDRAM when a half is free. dsp_level should always be full when this
+ * interupt occurs except for the initial start.  Byte offset to half-buffer locked by DMA0.
+            0 for top, DSP_BUFFER_SIZE/2 for bottom  DMSRC0 is the beginning of the DMA0-locked SARAM half-buffer.  DMSRC0 (banked register, see page 133 of SPRU302B  Note that these address offsets (dma0_locked and dma0_unlocked are in 
+     *  words.  Start the SDRAM to SARAM copy  This interupt handler runs every time a DMA transfer is complete from SDRAM 
+ *  to the SARAM buffer.  It is used to update the SARAM buffer level 
+ *  (dsp_level), the SDRAM buffer level (sdem_level) and to rebuffer if the dsp
+ *  buffer is not full.  Clear interrupt  dsp_level and sdem_level are in bytes  compare to DSP_BUFFER_SIZE without a divide because it is in words and 
+     *  we want half the total size in bytes.  Make sure that DMPREC is clear  Configure SARAM to McBSP DMA  Event XEVT0, 32-bit transfers, 0 frame count  Interrupts generated, Half and full buffer.
+     * ABU mode, From data space with postincrement, to data space with no 
+     *  change
+      Set the source (incrementing) location  Set the destination (static) location to the McBSP IIS interface  Set the size of the buffer  Set the interrupt mux 

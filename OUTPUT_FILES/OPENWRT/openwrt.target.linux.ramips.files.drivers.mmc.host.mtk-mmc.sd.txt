@@ -128,4 +128,69 @@
 	 * for flags 0 the trigger polarity is determined by the
 	 * device tree, but not the oneshot flag, but maybe it is also
 	 * not needed because the soc could be oneshot safe.
+	  Config card detection pin and enable interrupts  set for card  4 device share one driver, using "drvdata" to show difference  Fix me: Power Flow -------------------------------------------------------------------------- module init/exit                                                      -------------------------------------------------------------------------- Copyright Statement:
+ *
+ * This software/firmware and related documentation ("MediaTek Software") are
+ * protected under relevant copyright laws. The information contained herein
+ * is confidential and proprietary to MediaTek Inc. and/or its licensors.
+ * Without the prior written permission of MediaTek inc. and/or its licensors,
+ * any reproduction, modification, use or disclosure of MediaTek Software,
+ * and information contained herein, in whole or in part, shall be strictly prohibited.
+ *
+ * MediaTek Inc. (C) 2010. All rights reserved.
+ *
+ * BY OPENING THIS FILE, RECEIVER HEREBY UNEQUIVOCALLY ACKNOWLEDGES AND AGREES
+ * THAT THE SOFTWARE/FIRMWARE AND ITS DOCUMENTATIONS ("MEDIATEK SOFTWARE")
+ * RECEIVED FROM MEDIATEK AND/OR ITS REPRESENTATIVES ARE PROVIDED TO RECEIVER ON
+ * AN "AS-IS" BASIS ONLY. MEDIATEK EXPRESSLY DISCLAIMS ANY AND ALL WARRANTIES,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE OR NONINFRINGEMENT.
+ * NEITHER DOES MEDIATEK PROVIDE ANY WARRANTY WHATSOEVER WITH RESPECT TO THE
+ * SOFTWARE OF ANY THIRD PARTY WHICH MAY BE USED BY, INCORPORATED IN, OR
+ * SUPPLIED WITH THE MEDIATEK SOFTWARE, AND RECEIVER AGREES TO LOOK ONLY TO SUCH
+ * THIRD PARTY FOR ANY WARRANTY CLAIM RELATING THERETO. RECEIVER EXPRESSLY ACKNOWLEDGES
+ * THAT IT IS RECEIVER'S SOLE RESPONSIBILITY TO OBTAIN FROM ANY THIRD PARTY ALL PROPER LICENSES
+ * CONTAINED IN MEDIATEK SOFTWARE. MEDIATEK SHALL ALSO NOT BE RESPONSIBLE FOR ANY MEDIATEK
+ * SOFTWARE RELEASES MADE TO RECEIVER'S SPECIFICATION OR TO CONFORM TO A PARTICULAR
+ * STANDARD OR OPEN FORUM. RECEIVER'S SOLE AND EXCLUSIVE REMEDY AND MEDIATEK'S ENTIRE AND
+ * CUMULATIVE LIABILITY WITH RESPECT TO THE MEDIATEK SOFTWARE RELEASED HEREUNDER WILL BE,
+ * AT MEDIATEK'S OPTION, TO REVISE OR REPLACE THE MEDIATEK SOFTWARE AT ISSUE,
+ * OR REFUND ANY SOFTWARE LICENSE FEES OR SERVICE CHARGE PAID BY RECEIVER TO
+ * MEDIATEK FOR SUCH MEDIATEK SOFTWARE AT ISSUE.
+ *
+ * The following software/firmware and/or related documentation ("MediaTek Software")
+ * have been modified by MediaTek Inc. All revisions are subject to any receiver's
+ * applicable license agreements with MediaTek Inc.
+ #define IRQ_SDC 14	//MT7620 /*FIXME*/FIXME +/- by chhung  +/- by chhung  --- by chhung  end of ---  8 cycles  data timeout counter. 65536x40 sclk.  100ms  500ms x5  a single transaction for WIFI may be 50K one null gpd =================================#define PERI_MSDC1_PDN    (16)#define PERI_MSDC2_PDN    (17)#define PERI_MSDC3_PDN    (18) --- by chhung  gate means clock power down  not like power down register. 1 means clock on.  do we need sync object or not end of ---  +++ by chhung 	.flags          = MSDC_WP_PIN_EN | MSDC_CD_PIN_EN | MSDC_REMOVABLE, end of +++  RESP_NONE  RESP_R1  RESP_R2  RESP_R3  RESP_R4  RESP_R5  RESP_R6  RESP_R7  RESP_R1b  clock source for host: global  +/- by chhung  +/- by chhung ============================================ the power for msdc host controller: global    always keep the VMC on.================================================================================ the vdd output for card: global   always keep the VMCH on.==================================== can modify to read h/w register.#define is_card_present(h)   ((sdr_read32(MSDC_PS) & MSDC_PS_CDSTS) ? 0 : 1); +++ by chhung  end of +++  N_MSG is currently a no-op  0  1  2  3  4  5  6  7  8  9  10  11  12  13  14  15  in 65536 sclk cycle unit u32 change = 0; work around Make sure: handle the last interrupt  --- by chhung  For E2 only  end of --- struct msdc_hw *hw = host->hw;u8  clksrc = hw->clk_src; set mmc system clock to 0 ?ERR_MSG("set mclk to 0!!!"); ddr mode and use divisor  mean div = 1/4  sclk = clk / 4  bug fix  no divisor and divisor is ignored  use divisor  mean div = 1/2  sclk = clk / 2  set clock mode and divisor  wait clock stable  need? Fix me. when need to abort  need to check FIFO count 0 ? try to stop, but may not success if (host->mclk >= 25000000) {      msdc_set_mclk(host, 0, host->mclk >> 1);} --- by chhung  Config WP pin  NULL sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPU, 1); /* Check & FIXME */sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPD, 0); /* Check & FIXME */sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPU, 0); /* Check & FIXME */sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPD, 1); /* Check & FIXME */sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPU, 0); /* Check & FIXME */sdr_set_field(MSDC_PAD_CTL0, MSDC_PAD_CTL0_CLKPD, 0); /* Check & FIXME */ Config reset pin  NULL msdc_core_power(host, 1); // need do card detection.msdc_core_power(host, 0);msdc_vdd_on(host);  // need todo card detection.msdc_vdd_off(host); end of --- 
+   register as callback function of WIFI(combo_sdio_register_pm) .
+   can called by msdc_drv_suspend/resume too.
+ already suspend  default 0 for memory card. already power off by mmc  default PMSG_RESUME ERR_MSG("warning: already resume"); No PM resume when USR suspend  won't happen. -------------------------------------------------------------------------- mmc_host_ops members                                                      -------------------------------------------------------------------------- not used  Protocol layer does not provide response type, but our hardware needs
+	 * to know exact type, not just size!
+	  SDIO workaround.  rawcmd :
+	 * vol_swt << 30 | auto_cmd << 28 | blklen << 16 | go_irq << 15 |
+	 * stop << 14 | rw << 13 | dtype << 11 | rsptyp << 7 | brk << 6 | opcode
+	 BUG_ON(in_interrupt());u32 rawcmd;init_completion(&host->cmd_done);sdr_set_bits(MSDC_INTEN, wints);end: Response types 1, 3, 4, 5, 6, 7(1b)  do we need to save card's RCA when SD_SEND_RELATIVE_ADDR  memory card CRC  check if has data phase  do basic: reset  check DAT0 if (resp == RESP_R1B) {
+	   while ((sdr_read32(MSDC_PS) & 0x10000) != 0x10000);
+	   }  CMD12 Error Handle  --- by chhung  DMA resume / start / stop end of --- dsb(); /* --- by chhung */u32 retries=500;while (sdr_read32(MSDC_DMA_CFG) & MSDC_DMA_CFG_STS);dsb(); /* --- by chhung */ Not just xfer_comp  calc checksum  gpd bd setup + dma registers u32 i, j, num, bdlen, arg, xfersz;#if defined (CONFIG_RALINK_MT7620)#elif defined (CONFIG_RALINK_MT7621) || defined (CONFIG_RALINK_MT7628)#endif calculate the required number of gpd  modify gpdgpd->intr = 0; hw will clear it  need to clear first.  modify bd the last bd  checksume need to clear first  not support currently u32 intsts = 0; --- by chhung if(host->id ==1){} end of --- msdc_clr_fifo();  /* no need */ enable DMA mode first!!  start the command first then wait command done  for read, the data coming too fast, then CRC error
+		   start DMA no business with CRC. init_completion(&host->xfer_done); Last: stop transfer  don't stop twice! reset in IRQ, stop command has issued. -> No need  --- by chhung if(host->id==1) {} end of --- if (host->error) ERR_MSG("host->error<%d>", host->error); bug: we meet mmc->card is null when ACMD6  ==== don't support 3.0 now ====
+	   1: R_SMPL[1]
+	   2: PAD_CMD_RESP_RXDLY[26:22]
+	   ========================== save the previous tune result Lv1: R_SMPL[1]  not tune. should be EIO  check if has data phase  Lv2: PAD_CMD_RESP_RXDLY[26:22]  Support SD2.0 Only  Tune Method 2.  RO  Fix me: result is 0, but dcrc is still exist  there is a case: command timeout, and data phase not processed  E1 ECO. YD: Reverse  MSDC_IOCON_DDR50CKD need to check. [Fix me] Tune Method 2. just DAT0  E1 ECO. YD: Reverse  there is a case: command timeout, and data phase not processed  only adjust bit-1 for crc  need cmd12?  failed when msdc_do_request u32 base = host->base; CRC and TO  Fix me: don't care card status?  ops.request === for sdio profile === --- by chhung  end of ---  start to process  --- by chhung === for sdio profile === end of ---  ==== when request done, check if app_cmd ====  save the RCA host->app_cmd_arg = 0; --- by chhung === for sdio profile === end of ---  called by ops.set_ios  ops.set_ios  Power control ???  msdc_set_power_mode(host, ios->power_mode); /* --- by chhung */ Clock control if (!(host->hw->flags & MSDC_REMOVABLE)) {} /* for tuning debug */ default value  sdr_write32(MSDC_DAT_RDDLY0, 0x00000000); for MT7620 E2 and afterward sdr_write32(MSDC_PAD_TUNE,   0x00000000); for MT7620 E2 and afterward ops.get_ro  set for card  ops.get_cd  for sdio, MSDC_REMOVABLE not set, always return 1  For sdio, read H/W always get<1>, but may timeout some times  MSDC_CD_PIN_EN set for card  why not read from H/W: Fix me CD TODO? Check DAT3 pins for card detection -------------------------------------------------------------------------- interrupt handler                                                    -------------------------------------------------------------------------- clear interrupts  MSG will cause fatal error  card change interrupt  tuning when plug card ?  sdio interrupt  seems not sdio irq mmc_signal_sdio_irq(host->mmc); transfer complete interrupt  do basic reset, or stop command will sdc_busy if(sdr_read32(MSDC_INTEN) & MSDC_INT_XFER_COMPL) { Read CRC come fast, XFER_COMPL not enabled  command interrupts  Response types 1, 3, 4, 5, 6, 7(1b)  mmc irq interrupts         msdc_int_reg *int_reg = (msdc_int_reg*)&intsts;-------------------------------------------------------------------------- platform_driver members                                                      -------------------------------------------------------------------------- called by msdc_drv_probe/remove  for sdio, not set  Pull down card detection pin since it is not avaiable 
+		  if (hw->config_gpio_pin)
+		  hw->config_gpio_pin(MSDC_CD_PIN, GPIO_PULL_DOWN);
+		 card detection circuit relies on the core power so that the core power
+		 * shouldn't be turned off. Here adds a reference count to keep
+		 * the core power alive.
+		 msdc_vcore_on(host); //did in msdc_init_hw() NULL  not in document! Fix me  NULL  Here decreases a reference count to core power since card
+		 * detection circuit is shutdown.
+		 msdc_vcore_off(host); called by msdc_drv_probe  Power on  --- by chhung  end of ---  Configure to MMC/SD mode  Reset  Disable card detection  Disable and clear all interrupts  reset tuning parameter  sdr_write32(MSDC_PAD_TUNE,   0x00000000); for MT7620 E2 and afterward sdr_write32(MSDC_DAT_RDDLY0, 0x00000000); for MT7620 E2 and afterward use MT7620 default value: 0x403c004f bit0 modified: Rx Data Clock Source: 1 -> 2.0 internal clock: latch read data  for safety, should clear SDC_CFG.SDIO_INT_DET_EN & set SDC_CFG.SDIO in
+	   pre-loader,uboot,kernel drivers. and SDC_CFG.SDIO_INT_DET_EN will be only
+	   set when kernel driver wants to use SDIO bus interrupt  Configure to enable SDIO mode. it's must otherwise sdio cmd5 failed  disable detect SDIO device interupt function  eneable SMT for glitch filter  set clk, cmd, dat pad driving  set sampling edge  write crc timeout detection  Configure to default data timeout  called by msdc_drv_remove  Disable and clear all interrupts  Disable card detection  msdc_set_power_mode(host, MMC_POWER_OFF);   /* make sure power down */ /* --- by chhung */ init gpd and bd list in msdc_drv_probe  we just support one gpd, but gpd->next must be set for desc
+	 * DMA. That's why we alloc 2 gpd structurs.
+	  hwo, cs, bd pointer  physical address FIXME: this should be done by pinconf and not by the sd driver Allocate MMC host for this device  Set host parameters to mmc TODO: read this as bus-width from dt (via mmc_of_parse) MMC core transfer sizes tunable parameters  mclk: the request clock of mmc sub-system  hclk: clock of clock source to msdc controller  sclk: the really clock after divition     host->card_inserted = hw->flags & MSDC_REMOVABLE ? 0 : 1;init_MUTEX(&host->sem); /* we don't need to support multiple threads access */ using dma_alloc_coherent todo: using 1, for all 4 slots  TODO check weather flags 0 is correct, the mtk-sd driver uses
+	 * IRQF_TRIGGER_LOW | IRQF_ONESHOT for flags
+	 *
+	 * for flags 0 the trigger polarity is determined by the
+	 * device tree, but not the oneshot flag, but maybe it is also
+	 * not needed because the soc could be oneshot safe.
 	  Config card detection pin and enable interrupts  set for card  4 device share one driver, using "drvdata" to show difference  Fix me: Power Flow -------------------------------------------------------------------------- module init/exit                                                      --------------------------------------------------------------------------

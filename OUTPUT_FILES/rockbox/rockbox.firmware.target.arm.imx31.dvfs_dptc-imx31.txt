@@ -1,0 +1,145 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2010 by Michael Sevakis
+ *
+ * i.MX31 DVFS and DPTC drivers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Most of the code in here is based upon the Linux BSP provided by Freescale
+ * Copyright 2004-2008 Freescale Semiconductor, Inc. All Rights Reserved.  The current DVFS index level  The current DPTC working point  Synchronize DPTC comparator value registers to new table row  Enable DPTC and unmask interrupt.  Enable DPTC, assert voltage change request.  Now set that voltage is valid  Simply a safety check *in case* table gets scrambled * DVFS * Voltage ramp wait time  Has driver enabled DVFS?  Request tracking since boot  Wait for the UPDTEN flag to be set so that all bits may be written  Do the actual frequency and DVFS pin change - always call with IRQ masked  Ignore voltage change request from DPTC. Voltage is *not* valid.  Mask DPTC interrupt for when called in thread context  Up scaling, increase  Down scaling, decrease  DVSUP (new frequency index) setup  Save new level  Update pll and post-dividers.  Post-dividers update only  dvfs_int_voltage_wait_complete must be call to complete this; how that
+       is accomplished depends upon whether this was an interrupt with DVFS
+       enabled or a manual setting of the CPU frequency  Perform final DVFS frequency change steps after voltage ramp wait  Update the PLL settings  Start DVFS, change the set point and stop it  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped before calling.  Interrupt handler for DVFS  Do nothing. DVFS interrupt is masked.  Do nothing. DVFS didn't finish previous flow update.  DVFS already at lowest level  Upon the DECREASE event, the frequency will be changed to the next
+         * higher state index.  Single-step frequency increase  DVFS already at highest level  Upon the INCREASE event, the frequency will be changed to the next
+         * lower state index.  Right to highest if panic  DVFS already at highest level  Upon the INCREASE_NOW event, the frequency will be increased to
+         * the maximum (index 0).  Do nothing. Freq change is not required  end switch  Mask DVFS interrupt until voltage wait is complete  Complete this in a few microseconds from now  Interrupt vector for DVFS  Initialize the DVFS hardware  Combine SW1A and SW1B DVS pins for a possible five DVS levels
+     * per working point. Four, MAXIMUM, are actually used, one for each
+     * frequency.  Set DVS speed to 25mV every 4us.  Set DVFS pins to functional outputs. Input mode and pad setting is
+     * fixed in hardware.  Configure PWRRDY signal pin.  GP load bits disabled  Initialize DVFS signal weights and detection modes.  Set up LTR0.  Set up LTR1.  Set up LTR2-- EMA configuration.  DVFS interrupt goes to MCU. Mask load buffer full interrupt. Do not
+     * always give an event.  Initialize current core PLL and dividers for default level. Assumes
+     * clocking scheme has been set up appropriately in other init code.  Set initial level and working point. * DPTC * Request tracking since boot  Has driver enabled DPTC?  transfer descriptor  new working point  buffer for async write  ISR async write buffer  Register subaddresses  shadow regs  Called (in SPI INT context) after asynchronous PMIC write is completed  Save new working point  Handle the DPTC interrupt and sometimes the manual setting - always call
+ * with IRQ masked.  Mask DPTC interrupt and disable DPTC until the change request is
+     * serviced.  Decrease voltage request - increment working point  Increase voltage request - decrement working point  Panic request - move immediately to panic working point if
+         * decrement results in greater working point than DPTC_WP_PANIC.  Just maintain at global level  Keep result in range  Get new regulator register settings, sanity check them and write them
+     * in the background.  SW1A  SW1ADVS  SW1BDVS  SW1BSTBY  Save new for xfer completion handler  Handle setting the working point explicitly - always call with IRQ
+ * masked  "NO_INT" so the working point isn't incremented, just set.  Wait for PMIC write  Interrupt vector for DPTC  Initialize the DPTC hardware  Shadow the regulator registers  Set default, safe working point.  Interrupt goes to MCU, specified reference circuits enabled when
+     * DPTC is active, DPTC counting range = 256 system clocks * Main module interface ** DVFS+DPTC * Initialize DVFS and DPTC  DVFS or DPTC on for some reason? Force off.  Ensure correct order - after this, the two appear independent  Obtain the current core voltage setting, in millivolts 8-)  25mV steps from 0.900V to 1.675V * DVFS * Start the DVFS hardware  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped.  Unmask DVFS interrupt source and enable DVFS.  Stop the DVFS hardware and return to default frequency  Mask DVFS interrupts.  Set default frequency level  Is DVFS enabled?  If DVFS is disabled, set the level explicitly  Get the current DVFS level  Get bitmask of levels supported  Mask the DVFS interrupt without affecting running status  Just disable, not running = already disabled  DVFS is running; unmask it  Set a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Return a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Set a signal load detection mode  Returns a signal load detection mode  Set/clear the general-purpose load tracking bit  Return the general-purpose load tracking bit  Set GP load tracking by code.
+ * level_code:
+ *     lt 0  =defaults
+ *     0     =all off ->
+ *     28    =highest load
+ *     gte 28=highest load
+ * detect_mask bits:
+ *     b[3:0]: 1=LTn edge detect, 0=LTn level detect
+  defaults  set weight  set detect mode  set activity  Return GP weight settings  Turn the wait-for-interrupt monitoring on or off * DPTC * Start DPTC module  Enable DPTC and unmask interrupt.  Stop the DPTC hardware if running and go back to default working point  Disable DPTC and mask interrupt.  Go back to default working point.  Is DPTC enabled?  If DPTC is not running, set the working point explicitly  Get the current DPTC working point **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2010 by Michael Sevakis
+ *
+ * i.MX31 DVFS and DPTC drivers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Most of the code in here is based upon the Linux BSP provided by Freescale
+ * Copyright 2004-2008 Freescale Semiconductor, Inc. All Rights Reserved.  The current DVFS index level  The current DPTC working point  Synchronize DPTC comparator value registers to new table row  Enable DPTC and unmask interrupt.  Enable DPTC, assert voltage change request.  Now set that voltage is valid  Simply a safety check *in case* table gets scrambled * DVFS * Voltage ramp wait time  Has driver enabled DVFS?  Request tracking since boot  Wait for the UPDTEN flag to be set so that all bits may be written  Do the actual frequency and DVFS pin change - always call with IRQ masked  Ignore voltage change request from DPTC. Voltage is *not* valid.  Mask DPTC interrupt for when called in thread context  Up scaling, increase  Down scaling, decrease  DVSUP (new frequency index) setup  Save new level  Update pll and post-dividers.  Post-dividers update only  dvfs_int_voltage_wait_complete must be call to complete this; how that
+       is accomplished depends upon whether this was an interrupt with DVFS
+       enabled or a manual setting of the CPU frequency  Perform final DVFS frequency change steps after voltage ramp wait  Update the PLL settings  Start DVFS, change the set point and stop it  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped before calling.  Interrupt handler for DVFS  Do nothing. DVFS interrupt is masked.  Do nothing. DVFS didn't finish previous flow update.  DVFS already at lowest level  Upon the DECREASE event, the frequency will be changed to the next
+         * higher state index.  Single-step frequency increase  DVFS already at highest level  Upon the INCREASE event, the frequency will be changed to the next
+         * lower state index.  Right to highest if panic  DVFS already at highest level  Upon the INCREASE_NOW event, the frequency will be increased to
+         * the maximum (index 0).  Do nothing. Freq change is not required  end switch  Mask DVFS interrupt until voltage wait is complete  Complete this in a few microseconds from now  Interrupt vector for DVFS  Initialize the DVFS hardware  Combine SW1A and SW1B DVS pins for a possible five DVS levels
+     * per working point. Four, MAXIMUM, are actually used, one for each
+     * frequency.  Set DVS speed to 25mV every 4us.  Set DVFS pins to functional outputs. Input mode and pad setting is
+     * fixed in hardware.  Configure PWRRDY signal pin.  GP load bits disabled  Initialize DVFS signal weights and detection modes.  Set up LTR0.  Set up LTR1.  Set up LTR2-- EMA configuration.  DVFS interrupt goes to MCU. Mask load buffer full interrupt. Do not
+     * always give an event.  Initialize current core PLL and dividers for default level. Assumes
+     * clocking scheme has been set up appropriately in other init code.  Set initial level and working point. * DPTC * Request tracking since boot  Has driver enabled DPTC?  transfer descriptor  new working point  buffer for async write  ISR async write buffer  Register subaddresses  shadow regs  Called (in SPI INT context) after asynchronous PMIC write is completed  Save new working point  Handle the DPTC interrupt and sometimes the manual setting - always call
+ * with IRQ masked.  Mask DPTC interrupt and disable DPTC until the change request is
+     * serviced.  Decrease voltage request - increment working point  Increase voltage request - decrement working point  Panic request - move immediately to panic working point if
+         * decrement results in greater working point than DPTC_WP_PANIC.  Just maintain at global level  Keep result in range  Get new regulator register settings, sanity check them and write them
+     * in the background.  SW1A  SW1ADVS  SW1BDVS  SW1BSTBY  Save new for xfer completion handler  Handle setting the working point explicitly - always call with IRQ
+ * masked  "NO_INT" so the working point isn't incremented, just set.  Wait for PMIC write  Interrupt vector for DPTC  Initialize the DPTC hardware  Shadow the regulator registers  Set default, safe working point.  Interrupt goes to MCU, specified reference circuits enabled when
+     * DPTC is active, DPTC counting range = 256 system clocks * Main module interface ** DVFS+DPTC * Initialize DVFS and DPTC  DVFS or DPTC on for some reason? Force off.  Ensure correct order - after this, the two appear independent  Obtain the current core voltage setting, in millivolts 8-)  25mV steps from 0.900V to 1.675V * DVFS * Start the DVFS hardware  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped.  Unmask DVFS interrupt source and enable DVFS.  Stop the DVFS hardware and return to default frequency  Mask DVFS interrupts.  Set default frequency level  Is DVFS enabled?  If DVFS is disabled, set the level explicitly  Get the current DVFS level  Get bitmask of levels supported  Mask the DVFS interrupt without affecting running status  Just disable, not running = already disabled  DVFS is running; unmask it  Set a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Return a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Set a signal load detection mode  Returns a signal load detection mode  Set/clear the general-purpose load tracking bit  Return the general-purpose load tracking bit  Set GP load tracking by code.
+ * level_code:
+ *     lt 0  =defaults
+ *     0     =all off ->
+ *     28    =highest load
+ *     gte 28=highest load
+ * detect_mask bits:
+ *     b[3:0]: 1=LTn edge detect, 0=LTn level detect
+  defaults  set weight  set detect mode  set activity  Return GP weight settings  Turn the wait-for-interrupt monitoring on or off * DPTC * Start DPTC module  Enable DPTC and unmask interrupt.  Stop the DPTC hardware if running and go back to default working point  Disable DPTC and mask interrupt.  Go back to default working point.  Is DPTC enabled?  If DPTC is not running, set the working point explicitly  Get the current DPTC working point **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2010 by Michael Sevakis
+ *
+ * i.MX31 DVFS and DPTC drivers
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Most of the code in here is based upon the Linux BSP provided by Freescale
+ * Copyright 2004-2008 Freescale Semiconductor, Inc. All Rights Reserved.  The current DVFS index level  The current DPTC working point  Synchronize DPTC comparator value registers to new table row  Enable DPTC and unmask interrupt.  Enable DPTC, assert voltage change request.  Now set that voltage is valid  Simply a safety check *in case* table gets scrambled * DVFS * Voltage ramp wait time  Has driver enabled DVFS?  Request tracking since boot  Wait for the UPDTEN flag to be set so that all bits may be written  Do the actual frequency and DVFS pin change - always call with IRQ masked  Ignore voltage change request from DPTC. Voltage is *not* valid.  Mask DPTC interrupt for when called in thread context  Up scaling, increase  Down scaling, decrease  DVSUP (new frequency index) setup  Save new level  Update pll and post-dividers.  Post-dividers update only  dvfs_int_voltage_wait_complete must be call to complete this; how that
+       is accomplished depends upon whether this was an interrupt with DVFS
+       enabled or a manual setting of the CPU frequency  Perform final DVFS frequency change steps after voltage ramp wait  Update the PLL settings  Start DVFS, change the set point and stop it  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped before calling.  Interrupt handler for DVFS  Do nothing. DVFS interrupt is masked.  Do nothing. DVFS didn't finish previous flow update.  DVFS already at lowest level  Upon the DECREASE event, the frequency will be changed to the next
+         * higher state index.  Single-step frequency increase  DVFS already at highest level  Upon the INCREASE event, the frequency will be changed to the next
+         * lower state index.  Right to highest if panic  DVFS already at highest level  Upon the INCREASE_NOW event, the frequency will be increased to
+         * the maximum (index 0).  Do nothing. Freq change is not required  end switch  Mask DVFS interrupt until voltage wait is complete  Complete this in a few microseconds from now  Interrupt vector for DVFS  Initialize the DVFS hardware  Combine SW1A and SW1B DVS pins for a possible five DVS levels
+     * per working point. Four, MAXIMUM, are actually used, one for each
+     * frequency.  Set DVS speed to 25mV every 4us.  Set DVFS pins to functional outputs. Input mode and pad setting is
+     * fixed in hardware.  Configure PWRRDY signal pin.  GP load bits disabled  Initialize DVFS signal weights and detection modes.  Set up LTR0.  Set up LTR1.  Set up LTR2-- EMA configuration.  DVFS interrupt goes to MCU. Mask load buffer full interrupt. Do not
+     * always give an event.  Initialize current core PLL and dividers for default level. Assumes
+     * clocking scheme has been set up appropriately in other init code.  Set initial level and working point. * DPTC * Request tracking since boot  Has driver enabled DPTC?  transfer descriptor  new working point  buffer for async write  ISR async write buffer  Register subaddresses  shadow regs  Called (in SPI INT context) after asynchronous PMIC write is completed  Save new working point  Handle the DPTC interrupt and sometimes the manual setting - always call
+ * with IRQ masked.  Mask DPTC interrupt and disable DPTC until the change request is
+     * serviced.  Decrease voltage request - increment working point  Increase voltage request - decrement working point  Panic request - move immediately to panic working point if
+         * decrement results in greater working point than DPTC_WP_PANIC.  Just maintain at global level  Keep result in range  Get new regulator register settings, sanity check them and write them
+     * in the background.  SW1A  SW1ADVS  SW1BDVS  SW1BSTBY  Save new for xfer completion handler  Handle setting the working point explicitly - always call with IRQ
+ * masked  "NO_INT" so the working point isn't incremented, just set.  Wait for PMIC write  Interrupt vector for DPTC  Initialize the DPTC hardware  Shadow the regulator registers  Set default, safe working point.  Interrupt goes to MCU, specified reference circuits enabled when
+     * DPTC is active, DPTC counting range = 256 system clocks * Main module interface ** DVFS+DPTC * Initialize DVFS and DPTC  DVFS or DPTC on for some reason? Force off.  Ensure correct order - after this, the two appear independent  Obtain the current core voltage setting, in millivolts 8-)  25mV steps from 0.900V to 1.675V * DVFS * Start the DVFS hardware  Have to wait at least 3 div3 clocks before enabling after being
+     * stopped.  Unmask DVFS interrupt source and enable DVFS.  Stop the DVFS hardware and return to default frequency  Mask DVFS interrupts.  Set default frequency level  Is DVFS enabled?  If DVFS is disabled, set the level explicitly  Get the current DVFS level  Get bitmask of levels supported  Mask the DVFS interrupt without affecting running status  Just disable, not running = already disabled  DVFS is running; unmask it  Set a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Return a signal load tracking weight  Bits 7:5, 10:8 ... 31:29  Bits 13:11, 16:14 ... 31:29  Set a signal load detection mode  Returns a signal load detection mode  Set/clear the general-purpose load tracking bit  Return the general-purpose load tracking bit  Set GP load tracking by code.
+ * level_code:
+ *     lt 0  =defaults
+ *     0     =all off ->
+ *     28    =highest load
+ *     gte 28=highest load
+ * detect_mask bits:
+ *     b[3:0]: 1=LTn edge detect, 0=LTn level detect
+  defaults  set weight  set detect mode  set activity  Return GP weight settings  Turn the wait-for-interrupt monitoring on or off * DPTC * Start DPTC module  Enable DPTC and unmask interrupt.  Stop the DPTC hardware if running and go back to default working point  Disable DPTC and mask interrupt.  Go back to default working point.  Is DPTC enabled?  If DPTC is not running, set the working point explicitly  Get the current DPTC working point 

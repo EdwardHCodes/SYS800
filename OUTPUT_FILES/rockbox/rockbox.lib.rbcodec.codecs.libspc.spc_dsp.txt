@@ -1,0 +1,133 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007-2008 Michael Sevakis (jhMikeS)
+ * Copyright (C) 2006-2007 Adam Gashlin (hcs)
+ * Copyright (C) 2004-2007 Shay Green (blargg)
+ * Copyright (C) 2002 Brad Martin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The DSP portion (awe!)  Above may still use generic implementations. Also defines final 
+   function names.  each rate divides exactly into 0x7800 without remainder  Interleved gauss table (to improve cache coherency).  gauss [i * 2 + j] = normal_gauss [(1 - j) * 256 + i]  !SPC_NOINTERP  voice volumes  voice rates  fir coefficients  sign-extend  !SPC_NOECHO  Decode BRR block  header  point to next header  previous samples  if next block has end flag set,
+       this block ends early (verified)  arrange for last 9 samples to be skipped  force sample to end on next decode  !SPC_BRRCACHE  filter 2 (30-90% of the time)  y[n] = x[n] + 61/32 * y[n-1] - 15/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 1  y[n] = x[n] + 15/16 * y[n-1]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 3  y[n] = x[n] + 115/64 * y[n-1] - 13/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 0  y[n] = x[n]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  save to end of next block (for next call)  SPC_BRRCACHE  save to end of this block  a little extra for samples that go past end  BRR filter uses previous samples  initialize filters  output position - preincrement  if next block has end flag set, this block ends early  (verified)  skip last 9 samples  Plan filter init for later decoding at loop point  add to cache  see if in cache  do NOT want to see all the key down stuff for cached waves  Wave in cache  predecode BRR if not already  actually decode it  0x2fff  "Loop" is outside initial waveform  !SPC_BRRCACHE  BRR filter uses previous samples  force decode on next brr_decode call  0x12fff  "previous" BRR header  action based on previous block's header  1% of the time  first block was end block;
+               don't play anything (verified)  SPC_BRRCACHE  TODO: inaccurate?  Here we check for keys on/off.  Docs say that successive writes
+       to KON/KOF must be separated by at least 2 Ts periods or risk
+       being neglected.  Therefore DSP only looks at these during an
+       update, and not at the time of the write.  Only need to do this
+       once however, since the regs haven't changed over the whole
+       period we need to catch up with.  keying on a voice resets that bit in ENDX  key_off bits prevent key_on from being acknowledged  process key events outside loop, since they won't re-occur  (g.flags & 0x40) ? 30 : 14  one pair of output samples per iteration  Noise  !SPC_NOECHO  TODO: correct value for first channel?  TODO: put raw_voice pointer in voice_t?  pregen involves checking keyon, etc  Key on events are delayed  <1% of the time  Silent channel  Envelope  99% of the time  79% of the time  74% of the time  envx *= 255 / 256  TODO: should this be 8?  25% state_decay  envx *= 255 / 256  TODO: should this be 8?  state_attack  TODO: should this be 8?  gain mode  decay  exponential  envx *= 255 / 256  attack  TODO: should this be 8?  state_release  bit was set, so this clears it  bit was set, so this clears it  since voice->envx is 0,
+                   samples and position don't matter  Get rate (with possible modulation)  Gaussian interpolation using most recent 4 samples  Only left half of gaussian kernel is in table, so we must mirror
+               for right half  Use faster gaussian interpolation when exact result isn't needed
+               by pitch modulator of next channel  99% of the time  Main optimization is lack of clamping. Not a problem since
+                   output never goes more than +/- 16 outside 16-bit range and
+                   things are clamped later anyway. Other optimization is to
+                   preserve fractional accuracy, eliminating several masks.  slow gaussian  !SPC_NOINTERP (else two-point linear interpolation)  Apply envelope and volume  !SPC_NOECHO  end of voice loop  Generate output  Read feedback from echo buffer  Apply FIR  Feedback into echo buffer  !SPC_NOECHO  reset, mute, echo off  SPC_BRRCACHE  Not yet scaled  !SPC_NOINTERP && GAUSS_TABLE_SCALE  SPC_NOECHO **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007-2008 Michael Sevakis (jhMikeS)
+ * Copyright (C) 2006-2007 Adam Gashlin (hcs)
+ * Copyright (C) 2004-2007 Shay Green (blargg)
+ * Copyright (C) 2002 Brad Martin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The DSP portion (awe!)  Above may still use generic implementations. Also defines final 
+   function names.  each rate divides exactly into 0x7800 without remainder  Interleved gauss table (to improve cache coherency).  gauss [i * 2 + j] = normal_gauss [(1 - j) * 256 + i]  !SPC_NOINTERP  voice volumes  voice rates  fir coefficients  sign-extend  !SPC_NOECHO  Decode BRR block  header  point to next header  previous samples  if next block has end flag set,
+       this block ends early (verified)  arrange for last 9 samples to be skipped  force sample to end on next decode  !SPC_BRRCACHE  filter 2 (30-90% of the time)  y[n] = x[n] + 61/32 * y[n-1] - 15/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 1  y[n] = x[n] + 15/16 * y[n-1]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 3  y[n] = x[n] + 115/64 * y[n-1] - 13/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 0  y[n] = x[n]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  save to end of next block (for next call)  SPC_BRRCACHE  save to end of this block  a little extra for samples that go past end  BRR filter uses previous samples  initialize filters  output position - preincrement  if next block has end flag set, this block ends early  (verified)  skip last 9 samples  Plan filter init for later decoding at loop point  add to cache  see if in cache  do NOT want to see all the key down stuff for cached waves  Wave in cache  predecode BRR if not already  actually decode it  0x2fff  "Loop" is outside initial waveform  !SPC_BRRCACHE  BRR filter uses previous samples  force decode on next brr_decode call  0x12fff  "previous" BRR header  action based on previous block's header  1% of the time  first block was end block;
+               don't play anything (verified)  SPC_BRRCACHE  TODO: inaccurate?  Here we check for keys on/off.  Docs say that successive writes
+       to KON/KOF must be separated by at least 2 Ts periods or risk
+       being neglected.  Therefore DSP only looks at these during an
+       update, and not at the time of the write.  Only need to do this
+       once however, since the regs haven't changed over the whole
+       period we need to catch up with.  keying on a voice resets that bit in ENDX  key_off bits prevent key_on from being acknowledged  process key events outside loop, since they won't re-occur  (g.flags & 0x40) ? 30 : 14  one pair of output samples per iteration  Noise  !SPC_NOECHO  TODO: correct value for first channel?  TODO: put raw_voice pointer in voice_t?  pregen involves checking keyon, etc  Key on events are delayed  <1% of the time  Silent channel  Envelope  99% of the time  79% of the time  74% of the time  envx *= 255 / 256  TODO: should this be 8?  25% state_decay  envx *= 255 / 256  TODO: should this be 8?  state_attack  TODO: should this be 8?  gain mode  decay  exponential  envx *= 255 / 256  attack  TODO: should this be 8?  state_release  bit was set, so this clears it  bit was set, so this clears it  since voice->envx is 0,
+                   samples and position don't matter  Get rate (with possible modulation)  Gaussian interpolation using most recent 4 samples  Only left half of gaussian kernel is in table, so we must mirror
+               for right half  Use faster gaussian interpolation when exact result isn't needed
+               by pitch modulator of next channel  99% of the time  Main optimization is lack of clamping. Not a problem since
+                   output never goes more than +/- 16 outside 16-bit range and
+                   things are clamped later anyway. Other optimization is to
+                   preserve fractional accuracy, eliminating several masks.  slow gaussian  !SPC_NOINTERP (else two-point linear interpolation)  Apply envelope and volume  !SPC_NOECHO  end of voice loop  Generate output  Read feedback from echo buffer  Apply FIR  Feedback into echo buffer  !SPC_NOECHO  reset, mute, echo off  SPC_BRRCACHE  Not yet scaled  !SPC_NOINTERP && GAUSS_TABLE_SCALE  SPC_NOECHO **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007-2008 Michael Sevakis (jhMikeS)
+ * Copyright (C) 2006-2007 Adam Gashlin (hcs)
+ * Copyright (C) 2004-2007 Shay Green (blargg)
+ * Copyright (C) 2002 Brad Martin
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The DSP portion (awe!)  Above may still use generic implementations. Also defines final 
+   function names.  each rate divides exactly into 0x7800 without remainder  Interleved gauss table (to improve cache coherency).  gauss [i * 2 + j] = normal_gauss [(1 - j) * 256 + i]  !SPC_NOINTERP  voice volumes  voice rates  fir coefficients  sign-extend  !SPC_NOECHO  Decode BRR block  header  point to next header  previous samples  if next block has end flag set,
+       this block ends early (verified)  arrange for last 9 samples to be skipped  force sample to end on next decode  !SPC_BRRCACHE  filter 2 (30-90% of the time)  y[n] = x[n] + 61/32 * y[n-1] - 15/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 1  y[n] = x[n] + 15/16 * y[n-1]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 3  y[n] = x[n] + 115/64 * y[n-1] - 13/16 * y[n-2]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  sign-extend  filter 0  y[n] = x[n]  decode and filter 16 samples  Get nybble, sign-extend, then scale
+               get byte, select which nybble, sign-extend, then shift
+               based on scaling.  save to end of next block (for next call)  SPC_BRRCACHE  save to end of this block  a little extra for samples that go past end  BRR filter uses previous samples  initialize filters  output position - preincrement  if next block has end flag set, this block ends early  (verified)  skip last 9 samples  Plan filter init for later decoding at loop point  add to cache  see if in cache  do NOT want to see all the key down stuff for cached waves  Wave in cache  predecode BRR if not already  actually decode it  0x2fff  "Loop" is outside initial waveform  !SPC_BRRCACHE  BRR filter uses previous samples  force decode on next brr_decode call  0x12fff  "previous" BRR header  action based on previous block's header  1% of the time  first block was end block;
+               don't play anything (verified)  SPC_BRRCACHE  TODO: inaccurate?  Here we check for keys on/off.  Docs say that successive writes
+       to KON/KOF must be separated by at least 2 Ts periods or risk
+       being neglected.  Therefore DSP only looks at these during an
+       update, and not at the time of the write.  Only need to do this
+       once however, since the regs haven't changed over the whole
+       period we need to catch up with.  keying on a voice resets that bit in ENDX  key_off bits prevent key_on from being acknowledged  process key events outside loop, since they won't re-occur  (g.flags & 0x40) ? 30 : 14  one pair of output samples per iteration  Noise  !SPC_NOECHO  TODO: correct value for first channel?  TODO: put raw_voice pointer in voice_t?  pregen involves checking keyon, etc  Key on events are delayed  <1% of the time  Silent channel  Envelope  99% of the time  79% of the time  74% of the time  envx *= 255 / 256  TODO: should this be 8?  25% state_decay  envx *= 255 / 256  TODO: should this be 8?  state_attack  TODO: should this be 8?  gain mode  decay  exponential  envx *= 255 / 256  attack  TODO: should this be 8?  state_release  bit was set, so this clears it  bit was set, so this clears it  since voice->envx is 0,
+                   samples and position don't matter  Get rate (with possible modulation)  Gaussian interpolation using most recent 4 samples  Only left half of gaussian kernel is in table, so we must mirror
+               for right half  Use faster gaussian interpolation when exact result isn't needed
+               by pitch modulator of next channel  99% of the time  Main optimization is lack of clamping. Not a problem since
+                   output never goes more than +/- 16 outside 16-bit range and
+                   things are clamped later anyway. Other optimization is to
+                   preserve fractional accuracy, eliminating several masks.  slow gaussian  !SPC_NOINTERP (else two-point linear interpolation)  Apply envelope and volume  !SPC_NOECHO  end of voice loop  Generate output  Read feedback from echo buffer  Apply FIR  Feedback into echo buffer  !SPC_NOECHO  reset, mute, echo off  SPC_BRRCACHE  Not yet scaled  !SPC_NOINTERP && GAUSS_TABLE_SCALE  SPC_NOECHO 

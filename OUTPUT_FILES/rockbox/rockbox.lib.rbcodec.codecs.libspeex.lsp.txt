@@ -1,0 +1,439 @@
+---------------------------------------------------------------------------*\
+Original copyright
+    FILE........: lsp.c
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+Heavily modified by Jean-Marc Valin (c) 2002-2006 (fixed-point, 
+                       optimizations, additional functions, ...)
+
+   This file contains functions for converting Linear Prediction
+   Coefficients (LPC) to Line Spectral Pair (LSP) and back. Note that the
+   LSP coefficients are not in radians format but in the x domain of the
+   unit circle.
+
+   Speex License:
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+---------------------------------------------------------------------------*\
+
+  Introduction to Line Spectrum Pairs (LSPs)
+  ------------------------------------------
+
+  LSPs are used to encode the LPC filter coefficients {ak} for
+  transmission over the channel.  LSPs have several properties (like
+  less sensitivity to quantisation noise) that make them superior to
+  direct quantisation of {ak}.
+
+  A(z) is a polynomial of order lpcrdr with {ak} as the coefficients.
+
+  A(z) is transformed to P(z) and Q(z) (using a substitution and some
+  algebra), to obtain something like:
+
+    A(z) = 0.5[P(z)(z+z^-1) + Q(z)(z-z^-1)]  (1)
+
+  As you can imagine A(z) has complex zeros all over the z-plane. P(z)
+  and Q(z) have the very neat property of only having zeros _on_ the
+  unit circle.  So to find them we take a test point z=exp(jw) and
+  evaluate P (exp(jw)) and Q(exp(jw)) using a grid of points between 0
+  and pi.
+
+  The zeros (roots) of P(z) also happen to alternate, which is why we
+  swap coefficients as we find roots.  So the process of finding the
+  LSP frequencies is basically finding the roots of 5th order
+  polynomials.
+
+  The root so P(z) and Q(z) occur in symmetrical pairs at +/-w, hence
+  the name Line Spectrum Pairs (LSPs).
+
+  To convert back to ak we just evaluate (1), "clocking" an impulse
+  thru it lpcrdr times gives us the impulse response of A(z) which is
+  {ak}.
+
+\*--------------------------------------------------------------------------- pi #define ANGLE2X(a) (32768*cos(((a)/8192.)))#define X2ANGLE(x) (acos(.00006103515625*(x))*LSP_SCALING)#define C1 0.99940307
+#define C2 -0.49558072
+#define C3 0.03679168---------------------------------------------------------------------------*\
+
+   FUNCTION....: cheb_poly_eva()
+
+   AUTHOR......: David Rowe
+   DATE CREATED: 24/2/93
+
+   This function evaluates a series of Chebyshev polynomials
+
+\*--------------------------------------------------------------------------- P or Q coefs in Q13 format                cos of freq (-1.0 to 1.0) in Q14 format   LPC order/2                              Prevents overflows Initialise values  Evaluate Chebyshev series formulation usin g iterative approach   Initial conditions  b_(m+1)  b_(m+2)  Calculate the b_(k)  tmp holds the previous value of b0  b0 holds its new value based on b0 and b1  b1 holds the previous value of b0 ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lpc_to_lsp()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+    This function converts LPC coefficients to LSP
+    coefficients.
+
+\*---------------------------------------------------------------------------  float *a                lpc coefficients              int lpcrdr          order of LPC coefficients (10)        float *freq             LSP frequencies in the x domain           int nb          number of sub-intervals (4)           float delta         grid spacing interval (0.02)        ,temp_qsumr ptrs for memory allocation        ptrs for memory allocation        ptrs of respective P'(z) & Q'(z)  ptr used for cheb_poly_eval()
+                whether P' or Q'             DR 8/2/94: number of roots found       program is searching for a root when,
+                1 else has found one             order of P'(z) & Q'(z) polynomials    Allocate memory space for polynomials  determine P'(z)'s and Q'(z)'s coefficients where
+      P'(z) = P(z)/(1 + z^(-1)) and Q'(z) = Q(z)/(1-z^(-1))  initialise ptrs             if (fabs(*px)>=32768)
+          speex_warning_int("px", *px);
+       if (fabs(*qx)>=32768)
+       speex_warning_int("qx", *qx); The reason for this lies in the way cheb_poly_eva() is implemented for fixed-point  re-initialise ptrs            now that we have computed P and Q convert to 16 bits to
+       speed up cheb_poly_eval  Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
+    Keep alternating between the two polynomials as each zero is found   initialise xr to zero         start at point xl = 1         determines whether P' or Q' is eval.  evals poly. at xl     Modified by JMV to provide smaller steps around x=+-1  interval spacing      poly(xl-delta_x)     if no sign change increment xr and re-evaluate poly(xr). Repeat til
+    sign change.
+    if a sign change has occurred the interval is bisected and then
+    checked again for a sign change which determines in which
+    interval the zero lies in.
+    If there is no sign change between poly(xm) and poly(xl) set interval
+    between xm and xr else set interval between xl and xr and repeat till
+    root is located within the specified limits              bisect the interval   bisect the interval  if(psumm*psuml>0.) once zero is found, reset initial interval to xr   reset flag for next search    SPEEX_DISABLE_ENCODER ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lsp_to_lpc()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+        Converts LSP coefficients to LPC coefficients.
+
+\*---------------------------------------------------------------------------  float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            
+    
+       Reconstruct P(z) and Q(z) by cascading second order polynomials
+       in form 1 - 2cos(w)z(-1) + z(-2), where w is the LSP frequency.
+       In the time domain this is:
+
+       y(n) = x(n) - 2cos(w)x(n-1) + x(n-2)
+    
+       This is what the ALLOCS below are trying to do:
+
+         int xp[m+1][lpcrdr+1+2]; // P matrix in QIMP
+         int xq[m+1][lpcrdr+1+2]; // Q matrix in QIMP
+
+       These matrices store the output of each stage on each row.  The
+       final (m-th) row has the output of the final (m-th) cascaded
+       2nd order filter.  The first row is the impulse input to the
+       system (not written as it is known).
+
+       The version below takes advantage of the fact that a lot of the
+       outputs are zero or known, for example if we put an inpulse
+       into the first section the "clock" it 10 times only the first 3
+       outputs samples are non-zero (it's an FIR filter).
+     work out 2cos terms in Q14  scaling for impulse  0.5 in QIMP format  first col and last non-zero values of each row are trivial  2nd row (first output row) is trivial  now generate remaining rows  for last col xp[i][j+2] = xq[i][j+2] = 0  process last row to extra a{k}  final filter sections  hard limit ak's to +/- 32767   float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            initialise contents of array  set contents of buffer to 0  Set pointers up  reconstruct P(z) and Q(z) by  cascading second order
+      polynomials in form 1 - 2xz(-1) +z(-2), where x is the
+      LSP coefficient Makes sure the LSPs are stableMakes sure the LSPs are stable---------------------------------------------------------------------------*\
+Original copyright
+    FILE........: lsp.c
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+Heavily modified by Jean-Marc Valin (c) 2002-2006 (fixed-point, 
+                       optimizations, additional functions, ...)
+
+   This file contains functions for converting Linear Prediction
+   Coefficients (LPC) to Line Spectral Pair (LSP) and back. Note that the
+   LSP coefficients are not in radians format but in the x domain of the
+   unit circle.
+
+   Speex License:
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+---------------------------------------------------------------------------*\
+
+  Introduction to Line Spectrum Pairs (LSPs)
+  ------------------------------------------
+
+  LSPs are used to encode the LPC filter coefficients {ak} for
+  transmission over the channel.  LSPs have several properties (like
+  less sensitivity to quantisation noise) that make them superior to
+  direct quantisation of {ak}.
+
+  A(z) is a polynomial of order lpcrdr with {ak} as the coefficients.
+
+  A(z) is transformed to P(z) and Q(z) (using a substitution and some
+  algebra), to obtain something like:
+
+    A(z) = 0.5[P(z)(z+z^-1) + Q(z)(z-z^-1)]  (1)
+
+  As you can imagine A(z) has complex zeros all over the z-plane. P(z)
+  and Q(z) have the very neat property of only having zeros _on_ the
+  unit circle.  So to find them we take a test point z=exp(jw) and
+  evaluate P (exp(jw)) and Q(exp(jw)) using a grid of points between 0
+  and pi.
+
+  The zeros (roots) of P(z) also happen to alternate, which is why we
+  swap coefficients as we find roots.  So the process of finding the
+  LSP frequencies is basically finding the roots of 5th order
+  polynomials.
+
+  The root so P(z) and Q(z) occur in symmetrical pairs at +/-w, hence
+  the name Line Spectrum Pairs (LSPs).
+
+  To convert back to ak we just evaluate (1), "clocking" an impulse
+  thru it lpcrdr times gives us the impulse response of A(z) which is
+  {ak}.
+
+\*--------------------------------------------------------------------------- pi #define ANGLE2X(a) (32768*cos(((a)/8192.)))#define X2ANGLE(x) (acos(.00006103515625*(x))*LSP_SCALING)#define C1 0.99940307
+#define C2 -0.49558072
+#define C3 0.03679168---------------------------------------------------------------------------*\
+
+   FUNCTION....: cheb_poly_eva()
+
+   AUTHOR......: David Rowe
+   DATE CREATED: 24/2/93
+
+   This function evaluates a series of Chebyshev polynomials
+
+\*--------------------------------------------------------------------------- P or Q coefs in Q13 format                cos of freq (-1.0 to 1.0) in Q14 format   LPC order/2                              Prevents overflows Initialise values  Evaluate Chebyshev series formulation usin g iterative approach   Initial conditions  b_(m+1)  b_(m+2)  Calculate the b_(k)  tmp holds the previous value of b0  b0 holds its new value based on b0 and b1  b1 holds the previous value of b0 ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lpc_to_lsp()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+    This function converts LPC coefficients to LSP
+    coefficients.
+
+\*---------------------------------------------------------------------------  float *a                lpc coefficients              int lpcrdr          order of LPC coefficients (10)        float *freq             LSP frequencies in the x domain           int nb          number of sub-intervals (4)           float delta         grid spacing interval (0.02)        ,temp_qsumr ptrs for memory allocation        ptrs for memory allocation        ptrs of respective P'(z) & Q'(z)  ptr used for cheb_poly_eval()
+                whether P' or Q'             DR 8/2/94: number of roots found       program is searching for a root when,
+                1 else has found one             order of P'(z) & Q'(z) polynomials    Allocate memory space for polynomials  determine P'(z)'s and Q'(z)'s coefficients where
+      P'(z) = P(z)/(1 + z^(-1)) and Q'(z) = Q(z)/(1-z^(-1))  initialise ptrs             if (fabs(*px)>=32768)
+          speex_warning_int("px", *px);
+       if (fabs(*qx)>=32768)
+       speex_warning_int("qx", *qx); The reason for this lies in the way cheb_poly_eva() is implemented for fixed-point  re-initialise ptrs            now that we have computed P and Q convert to 16 bits to
+       speed up cheb_poly_eval  Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
+    Keep alternating between the two polynomials as each zero is found   initialise xr to zero         start at point xl = 1         determines whether P' or Q' is eval.  evals poly. at xl     Modified by JMV to provide smaller steps around x=+-1  interval spacing      poly(xl-delta_x)     if no sign change increment xr and re-evaluate poly(xr). Repeat til
+    sign change.
+    if a sign change has occurred the interval is bisected and then
+    checked again for a sign change which determines in which
+    interval the zero lies in.
+    If there is no sign change between poly(xm) and poly(xl) set interval
+    between xm and xr else set interval between xl and xr and repeat till
+    root is located within the specified limits              bisect the interval   bisect the interval  if(psumm*psuml>0.) once zero is found, reset initial interval to xr   reset flag for next search    SPEEX_DISABLE_ENCODER ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lsp_to_lpc()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+        Converts LSP coefficients to LPC coefficients.
+
+\*---------------------------------------------------------------------------  float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            
+    
+       Reconstruct P(z) and Q(z) by cascading second order polynomials
+       in form 1 - 2cos(w)z(-1) + z(-2), where w is the LSP frequency.
+       In the time domain this is:
+
+       y(n) = x(n) - 2cos(w)x(n-1) + x(n-2)
+    
+       This is what the ALLOCS below are trying to do:
+
+         int xp[m+1][lpcrdr+1+2]; // P matrix in QIMP
+         int xq[m+1][lpcrdr+1+2]; // Q matrix in QIMP
+
+       These matrices store the output of each stage on each row.  The
+       final (m-th) row has the output of the final (m-th) cascaded
+       2nd order filter.  The first row is the impulse input to the
+       system (not written as it is known).
+
+       The version below takes advantage of the fact that a lot of the
+       outputs are zero or known, for example if we put an inpulse
+       into the first section the "clock" it 10 times only the first 3
+       outputs samples are non-zero (it's an FIR filter).
+     work out 2cos terms in Q14  scaling for impulse  0.5 in QIMP format  first col and last non-zero values of each row are trivial  2nd row (first output row) is trivial  now generate remaining rows  for last col xp[i][j+2] = xq[i][j+2] = 0  process last row to extra a{k}  final filter sections  hard limit ak's to +/- 32767   float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            initialise contents of array  set contents of buffer to 0  Set pointers up  reconstruct P(z) and Q(z) by  cascading second order
+      polynomials in form 1 - 2xz(-1) +z(-2), where x is the
+      LSP coefficient Makes sure the LSPs are stableMakes sure the LSPs are stable---------------------------------------------------------------------------*\
+Original copyright
+    FILE........: lsp.c
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+Heavily modified by Jean-Marc Valin (c) 2002-2006 (fixed-point, 
+                       optimizations, additional functions, ...)
+
+   This file contains functions for converting Linear Prediction
+   Coefficients (LPC) to Line Spectral Pair (LSP) and back. Note that the
+   LSP coefficients are not in radians format but in the x domain of the
+   unit circle.
+
+   Speex License:
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+   
+   - Neither the name of the Xiph.org Foundation nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+   
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+---------------------------------------------------------------------------*\
+
+  Introduction to Line Spectrum Pairs (LSPs)
+  ------------------------------------------
+
+  LSPs are used to encode the LPC filter coefficients {ak} for
+  transmission over the channel.  LSPs have several properties (like
+  less sensitivity to quantisation noise) that make them superior to
+  direct quantisation of {ak}.
+
+  A(z) is a polynomial of order lpcrdr with {ak} as the coefficients.
+
+  A(z) is transformed to P(z) and Q(z) (using a substitution and some
+  algebra), to obtain something like:
+
+    A(z) = 0.5[P(z)(z+z^-1) + Q(z)(z-z^-1)]  (1)
+
+  As you can imagine A(z) has complex zeros all over the z-plane. P(z)
+  and Q(z) have the very neat property of only having zeros _on_ the
+  unit circle.  So to find them we take a test point z=exp(jw) and
+  evaluate P (exp(jw)) and Q(exp(jw)) using a grid of points between 0
+  and pi.
+
+  The zeros (roots) of P(z) also happen to alternate, which is why we
+  swap coefficients as we find roots.  So the process of finding the
+  LSP frequencies is basically finding the roots of 5th order
+  polynomials.
+
+  The root so P(z) and Q(z) occur in symmetrical pairs at +/-w, hence
+  the name Line Spectrum Pairs (LSPs).
+
+  To convert back to ak we just evaluate (1), "clocking" an impulse
+  thru it lpcrdr times gives us the impulse response of A(z) which is
+  {ak}.
+
+\*--------------------------------------------------------------------------- pi #define ANGLE2X(a) (32768*cos(((a)/8192.)))#define X2ANGLE(x) (acos(.00006103515625*(x))*LSP_SCALING)#define C1 0.99940307
+#define C2 -0.49558072
+#define C3 0.03679168---------------------------------------------------------------------------*\
+
+   FUNCTION....: cheb_poly_eva()
+
+   AUTHOR......: David Rowe
+   DATE CREATED: 24/2/93
+
+   This function evaluates a series of Chebyshev polynomials
+
+\*--------------------------------------------------------------------------- P or Q coefs in Q13 format                cos of freq (-1.0 to 1.0) in Q14 format   LPC order/2                              Prevents overflows Initialise values  Evaluate Chebyshev series formulation usin g iterative approach   Initial conditions  b_(m+1)  b_(m+2)  Calculate the b_(k)  tmp holds the previous value of b0  b0 holds its new value based on b0 and b1  b1 holds the previous value of b0 ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lpc_to_lsp()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+    This function converts LPC coefficients to LSP
+    coefficients.
+
+\*---------------------------------------------------------------------------  float *a                lpc coefficients              int lpcrdr          order of LPC coefficients (10)        float *freq             LSP frequencies in the x domain           int nb          number of sub-intervals (4)           float delta         grid spacing interval (0.02)        ,temp_qsumr ptrs for memory allocation        ptrs for memory allocation        ptrs of respective P'(z) & Q'(z)  ptr used for cheb_poly_eval()
+                whether P' or Q'             DR 8/2/94: number of roots found       program is searching for a root when,
+                1 else has found one             order of P'(z) & Q'(z) polynomials    Allocate memory space for polynomials  determine P'(z)'s and Q'(z)'s coefficients where
+      P'(z) = P(z)/(1 + z^(-1)) and Q'(z) = Q(z)/(1-z^(-1))  initialise ptrs             if (fabs(*px)>=32768)
+          speex_warning_int("px", *px);
+       if (fabs(*qx)>=32768)
+       speex_warning_int("qx", *qx); The reason for this lies in the way cheb_poly_eva() is implemented for fixed-point  re-initialise ptrs            now that we have computed P and Q convert to 16 bits to
+       speed up cheb_poly_eval  Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
+    Keep alternating between the two polynomials as each zero is found   initialise xr to zero         start at point xl = 1         determines whether P' or Q' is eval.  evals poly. at xl     Modified by JMV to provide smaller steps around x=+-1  interval spacing      poly(xl-delta_x)     if no sign change increment xr and re-evaluate poly(xr). Repeat til
+    sign change.
+    if a sign change has occurred the interval is bisected and then
+    checked again for a sign change which determines in which
+    interval the zero lies in.
+    If there is no sign change between poly(xm) and poly(xl) set interval
+    between xm and xr else set interval between xl and xr and repeat till
+    root is located within the specified limits              bisect the interval   bisect the interval  if(psumm*psuml>0.) once zero is found, reset initial interval to xr   reset flag for next search    SPEEX_DISABLE_ENCODER ---------------------------------------------------------------------------*\
+
+    FUNCTION....: lsp_to_lpc()
+
+    AUTHOR......: David Rowe
+    DATE CREATED: 24/2/93
+
+        Converts LSP coefficients to LPC coefficients.
+
+\*---------------------------------------------------------------------------  float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            
+    
+       Reconstruct P(z) and Q(z) by cascading second order polynomials
+       in form 1 - 2cos(w)z(-1) + z(-2), where w is the LSP frequency.
+       In the time domain this is:
+
+       y(n) = x(n) - 2cos(w)x(n-1) + x(n-2)
+    
+       This is what the ALLOCS below are trying to do:
+
+         int xp[m+1][lpcrdr+1+2]; // P matrix in QIMP
+         int xq[m+1][lpcrdr+1+2]; // Q matrix in QIMP
+
+       These matrices store the output of each stage on each row.  The
+       final (m-th) row has the output of the final (m-th) cascaded
+       2nd order filter.  The first row is the impulse input to the
+       system (not written as it is known).
+
+       The version below takes advantage of the fact that a lot of the
+       outputs are zero or known, for example if we put an inpulse
+       into the first section the "clock" it 10 times only the first 3
+       outputs samples are non-zero (it's an FIR filter).
+     work out 2cos terms in Q14  scaling for impulse  0.5 in QIMP format  first col and last non-zero values of each row are trivial  2nd row (first output row) is trivial  now generate remaining rows  for last col xp[i][j+2] = xq[i][j+2] = 0  process last row to extra a{k}  final filter sections  hard limit ak's to +/- 32767   float *freq     array of LSP frequencies in the x domain      float *ak       array of LPC coefficients             int lpcrdr      order of LPC coefficients            initialise contents of array  set contents of buffer to 0  Set pointers up  reconstruct P(z) and Q(z) by  cascading second order
+      polynomials in form 1 - 2xz(-1) +z(-2), where x is the
+      LSP coefficient Makes sure the LSPs are stableMakes sure the LSPs are stable

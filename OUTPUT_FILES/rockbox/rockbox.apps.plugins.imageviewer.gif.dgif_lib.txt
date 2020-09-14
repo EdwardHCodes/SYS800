@@ -1,0 +1,382 @@
+*****************************************************************************
+
+dgif_lib.c - GIF decoding
+
+The functions here and in egif_lib.c are partitioned carefully so that
+if you only require one of read and write capability, only one of these
+two modules will be linked.  Preserve this property!
+
+**************************************************************************** #include <unistd.h>  #include <stdio.h>  _WIN32  compose unsigned little endian value  avoid extra function call in case we use fread (TVT) *****************************************************************************
+ Open a new GIF file for read, given by its name.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+***************************************************************************** cppcheck-suppress resourceLeak*****************************************************************************
+ Update a new GIF file, given its file handle.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+*****************************************************************************@i1@ Belt and suspenders, in case the null pointer isn't zero  Make sure it is in binary mode.  _WIN32  Make it into a stream: @-mustfreeonly@ don't use alternate input method (TVT)  TVT @=mustfreeonly@ Let's see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ GifFileType constructor with user supplied input function (TVT)
+***************************************************************************** Belt and suspenders, in case the null pointer isn't zero  NULL  TVT  TVT  Lets see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ This routine should be called before any other DGif calls. Note that
+ this routine is called automatically from DGif file open routines.
+***************************************************************************** This file was NOT open for reading:  Put the screen descriptor into the file:  Do we have global color map?  Get the global color map: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+ Note it is assumed the Image desc. header has been read.
+*****************************************************************************    SavedImage *sp;  This file was NOT open for reading:  Setup the colormap  Does this image have local color map?  Get the image local color map:  Reset decompress algorithm parameters. *****************************************************************************
+ Get one full scanned line (Line) of length LineLen from GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Put one pixel (Pixel) into GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Get an extension block (see GIF manual) from GIF file. This routine only
+ returns the first data block, and DGifGetExtensionNext should be called
+ after this one until NULL extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+ Note it is assumed the Extension description header has been read.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Get a following extension block (see GIF manual) from GIF file. This
+ routine should be called until NULL Extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data] *****************************************************************************
+ Extract a Graphics Control Block from raw extension data
+**********************************************************************************************************************************************************
+ Extract the Graphics Control Block for a saved image, if it exists.
+**********************************************************************************************************************************************************
+ This routine should be called last, to close the GIF file.
+***************************************************************************** This file was NOT open for reading:  
+     * Without the #ifndef, we get spurious warnings because Coverity mistakenly
+     * thinks the GIF structure is freed on an error return. 
+      __COVERITY__ *****************************************************************************
+ Get 2 bytes (word) from the given file:
+**********************************************************************************************************************************************************
+ Get the image code in compressed form.  This routine can be called if the
+ information needed to be piped out as is. Obviously this is much faster
+ than decoding and encoding again. This routine should be followed by calls
+ to DGifGetCodeNext, until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Continue to get the image code in compressed form. This routine should be
+ called until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** coverity[tainted_data_argument]  coverity[lower_bounds]  Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data]  Make sure the buffer is empty!  And local info. indicate image read. *****************************************************************************
+ Setup the LZ decompression for this image:
+***************************************************************************** Read Code size from file.  Input Buffer empty.  Number of bits per code.  Max. code + 1.  No pixels on the pixel stack.  No information in CrntShiftDWord. *****************************************************************************
+ The LZ decompression routine:
+ This version decompress the given GIF file into Line of length LineLen.
+ This routine can be called few times (one per scan line, for example), in
+ order the complete the whole image.
+***************************************************************************** Let pop the stack off before continueing to read the GIF file:  Decode LineLen items.  Note however that usually we will not be here as we will stop
+             * decoding as soon as we got all the pixel, or EOF code will
+             * not be read at all, and DGifGetLine/Pixel clean everything.   We need to start over again:  Its regular code - if in pixel range simply add it to output
+             * stream, otherwise trace to codes linked list until the prefix
+             * is in pixel range:  This is simple - its pixel scalar, so add it to output:  Its a code to needed to be traced: trace the linked list
+                 * until the prefix is a pixel, while pushing the suffix
+                 * pixels on our stack. If we done, pop the stack in reverse
+                 * (thats what stack is good for!) order to output.   Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code!  Now (if image is O.K.) we should not get a NO_SUCH_CODE
+                 * during the trace. As we might loop forever, in case of
+                 * defective image, we use StackPtr as loop counter and stop
+                 * before overflowing Stack[].  Push the last character on stack:  Now lets pop all the stack into output:  Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code! *****************************************************************************
+ Routine to trace the Prefixes linked list until we get a prefix which is
+ not code, but a pixel value (less than ClearCode). Returns that pixel value.
+ If image is defective, we might loop here forever, so we limit the loops to
+ the maximum possible if image O.k. - LZ_MAX_CODE times.
+**********************************************************************************************************************************************************
+ Interface for accessing the LZ codes directly. Set Code to the real code
+ (12bits), or to -1 if EOF code is returned.
+***************************************************************************** This file was NOT open for reading:  Skip rest of codes (hopefully only NULL terminating block):  We need to start over again: *****************************************************************************
+ The LZ decompression input routine:
+ This routine is responsable for the decompression of the bit stream from
+ 8 bits (bytes) packets, into the real codes.
+ Returns GIF_OK if read successfully.
+***************************************************************************** The image can't contain more than LZ_BITS per code.  Needs to get more bytes from input stream for next code:  If code cannot fit into RunningBits bits, must raise its size. Note
+     * however that codes above 4095 are used for special signaling.
+     * If we're using LZ_BITS bits already and we're at the max code, just
+     * keep using the table as it is, don't increment Private->RunningCode.
+     *****************************************************************************
+ This routines read one GIF data block at a time and buffers it internally
+ so that the decompression routine could access it.
+ The routine returns the next byte from its internal buffer (or read next
+ block in if buffer empty) and returns GIF_OK if succesful.
+***************************************************************************** Needs to read the next buffer - this one is empty:  There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          We use now the second place as last char read! *****************************************************************************
+ This routine reads an entire GIF into core, hanging all its state info off
+ the GifFileType pointer.  Call DGifOpenFileName() or DGifOpenFileHandle()
+ first to initialize I/O.  Its inverse is EGifSpew().
+****************************************************************************** Allocate memory for the image  
+		    * The way an interlaced image should be read - 
+		    * offsets and jumps...
+		     Need to perform 4 passes on the image  Create an extension block with our data  Continue the extension block  Should be trapped by DGifGetRecordType  end *****************************************************************************
+
+dgif_lib.c - GIF decoding
+
+The functions here and in egif_lib.c are partitioned carefully so that
+if you only require one of read and write capability, only one of these
+two modules will be linked.  Preserve this property!
+
+**************************************************************************** #include <unistd.h>  #include <stdio.h>  _WIN32  compose unsigned little endian value  avoid extra function call in case we use fread (TVT) *****************************************************************************
+ Open a new GIF file for read, given by its name.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+***************************************************************************** cppcheck-suppress resourceLeak*****************************************************************************
+ Update a new GIF file, given its file handle.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+*****************************************************************************@i1@ Belt and suspenders, in case the null pointer isn't zero  Make sure it is in binary mode.  _WIN32  Make it into a stream: @-mustfreeonly@ don't use alternate input method (TVT)  TVT @=mustfreeonly@ Let's see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ GifFileType constructor with user supplied input function (TVT)
+***************************************************************************** Belt and suspenders, in case the null pointer isn't zero  NULL  TVT  TVT  Lets see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ This routine should be called before any other DGif calls. Note that
+ this routine is called automatically from DGif file open routines.
+***************************************************************************** This file was NOT open for reading:  Put the screen descriptor into the file:  Do we have global color map?  Get the global color map: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+ Note it is assumed the Image desc. header has been read.
+*****************************************************************************    SavedImage *sp;  This file was NOT open for reading:  Setup the colormap  Does this image have local color map?  Get the image local color map:  Reset decompress algorithm parameters. *****************************************************************************
+ Get one full scanned line (Line) of length LineLen from GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Put one pixel (Pixel) into GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Get an extension block (see GIF manual) from GIF file. This routine only
+ returns the first data block, and DGifGetExtensionNext should be called
+ after this one until NULL extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+ Note it is assumed the Extension description header has been read.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Get a following extension block (see GIF manual) from GIF file. This
+ routine should be called until NULL Extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data] *****************************************************************************
+ Extract a Graphics Control Block from raw extension data
+**********************************************************************************************************************************************************
+ Extract the Graphics Control Block for a saved image, if it exists.
+**********************************************************************************************************************************************************
+ This routine should be called last, to close the GIF file.
+***************************************************************************** This file was NOT open for reading:  
+     * Without the #ifndef, we get spurious warnings because Coverity mistakenly
+     * thinks the GIF structure is freed on an error return. 
+      __COVERITY__ *****************************************************************************
+ Get 2 bytes (word) from the given file:
+**********************************************************************************************************************************************************
+ Get the image code in compressed form.  This routine can be called if the
+ information needed to be piped out as is. Obviously this is much faster
+ than decoding and encoding again. This routine should be followed by calls
+ to DGifGetCodeNext, until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Continue to get the image code in compressed form. This routine should be
+ called until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** coverity[tainted_data_argument]  coverity[lower_bounds]  Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data]  Make sure the buffer is empty!  And local info. indicate image read. *****************************************************************************
+ Setup the LZ decompression for this image:
+***************************************************************************** Read Code size from file.  Input Buffer empty.  Number of bits per code.  Max. code + 1.  No pixels on the pixel stack.  No information in CrntShiftDWord. *****************************************************************************
+ The LZ decompression routine:
+ This version decompress the given GIF file into Line of length LineLen.
+ This routine can be called few times (one per scan line, for example), in
+ order the complete the whole image.
+***************************************************************************** Let pop the stack off before continueing to read the GIF file:  Decode LineLen items.  Note however that usually we will not be here as we will stop
+             * decoding as soon as we got all the pixel, or EOF code will
+             * not be read at all, and DGifGetLine/Pixel clean everything.   We need to start over again:  Its regular code - if in pixel range simply add it to output
+             * stream, otherwise trace to codes linked list until the prefix
+             * is in pixel range:  This is simple - its pixel scalar, so add it to output:  Its a code to needed to be traced: trace the linked list
+                 * until the prefix is a pixel, while pushing the suffix
+                 * pixels on our stack. If we done, pop the stack in reverse
+                 * (thats what stack is good for!) order to output.   Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code!  Now (if image is O.K.) we should not get a NO_SUCH_CODE
+                 * during the trace. As we might loop forever, in case of
+                 * defective image, we use StackPtr as loop counter and stop
+                 * before overflowing Stack[].  Push the last character on stack:  Now lets pop all the stack into output:  Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code! *****************************************************************************
+ Routine to trace the Prefixes linked list until we get a prefix which is
+ not code, but a pixel value (less than ClearCode). Returns that pixel value.
+ If image is defective, we might loop here forever, so we limit the loops to
+ the maximum possible if image O.k. - LZ_MAX_CODE times.
+**********************************************************************************************************************************************************
+ Interface for accessing the LZ codes directly. Set Code to the real code
+ (12bits), or to -1 if EOF code is returned.
+***************************************************************************** This file was NOT open for reading:  Skip rest of codes (hopefully only NULL terminating block):  We need to start over again: *****************************************************************************
+ The LZ decompression input routine:
+ This routine is responsable for the decompression of the bit stream from
+ 8 bits (bytes) packets, into the real codes.
+ Returns GIF_OK if read successfully.
+***************************************************************************** The image can't contain more than LZ_BITS per code.  Needs to get more bytes from input stream for next code:  If code cannot fit into RunningBits bits, must raise its size. Note
+     * however that codes above 4095 are used for special signaling.
+     * If we're using LZ_BITS bits already and we're at the max code, just
+     * keep using the table as it is, don't increment Private->RunningCode.
+     *****************************************************************************
+ This routines read one GIF data block at a time and buffers it internally
+ so that the decompression routine could access it.
+ The routine returns the next byte from its internal buffer (or read next
+ block in if buffer empty) and returns GIF_OK if succesful.
+***************************************************************************** Needs to read the next buffer - this one is empty:  There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          We use now the second place as last char read! *****************************************************************************
+ This routine reads an entire GIF into core, hanging all its state info off
+ the GifFileType pointer.  Call DGifOpenFileName() or DGifOpenFileHandle()
+ first to initialize I/O.  Its inverse is EGifSpew().
+****************************************************************************** Allocate memory for the image  
+		    * The way an interlaced image should be read - 
+		    * offsets and jumps...
+		     Need to perform 4 passes on the image  Create an extension block with our data  Continue the extension block  Should be trapped by DGifGetRecordType  end *****************************************************************************
+
+dgif_lib.c - GIF decoding
+
+The functions here and in egif_lib.c are partitioned carefully so that
+if you only require one of read and write capability, only one of these
+two modules will be linked.  Preserve this property!
+
+**************************************************************************** #include <unistd.h>  #include <stdio.h>  _WIN32  compose unsigned little endian value  avoid extra function call in case we use fread (TVT) *****************************************************************************
+ Open a new GIF file for read, given by its name.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+***************************************************************************** cppcheck-suppress resourceLeak*****************************************************************************
+ Update a new GIF file, given its file handle.
+ Returns dynamically allocated GifFileType pointer which serves as the GIF
+ info record.
+*****************************************************************************@i1@ Belt and suspenders, in case the null pointer isn't zero  Make sure it is in binary mode.  _WIN32  Make it into a stream: @-mustfreeonly@ don't use alternate input method (TVT)  TVT @=mustfreeonly@ Let's see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ GifFileType constructor with user supplied input function (TVT)
+***************************************************************************** Belt and suspenders, in case the null pointer isn't zero  NULL  TVT  TVT  Lets see if this is a GIF file:  Check for GIF prefix at start of file  What version of GIF? *****************************************************************************
+ This routine should be called before any other DGif calls. Note that
+ this routine is called automatically from DGif file open routines.
+***************************************************************************** This file was NOT open for reading:  Put the screen descriptor into the file:  Do we have global color map?  Get the global color map: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ This routine should be called before any attempt to read an image.
+ Note it is assumed the Image desc. header has been read.
+*****************************************************************************    SavedImage *sp;  This file was NOT open for reading:  Setup the colormap  Does this image have local color map?  Get the image local color map:  Reset decompress algorithm parameters. *****************************************************************************
+ Get one full scanned line (Line) of length LineLen from GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Put one pixel (Pixel) into GIF file.
+***************************************************************************** This file was NOT open for reading:  We probably won't be called any more, so let's clean up
+             * everything before we return: need to flush out all the
+             * rest of image until an empty block (size 0)
+             * detected. We use GetCodeNext.
+	     *****************************************************************************
+ Get an extension block (see GIF manual) from GIF file. This routine only
+ returns the first data block, and DGifGetExtensionNext should be called
+ after this one until NULL extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+ Note it is assumed the Extension description header has been read.
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Get a following extension block (see GIF manual) from GIF file. This
+ routine should be called until NULL Extension is returned.
+ The Extension should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data] *****************************************************************************
+ Extract a Graphics Control Block from raw extension data
+**********************************************************************************************************************************************************
+ Extract the Graphics Control Block for a saved image, if it exists.
+**********************************************************************************************************************************************************
+ This routine should be called last, to close the GIF file.
+***************************************************************************** This file was NOT open for reading:  
+     * Without the #ifndef, we get spurious warnings because Coverity mistakenly
+     * thinks the GIF structure is freed on an error return. 
+      __COVERITY__ *****************************************************************************
+ Get 2 bytes (word) from the given file:
+**********************************************************************************************************************************************************
+ Get the image code in compressed form.  This routine can be called if the
+ information needed to be piped out as is. Obviously this is much faster
+ than decoding and encoding again. This routine should be followed by calls
+ to DGifGetCodeNext, until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** This file was NOT open for reading: *****************************************************************************
+ Continue to get the image code in compressed form. This routine should be
+ called until NULL block is returned.
+ The block should NOT be freed by the user (not dynamically allocated).
+***************************************************************************** coverity[tainted_data_argument]  coverity[lower_bounds]  Use private unused buffer.  Pascal strings notation (pos. 0 is len.).  coverity[tainted_data]  Make sure the buffer is empty!  And local info. indicate image read. *****************************************************************************
+ Setup the LZ decompression for this image:
+***************************************************************************** Read Code size from file.  Input Buffer empty.  Number of bits per code.  Max. code + 1.  No pixels on the pixel stack.  No information in CrntShiftDWord. *****************************************************************************
+ The LZ decompression routine:
+ This version decompress the given GIF file into Line of length LineLen.
+ This routine can be called few times (one per scan line, for example), in
+ order the complete the whole image.
+***************************************************************************** Let pop the stack off before continueing to read the GIF file:  Decode LineLen items.  Note however that usually we will not be here as we will stop
+             * decoding as soon as we got all the pixel, or EOF code will
+             * not be read at all, and DGifGetLine/Pixel clean everything.   We need to start over again:  Its regular code - if in pixel range simply add it to output
+             * stream, otherwise trace to codes linked list until the prefix
+             * is in pixel range:  This is simple - its pixel scalar, so add it to output:  Its a code to needed to be traced: trace the linked list
+                 * until the prefix is a pixel, while pushing the suffix
+                 * pixels on our stack. If we done, pop the stack in reverse
+                 * (thats what stack is good for!) order to output.   Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code!  Now (if image is O.K.) we should not get a NO_SUCH_CODE
+                 * during the trace. As we might loop forever, in case of
+                 * defective image, we use StackPtr as loop counter and stop
+                 * before overflowing Stack[].  Push the last character on stack:  Now lets pop all the stack into output:  Only allowed if CrntCode is exactly the running code:
+                     * In that case CrntCode = XXXCode, CrntCode or the
+                     * prefix code is last code and the suffix char is
+                     * exactly the prefix of last code! *****************************************************************************
+ Routine to trace the Prefixes linked list until we get a prefix which is
+ not code, but a pixel value (less than ClearCode). Returns that pixel value.
+ If image is defective, we might loop here forever, so we limit the loops to
+ the maximum possible if image O.k. - LZ_MAX_CODE times.
+**********************************************************************************************************************************************************
+ Interface for accessing the LZ codes directly. Set Code to the real code
+ (12bits), or to -1 if EOF code is returned.
+***************************************************************************** This file was NOT open for reading:  Skip rest of codes (hopefully only NULL terminating block):  We need to start over again: *****************************************************************************
+ The LZ decompression input routine:
+ This routine is responsable for the decompression of the bit stream from
+ 8 bits (bytes) packets, into the real codes.
+ Returns GIF_OK if read successfully.
+***************************************************************************** The image can't contain more than LZ_BITS per code.  Needs to get more bytes from input stream for next code:  If code cannot fit into RunningBits bits, must raise its size. Note
+     * however that codes above 4095 are used for special signaling.
+     * If we're using LZ_BITS bits already and we're at the max code, just
+     * keep using the table as it is, don't increment Private->RunningCode.
+     *****************************************************************************
+ This routines read one GIF data block at a time and buffers it internally
+ so that the decompression routine could access it.
+ The routine returns the next byte from its internal buffer (or read next
+ block in if buffer empty) and returns GIF_OK if succesful.
+***************************************************************************** Needs to read the next buffer - this one is empty:  There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          There shouldn't be any empty data blocks here as the LZW spec
+         * says the LZW termination code should come first.  Therefore we
+         * shouldn't be inside this routine at that point.
+          We use now the second place as last char read! *****************************************************************************
+ This routine reads an entire GIF into core, hanging all its state info off
+ the GifFileType pointer.  Call DGifOpenFileName() or DGifOpenFileHandle()
+ first to initialize I/O.  Its inverse is EGifSpew().
+****************************************************************************** Allocate memory for the image  
+		    * The way an interlaced image should be read - 
+		    * offsets and jumps...
+		     Need to perform 4 passes on the image  Create an extension block with our data  Continue the extension block  Should be trapped by DGifGetRecordType  end 

@@ -1,0 +1,145 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 Dan Everton (safetydan)
+ * Copyright (C) 2009 Maurus Cuelenaere
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * -----------------------------------------------------------------------------
+ *
+ *  Rockbox Lua image wrapper
+ *
+ *  Some devices(1-bit / 2-bit displays) have packed bit formats that
+ *  need to be unpacked in order to work on them at a pixel level.
+ *
+ *  The internal formats of these devices do not follow the same paradigm
+ *  for image sizes either; We still display the actual width and height to
+ *  the user but store stride based on the native values
+ *
+ *  Conversion between native addressing and per pixel addressing
+ *  incurs extra overhead but it is much faster to do it
+ *  on the 'C' side rather than in lua.
+ *
+ * -----------------------------------------------------------------------------
+  mark for RLI to LUA Interface functions (luaState *L) is the only argument  holds iterator data for rlimages  __tostring information enums  !HAVE_LCD_COLOR  HAVE_LCD_COLOR  no native to pixel mapping needed  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  MSB on left  LCD_PIXELFORMAT  init_pixelmask  pixel_to_native equivalent of: (old & (~mask)) | ((new << bit_n) & mask); set_masked_pixel  get_masked_pixel  conversion between packed native formats and individual pixel addressing  [0-3] => greymap  greymap => [0-3]  2, 3  0, 1 MSB on left LCD_PIXELFORMAT == VERTICAL_INTERLEAVED && LCD_DEPTH == 2  pixel_to_fb  (LCD_DEPTH > 2) no native to pixel mapping needed  Internal worker functions for image data array **************************** swap_int  Throws error if x or y are out of bounds notifies user which narg indice
+   the out of bound variable originated  note -- return if no error  bounds_check_xy  cache result  does it have a metatable?  get correct metatable  does it have the correct mt?  remove both metatables  else error  to avoid warnings  rli_checktype  rliimage is pushed on the stack it is up to you to pop it  if this a new image we need space for image data  newuserdata pushes the userdata onto the stack  apparent w/h is stored but behind the scenes native w/h is used  alloc_rlimage  rliimage is pushed on the stack it is up to you to pop it  rli_wrap  rliimage is pushed on the stack it is up to you to pop it  ref to beginning of alloc'd img data  rli_alloc  data_set  data_get  column major address  y needs bound between 0 and stride otherwise overflow to prev/next x  data overflow  row major address  x needs bound between 0 and stride otherwise overflow to prev/next y  data overflow  return element address  rli_get_element  Lua to C Interface for pixel set and get functions (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip])  Arg 4 is color if set element  Error if !clip  get element  set element  returns old value  rli_setget  stepping in the correct x direction ?  stepping in the correct y direction ?  rli_iter_init  create new iter + pushed onto stack  steps to the next point(x, y) by delta x/y, stores pointer to element
+   returns true if x & y haven't reached x2 & y2
+   if limit reached - element set to NULL, deltas set to 0 & false returned
+ Reset x next_rli_iter  NOTE! clr passed as pointer  Bresenham midpoint line algorithm  range of x direction called 'a' for now  range of y direction called 'b' for now  step of a direction -1, 0, 1  step of b direction -1, 0, 1  pointer to the x var 'a'  pointer to the y var 'b'  instead of negative range we switch step  instead of negative range we switch step if rangeY('b') > rangeX('a') swap their identities  pointer to the y var 'a'  pointer to the x var 'b'  preload err of 1 step (px centered)  add 1 extra point to make the whole line  pre-subtract 'a' - 'b'  0 is our target midpoint(exact point on the line)  whichever axis is in 'b' stepped(-1 or +1)  only add 'b' when d_err < 0  whichever axis is in 'a' stepped(-1 or +1)  d_line  ellipse worker function  I. II. III.IV.   I. Quadrant +x +y   II. Quadrant -x +y  III. Quadrant -x -y   IV. Quadrant +x -y  d_ellipse_elements  NOTE! clr and fillclr passed as pointers  Rasterizing algorithm derivative of work by Alois Zingl  Prevents overflow on large screens  if called with swapped points .. exchange them  diameter  diameter  not an error but nothing to display  error increment  error increment  error of 1.step  target midpoint - y step  target midpoint - x step  early stop of flat ellipse a=1 finish tip  d_ellipse  Lua to C Interface for line and ellipse  fill color is index 7 if is_ellipse  rli_line_ellipse  User defined pixel manipulations through rli_copy, rli_marshal (lua_isfunction(L, -1)) make a copy of the lua function  Allows src to be omitted  call custom function w/ n-params & 2 ret  signal iter to stop  custom_transform  Pre defined pixel manipulations through rli_copy  Reuse 0 - 7 for src / clr blits case 30:  copyS/C   case 31:  DorS/C    case 32:  DxorS/C   case 33:  nDorS/C   case 34:  DornS/C   case 35:  DandS/C   case 36:  nDandS/C  case 37:  notS/C    mask blits  Sand  Snot  SorC   SxorC  nSorC  SornC  SandC  nSandC  DornSorC  DxorSandDxorC  src unneeded  copyC   DorC    DxorC   nDorC   DornC   DandC   nDandC  notC   switch op blit_transform  invert_transform  clear_transform  RLI_EXTENDED  RLI to LUA Interface functions ******************************************** [width, height] (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip]) val = (img*, index, [new_val])  (img, [infoitem])  lua_pushstring(L, lua_tostring(L, -1));  converts item at index to string  (dst*, x1, y1, x2, y2, [clr, fillclr, clip])  line and ellipse share the same init function  (dst*, x1, y1, [x2, y2, clr, clip])  line and ellipse share the same init function  see rli_iterator_factory  load next element  nothing left to do  (points) (img*, [x1, y1, x2, y2, dx, dy, clip])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  returns the iter function with embedded iter data(up values)  also invert, clear  (marshal/invert/clear) (img*, [x1, y1, x2, y2, dx, dy, clip, function])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  custom function  ensure lua function on top of stack  default transformation  (dst*, src*, [d_x, d_y, s_x, s_y, x_off, y_off, clip, [op, funct/clr]])  dst  src  dst  src  copy whole image if possible  10 is operation for blit  11 is custom function | color  dest swap  src swap  Out of bounds is not allowed  not an error but nothing to display  if src->data == dst->data need to care about fill direction  custom function supplied..  ensure lua function on top of stack  default transformation  (clear) (dst*, [color, x1, y1, x2, y2, clip, dx, dy])  clip -- index 8 color -- index 9 (img*, [x1, y1, x2, y2, dx, dy, clip, function])  RLI_EXTENDED  Rli Image methods exported to lua  RLI_EXTENDED 
+ * -----------------------------
+ *
+ *  Rockbox wrappers start here!
+ *
+ * -----------------------------
+  only SCREEN_MAIN exists  helper function for lcd_puts functions  Helper function for opt_viewport  Find table[key]  Pop the value off the stack  helper function for lcd_xxx_bitmap/rect functions  fills passed array of integers with lua integers from stack  LCD_DEPTH > 1  note that by and bheight are in 8-pixel units!  note that by and bheight are in 8-pixel units!  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  LCD_DEPTH == 16  Error occured, drop newly allocated image from stack  Graphics  LCD_DEPTH > 1  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  pushes the metatable  metatable.__index = metatable add rli_lib to the image metatable**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 Dan Everton (safetydan)
+ * Copyright (C) 2009 Maurus Cuelenaere
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * -----------------------------------------------------------------------------
+ *
+ *  Rockbox Lua image wrapper
+ *
+ *  Some devices(1-bit / 2-bit displays) have packed bit formats that
+ *  need to be unpacked in order to work on them at a pixel level.
+ *
+ *  The internal formats of these devices do not follow the same paradigm
+ *  for image sizes either; We still display the actual width and height to
+ *  the user but store stride based on the native values
+ *
+ *  Conversion between native addressing and per pixel addressing
+ *  incurs extra overhead but it is much faster to do it
+ *  on the 'C' side rather than in lua.
+ *
+ * -----------------------------------------------------------------------------
+  mark for RLI to LUA Interface functions (luaState *L) is the only argument  holds iterator data for rlimages  __tostring information enums  !HAVE_LCD_COLOR  HAVE_LCD_COLOR  no native to pixel mapping needed  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  MSB on left  LCD_PIXELFORMAT  init_pixelmask  pixel_to_native equivalent of: (old & (~mask)) | ((new << bit_n) & mask); set_masked_pixel  get_masked_pixel  conversion between packed native formats and individual pixel addressing  [0-3] => greymap  greymap => [0-3]  2, 3  0, 1 MSB on left LCD_PIXELFORMAT == VERTICAL_INTERLEAVED && LCD_DEPTH == 2  pixel_to_fb  (LCD_DEPTH > 2) no native to pixel mapping needed  Internal worker functions for image data array **************************** swap_int  Throws error if x or y are out of bounds notifies user which narg indice
+   the out of bound variable originated  note -- return if no error  bounds_check_xy  cache result  does it have a metatable?  get correct metatable  does it have the correct mt?  remove both metatables  else error  to avoid warnings  rli_checktype  rliimage is pushed on the stack it is up to you to pop it  if this a new image we need space for image data  newuserdata pushes the userdata onto the stack  apparent w/h is stored but behind the scenes native w/h is used  alloc_rlimage  rliimage is pushed on the stack it is up to you to pop it  rli_wrap  rliimage is pushed on the stack it is up to you to pop it  ref to beginning of alloc'd img data  rli_alloc  data_set  data_get  column major address  y needs bound between 0 and stride otherwise overflow to prev/next x  data overflow  row major address  x needs bound between 0 and stride otherwise overflow to prev/next y  data overflow  return element address  rli_get_element  Lua to C Interface for pixel set and get functions (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip])  Arg 4 is color if set element  Error if !clip  get element  set element  returns old value  rli_setget  stepping in the correct x direction ?  stepping in the correct y direction ?  rli_iter_init  create new iter + pushed onto stack  steps to the next point(x, y) by delta x/y, stores pointer to element
+   returns true if x & y haven't reached x2 & y2
+   if limit reached - element set to NULL, deltas set to 0 & false returned
+ Reset x next_rli_iter  NOTE! clr passed as pointer  Bresenham midpoint line algorithm  range of x direction called 'a' for now  range of y direction called 'b' for now  step of a direction -1, 0, 1  step of b direction -1, 0, 1  pointer to the x var 'a'  pointer to the y var 'b'  instead of negative range we switch step  instead of negative range we switch step if rangeY('b') > rangeX('a') swap their identities  pointer to the y var 'a'  pointer to the x var 'b'  preload err of 1 step (px centered)  add 1 extra point to make the whole line  pre-subtract 'a' - 'b'  0 is our target midpoint(exact point on the line)  whichever axis is in 'b' stepped(-1 or +1)  only add 'b' when d_err < 0  whichever axis is in 'a' stepped(-1 or +1)  d_line  ellipse worker function  I. II. III.IV.   I. Quadrant +x +y   II. Quadrant -x +y  III. Quadrant -x -y   IV. Quadrant +x -y  d_ellipse_elements  NOTE! clr and fillclr passed as pointers  Rasterizing algorithm derivative of work by Alois Zingl  Prevents overflow on large screens  if called with swapped points .. exchange them  diameter  diameter  not an error but nothing to display  error increment  error increment  error of 1.step  target midpoint - y step  target midpoint - x step  early stop of flat ellipse a=1 finish tip  d_ellipse  Lua to C Interface for line and ellipse  fill color is index 7 if is_ellipse  rli_line_ellipse  User defined pixel manipulations through rli_copy, rli_marshal (lua_isfunction(L, -1)) make a copy of the lua function  Allows src to be omitted  call custom function w/ n-params & 2 ret  signal iter to stop  custom_transform  Pre defined pixel manipulations through rli_copy  Reuse 0 - 7 for src / clr blits case 30:  copyS/C   case 31:  DorS/C    case 32:  DxorS/C   case 33:  nDorS/C   case 34:  DornS/C   case 35:  DandS/C   case 36:  nDandS/C  case 37:  notS/C    mask blits  Sand  Snot  SorC   SxorC  nSorC  SornC  SandC  nSandC  DornSorC  DxorSandDxorC  src unneeded  copyC   DorC    DxorC   nDorC   DornC   DandC   nDandC  notC   switch op blit_transform  invert_transform  clear_transform  RLI_EXTENDED  RLI to LUA Interface functions ******************************************** [width, height] (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip]) val = (img*, index, [new_val])  (img, [infoitem])  lua_pushstring(L, lua_tostring(L, -1));  converts item at index to string  (dst*, x1, y1, x2, y2, [clr, fillclr, clip])  line and ellipse share the same init function  (dst*, x1, y1, [x2, y2, clr, clip])  line and ellipse share the same init function  see rli_iterator_factory  load next element  nothing left to do  (points) (img*, [x1, y1, x2, y2, dx, dy, clip])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  returns the iter function with embedded iter data(up values)  also invert, clear  (marshal/invert/clear) (img*, [x1, y1, x2, y2, dx, dy, clip, function])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  custom function  ensure lua function on top of stack  default transformation  (dst*, src*, [d_x, d_y, s_x, s_y, x_off, y_off, clip, [op, funct/clr]])  dst  src  dst  src  copy whole image if possible  10 is operation for blit  11 is custom function | color  dest swap  src swap  Out of bounds is not allowed  not an error but nothing to display  if src->data == dst->data need to care about fill direction  custom function supplied..  ensure lua function on top of stack  default transformation  (clear) (dst*, [color, x1, y1, x2, y2, clip, dx, dy])  clip -- index 8 color -- index 9 (img*, [x1, y1, x2, y2, dx, dy, clip, function])  RLI_EXTENDED  Rli Image methods exported to lua  RLI_EXTENDED 
+ * -----------------------------
+ *
+ *  Rockbox wrappers start here!
+ *
+ * -----------------------------
+  only SCREEN_MAIN exists  helper function for lcd_puts functions  Helper function for opt_viewport  Find table[key]  Pop the value off the stack  helper function for lcd_xxx_bitmap/rect functions  fills passed array of integers with lua integers from stack  LCD_DEPTH > 1  note that by and bheight are in 8-pixel units!  note that by and bheight are in 8-pixel units!  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  LCD_DEPTH == 16  Error occured, drop newly allocated image from stack  Graphics  LCD_DEPTH > 1  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  pushes the metatable  metatable.__index = metatable add rli_lib to the image metatable**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 Dan Everton (safetydan)
+ * Copyright (C) 2009 Maurus Cuelenaere
+ * Copyright (C) 2017 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * -----------------------------------------------------------------------------
+ *
+ *  Rockbox Lua image wrapper
+ *
+ *  Some devices(1-bit / 2-bit displays) have packed bit formats that
+ *  need to be unpacked in order to work on them at a pixel level.
+ *
+ *  The internal formats of these devices do not follow the same paradigm
+ *  for image sizes either; We still display the actual width and height to
+ *  the user but store stride based on the native values
+ *
+ *  Conversion between native addressing and per pixel addressing
+ *  incurs extra overhead but it is much faster to do it
+ *  on the 'C' side rather than in lua.
+ *
+ * -----------------------------------------------------------------------------
+  mark for RLI to LUA Interface functions (luaState *L) is the only argument  holds iterator data for rlimages  __tostring information enums  !HAVE_LCD_COLOR  HAVE_LCD_COLOR  no native to pixel mapping needed  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  MSB on left  LCD_PIXELFORMAT  init_pixelmask  pixel_to_native equivalent of: (old & (~mask)) | ((new << bit_n) & mask); set_masked_pixel  get_masked_pixel  conversion between packed native formats and individual pixel addressing  [0-3] => greymap  greymap => [0-3]  2, 3  0, 1 MSB on left LCD_PIXELFORMAT == VERTICAL_INTERLEAVED && LCD_DEPTH == 2  pixel_to_fb  (LCD_DEPTH > 2) no native to pixel mapping needed  Internal worker functions for image data array **************************** swap_int  Throws error if x or y are out of bounds notifies user which narg indice
+   the out of bound variable originated  note -- return if no error  bounds_check_xy  cache result  does it have a metatable?  get correct metatable  does it have the correct mt?  remove both metatables  else error  to avoid warnings  rli_checktype  rliimage is pushed on the stack it is up to you to pop it  if this a new image we need space for image data  newuserdata pushes the userdata onto the stack  apparent w/h is stored but behind the scenes native w/h is used  alloc_rlimage  rliimage is pushed on the stack it is up to you to pop it  rli_wrap  rliimage is pushed on the stack it is up to you to pop it  ref to beginning of alloc'd img data  rli_alloc  data_set  data_get  column major address  y needs bound between 0 and stride otherwise overflow to prev/next x  data overflow  row major address  x needs bound between 0 and stride otherwise overflow to prev/next y  data overflow  return element address  rli_get_element  Lua to C Interface for pixel set and get functions (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip])  Arg 4 is color if set element  Error if !clip  get element  set element  returns old value  rli_setget  stepping in the correct x direction ?  stepping in the correct y direction ?  rli_iter_init  create new iter + pushed onto stack  steps to the next point(x, y) by delta x/y, stores pointer to element
+   returns true if x & y haven't reached x2 & y2
+   if limit reached - element set to NULL, deltas set to 0 & false returned
+ Reset x next_rli_iter  NOTE! clr passed as pointer  Bresenham midpoint line algorithm  range of x direction called 'a' for now  range of y direction called 'b' for now  step of a direction -1, 0, 1  step of b direction -1, 0, 1  pointer to the x var 'a'  pointer to the y var 'b'  instead of negative range we switch step  instead of negative range we switch step if rangeY('b') > rangeX('a') swap their identities  pointer to the y var 'a'  pointer to the x var 'b'  preload err of 1 step (px centered)  add 1 extra point to make the whole line  pre-subtract 'a' - 'b'  0 is our target midpoint(exact point on the line)  whichever axis is in 'b' stepped(-1 or +1)  only add 'b' when d_err < 0  whichever axis is in 'a' stepped(-1 or +1)  d_line  ellipse worker function  I. II. III.IV.   I. Quadrant +x +y   II. Quadrant -x +y  III. Quadrant -x -y   IV. Quadrant +x -y  d_ellipse_elements  NOTE! clr and fillclr passed as pointers  Rasterizing algorithm derivative of work by Alois Zingl  Prevents overflow on large screens  if called with swapped points .. exchange them  diameter  diameter  not an error but nothing to display  error increment  error increment  error of 1.step  target midpoint - y step  target midpoint - x step  early stop of flat ellipse a=1 finish tip  d_ellipse  Lua to C Interface for line and ellipse  fill color is index 7 if is_ellipse  rli_line_ellipse  User defined pixel manipulations through rli_copy, rli_marshal (lua_isfunction(L, -1)) make a copy of the lua function  Allows src to be omitted  call custom function w/ n-params & 2 ret  signal iter to stop  custom_transform  Pre defined pixel manipulations through rli_copy  Reuse 0 - 7 for src / clr blits case 30:  copyS/C   case 31:  DorS/C    case 32:  DxorS/C   case 33:  nDorS/C   case 34:  DornS/C   case 35:  DandS/C   case 36:  nDandS/C  case 37:  notS/C    mask blits  Sand  Snot  SorC   SxorC  nSorC  SornC  SandC  nSandC  DornSorC  DxorSandDxorC  src unneeded  copyC   DorC    DxorC   nDorC   DornC   DandC   nDandC  notC   switch op blit_transform  invert_transform  clear_transform  RLI_EXTENDED  RLI to LUA Interface functions ******************************************** [width, height] (set) (dst*, [x1, y1, clr, clip]) (get) (dst*, [x1, y1, clip]) val = (img*, index, [new_val])  (img, [infoitem])  lua_pushstring(L, lua_tostring(L, -1));  converts item at index to string  (dst*, x1, y1, x2, y2, [clr, fillclr, clip])  line and ellipse share the same init function  (dst*, x1, y1, [x2, y2, clr, clip])  line and ellipse share the same init function  see rli_iterator_factory  load next element  nothing left to do  (points) (img*, [x1, y1, x2, y2, dx, dy, clip])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  returns the iter function with embedded iter data(up values)  also invert, clear  (marshal/invert/clear) (img*, [x1, y1, x2, y2, dx, dy, clip, function])  (indices 1-8 are used by rli_iter_create)  create new iter + pushed onto stack  custom function  ensure lua function on top of stack  default transformation  (dst*, src*, [d_x, d_y, s_x, s_y, x_off, y_off, clip, [op, funct/clr]])  dst  src  dst  src  copy whole image if possible  10 is operation for blit  11 is custom function | color  dest swap  src swap  Out of bounds is not allowed  not an error but nothing to display  if src->data == dst->data need to care about fill direction  custom function supplied..  ensure lua function on top of stack  default transformation  (clear) (dst*, [color, x1, y1, x2, y2, clip, dx, dy])  clip -- index 8 color -- index 9 (img*, [x1, y1, x2, y2, dx, dy, clip, function])  RLI_EXTENDED  Rli Image methods exported to lua  RLI_EXTENDED 
+ * -----------------------------
+ *
+ *  Rockbox wrappers start here!
+ *
+ * -----------------------------
+  only SCREEN_MAIN exists  helper function for lcd_puts functions  Helper function for opt_viewport  Find table[key]  Pop the value off the stack  helper function for lcd_xxx_bitmap/rect functions  fills passed array of integers with lua integers from stack  LCD_DEPTH > 1  note that by and bheight are in 8-pixel units!  note that by and bheight are in 8-pixel units!  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  LCD_DEPTH == 16  Error occured, drop newly allocated image from stack  Graphics  LCD_DEPTH > 1  LCD_DEPTH < 4 && CONFIG_PLATFORM & PLATFORM_NATIVE  some devices need x | y coords shifted to match native format  conversion between packed native formats and individual pixel addressing  pushes the metatable  metatable.__index = metatable add rli_lib to the image metatable

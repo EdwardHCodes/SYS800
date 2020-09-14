@@ -1,0 +1,133 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ * Copyright (C) 2013 Michael Giacomelli
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Linear interpolation resampling that introduces a one sample delay because
+ * of our inability to look into the future at the end of a frame.
+  Set to '0' to enable debug messages  Per channel, per DSP  CODEC_IDX_AUDIO = left and right, CODEC_IDX_VOICE = mono  Data for each resampler on each DSP  00h: Phase delta for each step in s15.16 04h: Current phase [pos16|frac16]  08h: Last samples for interpolation (L+R)
+                                    0 = oldest, 2 = newest  20h  Virtual input samplerate  Resampler output samplerate  Buffer descriptor for resampled data  Actual output buffer pointers  Actual worker function. Implemented here or in target assembly code.  virtual samplerate  NOTE: If fully glitch-free transistions from no resampling to
+           resampling are desired, history should be maintained even when
+           not resampling.  Restore state  4-point, 3rd-order Hermite/Catmull-Rom spline (x-form):
+             * c1 = -0.5*x3 + 0.5*x1
+             *    = 0.5*(x1 - x3)                <--
+             *
+             * v = x1 - x2, -v = x2 - x1
+             * c2 = x3 - 2.5*x2 + 2*x1 - 0.5*x0
+             *    = x3 + 2*(x1 - x2) - 0.5*(x0 + x2)
+             *    = x3 + 2*v - 0.5*(x0 + x2)     <--
+             *
+             * c3 = -0.5*x3 + 1.5*x2 - 1.5*x1 + 0.5*x0
+             *    = 0.5*x0 - 0.5*x3 + 0.5*(x2 - x1) + (x2 - x1)
+             *    = 0.5*(x0 - x3 - v) - v        <--
+             *
+             * polynomial coefficients  Evaluate polynomial at time 'frac'; Horner's rule.  Save delay samples for next time. Must do this even if pos was
+         * clamped before loop in order to keep record up to date.  Wrap phase accumulator back to start of next frame.  CPU  Resample count stereo samples or stop when the destination is full.
+ * Updates the src buffer and changes to its own output buffer to refer to
+ * the resampled data.  data still remains  Advance src by consumed amount  else purged resample_buf  Inherit in-place processed mask from source buffer  Finish draining old samples then switch format or shut off  Everything after us is fout  No longer needed  Always mono  huh?  Always enable resampler so that format changes may be monitored and
+     * it self-activated when required  DSP message hook  This stage should be enabled at all times  Database entry **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ * Copyright (C) 2013 Michael Giacomelli
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Linear interpolation resampling that introduces a one sample delay because
+ * of our inability to look into the future at the end of a frame.
+  Set to '0' to enable debug messages  Per channel, per DSP  CODEC_IDX_AUDIO = left and right, CODEC_IDX_VOICE = mono  Data for each resampler on each DSP  00h: Phase delta for each step in s15.16 04h: Current phase [pos16|frac16]  08h: Last samples for interpolation (L+R)
+                                    0 = oldest, 2 = newest  20h  Virtual input samplerate  Resampler output samplerate  Buffer descriptor for resampled data  Actual output buffer pointers  Actual worker function. Implemented here or in target assembly code.  virtual samplerate  NOTE: If fully glitch-free transistions from no resampling to
+           resampling are desired, history should be maintained even when
+           not resampling.  Restore state  4-point, 3rd-order Hermite/Catmull-Rom spline (x-form):
+             * c1 = -0.5*x3 + 0.5*x1
+             *    = 0.5*(x1 - x3)                <--
+             *
+             * v = x1 - x2, -v = x2 - x1
+             * c2 = x3 - 2.5*x2 + 2*x1 - 0.5*x0
+             *    = x3 + 2*(x1 - x2) - 0.5*(x0 + x2)
+             *    = x3 + 2*v - 0.5*(x0 + x2)     <--
+             *
+             * c3 = -0.5*x3 + 1.5*x2 - 1.5*x1 + 0.5*x0
+             *    = 0.5*x0 - 0.5*x3 + 0.5*(x2 - x1) + (x2 - x1)
+             *    = 0.5*(x0 - x3 - v) - v        <--
+             *
+             * polynomial coefficients  Evaluate polynomial at time 'frac'; Horner's rule.  Save delay samples for next time. Must do this even if pos was
+         * clamped before loop in order to keep record up to date.  Wrap phase accumulator back to start of next frame.  CPU  Resample count stereo samples or stop when the destination is full.
+ * Updates the src buffer and changes to its own output buffer to refer to
+ * the resampled data.  data still remains  Advance src by consumed amount  else purged resample_buf  Inherit in-place processed mask from source buffer  Finish draining old samples then switch format or shut off  Everything after us is fout  No longer needed  Always mono  huh?  Always enable resampler so that format changes may be monitored and
+     * it self-activated when required  DSP message hook  This stage should be enabled at all times  Database entry **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 Miika Pekkarinen
+ * Copyright (C) 2012 Michael Sevakis
+ * Copyright (C) 2013 Michael Giacomelli
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Linear interpolation resampling that introduces a one sample delay because
+ * of our inability to look into the future at the end of a frame.
+  Set to '0' to enable debug messages  Per channel, per DSP  CODEC_IDX_AUDIO = left and right, CODEC_IDX_VOICE = mono  Data for each resampler on each DSP  00h: Phase delta for each step in s15.16 04h: Current phase [pos16|frac16]  08h: Last samples for interpolation (L+R)
+                                    0 = oldest, 2 = newest  20h  Virtual input samplerate  Resampler output samplerate  Buffer descriptor for resampled data  Actual output buffer pointers  Actual worker function. Implemented here or in target assembly code.  virtual samplerate  NOTE: If fully glitch-free transistions from no resampling to
+           resampling are desired, history should be maintained even when
+           not resampling.  Restore state  4-point, 3rd-order Hermite/Catmull-Rom spline (x-form):
+             * c1 = -0.5*x3 + 0.5*x1
+             *    = 0.5*(x1 - x3)                <--
+             *
+             * v = x1 - x2, -v = x2 - x1
+             * c2 = x3 - 2.5*x2 + 2*x1 - 0.5*x0
+             *    = x3 + 2*(x1 - x2) - 0.5*(x0 + x2)
+             *    = x3 + 2*v - 0.5*(x0 + x2)     <--
+             *
+             * c3 = -0.5*x3 + 1.5*x2 - 1.5*x1 + 0.5*x0
+             *    = 0.5*x0 - 0.5*x3 + 0.5*(x2 - x1) + (x2 - x1)
+             *    = 0.5*(x0 - x3 - v) - v        <--
+             *
+             * polynomial coefficients  Evaluate polynomial at time 'frac'; Horner's rule.  Save delay samples for next time. Must do this even if pos was
+         * clamped before loop in order to keep record up to date.  Wrap phase accumulator back to start of next frame.  CPU  Resample count stereo samples or stop when the destination is full.
+ * Updates the src buffer and changes to its own output buffer to refer to
+ * the resampled data.  data still remains  Advance src by consumed amount  else purged resample_buf  Inherit in-place processed mask from source buffer  Finish draining old samples then switch format or shut off  Everything after us is fout  No longer needed  Always mono  huh?  Always enable resampler so that format changes may be monitored and
+     * it self-activated when required  DSP message hook  This stage should be enabled at all times  Database entry 

@@ -1,0 +1,232 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Jonathan Gordon
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This file contains the code to draw the list widget on BITMAP LCDs.  these are static to make scrolling work  list-private helpers from the generic list.c (move to header?)  Draw the list...
+    internal screen layout:
+        -----------------
+        |TI|  title     |   TI is title icon
+        -----------------
+        | | |            |
+        |S|I|            |   S - scrollbar
+        | | | items      |   I - icons
+        | | |            |
+        ------------------
+
+        Note: This image is flipped horizontally when the language is a
+        right-to-left one (Hebrew, Arabic)
+ the sbs is handling the title  XXX: Do we want to support the separator on remote displays?  XXX: Do we want to support the separator on remote displays?  reset in case it's a new list  draw some extra items to not have empty lines at the top and bottom  make it negative for more consistent apparence when switching
+         * directions  draw the scrollbar if its needed  if the scrollbar is shown the text viewport needs to shrink  left  shift everything a bit in relation to the title  do the text  position the string at the correct offset place  draw the selected line  don't draw it during scrolling  The selected item must be displayed scrolling  the global_settings.cursor_style check is here to make
+                    * sure if they want the cursor instead of bar it will work
+                     Display inverted-line-style  Display colour line selector  Display gradient line selector  if the list has a color callback  if color selected  the list can have both, one of or neither of cursor and item icons,
+         * if both don't apply icon padding twice between the icons  This needs to be fixed if we ever get more than 1 touchscreen on a target.  difference in pixels between draws, above it means enough to start scrolling  no scrolling  scroll by using the scrollbar  scroll by wiping over the screen  state after releasing swipe  scrollbar scrolling is still line based  kinetic scrolling, based on
+ *
+ * v = a*t + v0 and ds = v*dt
+ *
+ * In each (fixed interval) timeout, the list is advanced by ds, then
+ * the v is reduced by a.
+ * This way we get a linear and smooth deceleration of the scrolling
+ *
+ * As v is the difference of distance per time unit, v is passed (as
+ * pixels moved since the last call) to the scrolling function which takes
+ * care of the pixel accurate drawing
+ *
+ * v0 is dertermined by averaging the last 4 movements of the list
+ * (the pixel and time difference is used to compute each v)
+ *
+ * influenced by http://stechz.com/tag/kinetic/
+ * We take the easy and smooth first approach (until section "Drawbacks"),
+ * since its drawbacks don't apply for us since our timers seem to be
+ * relatively accurate
+  these could possibly be configurable  the lower the smoother  the higher the earler the list stops  this array holds data to compute the initial velocity v0  current list  in pixel/s  data member points to the above struct 
+ * collect data about how fast the list is moved in order to compute
+ * the initial velocity from it later  collect velocity statistics  rewind the index 
+ * resets the statistic  cancels all currently active kinetic scrolling  helper for gui/list.c to cancel scrolling if a normal button event comes
+ * through dpad or keyboard or whatever 
+ * returns false if scrolling should be stopped entirely
+ *
+ * otherwise it returns true even if it didn't actually scroll,
+ * but scrolling mode shouldn't be changed
+ * fixme  make selecting items easier  does the list even scroll? if no, return but still show
+     * the caller that we would scroll  don't scroll at the edges of the list  stop kinetic at the edges  add up y_offset over time and translate to lines
+     * if scrolled enough  check if new_start_item is bigger than list item count  set new_start_item to 0 if it's negative  keep selected item in sync  cancel if screen was pressed  ds = v*dt  remember signedness to detect stopping  advance the list  nothing to scroll?  decelerate by a fixed amount
+         * decrementing v0 over time by the deceleration is
+         * equivalent to computing v = a*t + v0  let get_action() timeout, which loads to a
+     * gui_synclist_draw() call from the main thread  stop if the velocity hit or crossed zero  cancel or reload 
+ * computes the initial velocity v0 and sets up the timer  compute initial velocity  in pixel/s  see if the title was clicked  check the icon too  check scrollbar. assume it's shown, if it isn't it will be handled
+         * later  if all fails, it must be on the list icons  start with getting the action code and finding the click location  some defaults before running the state machine  on the first touch last_y has to be reset to avoid
+                 * glitches with touches from long ago  silence gcc 'used uninitialized' warning  selection needs to be corrected if items are only partially visible  adjust for the list title  if not scrolling, the user is trying to select  held a single line for a while, bring up the context menu  don't sent context repeatedly  release on list item enters it  clicking the title goes one level up (cancel)  clicking the title icon goes back to the root  when swipe scrolling, we accept outside presses as well and
+             * grab the entire screen (i.e. click_loc does not matter)  letting the pen go enters kinetic scrolling  during kinetic scrolling we need to handle cancellation.
+             * This state is actually only entered upon end of it as this
+             * function is not called during the animation.  a) the user touched the screen (manual cancellation)  b) kinetic scrolling stopped on its own  need to re-run this with SCROLL_NONE since otherwise
+                 * the next touch is not detected correctly  similarly to swipe scroll, using the scrollbar grabs
+             * focus so the click location is irrelevant  register y position unless forcefully reset **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Jonathan Gordon
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This file contains the code to draw the list widget on BITMAP LCDs.  these are static to make scrolling work  list-private helpers from the generic list.c (move to header?)  Draw the list...
+    internal screen layout:
+        -----------------
+        |TI|  title     |   TI is title icon
+        -----------------
+        | | |            |
+        |S|I|            |   S - scrollbar
+        | | | items      |   I - icons
+        | | |            |
+        ------------------
+
+        Note: This image is flipped horizontally when the language is a
+        right-to-left one (Hebrew, Arabic)
+ the sbs is handling the title  XXX: Do we want to support the separator on remote displays?  XXX: Do we want to support the separator on remote displays?  reset in case it's a new list  draw some extra items to not have empty lines at the top and bottom  make it negative for more consistent apparence when switching
+         * directions  draw the scrollbar if its needed  if the scrollbar is shown the text viewport needs to shrink  left  shift everything a bit in relation to the title  do the text  position the string at the correct offset place  draw the selected line  don't draw it during scrolling  The selected item must be displayed scrolling  the global_settings.cursor_style check is here to make
+                    * sure if they want the cursor instead of bar it will work
+                     Display inverted-line-style  Display colour line selector  Display gradient line selector  if the list has a color callback  if color selected  the list can have both, one of or neither of cursor and item icons,
+         * if both don't apply icon padding twice between the icons  This needs to be fixed if we ever get more than 1 touchscreen on a target.  difference in pixels between draws, above it means enough to start scrolling  no scrolling  scroll by using the scrollbar  scroll by wiping over the screen  state after releasing swipe  scrollbar scrolling is still line based  kinetic scrolling, based on
+ *
+ * v = a*t + v0 and ds = v*dt
+ *
+ * In each (fixed interval) timeout, the list is advanced by ds, then
+ * the v is reduced by a.
+ * This way we get a linear and smooth deceleration of the scrolling
+ *
+ * As v is the difference of distance per time unit, v is passed (as
+ * pixels moved since the last call) to the scrolling function which takes
+ * care of the pixel accurate drawing
+ *
+ * v0 is dertermined by averaging the last 4 movements of the list
+ * (the pixel and time difference is used to compute each v)
+ *
+ * influenced by http://stechz.com/tag/kinetic/
+ * We take the easy and smooth first approach (until section "Drawbacks"),
+ * since its drawbacks don't apply for us since our timers seem to be
+ * relatively accurate
+  these could possibly be configurable  the lower the smoother  the higher the earler the list stops  this array holds data to compute the initial velocity v0  current list  in pixel/s  data member points to the above struct 
+ * collect data about how fast the list is moved in order to compute
+ * the initial velocity from it later  collect velocity statistics  rewind the index 
+ * resets the statistic  cancels all currently active kinetic scrolling  helper for gui/list.c to cancel scrolling if a normal button event comes
+ * through dpad or keyboard or whatever 
+ * returns false if scrolling should be stopped entirely
+ *
+ * otherwise it returns true even if it didn't actually scroll,
+ * but scrolling mode shouldn't be changed
+ * fixme  make selecting items easier  does the list even scroll? if no, return but still show
+     * the caller that we would scroll  don't scroll at the edges of the list  stop kinetic at the edges  add up y_offset over time and translate to lines
+     * if scrolled enough  check if new_start_item is bigger than list item count  set new_start_item to 0 if it's negative  keep selected item in sync  cancel if screen was pressed  ds = v*dt  remember signedness to detect stopping  advance the list  nothing to scroll?  decelerate by a fixed amount
+         * decrementing v0 over time by the deceleration is
+         * equivalent to computing v = a*t + v0  let get_action() timeout, which loads to a
+     * gui_synclist_draw() call from the main thread  stop if the velocity hit or crossed zero  cancel or reload 
+ * computes the initial velocity v0 and sets up the timer  compute initial velocity  in pixel/s  see if the title was clicked  check the icon too  check scrollbar. assume it's shown, if it isn't it will be handled
+         * later  if all fails, it must be on the list icons  start with getting the action code and finding the click location  some defaults before running the state machine  on the first touch last_y has to be reset to avoid
+                 * glitches with touches from long ago  silence gcc 'used uninitialized' warning  selection needs to be corrected if items are only partially visible  adjust for the list title  if not scrolling, the user is trying to select  held a single line for a while, bring up the context menu  don't sent context repeatedly  release on list item enters it  clicking the title goes one level up (cancel)  clicking the title icon goes back to the root  when swipe scrolling, we accept outside presses as well and
+             * grab the entire screen (i.e. click_loc does not matter)  letting the pen go enters kinetic scrolling  during kinetic scrolling we need to handle cancellation.
+             * This state is actually only entered upon end of it as this
+             * function is not called during the animation.  a) the user touched the screen (manual cancellation)  b) kinetic scrolling stopped on its own  need to re-run this with SCROLL_NONE since otherwise
+                 * the next touch is not detected correctly  similarly to swipe scroll, using the scrollbar grabs
+             * focus so the click location is irrelevant  register y position unless forcefully reset **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2007 by Jonathan Gordon
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** This file contains the code to draw the list widget on BITMAP LCDs.  these are static to make scrolling work  list-private helpers from the generic list.c (move to header?)  Draw the list...
+    internal screen layout:
+        -----------------
+        |TI|  title     |   TI is title icon
+        -----------------
+        | | |            |
+        |S|I|            |   S - scrollbar
+        | | | items      |   I - icons
+        | | |            |
+        ------------------
+
+        Note: This image is flipped horizontally when the language is a
+        right-to-left one (Hebrew, Arabic)
+ the sbs is handling the title  XXX: Do we want to support the separator on remote displays?  XXX: Do we want to support the separator on remote displays?  reset in case it's a new list  draw some extra items to not have empty lines at the top and bottom  make it negative for more consistent apparence when switching
+         * directions  draw the scrollbar if its needed  if the scrollbar is shown the text viewport needs to shrink  left  shift everything a bit in relation to the title  do the text  position the string at the correct offset place  draw the selected line  don't draw it during scrolling  The selected item must be displayed scrolling  the global_settings.cursor_style check is here to make
+                    * sure if they want the cursor instead of bar it will work
+                     Display inverted-line-style  Display colour line selector  Display gradient line selector  if the list has a color callback  if color selected  the list can have both, one of or neither of cursor and item icons,
+         * if both don't apply icon padding twice between the icons  This needs to be fixed if we ever get more than 1 touchscreen on a target.  difference in pixels between draws, above it means enough to start scrolling  no scrolling  scroll by using the scrollbar  scroll by wiping over the screen  state after releasing swipe  scrollbar scrolling is still line based  kinetic scrolling, based on
+ *
+ * v = a*t + v0 and ds = v*dt
+ *
+ * In each (fixed interval) timeout, the list is advanced by ds, then
+ * the v is reduced by a.
+ * This way we get a linear and smooth deceleration of the scrolling
+ *
+ * As v is the difference of distance per time unit, v is passed (as
+ * pixels moved since the last call) to the scrolling function which takes
+ * care of the pixel accurate drawing
+ *
+ * v0 is dertermined by averaging the last 4 movements of the list
+ * (the pixel and time difference is used to compute each v)
+ *
+ * influenced by http://stechz.com/tag/kinetic/
+ * We take the easy and smooth first approach (until section "Drawbacks"),
+ * since its drawbacks don't apply for us since our timers seem to be
+ * relatively accurate
+  these could possibly be configurable  the lower the smoother  the higher the earler the list stops  this array holds data to compute the initial velocity v0  current list  in pixel/s  data member points to the above struct 
+ * collect data about how fast the list is moved in order to compute
+ * the initial velocity from it later  collect velocity statistics  rewind the index 
+ * resets the statistic  cancels all currently active kinetic scrolling  helper for gui/list.c to cancel scrolling if a normal button event comes
+ * through dpad or keyboard or whatever 
+ * returns false if scrolling should be stopped entirely
+ *
+ * otherwise it returns true even if it didn't actually scroll,
+ * but scrolling mode shouldn't be changed
+ * fixme  make selecting items easier  does the list even scroll? if no, return but still show
+     * the caller that we would scroll  don't scroll at the edges of the list  stop kinetic at the edges  add up y_offset over time and translate to lines
+     * if scrolled enough  check if new_start_item is bigger than list item count  set new_start_item to 0 if it's negative  keep selected item in sync  cancel if screen was pressed  ds = v*dt  remember signedness to detect stopping  advance the list  nothing to scroll?  decelerate by a fixed amount
+         * decrementing v0 over time by the deceleration is
+         * equivalent to computing v = a*t + v0  let get_action() timeout, which loads to a
+     * gui_synclist_draw() call from the main thread  stop if the velocity hit or crossed zero  cancel or reload 
+ * computes the initial velocity v0 and sets up the timer  compute initial velocity  in pixel/s  see if the title was clicked  check the icon too  check scrollbar. assume it's shown, if it isn't it will be handled
+         * later  if all fails, it must be on the list icons  start with getting the action code and finding the click location  some defaults before running the state machine  on the first touch last_y has to be reset to avoid
+                 * glitches with touches from long ago  silence gcc 'used uninitialized' warning  selection needs to be corrected if items are only partially visible  adjust for the list title  if not scrolling, the user is trying to select  held a single line for a while, bring up the context menu  don't sent context repeatedly  release on list item enters it  clicking the title goes one level up (cancel)  clicking the title icon goes back to the root  when swipe scrolling, we accept outside presses as well and
+             * grab the entire screen (i.e. click_loc does not matter)  letting the pen go enters kinetic scrolling  during kinetic scrolling we need to handle cancellation.
+             * This state is actually only entered upon end of it as this
+             * function is not called during the animation.  a) the user touched the screen (manual cancellation)  b) kinetic scrolling stopped on its own  need to re-run this with SCROLL_NONE since otherwise
+                 * the next touch is not detected correctly  similarly to swipe scroll, using the scrollbar grabs
+             * focus so the click location is irrelevant  register y position unless forcefully reset 

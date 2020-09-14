@@ -1,0 +1,1849 @@
+
+ * net.c: Net game.
+ 
+ * The standard user interface for Net simply has left- and
+ * right-button mouse clicks in a square rotate it one way or the
+ * other. We also provide, by #ifdef, a separate interface based on
+ * rotational dragging motions. I initially developed this for the
+ * Mac on the basis that it might work better than the click
+ * interface with only one mouse button available, but in fact
+ * found it to be quite strange and unintuitive. Apparently it
+ * works better on stylus-driven platforms such as Palm and
+ * PocketPC, though, so we enable it by default there.
+  Direction and other bitfields  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  skip any other gunk 
+     * Specifying either grid dimension as 2 in a wrapping puzzle
+     * makes it actually impossible to ensure a unique puzzle
+     * solution.
+     * 
+     * Proof:
+     * 
+     * Without loss of generality, let us assume the puzzle _width_
+     * is 2, so we can conveniently discuss rows without having to
+     * say `rows/columns' all the time. (The height may be 2 as
+     * well, but that doesn't matter.)
+     * 
+     * In each row, there are two edges between tiles: the inner
+     * edge (running down the centre of the grid) and the outer
+     * edge (the identified left and right edges of the grid).
+     * 
+     * Lemma: In any valid 2xn puzzle there must be at least one
+     * row in which _exactly one_ of the inner edge and outer edge
+     * is connected.
+     * 
+     *   Proof: No row can have _both_ inner and outer edges
+     *   connected, because this would yield a loop. So the only
+     *   other way to falsify the lemma is for every row to have
+     *   _neither_ the inner nor outer edge connected. But this
+     *   means there is no connection at all between the left and
+     *   right columns of the puzzle, so there are two disjoint
+     *   subgraphs, which is also disallowed. []
+     * 
+     * Given such a row, it is always possible to make the
+     * disconnected edge connected and the connected edge
+     * disconnected without changing the state of any other edge.
+     * (This is easily seen by case analysis on the various tiles:
+     * left-pointing and right-pointing endpoints can be exchanged,
+     * likewise T-pieces, and a corner piece can select its
+     * horizontal connectivity independently of its vertical.) This
+     * yields a distinct valid solution.
+     * 
+     * Thus, for _every_ row in which exactly one of the inner and
+     * outer edge is connected, there are two valid states for that
+     * row, and hence the total number of solutions of the puzzle
+     * is at least 2^(number of such rows), and in particular is at
+     * least 2 since there must be at least one such row. []
+      ----------------------------------------------------------------------
+ * Solver used to assure solution uniqueness during generation. 
+ 
+ * Test cases I used while debugging all this were
+ * 
+ *   ./net --generate 1 13x11w#12300
+ * which expands under the non-unique grid generation rules to
+ *   13x11w:5eaade1bd222664436d5e2965c12656b1129dd825219e3274d558d5eb2dab5da18898e571d5a2987be79746bd95726c597447d6da96188c513add829da7681da954db113d3cd244
+ * and has two ambiguous areas.
+ * 
+ * An even better one is
+ *   13x11w#507896411361192
+ * which expands to
+ *   13x11w:b7125b1aec598eb31bd58d82572bc11494e5dee4e8db2bdd29b88d41a16bdd996d2996ddec8c83741a1e8674e78328ba71737b8894a9271b1cd1399453d1952e43951d9b712822e
+ * and has an ambiguous area _and_ a situation where loop avoidance
+ * is a necessary deductive technique.
+ * 
+ * Then there's
+ *   48x25w#820543338195187
+ * becoming
+ *   48x25w:255989d14cdd185deaa753a93821a12edc1ab97943ac127e2685d7b8b3c48861b2192416139212b316eddd35de43714ebc7628d753db32e596284d9ec52c5a7dc1b4c811a655117d16dc28921b2b4161352cab1d89d18bc836b8b891d55ea4622a1251861b5bc9a8aa3e5bcd745c95229ca6c3b5e21d5832d397e917325793d7eb442dc351b2db2a52ba8e1651642275842d8871d5534aabc6d5b741aaa2d48ed2a7dbbb3151ddb49d5b9a7ed1ab98ee75d613d656dbba347bc514c84556b43a9bc65a3256ead792488b862a9d2a8a39b4255a4949ed7dbd79443292521265896b4399c95ede89d7c8c797a6a57791a849adea489359a158aa12e5dacce862b8333b7ebea7d344d1a3c53198864b73a9dedde7b663abb1b539e1e8853b1b7edb14a2a17ebaae4dbe63598a2e7e9a2dbdad415bc1d8cb88cbab5a8c82925732cd282e641ea3bd7d2c6e776de9117a26be86deb7c82c89524b122cb9397cd1acd2284e744ea62b9279bae85479ababe315c3ac29c431333395b24e6a1e3c43a2da42d4dce84aadd5b154aea555eaddcbd6e527d228c19388d9b424d94214555a7edbdeebe569d4a56dc51a86bd9963e377bb74752bd5eaa5761ba545e297b62a1bda46ab4aee423ad6c661311783cc18786d4289236563cb4a75ec67d481c14814994464cd1b87396dee63e5ab6e952cc584baa1d4c47cb557ec84dbb63d487c8728118673a166846dd3a4ebc23d6cb9c5827d96b4556e91899db32b517eda815ae271a8911bd745447121dc8d321557bc2a435ebec1bbac35b1a291669451174e6aa2218a4a9c5a6ca31ebc45d84e3a82c121e9ced7d55e9a
+ * which has a spot (far right) where slightly more complex loop
+ * avoidance is required.
+  already on the list  list is empty 
+ * Return values: -1 means puzzle was proved inconsistent, 0 means we
+ * failed to narrow down to a unique solution, +1 means we solved it
+ * fully.
+ 
+     * Set up the solver's data structures.
+     
+     * tilestate stores the possible orientations of each tile.
+     * There are up to four of these, so we'll index the array in
+     * fours. tilestate[(y * w + x) * 4] and its three successive
+     * members give the possible orientations, clearing to 255 from
+     * the end as things are ruled out.
+     * 
+     * In this loop we also count up the area of the grid (which is
+     * not _necessarily_ equal to w*h, because there might be one
+     * or more blank squares present. This will never happen in a
+     * grid generated _by_ this program, but it's worth keeping the
+     * solver as general as possible.)
+     
+     * edgestate stores the known state of each edge. It is 0 for
+     * unknown, 1 for open (connected) and 2 for closed (not
+     * connected).
+     * 
+     * In principle we need only worry about each edge once each,
+     * but in fact it's easier to track each edge twice so that we
+     * can reference it from either side conveniently. Also I'm
+     * going to allocate _five_ bytes per tile, rather than the
+     * obvious four, so that I can index edgestate[(y*w+x) * 5 + d]
+     * where d is 1,2,4,8 and they never overlap.
+     
+     * deadends tracks which edges have dead ends on them. It is
+     * indexed by tile and direction: deadends[(y*w+x) * 5 + d]
+     * tells you whether heading out of tile (x,y) in direction d
+     * can reach a limited amount of the grid. Values are area+1
+     * (no dead end known) or less than that (can reach _at most_
+     * this many other tiles by heading this way out of this tile).
+     
+     * equivalence tracks which sets of tiles are known to be
+     * connected to one another, so we can avoid creating loops by
+     * linking together tiles which are already linked through
+     * another route.
+     * 
+     * This is a disjoint set forest structure: equivalence[i]
+     * contains the index of another member of the equivalence
+     * class containing i, or contains i itself for precisely one
+     * member in each such class. To find a representative member
+     * of the equivalence class containing i, you keep replacing i
+     * with equivalence[i] until it stops changing; then you go
+     * _back_ along the same path and point everything on it
+     * directly at the representative member so as to speed up
+     * future searches. Then you test equivalence between tiles by
+     * finding the representative of each tile and seeing if
+     * they're the same; and you create new equivalence (merge
+     * classes) by finding the representative of each tile and
+     * setting equivalence[one]=the_other.
+     
+     * On a non-wrapping grid, we instantly know that all the edges
+     * round the edge are closed.
+     
+     * If we have barriers available, we can mark those edges as
+     * closed too.
+     
+		     * In principle the barrier list should already
+		     * contain each barrier from each side, but
+		     * let's not take chances with our internal
+		     * consistency.
+		     
+     * Since most deductions made by this solver are local (the
+     * exception is loop avoidance, where joining two tiles
+     * together on one side of the grid can theoretically permit a
+     * fresh deduction on the other), we can address the scaling
+     * problem inherent in iterating repeatedly over the entire
+     * grid by instead working with a to-do list.
+     
+     * Main deductive loop.
+      prevent instant termination! 
+	 * Take a tile index off the todo list and process it.
+	 
+	     * If we have run out of immediate things to do, we
+	     * have no choice but to scan the whole grid for
+	     * longer-range things we've missed. Hence, I now add
+	     * every square on the grid back on to the to-do list.
+	     * I also set `done_something' to false at this point;
+	     * if we later come back here and find it still false,
+	     * we will know we've scanned the entire grid without
+	     * finding anything new to do, and we can terminate.
+	     
+		     * Immediately rule out this orientation if it
+		     * conflicts with any known edge.
+		     
+			 * Count up the dead-end statistics.
+			 
+			 * Ensure we aren't linking to any tiles,
+			 * through edges not already known to be
+			 * open, which create a loop.
+			 
+		     * If this orientation links together dead-ends
+		     * with a total area of less than the entire
+		     * grid, it is invalid.
+		     *
+		     * (We add 1 to deadendtotal because of the
+		     * tile itself, of course; one tile linking
+		     * dead ends of size 2 and 3 forms a subnetwork
+		     * with a total area of 6, not 5.)
+		     
+		     * If this orientation links together one or
+		     * more dead-ends with precisely one
+		     * non-dead-end, then we may have to mark that
+		     * non-dead-end as a dead end going the other
+		     * way. However, it depends on whether all
+		     * other orientations share the same property.
+		     
+		     * If this orientation links together two or
+		     * more non-dead-ends, then we can rule out the
+		     * possibility of putting in new dead-end
+		     * markings in those directions.
+		      If we've ruled out all possible orientations for a
+                 * tile, then our puzzle has no solution at all. 
+		 * We have ruled out at least one tile orientation.
+		 * Make sure the rest are blanked.
+		 
+	     * Now go through the tile orientations again and see
+	     * if we've deduced anything new about any edges.
+	      This edge is open in all orientations.  This edge is closed in all orientations. 
+	     * Now check the dead-end markers and see if any of
+	     * them has lowered from the real ones.
+	     
+     * Mark all completely determined tiles as locked.
+     
+     * Free up working space.
+      ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+ * Function to randomly perturb an ambiguous section in a grid, to
+ * attempt to ensure unique solvability.
+ 
+     * We know that the tile at (startx,starty) is part of an
+     * ambiguous section, and we also know that its neighbour in
+     * direction startd is fully specified. We begin by tracing all
+     * the way round the ambiguous area.
+     
+	 * First, see if we can simply turn left from where we are
+	 * and find another locked square.
+	 
+	     * Failing that, step left into the new square and look
+	     * in front of us.
+	     
+		 * And failing _that_, we're going to have to step
+		 * forward into _that_ square and look right at the
+		 * same locked square as we started with.
+		 
+     * Our technique for perturbing this ambiguous area is to
+     * search round its edge for a join we can make: that is, an
+     * edge on the perimeter which is (a) not currently connected,
+     * and (b) connecting it would not yield a full cross on either
+     * side. Then we make that join, search round the network to
+     * find the loop thus constructed, and sever the loop at a
+     * randomly selected other point.
+      Shuffle the perimeter, so as to search it without directional bias.  can't link across non-wrapping border  already linked in this direction!  can't turn this tile into a cross  can't turn other tile into a cross 
+	 * We've found the point at which we're going to make a new
+	 * link.
+	  nothing we can do! 
+     * Now we've constructed a new link, we need to find the entire
+     * loop of which it is a part.
+     * 
+     * In principle, this involves doing a complete search round
+     * the network. However, I anticipate that in the vast majority
+     * of cases the loop will be quite small, so what I'm going to
+     * do is make _two_ searches round the network in parallel, one
+     * keeping its metaphorical hand on the left-hand wall while
+     * the other keeps its hand on the right. As soon as one of
+     * them gets back to its starting point, I abandon the other.
+     
+	     * Add this path segment to the loop, unless it exactly
+	     * reverses the previous one on the loop in which case
+	     * we take it away again.
+	     
+		 * Having found our loop, we now sever it at a
+		 * randomly chosen point - absolutely any will do -
+		 * which is not the one we joined it at to begin
+		 * with. Conveniently, the one we joined it at is
+		 * loop[i][0], so we just avoid that one.
+		 
+     * Finally, we must mark the entire disputed section as locked,
+     * to prevent the perturb function being called on it multiple
+     * times.
+     * 
+     * To do this, we _sort_ the perimeter of the area. The
+     * existing xyd_cmp function will arrange things into columns
+     * for us, in such a way that each column has the edges in
+     * vertical order. Then we can work down each column and fill
+     * in all the squares between an up edge and a down edge.
+     
+	     * Fill in everything from the last Up edge to the
+	     * bottom of the grid, if necessary.
+	     
+	     * Fill in everything from the last Up edge to here.
+	     
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+	 * Run the solver to check unique solubility.
+	 
+	     * We expect (in most cases) that most of the grid will
+	     * be uniquely specified already, and the remaining
+	     * ambiguous sections will be small and separate. So
+	     * our strategy is to find each individual such
+	     * section, and perform a perturbation on the network
+	     * in that area.
+	     
+	     * Now n counts the number of ambiguous sections we
+	     * have fiddled with. If we haven't managed to decrease
+	     * it from the last time we ran the solver, give up and
+	     * regenerate the entire grid.
+	      (sorry) 
+	 * The solver will have left a lot of LOCKED bits lying
+	 * around in the tiles array. Remove them.
+	 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+     * Now shuffle the grid.
+     * 
+     * In order to avoid accidentally generating an already-solved
+     * grid, we will reshuffle as necessary to ensure that at least
+     * one edge has a mismatched connection.
+     *
+     * This can always be done, since validate_params() enforces a
+     * grid area of at least 2 and our generator never creates
+     * either type of rotationally invariant tile (cross and
+     * blank). Hence there must be at least one edge separating
+     * distinct tiles, and it must be possible to find orientations
+     * of those tiles such that one tile is trying to connect
+     * through that edge and the other is not.
+     * 
+     * (We could be more subtle, and allow the shuffle to generate
+     * a grid in which all tiles match up locally and the only
+     * criterion preventing the grid from being already solved is
+     * connectedness. However, that would take more effort, and
+     * it's easier to simply make sure every grid is _obviously_
+     * not solved.)
+     *
+     * We also require that our shuffle produces no loops in the
+     * initial grid state, because it's a bit rude to light up a 'HEY,
+     * YOU DID SOMETHING WRONG!' indicator when the user hasn't even
+     * had a chance to do _anything_ yet. This also is possible just
+     * by retrying the whole shuffle on failure, because it's clear
+     * that at least one non-solved shuffle with no loops must exist.
+     * (Proof: take the _solved_ state of the puzzle, and rotate one
+     * endpoint.)
+     
+         * Check for loops, and try to fix them by reshuffling just
+         * the squares involved.
+         
+                 * We're increasing rather than reducing the number of
+                 * loops. Give up and go back to the full shuffle.
+                 
+         * I can't even be bothered to check for mismatches across
+         * a wrapping edge, so I'm just going to enforce that there
+         * must be a mismatch across a non-wrapping edge, which is
+         * still always possible.
+          OK. 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+         * We check whether this is de-facto a non-wrapping game
+         * despite the parameters, in case we were passed the
+         * description of a non-wrapping game. This is so that we
+         * can change some aspects of the UI behaviour.
+         
+	 * Run the internal solver on the provided grid. This might
+	 * not yield a complete solution.
+	 
+     * Now construct a string which can be passed to execute_move()
+     * to transform the current grid into the solved one.
+      nothing needs doing at all 
+	 * To transform this tile into the desired tile: first
+	 * unlock the tile if it's locked, then rotate it if
+	 * necessary, then lock it if necessary.
+	  ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  origin  source tile (game coordinates)  used for jumbling 
+     * We preserve the origin and centre-point coordinates over a
+     * serialise.
+      ----------------------------------------------------------------------
+ * Process a move.
+ 
+	 * The button must have been clicked on a valid tile.
+	  Transform from physical to game coords  with a stylus, `right-click' locks 
+             * Middle button never drags: it only toggles the lock.
+              (see above) 
+             * Otherwise, we note down the start point for a drag.
+              no actual action 
+             * Find the new drag point and see if it necessitates a
+             * rotation.
+              dC == dmin 
+                 * There was a click but no perceptible drag:
+                 * revert to single-click behaviour.
+                  no action  USE_DRAGGING  USE_DRAGGING  XXX should we have some mouse control for this? 
+     * The middle button locks or unlocks a tile. (A locked tile
+     * cannot be turned, and is visually marked as being locked.
+     * This is a convenience for the player, so that once they are
+     * sure which way round a tile goes, they can lock it and thus
+     * avoid forgetting later on that they'd already done that one;
+     * and the locking also prevents them turning the tile by
+     * accident. If they change their mind, another middle click
+     * unlocks it.)
+     
+         * The left and right buttons have no effect if clicked on a
+         * locked tile.
+         
+         * Otherwise, turn the tile one way or the other. Left button
+         * turns anticlockwise; right button turns clockwise.
+         
+         * Jumble all unlocked tiles to random orientations.
+         
+	 * Maximum string length assumes no int can be converted to
+	 * decimal and take more than 11 digits!
+	  disallowed for non-wrapping grids  suppress animation  + for sake of argument 
+     * Check whether the game has been completed.
+     * 
+     * For this purpose it doesn't matter where the source square is,
+     * because we can start from anywhere (or, at least, any square
+     * that's non-empty!), and correctly determine whether the game is
+     * completed.
+      ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  undecided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Highlighted errors are red as well.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Locked tiles are a grey in between those two.
+      Flags describing the visible features of a tile.  4 bits: R U L D  4 bits: RU UL LD DR  1 bit if cursor is here  8 bits: RR UU LL DD
+                                          * Each pair: 0=no wire, 1=unpowered,
+                                          * 2=powered, 3=error highlight  2 bits: 0=no endpoint, 1=unpowered,
+                                          * 2=powered, 3=power-source square  8 bits: RR UU LL DD,
+                                          * same encoding as TILE_WIRE_SHIFT  1 bit if tile is rotating  1 bit if tile is locked 
+     * Clip to the tile boundary, with adjustments if we're drawing
+     * just outside the grid.
+     
+     * Clear the clip region.
+     
+     * Draw the grid lines.
+     
+     * Draw the keyboard cursor.
+     
+     * Draw protrusions into this cell's edges of wires in
+     * neighbouring cells, as given by the TILE_WIRE_ON_EDGE_SHIFT
+     * flags. We only draw each of these if there _isn't_ a wire of
+     * our own that's going to overlap it, which means either the
+     * corresponding TILE_WIRE_SHIFT flag is zero, or else the
+     * TILE_ROTATING flag is set (so that our main wire won't be drawn
+     * in quite that place anyway).
+      there isn't a wire on the edge  wire on edge would be overdrawn anyway 
+     * Set up the rotation matrix for the main cell contents, i.e.
+     * everything that is centred in the grid square and optionally
+     * rotated by an arbitrary angle about that centre point.
+     
+     * Draw the wires.
+     
+     * Draw the central box.
+     
+     * Draw barriers along grid edges.
+     
+     * Unclip and draw update, to finish.
+     
+     * Clear the screen on our first call.
+     
+         * We're animating a single tile rotation. Find the turning
+         * tile.
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Build up a map of what we want every tile to look like. We
+     * include tiles one square outside the grid, for the outer edges
+     * of barriers.
+      Highlight as an error any edge in a locked tile that
+                     * is adjacent to a lack-of-edge in another locked tile,
+                     * or to a barrier  this is not an endpoint tile 
+             * In a completion flash, we adjust the LOCKED bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Now draw any tile that differs from the way it was last drawn.
+     * An exception is that if either the previous _or_ current state
+     * has the TILE_ROTATING bit set, we must draw it regardless,
+     * because it will have rotated to a different angle.q
+     
+     * Update the status bar.
+      ensure even an empty status string is terminated 
+         * Omit the 'Active: n/N' counter completely if the source
+         * tile is a completely empty one, because then the active
+         * count can't help but read '1'.
+         
+             * Also, if we're displaying a completion indicator and
+             * the game is still in its completed state (i.e. every
+             * tile is active), we might as well omit this too.
+             
+     * Don't animate if last_rotate_dir is zero.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+     
+     * I'll use 8mm squares by default.
+     
+     * Find our centre point.
+     
+     * Draw the square block if we have an endpoint.
+     
+     * Draw each radial line.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Barriers.
+     
+     * Grid contents.
+     
+	     * Rotate into a standard orientation for the top left
+	     * corner diagram.
+	     
+	     * Draw the top left corner diagram.
+	     
+	     * Draw the real solution diagram, if we're doing so.
+	      game_request_keys  wants_statusbar  flags 
+ * net.c: Net game.
+ 
+ * The standard user interface for Net simply has left- and
+ * right-button mouse clicks in a square rotate it one way or the
+ * other. We also provide, by #ifdef, a separate interface based on
+ * rotational dragging motions. I initially developed this for the
+ * Mac on the basis that it might work better than the click
+ * interface with only one mouse button available, but in fact
+ * found it to be quite strange and unintuitive. Apparently it
+ * works better on stylus-driven platforms such as Palm and
+ * PocketPC, though, so we enable it by default there.
+  Direction and other bitfields  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  skip any other gunk 
+     * Specifying either grid dimension as 2 in a wrapping puzzle
+     * makes it actually impossible to ensure a unique puzzle
+     * solution.
+     * 
+     * Proof:
+     * 
+     * Without loss of generality, let us assume the puzzle _width_
+     * is 2, so we can conveniently discuss rows without having to
+     * say `rows/columns' all the time. (The height may be 2 as
+     * well, but that doesn't matter.)
+     * 
+     * In each row, there are two edges between tiles: the inner
+     * edge (running down the centre of the grid) and the outer
+     * edge (the identified left and right edges of the grid).
+     * 
+     * Lemma: In any valid 2xn puzzle there must be at least one
+     * row in which _exactly one_ of the inner edge and outer edge
+     * is connected.
+     * 
+     *   Proof: No row can have _both_ inner and outer edges
+     *   connected, because this would yield a loop. So the only
+     *   other way to falsify the lemma is for every row to have
+     *   _neither_ the inner nor outer edge connected. But this
+     *   means there is no connection at all between the left and
+     *   right columns of the puzzle, so there are two disjoint
+     *   subgraphs, which is also disallowed. []
+     * 
+     * Given such a row, it is always possible to make the
+     * disconnected edge connected and the connected edge
+     * disconnected without changing the state of any other edge.
+     * (This is easily seen by case analysis on the various tiles:
+     * left-pointing and right-pointing endpoints can be exchanged,
+     * likewise T-pieces, and a corner piece can select its
+     * horizontal connectivity independently of its vertical.) This
+     * yields a distinct valid solution.
+     * 
+     * Thus, for _every_ row in which exactly one of the inner and
+     * outer edge is connected, there are two valid states for that
+     * row, and hence the total number of solutions of the puzzle
+     * is at least 2^(number of such rows), and in particular is at
+     * least 2 since there must be at least one such row. []
+      ----------------------------------------------------------------------
+ * Solver used to assure solution uniqueness during generation. 
+ 
+ * Test cases I used while debugging all this were
+ * 
+ *   ./net --generate 1 13x11w#12300
+ * which expands under the non-unique grid generation rules to
+ *   13x11w:5eaade1bd222664436d5e2965c12656b1129dd825219e3274d558d5eb2dab5da18898e571d5a2987be79746bd95726c597447d6da96188c513add829da7681da954db113d3cd244
+ * and has two ambiguous areas.
+ * 
+ * An even better one is
+ *   13x11w#507896411361192
+ * which expands to
+ *   13x11w:b7125b1aec598eb31bd58d82572bc11494e5dee4e8db2bdd29b88d41a16bdd996d2996ddec8c83741a1e8674e78328ba71737b8894a9271b1cd1399453d1952e43951d9b712822e
+ * and has an ambiguous area _and_ a situation where loop avoidance
+ * is a necessary deductive technique.
+ * 
+ * Then there's
+ *   48x25w#820543338195187
+ * becoming
+ *   48x25w:255989d14cdd185deaa753a93821a12edc1ab97943ac127e2685d7b8b3c48861b2192416139212b316eddd35de43714ebc7628d753db32e596284d9ec52c5a7dc1b4c811a655117d16dc28921b2b4161352cab1d89d18bc836b8b891d55ea4622a1251861b5bc9a8aa3e5bcd745c95229ca6c3b5e21d5832d397e917325793d7eb442dc351b2db2a52ba8e1651642275842d8871d5534aabc6d5b741aaa2d48ed2a7dbbb3151ddb49d5b9a7ed1ab98ee75d613d656dbba347bc514c84556b43a9bc65a3256ead792488b862a9d2a8a39b4255a4949ed7dbd79443292521265896b4399c95ede89d7c8c797a6a57791a849adea489359a158aa12e5dacce862b8333b7ebea7d344d1a3c53198864b73a9dedde7b663abb1b539e1e8853b1b7edb14a2a17ebaae4dbe63598a2e7e9a2dbdad415bc1d8cb88cbab5a8c82925732cd282e641ea3bd7d2c6e776de9117a26be86deb7c82c89524b122cb9397cd1acd2284e744ea62b9279bae85479ababe315c3ac29c431333395b24e6a1e3c43a2da42d4dce84aadd5b154aea555eaddcbd6e527d228c19388d9b424d94214555a7edbdeebe569d4a56dc51a86bd9963e377bb74752bd5eaa5761ba545e297b62a1bda46ab4aee423ad6c661311783cc18786d4289236563cb4a75ec67d481c14814994464cd1b87396dee63e5ab6e952cc584baa1d4c47cb557ec84dbb63d487c8728118673a166846dd3a4ebc23d6cb9c5827d96b4556e91899db32b517eda815ae271a8911bd745447121dc8d321557bc2a435ebec1bbac35b1a291669451174e6aa2218a4a9c5a6ca31ebc45d84e3a82c121e9ced7d55e9a
+ * which has a spot (far right) where slightly more complex loop
+ * avoidance is required.
+  already on the list  list is empty 
+ * Return values: -1 means puzzle was proved inconsistent, 0 means we
+ * failed to narrow down to a unique solution, +1 means we solved it
+ * fully.
+ 
+     * Set up the solver's data structures.
+     
+     * tilestate stores the possible orientations of each tile.
+     * There are up to four of these, so we'll index the array in
+     * fours. tilestate[(y * w + x) * 4] and its three successive
+     * members give the possible orientations, clearing to 255 from
+     * the end as things are ruled out.
+     * 
+     * In this loop we also count up the area of the grid (which is
+     * not _necessarily_ equal to w*h, because there might be one
+     * or more blank squares present. This will never happen in a
+     * grid generated _by_ this program, but it's worth keeping the
+     * solver as general as possible.)
+     
+     * edgestate stores the known state of each edge. It is 0 for
+     * unknown, 1 for open (connected) and 2 for closed (not
+     * connected).
+     * 
+     * In principle we need only worry about each edge once each,
+     * but in fact it's easier to track each edge twice so that we
+     * can reference it from either side conveniently. Also I'm
+     * going to allocate _five_ bytes per tile, rather than the
+     * obvious four, so that I can index edgestate[(y*w+x) * 5 + d]
+     * where d is 1,2,4,8 and they never overlap.
+     
+     * deadends tracks which edges have dead ends on them. It is
+     * indexed by tile and direction: deadends[(y*w+x) * 5 + d]
+     * tells you whether heading out of tile (x,y) in direction d
+     * can reach a limited amount of the grid. Values are area+1
+     * (no dead end known) or less than that (can reach _at most_
+     * this many other tiles by heading this way out of this tile).
+     
+     * equivalence tracks which sets of tiles are known to be
+     * connected to one another, so we can avoid creating loops by
+     * linking together tiles which are already linked through
+     * another route.
+     * 
+     * This is a disjoint set forest structure: equivalence[i]
+     * contains the index of another member of the equivalence
+     * class containing i, or contains i itself for precisely one
+     * member in each such class. To find a representative member
+     * of the equivalence class containing i, you keep replacing i
+     * with equivalence[i] until it stops changing; then you go
+     * _back_ along the same path and point everything on it
+     * directly at the representative member so as to speed up
+     * future searches. Then you test equivalence between tiles by
+     * finding the representative of each tile and seeing if
+     * they're the same; and you create new equivalence (merge
+     * classes) by finding the representative of each tile and
+     * setting equivalence[one]=the_other.
+     
+     * On a non-wrapping grid, we instantly know that all the edges
+     * round the edge are closed.
+     
+     * If we have barriers available, we can mark those edges as
+     * closed too.
+     
+		     * In principle the barrier list should already
+		     * contain each barrier from each side, but
+		     * let's not take chances with our internal
+		     * consistency.
+		     
+     * Since most deductions made by this solver are local (the
+     * exception is loop avoidance, where joining two tiles
+     * together on one side of the grid can theoretically permit a
+     * fresh deduction on the other), we can address the scaling
+     * problem inherent in iterating repeatedly over the entire
+     * grid by instead working with a to-do list.
+     
+     * Main deductive loop.
+      prevent instant termination! 
+	 * Take a tile index off the todo list and process it.
+	 
+	     * If we have run out of immediate things to do, we
+	     * have no choice but to scan the whole grid for
+	     * longer-range things we've missed. Hence, I now add
+	     * every square on the grid back on to the to-do list.
+	     * I also set `done_something' to false at this point;
+	     * if we later come back here and find it still false,
+	     * we will know we've scanned the entire grid without
+	     * finding anything new to do, and we can terminate.
+	     
+		     * Immediately rule out this orientation if it
+		     * conflicts with any known edge.
+		     
+			 * Count up the dead-end statistics.
+			 
+			 * Ensure we aren't linking to any tiles,
+			 * through edges not already known to be
+			 * open, which create a loop.
+			 
+		     * If this orientation links together dead-ends
+		     * with a total area of less than the entire
+		     * grid, it is invalid.
+		     *
+		     * (We add 1 to deadendtotal because of the
+		     * tile itself, of course; one tile linking
+		     * dead ends of size 2 and 3 forms a subnetwork
+		     * with a total area of 6, not 5.)
+		     
+		     * If this orientation links together one or
+		     * more dead-ends with precisely one
+		     * non-dead-end, then we may have to mark that
+		     * non-dead-end as a dead end going the other
+		     * way. However, it depends on whether all
+		     * other orientations share the same property.
+		     
+		     * If this orientation links together two or
+		     * more non-dead-ends, then we can rule out the
+		     * possibility of putting in new dead-end
+		     * markings in those directions.
+		      If we've ruled out all possible orientations for a
+                 * tile, then our puzzle has no solution at all. 
+		 * We have ruled out at least one tile orientation.
+		 * Make sure the rest are blanked.
+		 
+	     * Now go through the tile orientations again and see
+	     * if we've deduced anything new about any edges.
+	      This edge is open in all orientations.  This edge is closed in all orientations. 
+	     * Now check the dead-end markers and see if any of
+	     * them has lowered from the real ones.
+	     
+     * Mark all completely determined tiles as locked.
+     
+     * Free up working space.
+      ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+ * Function to randomly perturb an ambiguous section in a grid, to
+ * attempt to ensure unique solvability.
+ 
+     * We know that the tile at (startx,starty) is part of an
+     * ambiguous section, and we also know that its neighbour in
+     * direction startd is fully specified. We begin by tracing all
+     * the way round the ambiguous area.
+     
+	 * First, see if we can simply turn left from where we are
+	 * and find another locked square.
+	 
+	     * Failing that, step left into the new square and look
+	     * in front of us.
+	     
+		 * And failing _that_, we're going to have to step
+		 * forward into _that_ square and look right at the
+		 * same locked square as we started with.
+		 
+     * Our technique for perturbing this ambiguous area is to
+     * search round its edge for a join we can make: that is, an
+     * edge on the perimeter which is (a) not currently connected,
+     * and (b) connecting it would not yield a full cross on either
+     * side. Then we make that join, search round the network to
+     * find the loop thus constructed, and sever the loop at a
+     * randomly selected other point.
+      Shuffle the perimeter, so as to search it without directional bias.  can't link across non-wrapping border  already linked in this direction!  can't turn this tile into a cross  can't turn other tile into a cross 
+	 * We've found the point at which we're going to make a new
+	 * link.
+	  nothing we can do! 
+     * Now we've constructed a new link, we need to find the entire
+     * loop of which it is a part.
+     * 
+     * In principle, this involves doing a complete search round
+     * the network. However, I anticipate that in the vast majority
+     * of cases the loop will be quite small, so what I'm going to
+     * do is make _two_ searches round the network in parallel, one
+     * keeping its metaphorical hand on the left-hand wall while
+     * the other keeps its hand on the right. As soon as one of
+     * them gets back to its starting point, I abandon the other.
+     
+	     * Add this path segment to the loop, unless it exactly
+	     * reverses the previous one on the loop in which case
+	     * we take it away again.
+	     
+		 * Having found our loop, we now sever it at a
+		 * randomly chosen point - absolutely any will do -
+		 * which is not the one we joined it at to begin
+		 * with. Conveniently, the one we joined it at is
+		 * loop[i][0], so we just avoid that one.
+		 
+     * Finally, we must mark the entire disputed section as locked,
+     * to prevent the perturb function being called on it multiple
+     * times.
+     * 
+     * To do this, we _sort_ the perimeter of the area. The
+     * existing xyd_cmp function will arrange things into columns
+     * for us, in such a way that each column has the edges in
+     * vertical order. Then we can work down each column and fill
+     * in all the squares between an up edge and a down edge.
+     
+	     * Fill in everything from the last Up edge to the
+	     * bottom of the grid, if necessary.
+	     
+	     * Fill in everything from the last Up edge to here.
+	     
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+	 * Run the solver to check unique solubility.
+	 
+	     * We expect (in most cases) that most of the grid will
+	     * be uniquely specified already, and the remaining
+	     * ambiguous sections will be small and separate. So
+	     * our strategy is to find each individual such
+	     * section, and perform a perturbation on the network
+	     * in that area.
+	     
+	     * Now n counts the number of ambiguous sections we
+	     * have fiddled with. If we haven't managed to decrease
+	     * it from the last time we ran the solver, give up and
+	     * regenerate the entire grid.
+	      (sorry) 
+	 * The solver will have left a lot of LOCKED bits lying
+	 * around in the tiles array. Remove them.
+	 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+     * Now shuffle the grid.
+     * 
+     * In order to avoid accidentally generating an already-solved
+     * grid, we will reshuffle as necessary to ensure that at least
+     * one edge has a mismatched connection.
+     *
+     * This can always be done, since validate_params() enforces a
+     * grid area of at least 2 and our generator never creates
+     * either type of rotationally invariant tile (cross and
+     * blank). Hence there must be at least one edge separating
+     * distinct tiles, and it must be possible to find orientations
+     * of those tiles such that one tile is trying to connect
+     * through that edge and the other is not.
+     * 
+     * (We could be more subtle, and allow the shuffle to generate
+     * a grid in which all tiles match up locally and the only
+     * criterion preventing the grid from being already solved is
+     * connectedness. However, that would take more effort, and
+     * it's easier to simply make sure every grid is _obviously_
+     * not solved.)
+     *
+     * We also require that our shuffle produces no loops in the
+     * initial grid state, because it's a bit rude to light up a 'HEY,
+     * YOU DID SOMETHING WRONG!' indicator when the user hasn't even
+     * had a chance to do _anything_ yet. This also is possible just
+     * by retrying the whole shuffle on failure, because it's clear
+     * that at least one non-solved shuffle with no loops must exist.
+     * (Proof: take the _solved_ state of the puzzle, and rotate one
+     * endpoint.)
+     
+         * Check for loops, and try to fix them by reshuffling just
+         * the squares involved.
+         
+                 * We're increasing rather than reducing the number of
+                 * loops. Give up and go back to the full shuffle.
+                 
+         * I can't even be bothered to check for mismatches across
+         * a wrapping edge, so I'm just going to enforce that there
+         * must be a mismatch across a non-wrapping edge, which is
+         * still always possible.
+          OK. 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+         * We check whether this is de-facto a non-wrapping game
+         * despite the parameters, in case we were passed the
+         * description of a non-wrapping game. This is so that we
+         * can change some aspects of the UI behaviour.
+         
+	 * Run the internal solver on the provided grid. This might
+	 * not yield a complete solution.
+	 
+     * Now construct a string which can be passed to execute_move()
+     * to transform the current grid into the solved one.
+      nothing needs doing at all 
+	 * To transform this tile into the desired tile: first
+	 * unlock the tile if it's locked, then rotate it if
+	 * necessary, then lock it if necessary.
+	  ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  origin  source tile (game coordinates)  used for jumbling 
+     * We preserve the origin and centre-point coordinates over a
+     * serialise.
+      ----------------------------------------------------------------------
+ * Process a move.
+ 
+	 * The button must have been clicked on a valid tile.
+	  Transform from physical to game coords  with a stylus, `right-click' locks 
+             * Middle button never drags: it only toggles the lock.
+              (see above) 
+             * Otherwise, we note down the start point for a drag.
+              no actual action 
+             * Find the new drag point and see if it necessitates a
+             * rotation.
+              dC == dmin 
+                 * There was a click but no perceptible drag:
+                 * revert to single-click behaviour.
+                  no action  USE_DRAGGING  USE_DRAGGING  XXX should we have some mouse control for this? 
+     * The middle button locks or unlocks a tile. (A locked tile
+     * cannot be turned, and is visually marked as being locked.
+     * This is a convenience for the player, so that once they are
+     * sure which way round a tile goes, they can lock it and thus
+     * avoid forgetting later on that they'd already done that one;
+     * and the locking also prevents them turning the tile by
+     * accident. If they change their mind, another middle click
+     * unlocks it.)
+     
+         * The left and right buttons have no effect if clicked on a
+         * locked tile.
+         
+         * Otherwise, turn the tile one way or the other. Left button
+         * turns anticlockwise; right button turns clockwise.
+         
+         * Jumble all unlocked tiles to random orientations.
+         
+	 * Maximum string length assumes no int can be converted to
+	 * decimal and take more than 11 digits!
+	  disallowed for non-wrapping grids  suppress animation  + for sake of argument 
+     * Check whether the game has been completed.
+     * 
+     * For this purpose it doesn't matter where the source square is,
+     * because we can start from anywhere (or, at least, any square
+     * that's non-empty!), and correctly determine whether the game is
+     * completed.
+      ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  undecided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Highlighted errors are red as well.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Locked tiles are a grey in between those two.
+      Flags describing the visible features of a tile.  4 bits: R U L D  4 bits: RU UL LD DR  1 bit if cursor is here  8 bits: RR UU LL DD
+                                          * Each pair: 0=no wire, 1=unpowered,
+                                          * 2=powered, 3=error highlight  2 bits: 0=no endpoint, 1=unpowered,
+                                          * 2=powered, 3=power-source square  8 bits: RR UU LL DD,
+                                          * same encoding as TILE_WIRE_SHIFT  1 bit if tile is rotating  1 bit if tile is locked 
+     * Clip to the tile boundary, with adjustments if we're drawing
+     * just outside the grid.
+     
+     * Clear the clip region.
+     
+     * Draw the grid lines.
+     
+     * Draw the keyboard cursor.
+     
+     * Draw protrusions into this cell's edges of wires in
+     * neighbouring cells, as given by the TILE_WIRE_ON_EDGE_SHIFT
+     * flags. We only draw each of these if there _isn't_ a wire of
+     * our own that's going to overlap it, which means either the
+     * corresponding TILE_WIRE_SHIFT flag is zero, or else the
+     * TILE_ROTATING flag is set (so that our main wire won't be drawn
+     * in quite that place anyway).
+      there isn't a wire on the edge  wire on edge would be overdrawn anyway 
+     * Set up the rotation matrix for the main cell contents, i.e.
+     * everything that is centred in the grid square and optionally
+     * rotated by an arbitrary angle about that centre point.
+     
+     * Draw the wires.
+     
+     * Draw the central box.
+     
+     * Draw barriers along grid edges.
+     
+     * Unclip and draw update, to finish.
+     
+     * Clear the screen on our first call.
+     
+         * We're animating a single tile rotation. Find the turning
+         * tile.
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Build up a map of what we want every tile to look like. We
+     * include tiles one square outside the grid, for the outer edges
+     * of barriers.
+      Highlight as an error any edge in a locked tile that
+                     * is adjacent to a lack-of-edge in another locked tile,
+                     * or to a barrier  this is not an endpoint tile 
+             * In a completion flash, we adjust the LOCKED bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Now draw any tile that differs from the way it was last drawn.
+     * An exception is that if either the previous _or_ current state
+     * has the TILE_ROTATING bit set, we must draw it regardless,
+     * because it will have rotated to a different angle.q
+     
+     * Update the status bar.
+      ensure even an empty status string is terminated 
+         * Omit the 'Active: n/N' counter completely if the source
+         * tile is a completely empty one, because then the active
+         * count can't help but read '1'.
+         
+             * Also, if we're displaying a completion indicator and
+             * the game is still in its completed state (i.e. every
+             * tile is active), we might as well omit this too.
+             
+     * Don't animate if last_rotate_dir is zero.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+     
+     * I'll use 8mm squares by default.
+     
+     * Find our centre point.
+     
+     * Draw the square block if we have an endpoint.
+     
+     * Draw each radial line.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Barriers.
+     
+     * Grid contents.
+     
+	     * Rotate into a standard orientation for the top left
+	     * corner diagram.
+	     
+	     * Draw the top left corner diagram.
+	     
+	     * Draw the real solution diagram, if we're doing so.
+	      game_request_keys  wants_statusbar  flags 
+ * net.c: Net game.
+ 
+ * The standard user interface for Net simply has left- and
+ * right-button mouse clicks in a square rotate it one way or the
+ * other. We also provide, by #ifdef, a separate interface based on
+ * rotational dragging motions. I initially developed this for the
+ * Mac on the basis that it might work better than the click
+ * interface with only one mouse button available, but in fact
+ * found it to be quite strange and unintuitive. Apparently it
+ * works better on stylus-driven platforms such as Palm and
+ * PocketPC, though, so we enable it by default there.
+  Direction and other bitfields  Rotations: Anticlockwise, Clockwise, Flip, general rotate  X and Y displacements  Bit count  ----------------------------------------------------------------------
+ * Manage game parameters.
+  structure copy  skip any other gunk 
+     * Specifying either grid dimension as 2 in a wrapping puzzle
+     * makes it actually impossible to ensure a unique puzzle
+     * solution.
+     * 
+     * Proof:
+     * 
+     * Without loss of generality, let us assume the puzzle _width_
+     * is 2, so we can conveniently discuss rows without having to
+     * say `rows/columns' all the time. (The height may be 2 as
+     * well, but that doesn't matter.)
+     * 
+     * In each row, there are two edges between tiles: the inner
+     * edge (running down the centre of the grid) and the outer
+     * edge (the identified left and right edges of the grid).
+     * 
+     * Lemma: In any valid 2xn puzzle there must be at least one
+     * row in which _exactly one_ of the inner edge and outer edge
+     * is connected.
+     * 
+     *   Proof: No row can have _both_ inner and outer edges
+     *   connected, because this would yield a loop. So the only
+     *   other way to falsify the lemma is for every row to have
+     *   _neither_ the inner nor outer edge connected. But this
+     *   means there is no connection at all between the left and
+     *   right columns of the puzzle, so there are two disjoint
+     *   subgraphs, which is also disallowed. []
+     * 
+     * Given such a row, it is always possible to make the
+     * disconnected edge connected and the connected edge
+     * disconnected without changing the state of any other edge.
+     * (This is easily seen by case analysis on the various tiles:
+     * left-pointing and right-pointing endpoints can be exchanged,
+     * likewise T-pieces, and a corner piece can select its
+     * horizontal connectivity independently of its vertical.) This
+     * yields a distinct valid solution.
+     * 
+     * Thus, for _every_ row in which exactly one of the inner and
+     * outer edge is connected, there are two valid states for that
+     * row, and hence the total number of solutions of the puzzle
+     * is at least 2^(number of such rows), and in particular is at
+     * least 2 since there must be at least one such row. []
+      ----------------------------------------------------------------------
+ * Solver used to assure solution uniqueness during generation. 
+ 
+ * Test cases I used while debugging all this were
+ * 
+ *   ./net --generate 1 13x11w#12300
+ * which expands under the non-unique grid generation rules to
+ *   13x11w:5eaade1bd222664436d5e2965c12656b1129dd825219e3274d558d5eb2dab5da18898e571d5a2987be79746bd95726c597447d6da96188c513add829da7681da954db113d3cd244
+ * and has two ambiguous areas.
+ * 
+ * An even better one is
+ *   13x11w#507896411361192
+ * which expands to
+ *   13x11w:b7125b1aec598eb31bd58d82572bc11494e5dee4e8db2bdd29b88d41a16bdd996d2996ddec8c83741a1e8674e78328ba71737b8894a9271b1cd1399453d1952e43951d9b712822e
+ * and has an ambiguous area _and_ a situation where loop avoidance
+ * is a necessary deductive technique.
+ * 
+ * Then there's
+ *   48x25w#820543338195187
+ * becoming
+ *   48x25w:255989d14cdd185deaa753a93821a12edc1ab97943ac127e2685d7b8b3c48861b2192416139212b316eddd35de43714ebc7628d753db32e596284d9ec52c5a7dc1b4c811a655117d16dc28921b2b4161352cab1d89d18bc836b8b891d55ea4622a1251861b5bc9a8aa3e5bcd745c95229ca6c3b5e21d5832d397e917325793d7eb442dc351b2db2a52ba8e1651642275842d8871d5534aabc6d5b741aaa2d48ed2a7dbbb3151ddb49d5b9a7ed1ab98ee75d613d656dbba347bc514c84556b43a9bc65a3256ead792488b862a9d2a8a39b4255a4949ed7dbd79443292521265896b4399c95ede89d7c8c797a6a57791a849adea489359a158aa12e5dacce862b8333b7ebea7d344d1a3c53198864b73a9dedde7b663abb1b539e1e8853b1b7edb14a2a17ebaae4dbe63598a2e7e9a2dbdad415bc1d8cb88cbab5a8c82925732cd282e641ea3bd7d2c6e776de9117a26be86deb7c82c89524b122cb9397cd1acd2284e744ea62b9279bae85479ababe315c3ac29c431333395b24e6a1e3c43a2da42d4dce84aadd5b154aea555eaddcbd6e527d228c19388d9b424d94214555a7edbdeebe569d4a56dc51a86bd9963e377bb74752bd5eaa5761ba545e297b62a1bda46ab4aee423ad6c661311783cc18786d4289236563cb4a75ec67d481c14814994464cd1b87396dee63e5ab6e952cc584baa1d4c47cb557ec84dbb63d487c8728118673a166846dd3a4ebc23d6cb9c5827d96b4556e91899db32b517eda815ae271a8911bd745447121dc8d321557bc2a435ebec1bbac35b1a291669451174e6aa2218a4a9c5a6ca31ebc45d84e3a82c121e9ced7d55e9a
+ * which has a spot (far right) where slightly more complex loop
+ * avoidance is required.
+  already on the list  list is empty 
+ * Return values: -1 means puzzle was proved inconsistent, 0 means we
+ * failed to narrow down to a unique solution, +1 means we solved it
+ * fully.
+ 
+     * Set up the solver's data structures.
+     
+     * tilestate stores the possible orientations of each tile.
+     * There are up to four of these, so we'll index the array in
+     * fours. tilestate[(y * w + x) * 4] and its three successive
+     * members give the possible orientations, clearing to 255 from
+     * the end as things are ruled out.
+     * 
+     * In this loop we also count up the area of the grid (which is
+     * not _necessarily_ equal to w*h, because there might be one
+     * or more blank squares present. This will never happen in a
+     * grid generated _by_ this program, but it's worth keeping the
+     * solver as general as possible.)
+     
+     * edgestate stores the known state of each edge. It is 0 for
+     * unknown, 1 for open (connected) and 2 for closed (not
+     * connected).
+     * 
+     * In principle we need only worry about each edge once each,
+     * but in fact it's easier to track each edge twice so that we
+     * can reference it from either side conveniently. Also I'm
+     * going to allocate _five_ bytes per tile, rather than the
+     * obvious four, so that I can index edgestate[(y*w+x) * 5 + d]
+     * where d is 1,2,4,8 and they never overlap.
+     
+     * deadends tracks which edges have dead ends on them. It is
+     * indexed by tile and direction: deadends[(y*w+x) * 5 + d]
+     * tells you whether heading out of tile (x,y) in direction d
+     * can reach a limited amount of the grid. Values are area+1
+     * (no dead end known) or less than that (can reach _at most_
+     * this many other tiles by heading this way out of this tile).
+     
+     * equivalence tracks which sets of tiles are known to be
+     * connected to one another, so we can avoid creating loops by
+     * linking together tiles which are already linked through
+     * another route.
+     * 
+     * This is a disjoint set forest structure: equivalence[i]
+     * contains the index of another member of the equivalence
+     * class containing i, or contains i itself for precisely one
+     * member in each such class. To find a representative member
+     * of the equivalence class containing i, you keep replacing i
+     * with equivalence[i] until it stops changing; then you go
+     * _back_ along the same path and point everything on it
+     * directly at the representative member so as to speed up
+     * future searches. Then you test equivalence between tiles by
+     * finding the representative of each tile and seeing if
+     * they're the same; and you create new equivalence (merge
+     * classes) by finding the representative of each tile and
+     * setting equivalence[one]=the_other.
+     
+     * On a non-wrapping grid, we instantly know that all the edges
+     * round the edge are closed.
+     
+     * If we have barriers available, we can mark those edges as
+     * closed too.
+     
+		     * In principle the barrier list should already
+		     * contain each barrier from each side, but
+		     * let's not take chances with our internal
+		     * consistency.
+		     
+     * Since most deductions made by this solver are local (the
+     * exception is loop avoidance, where joining two tiles
+     * together on one side of the grid can theoretically permit a
+     * fresh deduction on the other), we can address the scaling
+     * problem inherent in iterating repeatedly over the entire
+     * grid by instead working with a to-do list.
+     
+     * Main deductive loop.
+      prevent instant termination! 
+	 * Take a tile index off the todo list and process it.
+	 
+	     * If we have run out of immediate things to do, we
+	     * have no choice but to scan the whole grid for
+	     * longer-range things we've missed. Hence, I now add
+	     * every square on the grid back on to the to-do list.
+	     * I also set `done_something' to false at this point;
+	     * if we later come back here and find it still false,
+	     * we will know we've scanned the entire grid without
+	     * finding anything new to do, and we can terminate.
+	     
+		     * Immediately rule out this orientation if it
+		     * conflicts with any known edge.
+		     
+			 * Count up the dead-end statistics.
+			 
+			 * Ensure we aren't linking to any tiles,
+			 * through edges not already known to be
+			 * open, which create a loop.
+			 
+		     * If this orientation links together dead-ends
+		     * with a total area of less than the entire
+		     * grid, it is invalid.
+		     *
+		     * (We add 1 to deadendtotal because of the
+		     * tile itself, of course; one tile linking
+		     * dead ends of size 2 and 3 forms a subnetwork
+		     * with a total area of 6, not 5.)
+		     
+		     * If this orientation links together one or
+		     * more dead-ends with precisely one
+		     * non-dead-end, then we may have to mark that
+		     * non-dead-end as a dead end going the other
+		     * way. However, it depends on whether all
+		     * other orientations share the same property.
+		     
+		     * If this orientation links together two or
+		     * more non-dead-ends, then we can rule out the
+		     * possibility of putting in new dead-end
+		     * markings in those directions.
+		      If we've ruled out all possible orientations for a
+                 * tile, then our puzzle has no solution at all. 
+		 * We have ruled out at least one tile orientation.
+		 * Make sure the rest are blanked.
+		 
+	     * Now go through the tile orientations again and see
+	     * if we've deduced anything new about any edges.
+	      This edge is open in all orientations.  This edge is closed in all orientations. 
+	     * Now check the dead-end markers and see if any of
+	     * them has lowered from the real ones.
+	     
+     * Mark all completely determined tiles as locked.
+     
+     * Free up working space.
+      ----------------------------------------------------------------------
+ * Randomly select a new game description.
+ 
+ * Function to randomly perturb an ambiguous section in a grid, to
+ * attempt to ensure unique solvability.
+ 
+     * We know that the tile at (startx,starty) is part of an
+     * ambiguous section, and we also know that its neighbour in
+     * direction startd is fully specified. We begin by tracing all
+     * the way round the ambiguous area.
+     
+	 * First, see if we can simply turn left from where we are
+	 * and find another locked square.
+	 
+	     * Failing that, step left into the new square and look
+	     * in front of us.
+	     
+		 * And failing _that_, we're going to have to step
+		 * forward into _that_ square and look right at the
+		 * same locked square as we started with.
+		 
+     * Our technique for perturbing this ambiguous area is to
+     * search round its edge for a join we can make: that is, an
+     * edge on the perimeter which is (a) not currently connected,
+     * and (b) connecting it would not yield a full cross on either
+     * side. Then we make that join, search round the network to
+     * find the loop thus constructed, and sever the loop at a
+     * randomly selected other point.
+      Shuffle the perimeter, so as to search it without directional bias.  can't link across non-wrapping border  already linked in this direction!  can't turn this tile into a cross  can't turn other tile into a cross 
+	 * We've found the point at which we're going to make a new
+	 * link.
+	  nothing we can do! 
+     * Now we've constructed a new link, we need to find the entire
+     * loop of which it is a part.
+     * 
+     * In principle, this involves doing a complete search round
+     * the network. However, I anticipate that in the vast majority
+     * of cases the loop will be quite small, so what I'm going to
+     * do is make _two_ searches round the network in parallel, one
+     * keeping its metaphorical hand on the left-hand wall while
+     * the other keeps its hand on the right. As soon as one of
+     * them gets back to its starting point, I abandon the other.
+     
+	     * Add this path segment to the loop, unless it exactly
+	     * reverses the previous one on the loop in which case
+	     * we take it away again.
+	     
+		 * Having found our loop, we now sever it at a
+		 * randomly chosen point - absolutely any will do -
+		 * which is not the one we joined it at to begin
+		 * with. Conveniently, the one we joined it at is
+		 * loop[i][0], so we just avoid that one.
+		 
+     * Finally, we must mark the entire disputed section as locked,
+     * to prevent the perturb function being called on it multiple
+     * times.
+     * 
+     * To do this, we _sort_ the perimeter of the area. The
+     * existing xyd_cmp function will arrange things into columns
+     * for us, in such a way that each column has the edges in
+     * vertical order. Then we can work down each column and fill
+     * in all the squares between an up edge and a down edge.
+     
+	     * Fill in everything from the last Up edge to the
+	     * bottom of the grid, if necessary.
+	     
+	     * Fill in everything from the last Up edge to here.
+	     
+     * Construct the unshuffled grid.
+     * 
+     * To do this, we simply start at the centre point, repeatedly
+     * choose a random possibility out of the available ways to
+     * extend a used square into an unused one, and do it. After
+     * extending the third line out of a square, we remove the
+     * fourth from the possibilities list to avoid any full-cross
+     * squares (which would make the game too easy because they
+     * only have one orientation).
+     * 
+     * The slightly worrying thing is the avoidance of full-cross
+     * squares. Can this cause our unsophisticated construction
+     * algorithm to paint itself into a corner, by getting into a
+     * situation where there are some unreached squares and the
+     * only way to reach any of them is to extend a T-piece into a
+     * full cross?
+     * 
+     * Answer: no it can't, and here's a proof.
+     * 
+     * Any contiguous group of such unreachable squares must be
+     * surrounded on _all_ sides by T-pieces pointing away from the
+     * group. (If not, then there is a square which can be extended
+     * into one of the `unreachable' ones, and so it wasn't
+     * unreachable after all.) In particular, this implies that
+     * each contiguous group of unreachable squares must be
+     * rectangular in shape (any deviation from that yields a
+     * non-T-piece next to an `unreachable' square).
+     * 
+     * So we have a rectangle of unreachable squares, with T-pieces
+     * forming a solid border around the rectangle. The corners of
+     * that border must be connected (since every tile connects all
+     * the lines arriving in it), and therefore the border must
+     * form a closed loop around the rectangle.
+     * 
+     * But this can't have happened in the first place, since we
+     * _know_ we've avoided creating closed loops! Hence, no such
+     * situation can ever arise, and the naive grid construction
+     * algorithm will guaranteeably result in a complete grid
+     * containing no unreached squares, no full crosses _and_ no
+     * closed loops. []
+     
+	 * Extract a randomly chosen possibility from the list.
+	 
+	 * Make the connection. (We should be moving to an as yet
+	 * unused tile.)
+	 
+	 * If we have created a T-piece, remove its last
+	 * possibility.
+	 
+	 * Remove all other possibilities that were pointing at the
+	 * tile we've just moved into.
+	 
+	 * Add new possibilities to the list for moving _out_ of
+	 * the tile we have just moved into.
+	  we've got this one already  this would create a loop  Having done that, we should have no possibilities remaining. 
+	 * Run the solver to check unique solubility.
+	 
+	     * We expect (in most cases) that most of the grid will
+	     * be uniquely specified already, and the remaining
+	     * ambiguous sections will be small and separate. So
+	     * our strategy is to find each individual such
+	     * section, and perform a perturbation on the network
+	     * in that area.
+	     
+	     * Now n counts the number of ambiguous sections we
+	     * have fiddled with. If we haven't managed to decrease
+	     * it from the last time we ran the solver, give up and
+	     * regenerate the entire grid.
+	      (sorry) 
+	 * The solver will have left a lot of LOCKED bits lying
+	 * around in the tiles array. Remove them.
+	 
+     * Now compute a list of the possible barrier locations.
+     
+     * Save the unshuffled grid in aux.
+     
+     * Now shuffle the grid.
+     * 
+     * In order to avoid accidentally generating an already-solved
+     * grid, we will reshuffle as necessary to ensure that at least
+     * one edge has a mismatched connection.
+     *
+     * This can always be done, since validate_params() enforces a
+     * grid area of at least 2 and our generator never creates
+     * either type of rotationally invariant tile (cross and
+     * blank). Hence there must be at least one edge separating
+     * distinct tiles, and it must be possible to find orientations
+     * of those tiles such that one tile is trying to connect
+     * through that edge and the other is not.
+     * 
+     * (We could be more subtle, and allow the shuffle to generate
+     * a grid in which all tiles match up locally and the only
+     * criterion preventing the grid from being already solved is
+     * connectedness. However, that would take more effort, and
+     * it's easier to simply make sure every grid is _obviously_
+     * not solved.)
+     *
+     * We also require that our shuffle produces no loops in the
+     * initial grid state, because it's a bit rude to light up a 'HEY,
+     * YOU DID SOMETHING WRONG!' indicator when the user hasn't even
+     * had a chance to do _anything_ yet. This also is possible just
+     * by retrying the whole shuffle on failure, because it's clear
+     * that at least one non-solved shuffle with no loops must exist.
+     * (Proof: take the _solved_ state of the puzzle, and rotate one
+     * endpoint.)
+     
+         * Check for loops, and try to fix them by reshuffling just
+         * the squares involved.
+         
+                 * We're increasing rather than reducing the number of
+                 * loops. Give up and go back to the full shuffle.
+                 
+         * I can't even be bothered to check for mismatches across
+         * a wrapping edge, so I'm just going to enforce that there
+         * must be a mismatch across a non-wrapping edge, which is
+         * still always possible.
+          OK. 
+     * And now choose barrier locations. (We carefully do this
+     * _after_ shuffling, so that changing the barrier rate in the
+     * params while keeping the random seed the same will give the
+     * same shuffled grid and _only_ change the barrier locations.
+     * Also the way we choose barrier locations, by repeatedly
+     * choosing one possibility from the list until we have enough,
+     * is designed to ensure that raising the barrier rate while
+     * keeping the seed the same will provide a superset of the
+     * previous barrier set - i.e. if you ask for 10 barriers, and
+     * then decide that's still too hard and ask for 20, you'll get
+     * the original 10 plus 10 more, rather than getting 20 new
+     * ones and the chance of remembering your first 10.)
+     
+	 * Extract a randomly chosen barrier from the list.
+	 
+     * Clean up the rest of the barrier list.
+     
+     * Finally, encode the grid into a string game description.
+     * 
+     * My syntax is extremely simple: each square is encoded as a
+     * hex digit in which bit 0 means a connection on the right,
+     * bit 1 means up, bit 2 left and bit 3 down. (i.e. the same
+     * encoding as used internally). Each digit is followed by
+     * optional barrier indicators: `v' means a vertical barrier to
+     * the right of it, and `h' means a horizontal barrier below
+     * it.
+      OK  OK  OK  ----------------------------------------------------------------------
+ * Construct an initial game state, given a description and parameters.
+ 
+     * Create a blank game state.
+     
+     * Parse the game description into the grid.
+     
+     * Set up border barriers if this is a non-wrapping game.
+     
+         * We check whether this is de-facto a non-wrapping game
+         * despite the parameters, in case we were passed the
+         * description of a non-wrapping game. This is so that we
+         * can change some aspects of the UI behaviour.
+         
+	 * Run the internal solver on the provided grid. This might
+	 * not yield a complete solution.
+	 
+     * Now construct a string which can be passed to execute_move()
+     * to transform the current grid into the solved one.
+      nothing needs doing at all 
+	 * To transform this tile into the desired tile: first
+	 * unlock the tile if it's locked, then rotate it if
+	 * necessary, then lock it if necessary.
+	  ----------------------------------------------------------------------
+ * Utility routine.
+ 
+ * Compute which squares are reachable from the centre square, as a
+ * quick visual aid to determining how close the game is to
+ * completion. This is also a simple way to tell if the game _is_
+ * completed - just call this function and see whether every square
+ * is marked active.
+ 
+     * We only store (x,y) pairs in todo, but it's easier to reuse
+     * xyd_cmp and just store direction 0 every time.
+     
+	     * If the next tile in this direction is connected to
+	     * us, and there isn't a barrier in the way, and it
+	     * isn't already marked active, then mark it active and
+	     * add it to the to-examine list.
+	      Now we expect the todo list to have shrunk to zero size.  origin  source tile (game coordinates)  used for jumbling 
+     * We preserve the origin and centre-point coordinates over a
+     * serialise.
+      ----------------------------------------------------------------------
+ * Process a move.
+ 
+	 * The button must have been clicked on a valid tile.
+	  Transform from physical to game coords  with a stylus, `right-click' locks 
+             * Middle button never drags: it only toggles the lock.
+              (see above) 
+             * Otherwise, we note down the start point for a drag.
+              no actual action 
+             * Find the new drag point and see if it necessitates a
+             * rotation.
+              dC == dmin 
+                 * There was a click but no perceptible drag:
+                 * revert to single-click behaviour.
+                  no action  USE_DRAGGING  USE_DRAGGING  XXX should we have some mouse control for this? 
+     * The middle button locks or unlocks a tile. (A locked tile
+     * cannot be turned, and is visually marked as being locked.
+     * This is a convenience for the player, so that once they are
+     * sure which way round a tile goes, they can lock it and thus
+     * avoid forgetting later on that they'd already done that one;
+     * and the locking also prevents them turning the tile by
+     * accident. If they change their mind, another middle click
+     * unlocks it.)
+     
+         * The left and right buttons have no effect if clicked on a
+         * locked tile.
+         
+         * Otherwise, turn the tile one way or the other. Left button
+         * turns anticlockwise; right button turns clockwise.
+         
+         * Jumble all unlocked tiles to random orientations.
+         
+	 * Maximum string length assumes no int can be converted to
+	 * decimal and take more than 11 digits!
+	  disallowed for non-wrapping grids  suppress animation  + for sake of argument 
+     * Check whether the game has been completed.
+     * 
+     * For this purpose it doesn't matter where the source square is,
+     * because we can start from anywhere (or, at least, any square
+     * that's non-empty!), and correctly determine whether the game is
+     * completed.
+      ----------------------------------------------------------------------
+ * Routines for drawing the game position on the screen.
+  undecided yet  Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Basic background colour is whatever the front end thinks is
+     * a sensible default.
+     
+     * Wires are black.
+     
+     * Powered wires and powered endpoints are cyan.
+     
+     * Barriers are red.
+     
+     * Highlighted errors are red as well.
+     
+     * Unpowered endpoints are blue.
+     
+     * Tile borders are a darker grey than the background.
+     
+     * Locked tiles are a grey in between those two.
+      Flags describing the visible features of a tile.  4 bits: R U L D  4 bits: RU UL LD DR  1 bit if cursor is here  8 bits: RR UU LL DD
+                                          * Each pair: 0=no wire, 1=unpowered,
+                                          * 2=powered, 3=error highlight  2 bits: 0=no endpoint, 1=unpowered,
+                                          * 2=powered, 3=power-source square  8 bits: RR UU LL DD,
+                                          * same encoding as TILE_WIRE_SHIFT  1 bit if tile is rotating  1 bit if tile is locked 
+     * Clip to the tile boundary, with adjustments if we're drawing
+     * just outside the grid.
+     
+     * Clear the clip region.
+     
+     * Draw the grid lines.
+     
+     * Draw the keyboard cursor.
+     
+     * Draw protrusions into this cell's edges of wires in
+     * neighbouring cells, as given by the TILE_WIRE_ON_EDGE_SHIFT
+     * flags. We only draw each of these if there _isn't_ a wire of
+     * our own that's going to overlap it, which means either the
+     * corresponding TILE_WIRE_SHIFT flag is zero, or else the
+     * TILE_ROTATING flag is set (so that our main wire won't be drawn
+     * in quite that place anyway).
+      there isn't a wire on the edge  wire on edge would be overdrawn anyway 
+     * Set up the rotation matrix for the main cell contents, i.e.
+     * everything that is centred in the grid square and optionally
+     * rotated by an arbitrary angle about that centre point.
+     
+     * Draw the wires.
+     
+     * Draw the central box.
+     
+     * Draw barriers along grid edges.
+     
+     * Unclip and draw update, to finish.
+     
+     * Clear the screen on our first call.
+     
+         * We're animating a single tile rotation. Find the turning
+         * tile.
+         
+         * We're animating a completion flash. Find which frame
+         * we're at.
+         
+     * Build up a map of what we want every tile to look like. We
+     * include tiles one square outside the grid, for the outer edges
+     * of barriers.
+      Highlight as an error any edge in a locked tile that
+                     * is adjacent to a lack-of-edge in another locked tile,
+                     * or to a barrier  this is not an endpoint tile 
+             * In a completion flash, we adjust the LOCKED bit
+             * depending on our distance from the centre point and
+             * the frame number.
+             
+     * Now draw any tile that differs from the way it was last drawn.
+     * An exception is that if either the previous _or_ current state
+     * has the TILE_ROTATING bit set, we must draw it regardless,
+     * because it will have rotated to a different angle.q
+     
+     * Update the status bar.
+      ensure even an empty status string is terminated 
+         * Omit the 'Active: n/N' counter completely if the source
+         * tile is a completely empty one, because then the active
+         * count can't help but read '1'.
+         
+             * Also, if we're displaying a completion indicator and
+             * the game is still in its completed state (i.e. every
+             * tile is active), we might as well omit this too.
+             
+     * Don't animate if last_rotate_dir is zero.
+     
+     * If the game has just been completed, we display a completion
+     * flash.
+     
+     * I'll use 8mm squares by default.
+     
+     * Find our centre point.
+     
+     * Draw the square block if we have an endpoint.
+     
+     * Draw each radial line.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Grid.
+     
+     * Barriers.
+     
+     * Grid contents.
+     
+	     * Rotate into a standard orientation for the top left
+	     * corner diagram.
+	     
+	     * Draw the top left corner diagram.
+	     
+	     * Draw the real solution diagram, if we're doing so.
+	      game_request_keys  wants_statusbar  flags 

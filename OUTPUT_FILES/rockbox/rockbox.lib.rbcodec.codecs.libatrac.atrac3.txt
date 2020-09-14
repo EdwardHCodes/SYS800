@@ -1,0 +1,595 @@
+
+ * Atrac 3 compatible decoder
+ * Copyright (c) 2006-2008 Maxim Poliakovski
+ * Copyright (c) 2006-2008 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file libavcodec/atrac3.c
+ * Atrac 3 compatible decoder.
+ * This decoder handles Sony's ATRAC3 data.
+ *
+ * Container formats used to store atrac 3 data:
+ * RealMedia (.rm), RIFF WAV (.wav, .at3), Sony OpenMG (.oma, .aa3).
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided in the containers above.
+  ROCKBOX  FFMAX/MIN/SWAP and av_clip were taken from libavutil/common.h  ARMv5e+ uses 32x16 multiplication *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param p3        output buffer
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param out       output buffer
+ * @param in        input buffer
+ * @param win       windowing coefficients
+ * @param nIn       size of spectrum buffer
+ * Reference implementation:
+ *
+ * for (j = nIn; j != 0; j--) {
+ *          s1 = fixmul32(in[0], win[0]);
+ *          s2 = fixmul32(in[1], win[1]);
+ *          for (i = 2; i < 48; i += 2) {
+ *              s1 += fixmul31(in[i  ], win[i  ]);
+ *              s2 += fixmul31(in[i+1], win[i+1]);
+ *          }
+ *          out[0] = s2;
+ *          out[1] = s1;
+ *          in += 2;
+ *          out += 2;
+ *      }
+  preload frist in value   0.. 7   8..15  16..23  24..31  32..39  40..47  s1  s2   0.. 7   8..15  16..23  24..31  32..39  40..47 *
+ * IMDCT windowing.
+ *
+ * @param buffer        sample buffer
+ * @param win           window coefficients
+  win[0..127] = win[511..384], win[128..383] = 1 *
+ * Quadrature mirror synthesis filter.
+ *
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ * @param pOut      out buffer
+ * @param delayBuf  delayBuf buffer
+ * @param temp      temp buffer
+  Restore the delay buffer  loop1: matrixing  loop2: dewindowing  Save the delay buffer *
+ * Regular 512 points IMDCT without overlapping, with the exception of the swapping of odd bands
+ * caused by the reverse spectra of the QMF.
+ *
+ * @param pInput    input
+ * @param pOutput   output
+ * @param odd_band  1 if the band is an odd band
+  Apply the imdct.  Windowing. *
+ * Atrac 3 indata descrambling, only used for data coming from the rm container
+ *
+ * @param in        pointer to 8 bit array of indata
+ * @param bits      amount of bits
+ * @param out       pointer to 8 bit array of outdata
+  no check for memory alignment of inbuffer  TEST  Generate the mdct window, for details see
+     * http://wiki.multimedia.cx/index.php?title=RealAudio_atrc#Windows  mdct window had been generated and saved as a lookup table in atrac3data_fixed.h  Generate the QMF window. *
+ * Mantissa decoding
+ *
+ * @param gb            the GetBit context
+ * @param selector      what table is the output values coded with
+ * @param codingFlag    constant length coding or variable length coding
+ * @param mantissas     mantissa output table
+ * @param numCodes      amount of values to get
+  constant length coding (CLC)  numBits is always 4 in this case  variable length coding (VLC) *
+ * Requantize the spectrum.
+ *
+ * @param *mantissas    pointer to mantissas for each spectral line
+ * @param pOut          requantized band spectrum
+ * @param first         first spectral line in subband
+ * @param last          last spectral line in subband
+ * @param SF            scalefactor for all spectral lines of this band
+  Inverse quantize the coefficients.  Odd band - Reverse coefficients  Even band - Do not reverse coefficients *
+ * Restore the quantized band spectrum coefficients
+ *
+ * @param gb            the GetBit context
+ * @param pOut          decoded band spectrum
+ * @return outSubbands  subband counter, fix for broken specification/files
+  number of coded subbands  coding Mode: 0 - VLC/ 1-CLC  Get the VLC selector table for the subbands, 0 means not coded.  Read the scale factor indexes from the stream.  Decode spectral coefficients for this subband.  TODO: This can be done faster is several blocks share the
+             * same VLC selector (subband_vlc_index)  Decode the scale factor for this subband.  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+             * representation. Needed for higher accuracy in internal calculations as
+             * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+              Inverse quantize the coefficients.  This subband was not coded, so zero the entire subband.  Clear the subbands that were not coded. *
+ * Restore the quantized tonal components
+ *
+ * @param gb            the GetBit context
+ * @param pComponent    tone component
+ * @param numBands      amount of coded bands
+  no tonal components  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+                 * representation. Needed for higher accuracy in internal calculations as
+                 * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+                  inverse quant *
+ * Decode gain parameters for the coded bands
+ *
+ * @param gb            the GetBit context
+ * @param pGb           the gainblock for the current band
+ * @param numBands      amount of coded bands
+  Clear the unused blocks. *
+ * Apply fix (constant) gain and overlap for sample[start...255].
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param gain          gain to apply
+  start is always a multiple of 8 and therefore allows us to unroll the 
+     * loop to 8 calculation per loop 
+      gain1 = 1.0 -> no multiplication needed, just adding  Remark: This path is called >90%.  gain1 != 1.0 -> we need to do a multiplication  Remark: This path is called seldom. *
+ * Apply variable gain and overlap. Returns sample index after applying gain,
+ * resulting sample index is always a multiple of 8.
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param end           end index for first loop (always a multiple of 8)
+ * @param gain1         current bands gain to apply
+ * @param gain2         next bands gain to apply
+ * @param gain_inc      stepwise adaption from gain1 to gain2
+  Apply fix gains until end index is reached  Interpolation is done over next eight samples *
+ * Apply gain parameters and perform the MDCT overlapping part
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param pGain1        current band gain info
+ * @param pGain2        next band gain info
+  gain compensation function  Remark: This path is called >90%.  Apply gain for all samples from 0...255  Remark: This path is called seldom.  starting loop with =0  Apply variable gain (gain1 -> gain2) to samples  Apply gain for the residual samples from nsample...255  Delay for the overlapping part. *
+ * Combine the tonal band spectrum and regular band spectrum
+ * Return position of the last tonal coefficient
+
+ *
+ * @param pSpectrum     output spectrum buffer
+ * @param numComponents amount of tonal components
+ * @param pComponent    tonal components for this band
+ *
+ * Linear equidistant interpolation between two points x and y. 7 interpolation
+ * points can be calculated.
+ * Result for s=0 is x
+ * Result for s=8 is y
+ *
+ * @param x     first input point
+ * @param y     second input point
+ * @param s     index of interpolation point (0..7)
+  rockbox: Not used anymore. Faster version defined below.
+#define INTERPOLATE_FP16(x, y, s)    ((x) + fixmul16(((s*ONE_16)>>3), (((y) - (x)))))
+ Selector value changed, interpolation needed.  Interpolation is done over the first eight samples.  Apply the matrix without interpolation.  M/S decoding  assert(0)  Read channel weights from table  Swap channel weights  w[x][y] y=0 is left y=1 is right  scale the channels by the weights *
+ * Decode a Sound Unit
+ *
+ * @param gb            the GetBit context
+ * @param pSnd          the channel unit to be used
+ * @param pOut          the decoded samples before IQMF
+ * @param channelNum    channel number
+ * @param codingMode    the coding mode (JOINT_STEREO or regular stereo/mono)
+  number of coded QMF bands  Merge the decoded spectrum and tonal components.  calculate number of used MLT/QMF bands according to the amount of coded spectral lines  Reconstruct time domain samples.  Perform the IMDCT step without overlapping.  gain compensation and overlapping  Swap the gain control buffers for the next frame. *
+ * Frame handling
+ *
+ * @param q             Atrac3 private context
+ * @param databuf       the input data
+  channel coupling mode  decode Sound Unit 1  Framedata of the su2 in the joint-stereo mode is encoded in
+         * reverse byte order so we need to swap it first.  Skip the sync codes (0xF8).  set the bitstream reader at the start of the second Sound Unit Fill the Weighting coeffs delay buffer  Decode Sound Unit 2.  Reconstruct the channel coefficients.  normal stereo mode or mono  Decode the channel sound units.  Set the bitstream reader at the start of a channel sound unit.  Apply the iQMF synthesis filter. *
+ * Atrac frame decoding
+ *
+ * @param rmctx     pointer to the AVCodecContext
+  Check if we need to descramble and what buffer to pass on. *
+ * Atrac3 initialization
+ *
+ * @param rmctx     pointer to the RMContext
+  Take data from the RM container.  Take care of the codec-specific extradata.  Parse the extradata, WAV format  Unknown value always 1  Dupe of coding mode  Unknown always 1  Unknown always 0  setup  Parse the extradata, RM format.  Check the extradata.  Initialize the VLC tables.  init the joint-stereo decoding data  Link the iram'ed arrays to the decoder's data structure 
+ * Atrac 3 compatible decoder
+ * Copyright (c) 2006-2008 Maxim Poliakovski
+ * Copyright (c) 2006-2008 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file libavcodec/atrac3.c
+ * Atrac 3 compatible decoder.
+ * This decoder handles Sony's ATRAC3 data.
+ *
+ * Container formats used to store atrac 3 data:
+ * RealMedia (.rm), RIFF WAV (.wav, .at3), Sony OpenMG (.oma, .aa3).
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided in the containers above.
+  ROCKBOX  FFMAX/MIN/SWAP and av_clip were taken from libavutil/common.h  ARMv5e+ uses 32x16 multiplication *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param p3        output buffer
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param out       output buffer
+ * @param in        input buffer
+ * @param win       windowing coefficients
+ * @param nIn       size of spectrum buffer
+ * Reference implementation:
+ *
+ * for (j = nIn; j != 0; j--) {
+ *          s1 = fixmul32(in[0], win[0]);
+ *          s2 = fixmul32(in[1], win[1]);
+ *          for (i = 2; i < 48; i += 2) {
+ *              s1 += fixmul31(in[i  ], win[i  ]);
+ *              s2 += fixmul31(in[i+1], win[i+1]);
+ *          }
+ *          out[0] = s2;
+ *          out[1] = s1;
+ *          in += 2;
+ *          out += 2;
+ *      }
+  preload frist in value   0.. 7   8..15  16..23  24..31  32..39  40..47  s1  s2   0.. 7   8..15  16..23  24..31  32..39  40..47 *
+ * IMDCT windowing.
+ *
+ * @param buffer        sample buffer
+ * @param win           window coefficients
+  win[0..127] = win[511..384], win[128..383] = 1 *
+ * Quadrature mirror synthesis filter.
+ *
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ * @param pOut      out buffer
+ * @param delayBuf  delayBuf buffer
+ * @param temp      temp buffer
+  Restore the delay buffer  loop1: matrixing  loop2: dewindowing  Save the delay buffer *
+ * Regular 512 points IMDCT without overlapping, with the exception of the swapping of odd bands
+ * caused by the reverse spectra of the QMF.
+ *
+ * @param pInput    input
+ * @param pOutput   output
+ * @param odd_band  1 if the band is an odd band
+  Apply the imdct.  Windowing. *
+ * Atrac 3 indata descrambling, only used for data coming from the rm container
+ *
+ * @param in        pointer to 8 bit array of indata
+ * @param bits      amount of bits
+ * @param out       pointer to 8 bit array of outdata
+  no check for memory alignment of inbuffer  TEST  Generate the mdct window, for details see
+     * http://wiki.multimedia.cx/index.php?title=RealAudio_atrc#Windows  mdct window had been generated and saved as a lookup table in atrac3data_fixed.h  Generate the QMF window. *
+ * Mantissa decoding
+ *
+ * @param gb            the GetBit context
+ * @param selector      what table is the output values coded with
+ * @param codingFlag    constant length coding or variable length coding
+ * @param mantissas     mantissa output table
+ * @param numCodes      amount of values to get
+  constant length coding (CLC)  numBits is always 4 in this case  variable length coding (VLC) *
+ * Requantize the spectrum.
+ *
+ * @param *mantissas    pointer to mantissas for each spectral line
+ * @param pOut          requantized band spectrum
+ * @param first         first spectral line in subband
+ * @param last          last spectral line in subband
+ * @param SF            scalefactor for all spectral lines of this band
+  Inverse quantize the coefficients.  Odd band - Reverse coefficients  Even band - Do not reverse coefficients *
+ * Restore the quantized band spectrum coefficients
+ *
+ * @param gb            the GetBit context
+ * @param pOut          decoded band spectrum
+ * @return outSubbands  subband counter, fix for broken specification/files
+  number of coded subbands  coding Mode: 0 - VLC/ 1-CLC  Get the VLC selector table for the subbands, 0 means not coded.  Read the scale factor indexes from the stream.  Decode spectral coefficients for this subband.  TODO: This can be done faster is several blocks share the
+             * same VLC selector (subband_vlc_index)  Decode the scale factor for this subband.  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+             * representation. Needed for higher accuracy in internal calculations as
+             * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+              Inverse quantize the coefficients.  This subband was not coded, so zero the entire subband.  Clear the subbands that were not coded. *
+ * Restore the quantized tonal components
+ *
+ * @param gb            the GetBit context
+ * @param pComponent    tone component
+ * @param numBands      amount of coded bands
+  no tonal components  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+                 * representation. Needed for higher accuracy in internal calculations as
+                 * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+                  inverse quant *
+ * Decode gain parameters for the coded bands
+ *
+ * @param gb            the GetBit context
+ * @param pGb           the gainblock for the current band
+ * @param numBands      amount of coded bands
+  Clear the unused blocks. *
+ * Apply fix (constant) gain and overlap for sample[start...255].
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param gain          gain to apply
+  start is always a multiple of 8 and therefore allows us to unroll the 
+     * loop to 8 calculation per loop 
+      gain1 = 1.0 -> no multiplication needed, just adding  Remark: This path is called >90%.  gain1 != 1.0 -> we need to do a multiplication  Remark: This path is called seldom. *
+ * Apply variable gain and overlap. Returns sample index after applying gain,
+ * resulting sample index is always a multiple of 8.
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param end           end index for first loop (always a multiple of 8)
+ * @param gain1         current bands gain to apply
+ * @param gain2         next bands gain to apply
+ * @param gain_inc      stepwise adaption from gain1 to gain2
+  Apply fix gains until end index is reached  Interpolation is done over next eight samples *
+ * Apply gain parameters and perform the MDCT overlapping part
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param pGain1        current band gain info
+ * @param pGain2        next band gain info
+  gain compensation function  Remark: This path is called >90%.  Apply gain for all samples from 0...255  Remark: This path is called seldom.  starting loop with =0  Apply variable gain (gain1 -> gain2) to samples  Apply gain for the residual samples from nsample...255  Delay for the overlapping part. *
+ * Combine the tonal band spectrum and regular band spectrum
+ * Return position of the last tonal coefficient
+
+ *
+ * @param pSpectrum     output spectrum buffer
+ * @param numComponents amount of tonal components
+ * @param pComponent    tonal components for this band
+ *
+ * Linear equidistant interpolation between two points x and y. 7 interpolation
+ * points can be calculated.
+ * Result for s=0 is x
+ * Result for s=8 is y
+ *
+ * @param x     first input point
+ * @param y     second input point
+ * @param s     index of interpolation point (0..7)
+  rockbox: Not used anymore. Faster version defined below.
+#define INTERPOLATE_FP16(x, y, s)    ((x) + fixmul16(((s*ONE_16)>>3), (((y) - (x)))))
+ Selector value changed, interpolation needed.  Interpolation is done over the first eight samples.  Apply the matrix without interpolation.  M/S decoding  assert(0)  Read channel weights from table  Swap channel weights  w[x][y] y=0 is left y=1 is right  scale the channels by the weights *
+ * Decode a Sound Unit
+ *
+ * @param gb            the GetBit context
+ * @param pSnd          the channel unit to be used
+ * @param pOut          the decoded samples before IQMF
+ * @param channelNum    channel number
+ * @param codingMode    the coding mode (JOINT_STEREO or regular stereo/mono)
+  number of coded QMF bands  Merge the decoded spectrum and tonal components.  calculate number of used MLT/QMF bands according to the amount of coded spectral lines  Reconstruct time domain samples.  Perform the IMDCT step without overlapping.  gain compensation and overlapping  Swap the gain control buffers for the next frame. *
+ * Frame handling
+ *
+ * @param q             Atrac3 private context
+ * @param databuf       the input data
+  channel coupling mode  decode Sound Unit 1  Framedata of the su2 in the joint-stereo mode is encoded in
+         * reverse byte order so we need to swap it first.  Skip the sync codes (0xF8).  set the bitstream reader at the start of the second Sound Unit Fill the Weighting coeffs delay buffer  Decode Sound Unit 2.  Reconstruct the channel coefficients.  normal stereo mode or mono  Decode the channel sound units.  Set the bitstream reader at the start of a channel sound unit.  Apply the iQMF synthesis filter. *
+ * Atrac frame decoding
+ *
+ * @param rmctx     pointer to the AVCodecContext
+  Check if we need to descramble and what buffer to pass on. *
+ * Atrac3 initialization
+ *
+ * @param rmctx     pointer to the RMContext
+  Take data from the RM container.  Take care of the codec-specific extradata.  Parse the extradata, WAV format  Unknown value always 1  Dupe of coding mode  Unknown always 1  Unknown always 0  setup  Parse the extradata, RM format.  Check the extradata.  Initialize the VLC tables.  init the joint-stereo decoding data  Link the iram'ed arrays to the decoder's data structure 
+ * Atrac 3 compatible decoder
+ * Copyright (c) 2006-2008 Maxim Poliakovski
+ * Copyright (c) 2006-2008 Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file libavcodec/atrac3.c
+ * Atrac 3 compatible decoder.
+ * This decoder handles Sony's ATRAC3 data.
+ *
+ * Container formats used to store atrac 3 data:
+ * RealMedia (.rm), RIFF WAV (.wav, .at3), Sony OpenMG (.oma, .aa3).
+ *
+ * To use this decoder, a calling application must supply the extradata
+ * bytes provided in the containers above.
+  ROCKBOX  FFMAX/MIN/SWAP and av_clip were taken from libavutil/common.h  ARMv5e+ uses 32x16 multiplication *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param p3        output buffer
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ *
+ * Matrixing within quadrature mirror synthesis filter.
+ *
+ * @param out       output buffer
+ * @param in        input buffer
+ * @param win       windowing coefficients
+ * @param nIn       size of spectrum buffer
+ * Reference implementation:
+ *
+ * for (j = nIn; j != 0; j--) {
+ *          s1 = fixmul32(in[0], win[0]);
+ *          s2 = fixmul32(in[1], win[1]);
+ *          for (i = 2; i < 48; i += 2) {
+ *              s1 += fixmul31(in[i  ], win[i  ]);
+ *              s2 += fixmul31(in[i+1], win[i+1]);
+ *          }
+ *          out[0] = s2;
+ *          out[1] = s1;
+ *          in += 2;
+ *          out += 2;
+ *      }
+  preload frist in value   0.. 7   8..15  16..23  24..31  32..39  40..47  s1  s2   0.. 7   8..15  16..23  24..31  32..39  40..47 *
+ * IMDCT windowing.
+ *
+ * @param buffer        sample buffer
+ * @param win           window coefficients
+  win[0..127] = win[511..384], win[128..383] = 1 *
+ * Quadrature mirror synthesis filter.
+ *
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ * @param pOut      out buffer
+ * @param delayBuf  delayBuf buffer
+ * @param temp      temp buffer
+  Restore the delay buffer  loop1: matrixing  loop2: dewindowing  Save the delay buffer *
+ * Regular 512 points IMDCT without overlapping, with the exception of the swapping of odd bands
+ * caused by the reverse spectra of the QMF.
+ *
+ * @param pInput    input
+ * @param pOutput   output
+ * @param odd_band  1 if the band is an odd band
+  Apply the imdct.  Windowing. *
+ * Atrac 3 indata descrambling, only used for data coming from the rm container
+ *
+ * @param in        pointer to 8 bit array of indata
+ * @param bits      amount of bits
+ * @param out       pointer to 8 bit array of outdata
+  no check for memory alignment of inbuffer  TEST  Generate the mdct window, for details see
+     * http://wiki.multimedia.cx/index.php?title=RealAudio_atrc#Windows  mdct window had been generated and saved as a lookup table in atrac3data_fixed.h  Generate the QMF window. *
+ * Mantissa decoding
+ *
+ * @param gb            the GetBit context
+ * @param selector      what table is the output values coded with
+ * @param codingFlag    constant length coding or variable length coding
+ * @param mantissas     mantissa output table
+ * @param numCodes      amount of values to get
+  constant length coding (CLC)  numBits is always 4 in this case  variable length coding (VLC) *
+ * Requantize the spectrum.
+ *
+ * @param *mantissas    pointer to mantissas for each spectral line
+ * @param pOut          requantized band spectrum
+ * @param first         first spectral line in subband
+ * @param last          last spectral line in subband
+ * @param SF            scalefactor for all spectral lines of this band
+  Inverse quantize the coefficients.  Odd band - Reverse coefficients  Even band - Do not reverse coefficients *
+ * Restore the quantized band spectrum coefficients
+ *
+ * @param gb            the GetBit context
+ * @param pOut          decoded band spectrum
+ * @return outSubbands  subband counter, fix for broken specification/files
+  number of coded subbands  coding Mode: 0 - VLC/ 1-CLC  Get the VLC selector table for the subbands, 0 means not coded.  Read the scale factor indexes from the stream.  Decode spectral coefficients for this subband.  TODO: This can be done faster is several blocks share the
+             * same VLC selector (subband_vlc_index)  Decode the scale factor for this subband.  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+             * representation. Needed for higher accuracy in internal calculations as
+             * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+              Inverse quantize the coefficients.  This subband was not coded, so zero the entire subband.  Clear the subbands that were not coded. *
+ * Restore the quantized tonal components
+ *
+ * @param gb            the GetBit context
+ * @param pComponent    tone component
+ * @param numBands      amount of coded bands
+  no tonal components  Remark: Hardcoded hack to add 2 bits (empty) fract part to internal sample
+                 * representation. Needed for higher accuracy in internal calculations as
+                 * well as for DSP configuration. See also: ../atrac3_rm.c, DSP_SET_SAMPLE_DEPTH 
+                  inverse quant *
+ * Decode gain parameters for the coded bands
+ *
+ * @param gb            the GetBit context
+ * @param pGb           the gainblock for the current band
+ * @param numBands      amount of coded bands
+  Clear the unused blocks. *
+ * Apply fix (constant) gain and overlap for sample[start...255].
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param gain          gain to apply
+  start is always a multiple of 8 and therefore allows us to unroll the 
+     * loop to 8 calculation per loop 
+      gain1 = 1.0 -> no multiplication needed, just adding  Remark: This path is called >90%.  gain1 != 1.0 -> we need to do a multiplication  Remark: This path is called seldom. *
+ * Apply variable gain and overlap. Returns sample index after applying gain,
+ * resulting sample index is always a multiple of 8.
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param start         index to start with (always a multiple of 8)
+ * @param end           end index for first loop (always a multiple of 8)
+ * @param gain1         current bands gain to apply
+ * @param gain2         next bands gain to apply
+ * @param gain_inc      stepwise adaption from gain1 to gain2
+  Apply fix gains until end index is reached  Interpolation is done over next eight samples *
+ * Apply gain parameters and perform the MDCT overlapping part
+ *
+ * @param pIn           input buffer
+ * @param pPrev         previous buffer to perform overlap against
+ * @param pOut          output buffer
+ * @param pGain1        current band gain info
+ * @param pGain2        next band gain info
+  gain compensation function  Remark: This path is called >90%.  Apply gain for all samples from 0...255  Remark: This path is called seldom.  starting loop with =0  Apply variable gain (gain1 -> gain2) to samples  Apply gain for the residual samples from nsample...255  Delay for the overlapping part. *
+ * Combine the tonal band spectrum and regular band spectrum
+ * Return position of the last tonal coefficient
+
+ *
+ * @param pSpectrum     output spectrum buffer
+ * @param numComponents amount of tonal components
+ * @param pComponent    tonal components for this band
+ *
+ * Linear equidistant interpolation between two points x and y. 7 interpolation
+ * points can be calculated.
+ * Result for s=0 is x
+ * Result for s=8 is y
+ *
+ * @param x     first input point
+ * @param y     second input point
+ * @param s     index of interpolation point (0..7)
+  rockbox: Not used anymore. Faster version defined below.
+#define INTERPOLATE_FP16(x, y, s)    ((x) + fixmul16(((s*ONE_16)>>3), (((y) - (x)))))
+ Selector value changed, interpolation needed.  Interpolation is done over the first eight samples.  Apply the matrix without interpolation.  M/S decoding  assert(0)  Read channel weights from table  Swap channel weights  w[x][y] y=0 is left y=1 is right  scale the channels by the weights *
+ * Decode a Sound Unit
+ *
+ * @param gb            the GetBit context
+ * @param pSnd          the channel unit to be used
+ * @param pOut          the decoded samples before IQMF
+ * @param channelNum    channel number
+ * @param codingMode    the coding mode (JOINT_STEREO or regular stereo/mono)
+  number of coded QMF bands  Merge the decoded spectrum and tonal components.  calculate number of used MLT/QMF bands according to the amount of coded spectral lines  Reconstruct time domain samples.  Perform the IMDCT step without overlapping.  gain compensation and overlapping  Swap the gain control buffers for the next frame. *
+ * Frame handling
+ *
+ * @param q             Atrac3 private context
+ * @param databuf       the input data
+  channel coupling mode  decode Sound Unit 1  Framedata of the su2 in the joint-stereo mode is encoded in
+         * reverse byte order so we need to swap it first.  Skip the sync codes (0xF8).  set the bitstream reader at the start of the second Sound Unit Fill the Weighting coeffs delay buffer  Decode Sound Unit 2.  Reconstruct the channel coefficients.  normal stereo mode or mono  Decode the channel sound units.  Set the bitstream reader at the start of a channel sound unit.  Apply the iQMF synthesis filter. *
+ * Atrac frame decoding
+ *
+ * @param rmctx     pointer to the AVCodecContext
+  Check if we need to descramble and what buffer to pass on. *
+ * Atrac3 initialization
+ *
+ * @param rmctx     pointer to the RMContext
+  Take data from the RM container.  Take care of the codec-specific extradata.  Parse the extradata, WAV format  Unknown value always 1  Dupe of coding mode  Unknown always 1  Unknown always 0  setup  Parse the extradata, RM format.  Check the extradata.  Initialize the VLC tables.  init the joint-stereo decoding data  Link the iram'ed arrays to the decoder's data structure 

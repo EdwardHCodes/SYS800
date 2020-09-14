@@ -1,0 +1,613 @@
+
+ * Wmapro compatible decoder
+ * Copyright (c) 2007 Baptiste Coudurier, Benjamin Larsson, Ulion
+ * Copyright (c) 2008 - 2009 Sascha Sommer, Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file  libavcodec/wmaprodec.c
+ * @brief wmapro decoder implementation
+ * Wmapro is an MDCT based codec comparable to wma standard or AAC.
+ * The decoding therefore consists of the following steps:
+ * - bitstream decoding
+ * - reconstruction of per-channel data
+ * - rescaling and inverse quantization
+ * - IMDCT
+ * - windowing and overlapp-add
+ *
+ * The compressed wmapro bitstream is split into individual packets.
+ * Every such packet contains one or more wma frames.
+ * The compressed frames may have a variable length and frames may
+ * cross packet boundaries.
+ * Common to all wmapro frames is the number of samples that are stored in
+ * a frame.
+ * The number of samples and a few other decode flags are stored
+ * as extradata that has to be passed to the decoder.
+ *
+ * The wmapro frames themselves are again split into a variable number of
+ * subframes. Every subframe contains the data for 2^N time domain samples
+ * where N varies between 7 and 12.
+ *
+ * Example wmapro bitstream (in samples):
+ *
+ * ||   packet 0           || packet 1 || packet 2      packets
+ * ---------------------------------------------------
+ * || frame 0      || frame 1       || frame 2    ||    frames
+ * ---------------------------------------------------
+ * ||   |      |   ||   |   |   |   ||            ||    subframes of channel 0
+ * ---------------------------------------------------
+ * ||      |   |   ||   |   |   |   ||            ||    subframes of channel 1
+ * ---------------------------------------------------
+ *
+ * The frame layouts for the individual channels of a wma frame does not need
+ * to be the same.
+ *
+ * However, if the offsets and lengths of several subframes of a frame are the
+ * same, the subframes of the channels can be grouped.
+ * Every group may then use special coding techniques like M/S stereo coding
+ * to improve the compression ratio. These channel transformations do not
+ * need to be applied to a whole subframe. Instead, they can also work on
+ * individual scale factor bands (see below).
+ * The coefficients that carry the audio signal in the frequency domain
+ * are transmitted as huffman-coded vectors with 4, 2 and 1 elements.
+ * In addition to that, the encoder can switch to a runlevel coding scheme
+ * by transmitting subframe_length / 128 zero coefficients.
+ *
+ * Before the audio signal can be converted to the time domain, the
+ * coefficients have to be rescaled and inverse quantized.
+ * A subframe is therefore split into several scale factor bands that get
+ * scaled individually.
+ * Scale factors are submitted for every frame but they might be shared
+ * between the subframes of a channel. Scale factors are initially DPCM-coded.
+ * Once scale factors are shared, the differences are transmitted as runlevel
+ * codes.
+ * Every subframe length and offset combination in the frame layout shares a
+ * common quantization factor that can be adjusted for every channel by a
+ * modifier.
+ * After the inverse quantization, the coefficients get processed by an IMDCT.
+ * The resulting values are then windowed with a sine window and the first half
+ * of the values are added to the second half of the output from the previous
+ * subframe in order to reconstruct the output samples.
+ #include "wmapro_mdct.h" Uncomment the following line to enable some debug output #define WMAPRO_DUMP_CTX_EN Some defines to make it compile  Taken from avcodec.h  Taken from libavutil/mem.h  Taken from libavutil/common.h  Define some multiple used constants  0x00016A0A = (sqrt(2)*(1<<16))  0x0000B505 = (cos(pi/4)<<16)  0x00010000 = (1<<16)  Enable multichannel for large-memory targets only /< max number of handled channels/< max number of handled channels Current decoder limitations /< max number of subframes per channel/< max number of scale factor bands/< maximum compressed frame size/< log2 of max block size/< maximum block size/< possible block sizes/< scale factor DPCM vlc/< scale factor run length vlc/< 4 coefficients per symbol/< 2 coefficients per symbol/< 1 coefficient per symbol/< coefficient run length vlc codesstatic float            sin64[33];        ///< sinus table for decorrelation Global defined arrays to allow IRAM usage for some models. *
+ * @brief frame specific decoder context for a single channel
+ /< length of the previous block/< subframe length in samples/< subframe positions in the current frame/< current subframe number/< number of already processed samples/< channel is part of a group/< quantization step for the current subframe/< share scale factors between subframes/< scaling step for the current subframe/< maximum scale factor for the current subframe/< resampled and (previously) transmitted scale factor values/< index for the transmitted scale factor values (used for resampling)/< pointer to the scale factor values used for decoding/< index in sf_offsets for the scale factor reference block/< pointer to the subframe decode buffer/< number of vector coded coefficients/< output buffer*
+ * @brief channel group for channel transformations
+ /< number of channels in the group/< transform on / off/< controls if the transform is enabled for a certain bandfloat   decorrelation_matrix[WMAPRO_MAX_CHANNELS*WMAPRO_MAX_CHANNELS];/< transformation coefficients*
+ * @brief main decoder context
+  generic decoder variables /< compressed frame data/< context for filling the frame_data buffer/< IMDCT input buffer frame size dependent frame information (set during initialization) /< used compression features/< frame is prefixed with its length/< frame contains DRC data/< integer audio sample size for the unscaled IMDCT output (used to scale to [-1.0, 1.0])/< number of samples to output/< number of channels in the stream (same as AVCodecContext.num_channels)/< lfe channel index/< number of bits used for the subframe length/< flag indicating that the subframe is of maximum size when the first subframe length bit is 1/< scale factor bands per block size/< scale factor band offsets (multiples of 4)/< scale factor resample matrix/< subwoofer cutoff values packet decode state /< bitstream reader context for the packet/< frame offset in the packet/< current packet number/< saved number of bits/< frame offset in the bit reservoir/< subframe offset in the bit reservoir/< set in case of bitstream error/< set when a packet is fully decoded frame decode state /< current frame number/< bitstream reader context/< buffer size in bits/< maximum samplebuffer pointer/< gain for the DRC tool/< skip output step/< all subframes decoded? subframe/block decode state /< current subframe length/< number of channels that contain the subframe/< number of scale factor bands/< number of vector coded coefficients is part of the bitstream/< sfb offsets for the current block/< index for the num_sfb, sfb_offsets, sf_offsets and subwoofer_cutoffs tables/< length of escaped coefficients/< number of channel groups/< channel group information/< per channel data static decode context, to avoid malloc *
+ *@brief helper function to print the most important members of the context
+ *@param s context
+ *
+ *@brief Initialize the decoder.
+ *@param avctx codec context
+ *@return 0 on success, -1 otherwise
+  Use globally defined array. Allows IRAM usage for models with large IRAM.  Use globally defined arrays. Allows IRAM usage for up to 2 channels. * dump the extradata * generic init * frame info * skip first frame * get frame len * init previous block len * subframe info * extract lfe channel position * calculate number of scale factor bands and their offsets
+        for every possible block size * Scale factors can be shared between blocks of different size
+        as every block has a different scale factor band layout.
+        The matrix sf_offsets is needed to find the correct scale factor.
+     * calculate subwoofer cutoff values * calculate sine values for the decorrelation matrix *
+ *@brief Decode the subframe length.
+ *@param s context
+ *@param offset sample offset in the frame
+ *@return decoded subframe length on success, < 0 in case of an error
+ * no need to read from the bitstream when only one length is possible * 1 bit indicates if the subframe is of maximum length * sanity check the length *
+ *@brief Decode how the data in the frame is split into subframes.
+ *       Every WMA frame contains the encoded data for a fixed number of
+ *       samples per channel. The data for every channel might be split
+ *       into several subframes. This function will reconstruct the list of
+ *       subframes for every channel.
+ *
+ *       If the subframes are not evenly split, the algorithm estimates the
+ *       channels with the lowest number of total samples.
+ *       Afterwards, for each of these channels a bit is read from the
+ *       bitstream that indicates if the channel contains a subframe with the
+ *       next subframe size that is going to be read from the bitstream or not.
+ *       If a channel contains such a subframe, the subframe size gets added to
+ *       the channel's subframe list.
+ *       The algorithm repeats these steps until the frame is properly divided
+ *       between the individual channels.
+ *
+ *@param s context
+ *@return 0 on success, < 0 in case of an error
+ * sum of samples for all currently known subframes of a channel * flag indicating if a channel contains the current subframe * number of channels that contain the current subframe * flag indicating that all channels use the same subframe offsets and sizes * smallest sum of samples (channels with this length will be processed first)  Should never consume more than 3073 bits (256 iterations for the
+     * while loop when always the minimum amount of 128 samples is substracted
+     * from missing samples in the 8 channel case).
+     * 1 + BLOCK_MAX_SIZE * MAX_CHANNELS / BLOCK_MIN_SIZE * (MAX_CHANNELS  + 4)
+     * reset tiling information * loop until the frame data is split between the subframes * check which channels contain the subframe * get subframe length, subframe_len == 0 is not allowed * add subframes to the individual channels and find new min_channel_len *
+ *@brief Calculate a decorrelation matrix from the bitstream parameters.
+ *@param s codec context
+ *@param chgroup channel group for which the matrix needs to be calculated
+ *
+ *@brief Decode channel transformation parameters
+ *@param s codec context
+ *@return 0 in case of success, < 0 in case of bitstream errors
+  should never consume more than 1921 bits for the 8 channel case
+     * 1 + MAX_CHANNELS * (MAX_CHANNELS + 2 + 3 * MAX_CHANNELS * MAX_CHANNELS
+     * + MAX_CHANNELS + MAX_BANDS + 1)
+     * in the one channel case channel transforms are pointless * decode channel mask * decode transform type * cos(pi/4) * FIXME: more than 6 coupled channels not supported * decode transform on / off * transform can be enabled for individual bands *
+ *@brief Extract the coefficients from the bitstream.
+ *@param s codec context
+ *@param c current channel number
+ *@return 0 on success, < 0 in case of bitstream errors
+ * decode vector coefficients (consumes up to 167 bits per iteration for
+      4 vector coded large values)  Rockbox: To be able to use rockbox' optimized mdct we need to 
+         * pre-shift the values by >>(nbits-3). * decode sign  Rockbox: To be able to use rockbox' optimized mdct we need
+                 * invert the sign. * switch to run level mode when subframe_len / 128 zeros
+                    were found in a row * decode run level coded coefficients *
+ *@brief Extract scale factors from the bitstream.
+ *@param s codec context
+ *@return 0 on success, < 0 in case of bitstream errors
+ * should never consume more than 5344 bits
+     *  MAX_CHANNELS * (1 +  MAX_BANDS * 23)
+     * resample scale factors for the new block size
+         *  as the scale factors might need to be resampled several times
+         *  before some  new values are transmitted, a backup of the last
+         *  transmitted scale factors is kept in saved_scale_factors
+         * decode DPCM coded scale factors * run level decode differences to the resampled factors * swap buffers * calculate new scale factor maximum *
+ *@brief Reconstruct the individual channel data.
+ *@param s codec context
+ * multichannel decorrelation * multiply values with the decorrelation_matrix  Scale with sqrt(2) *
+ *@brief Apply sine window and reconstruct the output buffer.
+ *@param s codec context
+ *
+ *@brief Decode a single subframe (block).
+ *@param s codec context
+ *@return 0 on success, < 0 when decoding failed
+ * reset channel context and find the next block offset and size
+        == the next block of the channel with the smallest number of
+        decoded samples
+    * get a list of all channels that contain the estimated block * substract already processed samples * and count if there are multiple subframes that match our profile * check if the frame will be complete after processing the
+        estimated block * calculate number of scale factor bands and their offsets * configure the decoder for the current subframe * skip extended header if any * no idea for what the following bit is used * decode number of vector coded coefficients * decode quantization step * decode quantization step modifiers for every channel * decode scale factors * parse coefficients * reconstruct the per channel data * inverse quantization and rescaling * apply imdct (ff_imdct_half == DCTIV with reverse) * window and overlapp-add * handled one subframe *
+ *@brief Decode one WMA frame.
+ *@param s codec context
+ *@return 0 if the trailer bit indicates that this is the last frame,
+ *        1 if there are additional frames
+ * check for potential output buffer overflow  Rockbox : No need to check that anymore since we work directly on the
+       buffers in the WMAProDecCtx * return an error if no frame could be decoded at all * get frame length * decode tile information * read postproc transform * read drc info * no idea what these are for, might be the number of samples
+        that need to be skipped at the beginning or end of a stream * usually true for the first frame * sometimes true for the last frame * reset subframe states * decode all subframes * FIXME: not sure if this is always an error * skip the rest of the frame data * decode trailer bit *
+ *@brief Calculate remaining input buffer length.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@return remaining size in bits
+ *
+ *@brief Fill the bit reservoir with a (partial) frame.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@param len length of the partial frame
+ *@param append decides wether to reset the buffer or not
+ * when the frame data does not need to be concatenated, the input buffer
+        is resetted and additional bits from the previous frame are copyed
+        and skipped later so that a fast byte copy is possible *
+ *@brief Decode a single WMA packet.
+ *@param avctx codec context
+ *@param data the output buffer
+ *@param data_size number of bytes that were written to the output buffer
+ *@param avpkt input packet
+ *@return number of bytes that were read from the input buffer
+ * reuse second half of the IMDCT output for the next frame  NOTE : Relies on the WMAProDecCtx being static * sanity check for the buffer length * parse packet header * get number of bits that need to be added to the previous frame * check for packet loss * append the previous frame data to the remaining data from the
+                previous packet to create a full frame * decode the cross packet frame if it is valid * save the rest of the data so that it can be decoded
+            with the next packet *
+ *@brief wmapro decoder
+ 
+ * Wmapro compatible decoder
+ * Copyright (c) 2007 Baptiste Coudurier, Benjamin Larsson, Ulion
+ * Copyright (c) 2008 - 2009 Sascha Sommer, Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file  libavcodec/wmaprodec.c
+ * @brief wmapro decoder implementation
+ * Wmapro is an MDCT based codec comparable to wma standard or AAC.
+ * The decoding therefore consists of the following steps:
+ * - bitstream decoding
+ * - reconstruction of per-channel data
+ * - rescaling and inverse quantization
+ * - IMDCT
+ * - windowing and overlapp-add
+ *
+ * The compressed wmapro bitstream is split into individual packets.
+ * Every such packet contains one or more wma frames.
+ * The compressed frames may have a variable length and frames may
+ * cross packet boundaries.
+ * Common to all wmapro frames is the number of samples that are stored in
+ * a frame.
+ * The number of samples and a few other decode flags are stored
+ * as extradata that has to be passed to the decoder.
+ *
+ * The wmapro frames themselves are again split into a variable number of
+ * subframes. Every subframe contains the data for 2^N time domain samples
+ * where N varies between 7 and 12.
+ *
+ * Example wmapro bitstream (in samples):
+ *
+ * ||   packet 0           || packet 1 || packet 2      packets
+ * ---------------------------------------------------
+ * || frame 0      || frame 1       || frame 2    ||    frames
+ * ---------------------------------------------------
+ * ||   |      |   ||   |   |   |   ||            ||    subframes of channel 0
+ * ---------------------------------------------------
+ * ||      |   |   ||   |   |   |   ||            ||    subframes of channel 1
+ * ---------------------------------------------------
+ *
+ * The frame layouts for the individual channels of a wma frame does not need
+ * to be the same.
+ *
+ * However, if the offsets and lengths of several subframes of a frame are the
+ * same, the subframes of the channels can be grouped.
+ * Every group may then use special coding techniques like M/S stereo coding
+ * to improve the compression ratio. These channel transformations do not
+ * need to be applied to a whole subframe. Instead, they can also work on
+ * individual scale factor bands (see below).
+ * The coefficients that carry the audio signal in the frequency domain
+ * are transmitted as huffman-coded vectors with 4, 2 and 1 elements.
+ * In addition to that, the encoder can switch to a runlevel coding scheme
+ * by transmitting subframe_length / 128 zero coefficients.
+ *
+ * Before the audio signal can be converted to the time domain, the
+ * coefficients have to be rescaled and inverse quantized.
+ * A subframe is therefore split into several scale factor bands that get
+ * scaled individually.
+ * Scale factors are submitted for every frame but they might be shared
+ * between the subframes of a channel. Scale factors are initially DPCM-coded.
+ * Once scale factors are shared, the differences are transmitted as runlevel
+ * codes.
+ * Every subframe length and offset combination in the frame layout shares a
+ * common quantization factor that can be adjusted for every channel by a
+ * modifier.
+ * After the inverse quantization, the coefficients get processed by an IMDCT.
+ * The resulting values are then windowed with a sine window and the first half
+ * of the values are added to the second half of the output from the previous
+ * subframe in order to reconstruct the output samples.
+ #include "wmapro_mdct.h" Uncomment the following line to enable some debug output #define WMAPRO_DUMP_CTX_EN Some defines to make it compile  Taken from avcodec.h  Taken from libavutil/mem.h  Taken from libavutil/common.h  Define some multiple used constants  0x00016A0A = (sqrt(2)*(1<<16))  0x0000B505 = (cos(pi/4)<<16)  0x00010000 = (1<<16)  Enable multichannel for large-memory targets only /< max number of handled channels/< max number of handled channels Current decoder limitations /< max number of subframes per channel/< max number of scale factor bands/< maximum compressed frame size/< log2 of max block size/< maximum block size/< possible block sizes/< scale factor DPCM vlc/< scale factor run length vlc/< 4 coefficients per symbol/< 2 coefficients per symbol/< 1 coefficient per symbol/< coefficient run length vlc codesstatic float            sin64[33];        ///< sinus table for decorrelation Global defined arrays to allow IRAM usage for some models. *
+ * @brief frame specific decoder context for a single channel
+ /< length of the previous block/< subframe length in samples/< subframe positions in the current frame/< current subframe number/< number of already processed samples/< channel is part of a group/< quantization step for the current subframe/< share scale factors between subframes/< scaling step for the current subframe/< maximum scale factor for the current subframe/< resampled and (previously) transmitted scale factor values/< index for the transmitted scale factor values (used for resampling)/< pointer to the scale factor values used for decoding/< index in sf_offsets for the scale factor reference block/< pointer to the subframe decode buffer/< number of vector coded coefficients/< output buffer*
+ * @brief channel group for channel transformations
+ /< number of channels in the group/< transform on / off/< controls if the transform is enabled for a certain bandfloat   decorrelation_matrix[WMAPRO_MAX_CHANNELS*WMAPRO_MAX_CHANNELS];/< transformation coefficients*
+ * @brief main decoder context
+  generic decoder variables /< compressed frame data/< context for filling the frame_data buffer/< IMDCT input buffer frame size dependent frame information (set during initialization) /< used compression features/< frame is prefixed with its length/< frame contains DRC data/< integer audio sample size for the unscaled IMDCT output (used to scale to [-1.0, 1.0])/< number of samples to output/< number of channels in the stream (same as AVCodecContext.num_channels)/< lfe channel index/< number of bits used for the subframe length/< flag indicating that the subframe is of maximum size when the first subframe length bit is 1/< scale factor bands per block size/< scale factor band offsets (multiples of 4)/< scale factor resample matrix/< subwoofer cutoff values packet decode state /< bitstream reader context for the packet/< frame offset in the packet/< current packet number/< saved number of bits/< frame offset in the bit reservoir/< subframe offset in the bit reservoir/< set in case of bitstream error/< set when a packet is fully decoded frame decode state /< current frame number/< bitstream reader context/< buffer size in bits/< maximum samplebuffer pointer/< gain for the DRC tool/< skip output step/< all subframes decoded? subframe/block decode state /< current subframe length/< number of channels that contain the subframe/< number of scale factor bands/< number of vector coded coefficients is part of the bitstream/< sfb offsets for the current block/< index for the num_sfb, sfb_offsets, sf_offsets and subwoofer_cutoffs tables/< length of escaped coefficients/< number of channel groups/< channel group information/< per channel data static decode context, to avoid malloc *
+ *@brief helper function to print the most important members of the context
+ *@param s context
+ *
+ *@brief Initialize the decoder.
+ *@param avctx codec context
+ *@return 0 on success, -1 otherwise
+  Use globally defined array. Allows IRAM usage for models with large IRAM.  Use globally defined arrays. Allows IRAM usage for up to 2 channels. * dump the extradata * generic init * frame info * skip first frame * get frame len * init previous block len * subframe info * extract lfe channel position * calculate number of scale factor bands and their offsets
+        for every possible block size * Scale factors can be shared between blocks of different size
+        as every block has a different scale factor band layout.
+        The matrix sf_offsets is needed to find the correct scale factor.
+     * calculate subwoofer cutoff values * calculate sine values for the decorrelation matrix *
+ *@brief Decode the subframe length.
+ *@param s context
+ *@param offset sample offset in the frame
+ *@return decoded subframe length on success, < 0 in case of an error
+ * no need to read from the bitstream when only one length is possible * 1 bit indicates if the subframe is of maximum length * sanity check the length *
+ *@brief Decode how the data in the frame is split into subframes.
+ *       Every WMA frame contains the encoded data for a fixed number of
+ *       samples per channel. The data for every channel might be split
+ *       into several subframes. This function will reconstruct the list of
+ *       subframes for every channel.
+ *
+ *       If the subframes are not evenly split, the algorithm estimates the
+ *       channels with the lowest number of total samples.
+ *       Afterwards, for each of these channels a bit is read from the
+ *       bitstream that indicates if the channel contains a subframe with the
+ *       next subframe size that is going to be read from the bitstream or not.
+ *       If a channel contains such a subframe, the subframe size gets added to
+ *       the channel's subframe list.
+ *       The algorithm repeats these steps until the frame is properly divided
+ *       between the individual channels.
+ *
+ *@param s context
+ *@return 0 on success, < 0 in case of an error
+ * sum of samples for all currently known subframes of a channel * flag indicating if a channel contains the current subframe * number of channels that contain the current subframe * flag indicating that all channels use the same subframe offsets and sizes * smallest sum of samples (channels with this length will be processed first)  Should never consume more than 3073 bits (256 iterations for the
+     * while loop when always the minimum amount of 128 samples is substracted
+     * from missing samples in the 8 channel case).
+     * 1 + BLOCK_MAX_SIZE * MAX_CHANNELS / BLOCK_MIN_SIZE * (MAX_CHANNELS  + 4)
+     * reset tiling information * loop until the frame data is split between the subframes * check which channels contain the subframe * get subframe length, subframe_len == 0 is not allowed * add subframes to the individual channels and find new min_channel_len *
+ *@brief Calculate a decorrelation matrix from the bitstream parameters.
+ *@param s codec context
+ *@param chgroup channel group for which the matrix needs to be calculated
+ *
+ *@brief Decode channel transformation parameters
+ *@param s codec context
+ *@return 0 in case of success, < 0 in case of bitstream errors
+  should never consume more than 1921 bits for the 8 channel case
+     * 1 + MAX_CHANNELS * (MAX_CHANNELS + 2 + 3 * MAX_CHANNELS * MAX_CHANNELS
+     * + MAX_CHANNELS + MAX_BANDS + 1)
+     * in the one channel case channel transforms are pointless * decode channel mask * decode transform type * cos(pi/4) * FIXME: more than 6 coupled channels not supported * decode transform on / off * transform can be enabled for individual bands *
+ *@brief Extract the coefficients from the bitstream.
+ *@param s codec context
+ *@param c current channel number
+ *@return 0 on success, < 0 in case of bitstream errors
+ * decode vector coefficients (consumes up to 167 bits per iteration for
+      4 vector coded large values)  Rockbox: To be able to use rockbox' optimized mdct we need to 
+         * pre-shift the values by >>(nbits-3). * decode sign  Rockbox: To be able to use rockbox' optimized mdct we need
+                 * invert the sign. * switch to run level mode when subframe_len / 128 zeros
+                    were found in a row * decode run level coded coefficients *
+ *@brief Extract scale factors from the bitstream.
+ *@param s codec context
+ *@return 0 on success, < 0 in case of bitstream errors
+ * should never consume more than 5344 bits
+     *  MAX_CHANNELS * (1 +  MAX_BANDS * 23)
+     * resample scale factors for the new block size
+         *  as the scale factors might need to be resampled several times
+         *  before some  new values are transmitted, a backup of the last
+         *  transmitted scale factors is kept in saved_scale_factors
+         * decode DPCM coded scale factors * run level decode differences to the resampled factors * swap buffers * calculate new scale factor maximum *
+ *@brief Reconstruct the individual channel data.
+ *@param s codec context
+ * multichannel decorrelation * multiply values with the decorrelation_matrix  Scale with sqrt(2) *
+ *@brief Apply sine window and reconstruct the output buffer.
+ *@param s codec context
+ *
+ *@brief Decode a single subframe (block).
+ *@param s codec context
+ *@return 0 on success, < 0 when decoding failed
+ * reset channel context and find the next block offset and size
+        == the next block of the channel with the smallest number of
+        decoded samples
+    * get a list of all channels that contain the estimated block * substract already processed samples * and count if there are multiple subframes that match our profile * check if the frame will be complete after processing the
+        estimated block * calculate number of scale factor bands and their offsets * configure the decoder for the current subframe * skip extended header if any * no idea for what the following bit is used * decode number of vector coded coefficients * decode quantization step * decode quantization step modifiers for every channel * decode scale factors * parse coefficients * reconstruct the per channel data * inverse quantization and rescaling * apply imdct (ff_imdct_half == DCTIV with reverse) * window and overlapp-add * handled one subframe *
+ *@brief Decode one WMA frame.
+ *@param s codec context
+ *@return 0 if the trailer bit indicates that this is the last frame,
+ *        1 if there are additional frames
+ * check for potential output buffer overflow  Rockbox : No need to check that anymore since we work directly on the
+       buffers in the WMAProDecCtx * return an error if no frame could be decoded at all * get frame length * decode tile information * read postproc transform * read drc info * no idea what these are for, might be the number of samples
+        that need to be skipped at the beginning or end of a stream * usually true for the first frame * sometimes true for the last frame * reset subframe states * decode all subframes * FIXME: not sure if this is always an error * skip the rest of the frame data * decode trailer bit *
+ *@brief Calculate remaining input buffer length.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@return remaining size in bits
+ *
+ *@brief Fill the bit reservoir with a (partial) frame.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@param len length of the partial frame
+ *@param append decides wether to reset the buffer or not
+ * when the frame data does not need to be concatenated, the input buffer
+        is resetted and additional bits from the previous frame are copyed
+        and skipped later so that a fast byte copy is possible *
+ *@brief Decode a single WMA packet.
+ *@param avctx codec context
+ *@param data the output buffer
+ *@param data_size number of bytes that were written to the output buffer
+ *@param avpkt input packet
+ *@return number of bytes that were read from the input buffer
+ * reuse second half of the IMDCT output for the next frame  NOTE : Relies on the WMAProDecCtx being static * sanity check for the buffer length * parse packet header * get number of bits that need to be added to the previous frame * check for packet loss * append the previous frame data to the remaining data from the
+                previous packet to create a full frame * decode the cross packet frame if it is valid * save the rest of the data so that it can be decoded
+            with the next packet *
+ *@brief wmapro decoder
+ 
+ * Wmapro compatible decoder
+ * Copyright (c) 2007 Baptiste Coudurier, Benjamin Larsson, Ulion
+ * Copyright (c) 2008 - 2009 Sascha Sommer, Benjamin Larsson
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * @file  libavcodec/wmaprodec.c
+ * @brief wmapro decoder implementation
+ * Wmapro is an MDCT based codec comparable to wma standard or AAC.
+ * The decoding therefore consists of the following steps:
+ * - bitstream decoding
+ * - reconstruction of per-channel data
+ * - rescaling and inverse quantization
+ * - IMDCT
+ * - windowing and overlapp-add
+ *
+ * The compressed wmapro bitstream is split into individual packets.
+ * Every such packet contains one or more wma frames.
+ * The compressed frames may have a variable length and frames may
+ * cross packet boundaries.
+ * Common to all wmapro frames is the number of samples that are stored in
+ * a frame.
+ * The number of samples and a few other decode flags are stored
+ * as extradata that has to be passed to the decoder.
+ *
+ * The wmapro frames themselves are again split into a variable number of
+ * subframes. Every subframe contains the data for 2^N time domain samples
+ * where N varies between 7 and 12.
+ *
+ * Example wmapro bitstream (in samples):
+ *
+ * ||   packet 0           || packet 1 || packet 2      packets
+ * ---------------------------------------------------
+ * || frame 0      || frame 1       || frame 2    ||    frames
+ * ---------------------------------------------------
+ * ||   |      |   ||   |   |   |   ||            ||    subframes of channel 0
+ * ---------------------------------------------------
+ * ||      |   |   ||   |   |   |   ||            ||    subframes of channel 1
+ * ---------------------------------------------------
+ *
+ * The frame layouts for the individual channels of a wma frame does not need
+ * to be the same.
+ *
+ * However, if the offsets and lengths of several subframes of a frame are the
+ * same, the subframes of the channels can be grouped.
+ * Every group may then use special coding techniques like M/S stereo coding
+ * to improve the compression ratio. These channel transformations do not
+ * need to be applied to a whole subframe. Instead, they can also work on
+ * individual scale factor bands (see below).
+ * The coefficients that carry the audio signal in the frequency domain
+ * are transmitted as huffman-coded vectors with 4, 2 and 1 elements.
+ * In addition to that, the encoder can switch to a runlevel coding scheme
+ * by transmitting subframe_length / 128 zero coefficients.
+ *
+ * Before the audio signal can be converted to the time domain, the
+ * coefficients have to be rescaled and inverse quantized.
+ * A subframe is therefore split into several scale factor bands that get
+ * scaled individually.
+ * Scale factors are submitted for every frame but they might be shared
+ * between the subframes of a channel. Scale factors are initially DPCM-coded.
+ * Once scale factors are shared, the differences are transmitted as runlevel
+ * codes.
+ * Every subframe length and offset combination in the frame layout shares a
+ * common quantization factor that can be adjusted for every channel by a
+ * modifier.
+ * After the inverse quantization, the coefficients get processed by an IMDCT.
+ * The resulting values are then windowed with a sine window and the first half
+ * of the values are added to the second half of the output from the previous
+ * subframe in order to reconstruct the output samples.
+ #include "wmapro_mdct.h" Uncomment the following line to enable some debug output #define WMAPRO_DUMP_CTX_EN Some defines to make it compile  Taken from avcodec.h  Taken from libavutil/mem.h  Taken from libavutil/common.h  Define some multiple used constants  0x00016A0A = (sqrt(2)*(1<<16))  0x0000B505 = (cos(pi/4)<<16)  0x00010000 = (1<<16)  Enable multichannel for large-memory targets only /< max number of handled channels/< max number of handled channels Current decoder limitations /< max number of subframes per channel/< max number of scale factor bands/< maximum compressed frame size/< log2 of max block size/< maximum block size/< possible block sizes/< scale factor DPCM vlc/< scale factor run length vlc/< 4 coefficients per symbol/< 2 coefficients per symbol/< 1 coefficient per symbol/< coefficient run length vlc codesstatic float            sin64[33];        ///< sinus table for decorrelation Global defined arrays to allow IRAM usage for some models. *
+ * @brief frame specific decoder context for a single channel
+ /< length of the previous block/< subframe length in samples/< subframe positions in the current frame/< current subframe number/< number of already processed samples/< channel is part of a group/< quantization step for the current subframe/< share scale factors between subframes/< scaling step for the current subframe/< maximum scale factor for the current subframe/< resampled and (previously) transmitted scale factor values/< index for the transmitted scale factor values (used for resampling)/< pointer to the scale factor values used for decoding/< index in sf_offsets for the scale factor reference block/< pointer to the subframe decode buffer/< number of vector coded coefficients/< output buffer*
+ * @brief channel group for channel transformations
+ /< number of channels in the group/< transform on / off/< controls if the transform is enabled for a certain bandfloat   decorrelation_matrix[WMAPRO_MAX_CHANNELS*WMAPRO_MAX_CHANNELS];/< transformation coefficients*
+ * @brief main decoder context
+  generic decoder variables /< compressed frame data/< context for filling the frame_data buffer/< IMDCT input buffer frame size dependent frame information (set during initialization) /< used compression features/< frame is prefixed with its length/< frame contains DRC data/< integer audio sample size for the unscaled IMDCT output (used to scale to [-1.0, 1.0])/< number of samples to output/< number of channels in the stream (same as AVCodecContext.num_channels)/< lfe channel index/< number of bits used for the subframe length/< flag indicating that the subframe is of maximum size when the first subframe length bit is 1/< scale factor bands per block size/< scale factor band offsets (multiples of 4)/< scale factor resample matrix/< subwoofer cutoff values packet decode state /< bitstream reader context for the packet/< frame offset in the packet/< current packet number/< saved number of bits/< frame offset in the bit reservoir/< subframe offset in the bit reservoir/< set in case of bitstream error/< set when a packet is fully decoded frame decode state /< current frame number/< bitstream reader context/< buffer size in bits/< maximum samplebuffer pointer/< gain for the DRC tool/< skip output step/< all subframes decoded? subframe/block decode state /< current subframe length/< number of channels that contain the subframe/< number of scale factor bands/< number of vector coded coefficients is part of the bitstream/< sfb offsets for the current block/< index for the num_sfb, sfb_offsets, sf_offsets and subwoofer_cutoffs tables/< length of escaped coefficients/< number of channel groups/< channel group information/< per channel data static decode context, to avoid malloc *
+ *@brief helper function to print the most important members of the context
+ *@param s context
+ *
+ *@brief Initialize the decoder.
+ *@param avctx codec context
+ *@return 0 on success, -1 otherwise
+  Use globally defined array. Allows IRAM usage for models with large IRAM.  Use globally defined arrays. Allows IRAM usage for up to 2 channels. * dump the extradata * generic init * frame info * skip first frame * get frame len * init previous block len * subframe info * extract lfe channel position * calculate number of scale factor bands and their offsets
+        for every possible block size * Scale factors can be shared between blocks of different size
+        as every block has a different scale factor band layout.
+        The matrix sf_offsets is needed to find the correct scale factor.
+     * calculate subwoofer cutoff values * calculate sine values for the decorrelation matrix *
+ *@brief Decode the subframe length.
+ *@param s context
+ *@param offset sample offset in the frame
+ *@return decoded subframe length on success, < 0 in case of an error
+ * no need to read from the bitstream when only one length is possible * 1 bit indicates if the subframe is of maximum length * sanity check the length *
+ *@brief Decode how the data in the frame is split into subframes.
+ *       Every WMA frame contains the encoded data for a fixed number of
+ *       samples per channel. The data for every channel might be split
+ *       into several subframes. This function will reconstruct the list of
+ *       subframes for every channel.
+ *
+ *       If the subframes are not evenly split, the algorithm estimates the
+ *       channels with the lowest number of total samples.
+ *       Afterwards, for each of these channels a bit is read from the
+ *       bitstream that indicates if the channel contains a subframe with the
+ *       next subframe size that is going to be read from the bitstream or not.
+ *       If a channel contains such a subframe, the subframe size gets added to
+ *       the channel's subframe list.
+ *       The algorithm repeats these steps until the frame is properly divided
+ *       between the individual channels.
+ *
+ *@param s context
+ *@return 0 on success, < 0 in case of an error
+ * sum of samples for all currently known subframes of a channel * flag indicating if a channel contains the current subframe * number of channels that contain the current subframe * flag indicating that all channels use the same subframe offsets and sizes * smallest sum of samples (channels with this length will be processed first)  Should never consume more than 3073 bits (256 iterations for the
+     * while loop when always the minimum amount of 128 samples is substracted
+     * from missing samples in the 8 channel case).
+     * 1 + BLOCK_MAX_SIZE * MAX_CHANNELS / BLOCK_MIN_SIZE * (MAX_CHANNELS  + 4)
+     * reset tiling information * loop until the frame data is split between the subframes * check which channels contain the subframe * get subframe length, subframe_len == 0 is not allowed * add subframes to the individual channels and find new min_channel_len *
+ *@brief Calculate a decorrelation matrix from the bitstream parameters.
+ *@param s codec context
+ *@param chgroup channel group for which the matrix needs to be calculated
+ *
+ *@brief Decode channel transformation parameters
+ *@param s codec context
+ *@return 0 in case of success, < 0 in case of bitstream errors
+  should never consume more than 1921 bits for the 8 channel case
+     * 1 + MAX_CHANNELS * (MAX_CHANNELS + 2 + 3 * MAX_CHANNELS * MAX_CHANNELS
+     * + MAX_CHANNELS + MAX_BANDS + 1)
+     * in the one channel case channel transforms are pointless * decode channel mask * decode transform type * cos(pi/4) * FIXME: more than 6 coupled channels not supported * decode transform on / off * transform can be enabled for individual bands *
+ *@brief Extract the coefficients from the bitstream.
+ *@param s codec context
+ *@param c current channel number
+ *@return 0 on success, < 0 in case of bitstream errors
+ * decode vector coefficients (consumes up to 167 bits per iteration for
+      4 vector coded large values)  Rockbox: To be able to use rockbox' optimized mdct we need to 
+         * pre-shift the values by >>(nbits-3). * decode sign  Rockbox: To be able to use rockbox' optimized mdct we need
+                 * invert the sign. * switch to run level mode when subframe_len / 128 zeros
+                    were found in a row * decode run level coded coefficients *
+ *@brief Extract scale factors from the bitstream.
+ *@param s codec context
+ *@return 0 on success, < 0 in case of bitstream errors
+ * should never consume more than 5344 bits
+     *  MAX_CHANNELS * (1 +  MAX_BANDS * 23)
+     * resample scale factors for the new block size
+         *  as the scale factors might need to be resampled several times
+         *  before some  new values are transmitted, a backup of the last
+         *  transmitted scale factors is kept in saved_scale_factors
+         * decode DPCM coded scale factors * run level decode differences to the resampled factors * swap buffers * calculate new scale factor maximum *
+ *@brief Reconstruct the individual channel data.
+ *@param s codec context
+ * multichannel decorrelation * multiply values with the decorrelation_matrix  Scale with sqrt(2) *
+ *@brief Apply sine window and reconstruct the output buffer.
+ *@param s codec context
+ *
+ *@brief Decode a single subframe (block).
+ *@param s codec context
+ *@return 0 on success, < 0 when decoding failed
+ * reset channel context and find the next block offset and size
+        == the next block of the channel with the smallest number of
+        decoded samples
+    * get a list of all channels that contain the estimated block * substract already processed samples * and count if there are multiple subframes that match our profile * check if the frame will be complete after processing the
+        estimated block * calculate number of scale factor bands and their offsets * configure the decoder for the current subframe * skip extended header if any * no idea for what the following bit is used * decode number of vector coded coefficients * decode quantization step * decode quantization step modifiers for every channel * decode scale factors * parse coefficients * reconstruct the per channel data * inverse quantization and rescaling * apply imdct (ff_imdct_half == DCTIV with reverse) * window and overlapp-add * handled one subframe *
+ *@brief Decode one WMA frame.
+ *@param s codec context
+ *@return 0 if the trailer bit indicates that this is the last frame,
+ *        1 if there are additional frames
+ * check for potential output buffer overflow  Rockbox : No need to check that anymore since we work directly on the
+       buffers in the WMAProDecCtx * return an error if no frame could be decoded at all * get frame length * decode tile information * read postproc transform * read drc info * no idea what these are for, might be the number of samples
+        that need to be skipped at the beginning or end of a stream * usually true for the first frame * sometimes true for the last frame * reset subframe states * decode all subframes * FIXME: not sure if this is always an error * skip the rest of the frame data * decode trailer bit *
+ *@brief Calculate remaining input buffer length.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@return remaining size in bits
+ *
+ *@brief Fill the bit reservoir with a (partial) frame.
+ *@param s codec context
+ *@param gb bitstream reader context
+ *@param len length of the partial frame
+ *@param append decides wether to reset the buffer or not
+ * when the frame data does not need to be concatenated, the input buffer
+        is resetted and additional bits from the previous frame are copyed
+        and skipped later so that a fast byte copy is possible *
+ *@brief Decode a single WMA packet.
+ *@param avctx codec context
+ *@param data the output buffer
+ *@param data_size number of bytes that were written to the output buffer
+ *@param avpkt input packet
+ *@return number of bytes that were read from the input buffer
+ * reuse second half of the IMDCT output for the next frame  NOTE : Relies on the WMAProDecCtx being static * sanity check for the buffer length * parse packet header * get number of bits that need to be added to the previous frame * check for packet loss * append the previous frame data to the remaining data from the
+                previous packet to create a full frame * decode the cross packet frame if it is valid * save the rest of the data so that it can be decoded
+            with the next packet *
+ *@brief wmapro decoder
+ 

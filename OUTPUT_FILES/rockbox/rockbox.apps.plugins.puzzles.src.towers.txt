@@ -1,0 +1,709 @@
+
+ * towers.c: the puzzle also known as 'Skyscrapers'.
+ *
+ * Possible future work:
+ *
+ *  - Relax the upper bound on grid size at 9?
+ *     + I'd need TOCHAR and FROMCHAR macros a bit like group's, to
+ * 	 be used wherever this code has +'0' or -'0'
+ *     + the pencil marks in the drawstate would need a separate
+ * 	 word to live in
+ *     + the clues outside the grid would have to cope with being
+ * 	 multi-digit, meaning in particular that the text formatting
+ * 	 would become more unpleasant
+ *     + most importantly, though, the solver just isn't fast
+ * 	 enough. Even at size 9 it can't really do the solver_hard
+ * 	 factorial-time enumeration at a sensible rate. Easy puzzles
+ * 	 higher than that would be possible, but more latin-squarey
+ * 	 than skyscrapery, as it were.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+     * An array of 4w integers, of which:
+     *  - the first w run across the top
+     *  - the next w across the bottom
+     *  - the third w down the left
+     *  - the last w down the right.
+     
+     * An array of w*w digits.
+     
+ * Macros to compute clue indices and coordinates.
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+	 * One-off loop to help get started: when a pair of facing
+	 * clues sum to w+1, it must mean that the row consists of
+	 * two increasing sequences back to back, so we can
+	 * immediately place the highest digit by knowing the
+	 * lengths of those two sequences.
+	 
+     * Go over every clue doing reasonably simple heuristic
+     * deductions.
+      Find the location of each number in the row.  placate optimiser 
+	     * We can already see an increasing sequence of the very
+	     * highest numbers, of length one less than that
+	     * specified in the clue. All of those numbers _must_ be
+	     * part of the clue sequence, so the number right next
+	     * to the clue must be the final one - i.e. it must be
+	     * bigger than any of the numbers between it and m. This
+	     * allows us to rule out small numbers in that square.
+	     *
+	     * (This is a generalisation of the obvious deduction
+	     * that when you see a clue saying 1, it must be right
+	     * next to the largest possible number; and similarly,
+	     * when you see a clue saying 2 opposite that, it must
+	     * be right next to the second-largest.)
+	      number of small numbers we can rule out  skip this number, it's elsewhere  placate optimiser 
+	     * The largest number cannot occur in the first (clue-1)
+	     * squares of the row, or else there wouldn't be space
+	     * for a sufficiently long increasing sequence which it
+	     * terminated. The second-largest number (not counting
+	     * any that are known to be on the far side of a larger
+	     * number and hence excluded from this sequence) cannot
+	     * occur in the first (clue-2) squares, similarly, and
+	     * so on.
+	      this number doesn't count 
+     * Go over every clue analysing all possibilities.
+     
+	 * Instead of a tedious physical recursion, I iterate in the
+	 * scratch array through all possibilities. At any given
+	 * moment, i indexes the element of the box that will next
+	 * be incremented.
+	 
+		 * Find the next valid value for cell i.
+		  used this one already  ruled out already  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on.  placate optimiser 
+	     * Once we find one clue we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is.
+	      ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Difficulty exceptions: some combinations of size and
+     * difficulty cannot be satisfied, because all puzzles of at
+     * most that difficulty are actually even easier.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e h x u; do
+  for i in {3..9}; do
+    echo -n "./towers --generate 1 ${i}d${d}: "
+    perl -e 'alarm 30; exec @ARGV' ./towers --generate 1 ${i}d${d} >/dev/null \
+      && echo ok
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * Construct a latin square to be the solution.
+	 
+	 * Fill in the clues.
+	 
+	 * Remove the grid numbers and then the clues, one by one,
+	 * for as long as the game remains soluble at the given
+	 * difficulty.
+	 
+	     * Special case: for Easy-mode grids that are small
+	     * enough, it's nice to be able to find completely empty
+	     * grids.
+	      leave all clues on Easy mode 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+		     * If there's a number in the very top left or
+		     * bottom right, there's no point putting an
+		     * unnecessary _ before or after it.
+		     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the right number of clues are given, and that
+     * they're in range.
+     
+	 * Verify that the right amount of grid data is given, and
+	 * that any grid elements provided are in range.
+	  do nothing  structure copy  do nothing  structure copy  , a = w*w 
+     * We have:
+     * 	- a top clue row, consisting of three spaces, then w clue
+     * 	  digits with spaces between (total 2*w+3 chars including
+     * 	  newline)
+     *  - a blank line (one newline)
+     * 	- w main rows, consisting of a left clue digit, two spaces,
+     * 	  w grid digits with spaces between, two spaces and a right
+     * 	  clue digit (total 2*w+6 chars each including newline)
+     *  - a blank line (one newline)
+     *  - a bottom clue row (same as top clue row)
+     *  - terminating NUL.
+     *
+     * Total size is therefore 2*(2*w+3) + 2 + w*(2*w+6) + 1
+     * = 2w^2+10w+9.
+      Top clue row.  Blank line.  Main grid.  Blank line.  Bottom clue row. 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow = 1, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      These always return positive values, though y offsets are actually -ve  default 3D graphics are user-disableable  (w+2)*(w+2) temp space  (w+2)*(w+2)*4: current drawn data , a = w*w  the errors array is (w+2) square  can't tell what happens next 
+	 * In 3D mode, just locating the mouse click in the natural
+	 * square grid may not be sufficient to tell which tower the
+	 * user clicked on. Investigate the _tops_ of the nearby
+	 * towers to see if a click on one grid square was actually
+	 * a click on a tower protruding into that region from
+	 * another.
+	  on top face?  in triangle between top-left corners?  in triangle between bottom-right corners? 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Can't do anything to an immutable square.
+	 
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes , a = w*w  , a = w*w  draw tower  left face of tower  bottom face of tower  now offset all subsequent drawing to the top of the tower  erase background  pencil-mode highlight  draw box outline  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square, minus space for impinging towers 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+     * Work out what data each tile should contain.
+      completely blank square  The clue squares...  ... and the main grid.  completion flash 
+     * Now actually draw anything that needs to be changed.
+     
+     * We use 9mm squares by default, like Solo.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Clues.
+     
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+         * Now run the solver again at the last difficulty level we
+         * tried, but this time with diagnostics enabled.
+          vim: set shiftwidth=4 tabstop=8: 
+ * towers.c: the puzzle also known as 'Skyscrapers'.
+ *
+ * Possible future work:
+ *
+ *  - Relax the upper bound on grid size at 9?
+ *     + I'd need TOCHAR and FROMCHAR macros a bit like group's, to
+ * 	 be used wherever this code has +'0' or -'0'
+ *     + the pencil marks in the drawstate would need a separate
+ * 	 word to live in
+ *     + the clues outside the grid would have to cope with being
+ * 	 multi-digit, meaning in particular that the text formatting
+ * 	 would become more unpleasant
+ *     + most importantly, though, the solver just isn't fast
+ * 	 enough. Even at size 9 it can't really do the solver_hard
+ * 	 factorial-time enumeration at a sensible rate. Easy puzzles
+ * 	 higher than that would be possible, but more latin-squarey
+ * 	 than skyscrapery, as it were.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+     * An array of 4w integers, of which:
+     *  - the first w run across the top
+     *  - the next w across the bottom
+     *  - the third w down the left
+     *  - the last w down the right.
+     
+     * An array of w*w digits.
+     
+ * Macros to compute clue indices and coordinates.
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+	 * One-off loop to help get started: when a pair of facing
+	 * clues sum to w+1, it must mean that the row consists of
+	 * two increasing sequences back to back, so we can
+	 * immediately place the highest digit by knowing the
+	 * lengths of those two sequences.
+	 
+     * Go over every clue doing reasonably simple heuristic
+     * deductions.
+      Find the location of each number in the row.  placate optimiser 
+	     * We can already see an increasing sequence of the very
+	     * highest numbers, of length one less than that
+	     * specified in the clue. All of those numbers _must_ be
+	     * part of the clue sequence, so the number right next
+	     * to the clue must be the final one - i.e. it must be
+	     * bigger than any of the numbers between it and m. This
+	     * allows us to rule out small numbers in that square.
+	     *
+	     * (This is a generalisation of the obvious deduction
+	     * that when you see a clue saying 1, it must be right
+	     * next to the largest possible number; and similarly,
+	     * when you see a clue saying 2 opposite that, it must
+	     * be right next to the second-largest.)
+	      number of small numbers we can rule out  skip this number, it's elsewhere  placate optimiser 
+	     * The largest number cannot occur in the first (clue-1)
+	     * squares of the row, or else there wouldn't be space
+	     * for a sufficiently long increasing sequence which it
+	     * terminated. The second-largest number (not counting
+	     * any that are known to be on the far side of a larger
+	     * number and hence excluded from this sequence) cannot
+	     * occur in the first (clue-2) squares, similarly, and
+	     * so on.
+	      this number doesn't count 
+     * Go over every clue analysing all possibilities.
+     
+	 * Instead of a tedious physical recursion, I iterate in the
+	 * scratch array through all possibilities. At any given
+	 * moment, i indexes the element of the box that will next
+	 * be incremented.
+	 
+		 * Find the next valid value for cell i.
+		  used this one already  ruled out already  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on.  placate optimiser 
+	     * Once we find one clue we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is.
+	      ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Difficulty exceptions: some combinations of size and
+     * difficulty cannot be satisfied, because all puzzles of at
+     * most that difficulty are actually even easier.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e h x u; do
+  for i in {3..9}; do
+    echo -n "./towers --generate 1 ${i}d${d}: "
+    perl -e 'alarm 30; exec @ARGV' ./towers --generate 1 ${i}d${d} >/dev/null \
+      && echo ok
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * Construct a latin square to be the solution.
+	 
+	 * Fill in the clues.
+	 
+	 * Remove the grid numbers and then the clues, one by one,
+	 * for as long as the game remains soluble at the given
+	 * difficulty.
+	 
+	     * Special case: for Easy-mode grids that are small
+	     * enough, it's nice to be able to find completely empty
+	     * grids.
+	      leave all clues on Easy mode 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+		     * If there's a number in the very top left or
+		     * bottom right, there's no point putting an
+		     * unnecessary _ before or after it.
+		     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the right number of clues are given, and that
+     * they're in range.
+     
+	 * Verify that the right amount of grid data is given, and
+	 * that any grid elements provided are in range.
+	  do nothing  structure copy  do nothing  structure copy  , a = w*w 
+     * We have:
+     * 	- a top clue row, consisting of three spaces, then w clue
+     * 	  digits with spaces between (total 2*w+3 chars including
+     * 	  newline)
+     *  - a blank line (one newline)
+     * 	- w main rows, consisting of a left clue digit, two spaces,
+     * 	  w grid digits with spaces between, two spaces and a right
+     * 	  clue digit (total 2*w+6 chars each including newline)
+     *  - a blank line (one newline)
+     *  - a bottom clue row (same as top clue row)
+     *  - terminating NUL.
+     *
+     * Total size is therefore 2*(2*w+3) + 2 + w*(2*w+6) + 1
+     * = 2w^2+10w+9.
+      Top clue row.  Blank line.  Main grid.  Blank line.  Bottom clue row. 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow = 1, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      These always return positive values, though y offsets are actually -ve  default 3D graphics are user-disableable  (w+2)*(w+2) temp space  (w+2)*(w+2)*4: current drawn data , a = w*w  the errors array is (w+2) square  can't tell what happens next 
+	 * In 3D mode, just locating the mouse click in the natural
+	 * square grid may not be sufficient to tell which tower the
+	 * user clicked on. Investigate the _tops_ of the nearby
+	 * towers to see if a click on one grid square was actually
+	 * a click on a tower protruding into that region from
+	 * another.
+	  on top face?  in triangle between top-left corners?  in triangle between bottom-right corners? 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Can't do anything to an immutable square.
+	 
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes , a = w*w  , a = w*w  draw tower  left face of tower  bottom face of tower  now offset all subsequent drawing to the top of the tower  erase background  pencil-mode highlight  draw box outline  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square, minus space for impinging towers 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+     * Work out what data each tile should contain.
+      completely blank square  The clue squares...  ... and the main grid.  completion flash 
+     * Now actually draw anything that needs to be changed.
+     
+     * We use 9mm squares by default, like Solo.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Clues.
+     
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+         * Now run the solver again at the last difficulty level we
+         * tried, but this time with diagnostics enabled.
+          vim: set shiftwidth=4 tabstop=8: 
+ * towers.c: the puzzle also known as 'Skyscrapers'.
+ *
+ * Possible future work:
+ *
+ *  - Relax the upper bound on grid size at 9?
+ *     + I'd need TOCHAR and FROMCHAR macros a bit like group's, to
+ * 	 be used wherever this code has +'0' or -'0'
+ *     + the pencil marks in the drawstate would need a separate
+ * 	 word to live in
+ *     + the clues outside the grid would have to cope with being
+ * 	 multi-digit, meaning in particular that the text formatting
+ * 	 would become more unpleasant
+ *     + most importantly, though, the solver just isn't fast
+ * 	 enough. Even at size 9 it can't really do the solver_hard
+ * 	 factorial-time enumeration at a sensible rate. Easy puzzles
+ * 	 higher than that would be possible, but more latin-squarey
+ * 	 than skyscrapery, as it were.
+ 
+ * Difficulty levels. I do some macro ickery here to ensure that my
+ * enum and the various forms of my name list always match up.
+ 
+     * An array of 4w integers, of which:
+     *  - the first w run across the top
+     *  - the next w across the bottom
+     *  - the third w down the left
+     *  - the last w down the right.
+     
+     * An array of w*w digits.
+     
+ * Macros to compute clue indices and coordinates.
+  bitmaps using bits 1<<1..1<<n  structure copy  structure copy  ...which is invalid  ----------------------------------------------------------------------
+ * Solver.
+ 
+	 * One-off loop to help get started: when a pair of facing
+	 * clues sum to w+1, it must mean that the row consists of
+	 * two increasing sequences back to back, so we can
+	 * immediately place the highest digit by knowing the
+	 * lengths of those two sequences.
+	 
+     * Go over every clue doing reasonably simple heuristic
+     * deductions.
+      Find the location of each number in the row.  placate optimiser 
+	     * We can already see an increasing sequence of the very
+	     * highest numbers, of length one less than that
+	     * specified in the clue. All of those numbers _must_ be
+	     * part of the clue sequence, so the number right next
+	     * to the clue must be the final one - i.e. it must be
+	     * bigger than any of the numbers between it and m. This
+	     * allows us to rule out small numbers in that square.
+	     *
+	     * (This is a generalisation of the obvious deduction
+	     * that when you see a clue saying 1, it must be right
+	     * next to the largest possible number; and similarly,
+	     * when you see a clue saying 2 opposite that, it must
+	     * be right next to the second-largest.)
+	      number of small numbers we can rule out  skip this number, it's elsewhere  placate optimiser 
+	     * The largest number cannot occur in the first (clue-1)
+	     * squares of the row, or else there wouldn't be space
+	     * for a sufficiently long increasing sequence which it
+	     * terminated. The second-largest number (not counting
+	     * any that are known to be on the far side of a larger
+	     * number and hence excluded from this sequence) cannot
+	     * occur in the first (clue-2) squares, similarly, and
+	     * so on.
+	      this number doesn't count 
+     * Go over every clue analysing all possibilities.
+     
+	 * Instead of a tedious physical recursion, I iterate in the
+	 * scratch array through all possibilities. At any given
+	 * moment, i indexes the element of the box that will next
+	 * be incremented.
+	 
+		 * Find the next valid value for cell i.
+		  used this one already  ruled out already  Found one.  No valid values left; drop back.  overall iteration is finished  Got a valid value; store it and move on.  placate optimiser 
+	     * Once we find one clue we can do something with in
+	     * this way, revert to trying easier deductions, so as
+	     * not to generate solver diagnostics that make the
+	     * problem look harder than it is.
+	      ----------------------------------------------------------------------
+ * Grid generation.
+ 
+     * Difficulty exceptions: some combinations of size and
+     * difficulty cannot be satisfied, because all puzzles of at
+     * most that difficulty are actually even easier.
+     *
+     * Remember to re-test this whenever a change is made to the
+     * solver logic!
+     *
+     * I tested it using the following shell command:
+
+for d in e h x u; do
+  for i in {3..9}; do
+    echo -n "./towers --generate 1 ${i}d${d}: "
+    perl -e 'alarm 30; exec @ARGV' ./towers --generate 1 ${i}d${d} >/dev/null \
+      && echo ok
+  done
+done
+
+     * Of course, it's better to do that after taking the exceptions
+     * _out_, so as to detect exceptions that should be removed as
+     * well as those which should be added.
+     
+	 * Construct a latin square to be the solution.
+	 
+	 * Fill in the clues.
+	 
+	 * Remove the grid numbers and then the clues, one by one,
+	 * for as long as the game remains soluble at the given
+	 * difficulty.
+	 
+	     * Special case: for Easy-mode grids that are small
+	     * enough, it's nice to be able to find completely empty
+	     * grids.
+	      leave all clues on Easy mode 
+	 * See if the game can be solved at the specified difficulty
+	 * level, but not at the one below.
+	  go round again 
+	 * We've got a usable puzzle!
+	 
+     * Encode the puzzle description.
+     
+		     * If there's a number in the very top left or
+		     * bottom right, there's no point putting an
+		     * unnecessary _ before or after it.
+		     
+     * Encode the solution.
+      ----------------------------------------------------------------------
+ * Gameplay.
+ 
+     * Verify that the right number of clues are given, and that
+     * they're in range.
+     
+	 * Verify that the right amount of grid data is given, and
+	 * that any grid elements provided are in range.
+	  do nothing  structure copy  do nothing  structure copy  , a = w*w 
+     * We have:
+     * 	- a top clue row, consisting of three spaces, then w clue
+     * 	  digits with spaces between (total 2*w+3 chars including
+     * 	  newline)
+     *  - a blank line (one newline)
+     * 	- w main rows, consisting of a left clue digit, two spaces,
+     * 	  w grid digits with spaces between, two spaces and a right
+     * 	  clue digit (total 2*w+6 chars each including newline)
+     *  - a blank line (one newline)
+     *  - a bottom clue row (same as top clue row)
+     *  - terminating NUL.
+     *
+     * Total size is therefore 2*(2*w+3) + 2 + w*(2*w+6) + 1
+     * = 2w^2+10w+9.
+      Top clue row.  Blank line.  Main grid.  Blank line.  Bottom clue row. 
+     * These are the coordinates of the currently highlighted
+     * square on the grid, if hshow = 1.
+     
+     * This indicates whether the current highlight is a
+     * pencil-mark one or a real one.
+     
+     * This indicates whether or not we're showing the highlight
+     * (used to be hx = hy = -1); important so that when we're
+     * using the cursor keys it doesn't keep coming back at a
+     * fixed position. When hshow = 1, pressing a valid number
+     * or letter key or Space will enter that number or letter in the grid.
+     
+     * This indicates whether we're using the highlight as a cursor;
+     * it means that it doesn't vanish on a keypress, and that it is
+     * allowed on immutable squares.
+     
+     * We prevent pencil-mode highlighting of a filled square, unless
+     * we're using the cursor keys. So if the user has just filled in
+     * a square which we had a pencil-mode highlight in (by Undo, or
+     * by Redo, or by Solve), then we cancel the highlight.
+      These always return positive values, though y offsets are actually -ve  default 3D graphics are user-disableable  (w+2)*(w+2) temp space  (w+2)*(w+2)*4: current drawn data , a = w*w  the errors array is (w+2) square  can't tell what happens next 
+	 * In 3D mode, just locating the mouse click in the natural
+	 * square grid may not be sufficient to tell which tower the
+	 * user clicked on. Investigate the _tops_ of the nearby
+	 * towers to see if a click on one grid square was actually
+	 * a click on a tower protruding into that region from
+	 * another.
+	  on top face?  in triangle between top-left corners?  in triangle between bottom-right corners? 
+             * Pencil-mode highlighting for non filled squares.
+             
+         * Can't make pencil marks in a filled square. This can only
+         * become highlighted if we're using cursor keys.
+         
+	 * Can't do anything to an immutable square.
+	 
+	 * Fill in absolutely all pencil marks everywhere. (I
+	 * wouldn't use this for actual play, but it's a handy
+	 * starting point when following through a set of
+	 * diagnostics output by the standalone solver.)
+	  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes , a = w*w  , a = w*w  draw tower  left face of tower  bottom face of tower  now offset all subsequent drawing to the top of the tower  erase background  pencil-mode highlight  draw box outline  new number needs drawing?  Count the pencil marks required. 
+	     * Determine the bounding rectangle within which we're going
+	     * to put the pencil marks.
+	      Start with the whole square, minus space for impinging towers 
+	     * We arrange our pencil marks in a grid layout, with
+	     * the number of rows and columns adjusted to allow the
+	     * maximum font size.
+	     *
+	     * So now we work out what the grid size ought to be.
+	      Minimum 
+	     * Now we've got our grid dimensions, work out the pixel
+	     * size of a grid element, and round it to the nearest
+	     * pixel. (We don't want rounding errors to make the
+	     * grid look uneven at low pixel sizes.)
+	     
+	     * Centre the resulting figure in the square.
+	     
+	     * Now actually draw the pencil marks.
+	     , a = w*w 
+	 * The initial contents of the window are not guaranteed and
+	 * can vary with front ends. To be on the safe side, all
+	 * games should start by drawing a big background-colour
+	 * rectangle covering the whole window.
+	 
+     * Work out what data each tile should contain.
+      completely blank square  The clue squares...  ... and the main grid.  completion flash 
+     * Now actually draw anything that needs to be changed.
+     
+     * We use 9mm squares by default, like Solo.
+      Ick: fake up `ds->tilesize' for macro expansion purposes 
+     * Border.
+     
+     * Main grid.
+     
+     * Clues.
+     
+     * Numbers for the solution, if any.
+      wants_statusbar  flags 
+     * When solving an Easy puzzle, we don't want to bother the
+     * user with Hard-level deductions. For this reason, we grade
+     * the puzzle internally before doing anything else.
+      placate optimiser 
+         * Now run the solver again at the last difficulty level we
+         * tried, but this time with diagnostics enabled.
+          vim: set shiftwidth=4 tabstop=8: 

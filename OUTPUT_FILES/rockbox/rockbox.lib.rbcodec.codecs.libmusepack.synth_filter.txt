@@ -1,0 +1,205 @@
+
+  Copyright (c) 2005, The Musepack Development Team
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+
+  * Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the following
+  disclaimer in the documentation and/or other materials provided
+  with the distribution.
+
+  * Neither the name of the The Musepack Development Team nor the
+  names of its contributors may be used to endorse or promote
+  products derived from this software without specific prior
+  written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/ \file synth_filter.c/ Synthesis functions./ \todo document me C O N S T A N T S  on ARMv6 we use 32*32=64>>32 multiplies (smmul/smmla) so we need to scale up the D coefficients the ARM11 multiplier doesn't have early termination so the magnitude of the multiplicands does not matter for speed. do not up-scale D-values to achieve higher speed in smull/mlal operations. saves ~14/8 = 1.75 cycles per multiplication in this configuration a post-shift by >>16 is needed after synthesis saturate to +/- 2^31 (= value << (31-17)), D-values are +/- 2^17 IMPORTANT: internal scaling is somehow strange for floating point, therefore we scale the coefficients Di_opt by the correct amount to have proper scaled output Di_opt coefficients are +/- 2^17 (pre-shifted by <<16)           0        1        2         3         4         5          6          7         8         9       10        11       12       13      14     15    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  DCT32-coefficients were expanded (<<) by DCT32_COEFFICIENT_EXPAND define 64=32x32-multiplication for DCT-coefficients with samples. Via usage of MPC_FRACT highly optimized assembler might be used MULTIPLY_FRACT will perform >>32 after multiplication, as coef were expanded by DCT32_COEFFICIENT_EXPAND we'll correct this on the result. Will loose 4 bit accuracy on result in fract part without effect on final audio result for floating point use the standard multiplication macro*****************************************************************************
+ * mpc_dct32(const int *in, int *out)
+ *
+ * mpc_dct32 is a dct32 with in[32]->dct[32] that contains the mirroring from
+ * dct[32] to the expected out[64]. The symmetry is 
+ * out[16] = 0, 
+ * out[ 0..15] =  dct[ 0..15], 
+ * out[32..17] = -dct[ 0..15], 
+ * out[33..48] = -dct[16..31],
+ * out[63..48] = -dct[16..31].
+ * The cos-tab has the format s0.31.
+ **************************************************************************** costab[i] = cos(PI / (2 * 32) * i)  0.998795456  0.995184727  0.989176510  0.980785280  0.970031253  0.956940336  0.941544065  0.923879533  0.903989293  0.881921264  0.857728610  0.831469612  0.803207531  0.773010453  0.740951125  0.707106781  0.671558955  0.634393284  0.595699304  0.555570233  0.514102744  0.471396737  0.427555093  0.382683432  0.336889853  0.290284677  0.242980180  0.195090322  0.146730474  0.098017140  0.049067674   0  16   1   2   3   4   5   6   7   8  24   9  10  11  12  20  28  13  14  18  22  26  30  15  17  19  21  23  25  27  29  31  64=64x64-multiply (FIXED_POINT) or float=float*float (!FIXED_POINT) in C total: 16 muls, 15 adds, 16 shifts CPU_ARM || CPU_COLDFIRE ******** left channel ************** right channel ************************************************                                                     dithered synthesis                                                    ***************************************** parity
+ *  This is a simple random number generator with good quality for audio purposes.
+ *  It consists of two polycounters with opposite rotation direction and different
+ *  periods. The periods are coprime, so the total period is the product of both.
+ *
+ *     -------------------------------------------------------------------------------------------------
+ * +-> |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0|
+ * |   -------------------------------------------------------------------------------------------------
+ * |                                                                          |  |  |  |     |        |
+ * |                                                                          +--+--+--+-XOR-+--------+
+ * |                                                                                      |
+ * +--------------------------------------------------------------------------------------+
+ *
+ *     -------------------------------------------------------------------------------------------------
+ *     |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0| <-+
+ *     -------------------------------------------------------------------------------------------------   |
+ *       |  |           |  |                                                                               |
+ *       +--+----XOR----+--+                                                                               |
+ *                |                                                                                        |
+ *                +----------------------------------------------------------------------------------------+
+ *
+ *
+ *  The first has an period of 3*5*17*257*65537, the second of 7*47*73*178481,
+ *  which gives a period of 18.410.713.077.675.721.215. The result is the
+ *  XORed values of both generators.
+  Parity calculation is done via table lookup, this is also available on CPUs without parity, can be implemented in C and avoid unpredictable jumps and slow rotate through the carry flag operations.
+  Copyright (c) 2005, The Musepack Development Team
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+
+  * Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the following
+  disclaimer in the documentation and/or other materials provided
+  with the distribution.
+
+  * Neither the name of the The Musepack Development Team nor the
+  names of its contributors may be used to endorse or promote
+  products derived from this software without specific prior
+  written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/ \file synth_filter.c/ Synthesis functions./ \todo document me C O N S T A N T S  on ARMv6 we use 32*32=64>>32 multiplies (smmul/smmla) so we need to scale up the D coefficients the ARM11 multiplier doesn't have early termination so the magnitude of the multiplicands does not matter for speed. do not up-scale D-values to achieve higher speed in smull/mlal operations. saves ~14/8 = 1.75 cycles per multiplication in this configuration a post-shift by >>16 is needed after synthesis saturate to +/- 2^31 (= value << (31-17)), D-values are +/- 2^17 IMPORTANT: internal scaling is somehow strange for floating point, therefore we scale the coefficients Di_opt by the correct amount to have proper scaled output Di_opt coefficients are +/- 2^17 (pre-shifted by <<16)           0        1        2         3         4         5          6          7         8         9       10        11       12       13      14     15    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  DCT32-coefficients were expanded (<<) by DCT32_COEFFICIENT_EXPAND define 64=32x32-multiplication for DCT-coefficients with samples. Via usage of MPC_FRACT highly optimized assembler might be used MULTIPLY_FRACT will perform >>32 after multiplication, as coef were expanded by DCT32_COEFFICIENT_EXPAND we'll correct this on the result. Will loose 4 bit accuracy on result in fract part without effect on final audio result for floating point use the standard multiplication macro*****************************************************************************
+ * mpc_dct32(const int *in, int *out)
+ *
+ * mpc_dct32 is a dct32 with in[32]->dct[32] that contains the mirroring from
+ * dct[32] to the expected out[64]. The symmetry is 
+ * out[16] = 0, 
+ * out[ 0..15] =  dct[ 0..15], 
+ * out[32..17] = -dct[ 0..15], 
+ * out[33..48] = -dct[16..31],
+ * out[63..48] = -dct[16..31].
+ * The cos-tab has the format s0.31.
+ **************************************************************************** costab[i] = cos(PI / (2 * 32) * i)  0.998795456  0.995184727  0.989176510  0.980785280  0.970031253  0.956940336  0.941544065  0.923879533  0.903989293  0.881921264  0.857728610  0.831469612  0.803207531  0.773010453  0.740951125  0.707106781  0.671558955  0.634393284  0.595699304  0.555570233  0.514102744  0.471396737  0.427555093  0.382683432  0.336889853  0.290284677  0.242980180  0.195090322  0.146730474  0.098017140  0.049067674   0  16   1   2   3   4   5   6   7   8  24   9  10  11  12  20  28  13  14  18  22  26  30  15  17  19  21  23  25  27  29  31  64=64x64-multiply (FIXED_POINT) or float=float*float (!FIXED_POINT) in C total: 16 muls, 15 adds, 16 shifts CPU_ARM || CPU_COLDFIRE ******** left channel ************** right channel ************************************************                                                     dithered synthesis                                                    ***************************************** parity
+ *  This is a simple random number generator with good quality for audio purposes.
+ *  It consists of two polycounters with opposite rotation direction and different
+ *  periods. The periods are coprime, so the total period is the product of both.
+ *
+ *     -------------------------------------------------------------------------------------------------
+ * +-> |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0|
+ * |   -------------------------------------------------------------------------------------------------
+ * |                                                                          |  |  |  |     |        |
+ * |                                                                          +--+--+--+-XOR-+--------+
+ * |                                                                                      |
+ * +--------------------------------------------------------------------------------------+
+ *
+ *     -------------------------------------------------------------------------------------------------
+ *     |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0| <-+
+ *     -------------------------------------------------------------------------------------------------   |
+ *       |  |           |  |                                                                               |
+ *       +--+----XOR----+--+                                                                               |
+ *                |                                                                                        |
+ *                +----------------------------------------------------------------------------------------+
+ *
+ *
+ *  The first has an period of 3*5*17*257*65537, the second of 7*47*73*178481,
+ *  which gives a period of 18.410.713.077.675.721.215. The result is the
+ *  XORed values of both generators.
+  Parity calculation is done via table lookup, this is also available on CPUs without parity, can be implemented in C and avoid unpredictable jumps and slow rotate through the carry flag operations.
+  Copyright (c) 2005, The Musepack Development Team
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+
+  * Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the following
+  disclaimer in the documentation and/or other materials provided
+  with the distribution.
+
+  * Neither the name of the The Musepack Development Team nor the
+  names of its contributors may be used to endorse or promote
+  products derived from this software without specific prior
+  written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/ \file synth_filter.c/ Synthesis functions./ \todo document me C O N S T A N T S  on ARMv6 we use 32*32=64>>32 multiplies (smmul/smmla) so we need to scale up the D coefficients the ARM11 multiplier doesn't have early termination so the magnitude of the multiplicands does not matter for speed. do not up-scale D-values to achieve higher speed in smull/mlal operations. saves ~14/8 = 1.75 cycles per multiplication in this configuration a post-shift by >>16 is needed after synthesis saturate to +/- 2^31 (= value << (31-17)), D-values are +/- 2^17 IMPORTANT: internal scaling is somehow strange for floating point, therefore we scale the coefficients Di_opt by the correct amount to have proper scaled output Di_opt coefficients are +/- 2^17 (pre-shifted by <<16)           0        1        2         3         4         5          6          7         8         9       10        11       12       13      14     15    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  DCT32-coefficients were expanded (<<) by DCT32_COEFFICIENT_EXPAND define 64=32x32-multiplication for DCT-coefficients with samples. Via usage of MPC_FRACT highly optimized assembler might be used MULTIPLY_FRACT will perform >>32 after multiplication, as coef were expanded by DCT32_COEFFICIENT_EXPAND we'll correct this on the result. Will loose 4 bit accuracy on result in fract part without effect on final audio result for floating point use the standard multiplication macro*****************************************************************************
+ * mpc_dct32(const int *in, int *out)
+ *
+ * mpc_dct32 is a dct32 with in[32]->dct[32] that contains the mirroring from
+ * dct[32] to the expected out[64]. The symmetry is 
+ * out[16] = 0, 
+ * out[ 0..15] =  dct[ 0..15], 
+ * out[32..17] = -dct[ 0..15], 
+ * out[33..48] = -dct[16..31],
+ * out[63..48] = -dct[16..31].
+ * The cos-tab has the format s0.31.
+ **************************************************************************** costab[i] = cos(PI / (2 * 32) * i)  0.998795456  0.995184727  0.989176510  0.980785280  0.970031253  0.956940336  0.941544065  0.923879533  0.903989293  0.881921264  0.857728610  0.831469612  0.803207531  0.773010453  0.740951125  0.707106781  0.671558955  0.634393284  0.595699304  0.555570233  0.514102744  0.471396737  0.427555093  0.382683432  0.336889853  0.290284677  0.242980180  0.195090322  0.146730474  0.098017140  0.049067674   0  16   1   2   3   4   5   6   7   8  24   9  10  11  12  20  28  13  14  18  22  26  30  15  17  19  21  23  25  27  29  31  64=64x64-multiply (FIXED_POINT) or float=float*float (!FIXED_POINT) in C total: 16 muls, 15 adds, 16 shifts CPU_ARM || CPU_COLDFIRE ******** left channel ************** right channel ************************************************                                                     dithered synthesis                                                    ***************************************** parity
+ *  This is a simple random number generator with good quality for audio purposes.
+ *  It consists of two polycounters with opposite rotation direction and different
+ *  periods. The periods are coprime, so the total period is the product of both.
+ *
+ *     -------------------------------------------------------------------------------------------------
+ * +-> |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0|
+ * |   -------------------------------------------------------------------------------------------------
+ * |                                                                          |  |  |  |     |        |
+ * |                                                                          +--+--+--+-XOR-+--------+
+ * |                                                                                      |
+ * +--------------------------------------------------------------------------------------+
+ *
+ *     -------------------------------------------------------------------------------------------------
+ *     |31:30:29:28:27:26:25:24:23:22:21:20:19:18:17:16:15:14:13:12:11:10: 9: 8: 7: 6: 5: 4: 3: 2: 1: 0| <-+
+ *     -------------------------------------------------------------------------------------------------   |
+ *       |  |           |  |                                                                               |
+ *       +--+----XOR----+--+                                                                               |
+ *                |                                                                                        |
+ *                +----------------------------------------------------------------------------------------+
+ *
+ *
+ *  The first has an period of 3*5*17*257*65537, the second of 7*47*73*178481,
+ *  which gives a period of 18.410.713.077.675.721.215. The result is the
+ *  XORed values of both generators.
+  Parity calculation is done via table lookup, this is also available on CPUs without parity, can be implemented in C and avoid unpredictable jumps and slow rotate through the carry flag operations.

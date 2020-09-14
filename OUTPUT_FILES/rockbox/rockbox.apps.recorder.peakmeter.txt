@@ -1,0 +1,703 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Philipp Pertermann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** selects between playback and recording peaks  Current values and cumulation  current values (last peak_meter_peek)  maximum values between peak meter draws  max. peak values between peakhold calls  used for AGC and histogram display  Clip hold  when true a clip has occurred  clip hold timeouts  Temporarily en- / disables peak meter. This is especially for external
+   applications to detect if the peak_meter is in use and needs drawing at all * Parameters * Range  minimum of range in samples  maximum of range in samples  range width in samples  true if peakmeter displays dBfs  true if peeked at peakmeter before drawing  minimum of range in 1/100 dB  maximum of range in 1/100 dB  range width in 1/100 dB  Timing behaviour  peak hold timeout ticks  peak release in units per read  clip hold timeout ticks  true if clip timeout is disabled  point in time when the threshold was exceeded  point in time when the volume fell below the threshold The output value of the trigger. See TRIG_XXX constants for valid values  clipping counter (only used for recording)  clipping count  counting or not  debug only  HAVE_LCD_COLOR  HAVE_LCD_COLOR  LCD_DEPTH > 1  LCD_DEPTH > 1  HAVE_HISTOGRAM  precalculated peak values that represent magical
+   dBfs values. Used to draw the scale    0 db  - 3 db  - 6 db  - 9 db  -12 db  -18 db  -24 db  -30 db  -40 db  -50 db  -60 db  -inf   *
+ * Calculates dB Value for the peak meter, uses peak value as input
+ * @param int sample - The input value 
+ *                    Make sure that 0 <= value < SAMPLE_RANGE
+ *
+ * @return int - The 2 digit fixed point result of the euation
+ *               20 * log (sample / SAMPLE_RANGE) + 90
+ *               Output range is 0-9000 (that is 0.0 - 90.0 dB).
+ *               Normally 0dB is full scale, here it is shifted +90dB.
+ *               The calculation is based on the results of a linear
+ *               approximation tool written specifically for this problem
+ *               by Andreas Zwirtes (radhard@gmx.de). The result has an
+ *               accurracy of better than 2%. It is highly runtime optimized,
+ *               the cascading if-clauses do an successive approximation on
+ *               the input value. This avoids big lookup-tables and
+ *               for-loops.
+ *               Improved by Jvo Studer for errors < 0.2dB for critical
+ *               range of -12dB to 0dB (78.0 to 90.0dB).
+  return n+m*(isample-istart)/100  Range 1-5  Range 1-3  Range 1  Range 2  Range 3  Range 4-5  Range 4  Range 5  Range 6-9  Range 6  Range 7  Range 8  Range 9 *
+ * A helper function for peak_meter_db2sample. Don't call it separately but
+ * use peak_meter_db2sample. If one or both of min and max are outside the
+ * range 0 <= min (or max) < 8961 the behaviour of this function is
+ * undefined. It may not return.
+ * @param int min - The minimum of the value range that is searched.
+ * @param int max - The maximum of the value range that is searched.
+ * @param int db  - The value in dBfs * (-100) for which the according
+ *                  minimal peak sample is searched.
+ * @return int - A linear volume value with 0 <= value < MAX_PEAK
+ *
+ * Converts a value representing dBfs to a linear
+ * scaled volume info as it is used by the MAS.
+ * An incredibly inefficiant function which is
+ * the vague inverse of calc_db. This really 
+ * should be replaced by something better soon.
+ * 
+ * @param int db - A dBfs * 100 value with 
+ *                 -9000 < value <= 0
+ * @return int - The return value is in the range of
+ *               0 <= return value < MAX_PEAK
+  what is the maximum pseudo db value  range check: db value to big  range check: db value too small  value in range: find the matching linear value  as this is a dirty function anyway, we want to adjust the 
+           full scale hit manually to avoid users complaining that when
+           they adjust maximum for 0 dBfs and display it in percent it 
+           shows 99%. That is due to precision loss and this is the 
+           optical fix *
+ * Set the min value for restriction of the value range.
+ * @param int newmin - depending whether dBfs is used
+ * newmin is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmin <= 0
+ * for linear: 0 <= newmin <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values.
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Set the max value for restriction of the value range.
+ * @param int newmax - depending wether dBfs is used
+ * newmax is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmax <= 0
+ * for linear: 0 <= newmax <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Returns whether the meter is currently displaying dBfs or percent values.
+ * @return bool - true if the meter is displaying dBfs
+                  false if the meter is displaying percent values.
+ *
+ * Specifies whether the values displayed are scaled
+ * as dBfs or as linear percent values.
+ * @param use - set to true for dBfs, 
+ *              set to false for linear scaling in percent
+ *
+ * Initialize the range of the meter. Only values
+ * that are in the range of [range_min ... range_max]
+ * are displayed.
+ * @param bool dbfs - set to true for dBfs, 
+ *                    set to false for linear scaling in percent 
+ * @param int range_min - Specifies the lower value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ * @param int range_max - Specifies the upper value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ *
+ * Initialize the peak meter with all relevant values concerning times.
+ * @param int release - Set the maximum amount of pixels the meter is allowed
+ *                      to decrease with each redraw
+ * @param int hold_ms - Select the time in ms for the time the peak indicator
+ *                      is reset after a peak occurred.
+ * @param int clip_hold_sec - Select the time in seconds for the time the peak
+ *                            indicator is reset after a peak occurred.
+  convert ms to ticks *
+ * Enable/disable clip counting
+ *
+ * Get clipping counter value
+ *
+ * Set clipping counter to zero (typically at start of recording or playback) 
+ *
+ * Set the source of the peak meter to playback or to 
+ * record.
+ * @param: bool playback - If true playback peak meter is used.
+ *         If false recording peak meter is used.
+  reset the scales just in case recording and playback
+       use different viewport sizes. Normally we should be checking viewport
+       sizes every time but this will do for now *
+ * Reads peak values from the MAS, and detects clips. The 
+ * values are stored in pm_max_left pm_max_right for later
+ * evauluation. Consecutive calls to peak_meter_peek detect 
+ * that ocurred. This function could be used by a thread for
+ * busy reading the MAS.
+  read current values  *MUST* be static  check for clips
+       An clip is assumed when two consecutive readouts
+       of the volume are at full scale. This is proven
+       to be inaccurate in both ways: it may detect clips
+       when no clip occurred and it may fail to detect
+       a real clip. For software codecs, the peak is already
+       the max of a bunch of samples, so use one max value
+       or you fail to detect clipping!  peaks are searched -> we have to find the maximum. When
+       many calls of peak_meter_peek the maximum value will be
+       stored in pm_max_xxx. This maximum is reset by the
+       functions peak_meter_read_x.  Ignore any unread peakmeter data  this value may need tweaking. Increase if you are
+                              getting trig events when you shouldn't with
+                              trig_stp_hold = 0  no more changes, if trigger was activated as release trigger  threshold exceeded?  reset trigger duration  reset dropout duration  if trig_duration is set to 0 the user wants to start
+                     recording immediately  trigger duration exceeded  threshold exceeded?  reset lowtime  volume is below threshold  dropout occurred?  trig_status == TRIG_RETRIG  the gap has already expired  threshold exceeded?  restart hold time countdown  gap time expired?  start threshold exceeded?  stop threshold exceeded  below any threshold  still within the gap time  stop threshold exceeded  hold time expired  restore stop hold value  check levels next time peakmeter drawn *
+ * Reads out the peak volume of the left channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  pm_max_left contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_l  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_left so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the peak volume of the right channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  peak_meter_r contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_r  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_right so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the current peak-hold values since the last call.
+ * This is used by the histogram feature in the recording screen.
+ * Values are in the range 0 <= peak_x < MAX_PEAK. MAX_PEAK is typ 32767.
+ *
+ * Reset the detected clips. This method is for
+ * use by the user interface.
+ * @param int unused - This parameter was added to
+ * make the function compatible with set_int
+ *
+ * Scales a peak value as read from the MAS to the range of meterwidth.
+ * The scaling is performed according to the scaling method (dBfs / linear)
+ * and the range (peak_meter_range_min .. peak_meter_range_max).
+ * @param unsigned short val - The volume value. Range: 0 <= val < MAX_PEAK
+ * @param int meterwidht - The widht of the meter in pixel
+ * @return unsigned short - A value 0 <= return value <= meterwidth
+  different scaling is used for dBfs and linear percent  scale the samples dBfs  Scale for linear percent display  scale the samples  sets *left and *right to the current *unscaled* values  only read the volume info from MAS if peek since last read*
+ * Draws a peak meter in the specified size at the specified position.
+ * @param int x - The x coordinate. 
+ *                Make sure that 0 <= x and x + width < display->getwidth()
+ * @param int y - The y coordinate. 
+ *                Make sure that 0 <= y and y + height < display->getheight()
+ * @param int width - The width of the peak meter. Note that for display
+ *                    of clips a 3 pixel wide area is used ->
+ *                    width > 3
+ * @param int height - The height of the peak meter. height > 3
+  if disabled only draw the peak meter  scale the samples dBfs if the scale has changed -> recalculate the scale 
+           (The scale becomes invalid when the range changed.)  find the real x-coords for predefined interesting
+                       dBfs values. These only are recalculated when the
+                       scaling of the meter changed.  when scaling linear we simly make 10% steps  mark scale valid to avoid recalculating dBfs values
+               of the scale.  apply release  reset max values after timeout  check for new max values  draw the peak meter  draw left  draw right  draw scale end  draw dots for scale marks  The x-coordinates of interesting scale mark points 
+           have been calculated before  cliplight  if clipping, cliplight setting on and in recording screen  turn on main unit light if setting set to main or both turn remote light unit on if setting set to remote or both  HAVE_REMOTE_LCD  HAVE_BACKLIGHT  display threshold value HAVE_RECORDING display a bar to show how many calls to peak_meter_peek
+       have ocurred since the last display  display a bar to show how many ticks have passed since 
+       the last redraw *
+ * Defines the parameters of the trigger. After these parameters are defined
+ * the trigger can be started either by peak_meter_attack_trigger or by
+ * peak_meter_release_trigger. Note that you can pass either linear (%) or
+ * logarithmic (db) values to the thresholds. Positive values are intepreted as
+ * percent (0 is 0% .. 100 is 100%). Negative values are interpreted as db.
+ * To avoid ambiguosity of the value 0 the negative values are shifted by -1.
+ * Thus -75 is -74db .. -1 is 0db.
+ * @param start_threshold - The threshold used for attack trigger. Negative
+ *                          values are interpreted as db -1, positive as %.
+ * @param start_duration - The minimum time span within which start_threshold
+ *                         must be exceeded to fire the attack trigger.
+ * @param start_dropout - The maximum time span the level may fall below
+ *                        start_threshold without releasing the attack trigger.
+ * @param stop_threshold - The threshold the volume must fall below to release
+ *                         the release trigger.Negative values are
+ *                         interpreted as db -1, positive as %.
+ * @param stop_hold - The minimum time the volume must fall below the
+ *                    stop_threshold to release the trigger.
+ * @param
+  db  linear percent  db  linear percent *
+ * Enables or disables the trigger.
+ * @param on - If true the trigger is turned on.
+  don't use set_trigger here as that would fire an undesired event *
+ * Registers the listener function that listenes on trig_status changes.
+ * @param listener - The function that is called with each change of
+ *                   trig_status. May be set to NULL if no callback is desired.
+ *
+ * Fetches the status of the trigger.
+ * TRIG_OFF: the trigger is inactive
+ * TRIG_RELEASED:  The volume level is below the threshold
+ * TRIG_ACTIVATED: The volume level has exceeded the threshold, but the trigger
+ *                 hasn't been fired yet.
+ * TRIG_FIRED:     The volume exceeds the threshold
+ *
+ * To activate the trigger call either peak_meter_attack_trigger or
+ * peak_meter_release_trigger. To turn the trigger off call
+ * peak_meter_trigger_off.
+  & TRIG_PIT_MASK; Peek only once per refresh when disk is  spinning, but as often as possible  otherwise.  Sleep until end of current tick.  get update interval, clear buffer, reset drawing position  fill history buffer  HAVE_HISTOGRAM **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Philipp Pertermann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** selects between playback and recording peaks  Current values and cumulation  current values (last peak_meter_peek)  maximum values between peak meter draws  max. peak values between peakhold calls  used for AGC and histogram display  Clip hold  when true a clip has occurred  clip hold timeouts  Temporarily en- / disables peak meter. This is especially for external
+   applications to detect if the peak_meter is in use and needs drawing at all * Parameters * Range  minimum of range in samples  maximum of range in samples  range width in samples  true if peakmeter displays dBfs  true if peeked at peakmeter before drawing  minimum of range in 1/100 dB  maximum of range in 1/100 dB  range width in 1/100 dB  Timing behaviour  peak hold timeout ticks  peak release in units per read  clip hold timeout ticks  true if clip timeout is disabled  point in time when the threshold was exceeded  point in time when the volume fell below the threshold The output value of the trigger. See TRIG_XXX constants for valid values  clipping counter (only used for recording)  clipping count  counting or not  debug only  HAVE_LCD_COLOR  HAVE_LCD_COLOR  LCD_DEPTH > 1  LCD_DEPTH > 1  HAVE_HISTOGRAM  precalculated peak values that represent magical
+   dBfs values. Used to draw the scale    0 db  - 3 db  - 6 db  - 9 db  -12 db  -18 db  -24 db  -30 db  -40 db  -50 db  -60 db  -inf   *
+ * Calculates dB Value for the peak meter, uses peak value as input
+ * @param int sample - The input value 
+ *                    Make sure that 0 <= value < SAMPLE_RANGE
+ *
+ * @return int - The 2 digit fixed point result of the euation
+ *               20 * log (sample / SAMPLE_RANGE) + 90
+ *               Output range is 0-9000 (that is 0.0 - 90.0 dB).
+ *               Normally 0dB is full scale, here it is shifted +90dB.
+ *               The calculation is based on the results of a linear
+ *               approximation tool written specifically for this problem
+ *               by Andreas Zwirtes (radhard@gmx.de). The result has an
+ *               accurracy of better than 2%. It is highly runtime optimized,
+ *               the cascading if-clauses do an successive approximation on
+ *               the input value. This avoids big lookup-tables and
+ *               for-loops.
+ *               Improved by Jvo Studer for errors < 0.2dB for critical
+ *               range of -12dB to 0dB (78.0 to 90.0dB).
+  return n+m*(isample-istart)/100  Range 1-5  Range 1-3  Range 1  Range 2  Range 3  Range 4-5  Range 4  Range 5  Range 6-9  Range 6  Range 7  Range 8  Range 9 *
+ * A helper function for peak_meter_db2sample. Don't call it separately but
+ * use peak_meter_db2sample. If one or both of min and max are outside the
+ * range 0 <= min (or max) < 8961 the behaviour of this function is
+ * undefined. It may not return.
+ * @param int min - The minimum of the value range that is searched.
+ * @param int max - The maximum of the value range that is searched.
+ * @param int db  - The value in dBfs * (-100) for which the according
+ *                  minimal peak sample is searched.
+ * @return int - A linear volume value with 0 <= value < MAX_PEAK
+ *
+ * Converts a value representing dBfs to a linear
+ * scaled volume info as it is used by the MAS.
+ * An incredibly inefficiant function which is
+ * the vague inverse of calc_db. This really 
+ * should be replaced by something better soon.
+ * 
+ * @param int db - A dBfs * 100 value with 
+ *                 -9000 < value <= 0
+ * @return int - The return value is in the range of
+ *               0 <= return value < MAX_PEAK
+  what is the maximum pseudo db value  range check: db value to big  range check: db value too small  value in range: find the matching linear value  as this is a dirty function anyway, we want to adjust the 
+           full scale hit manually to avoid users complaining that when
+           they adjust maximum for 0 dBfs and display it in percent it 
+           shows 99%. That is due to precision loss and this is the 
+           optical fix *
+ * Set the min value for restriction of the value range.
+ * @param int newmin - depending whether dBfs is used
+ * newmin is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmin <= 0
+ * for linear: 0 <= newmin <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values.
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Set the max value for restriction of the value range.
+ * @param int newmax - depending wether dBfs is used
+ * newmax is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmax <= 0
+ * for linear: 0 <= newmax <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Returns whether the meter is currently displaying dBfs or percent values.
+ * @return bool - true if the meter is displaying dBfs
+                  false if the meter is displaying percent values.
+ *
+ * Specifies whether the values displayed are scaled
+ * as dBfs or as linear percent values.
+ * @param use - set to true for dBfs, 
+ *              set to false for linear scaling in percent
+ *
+ * Initialize the range of the meter. Only values
+ * that are in the range of [range_min ... range_max]
+ * are displayed.
+ * @param bool dbfs - set to true for dBfs, 
+ *                    set to false for linear scaling in percent 
+ * @param int range_min - Specifies the lower value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ * @param int range_max - Specifies the upper value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ *
+ * Initialize the peak meter with all relevant values concerning times.
+ * @param int release - Set the maximum amount of pixels the meter is allowed
+ *                      to decrease with each redraw
+ * @param int hold_ms - Select the time in ms for the time the peak indicator
+ *                      is reset after a peak occurred.
+ * @param int clip_hold_sec - Select the time in seconds for the time the peak
+ *                            indicator is reset after a peak occurred.
+  convert ms to ticks *
+ * Enable/disable clip counting
+ *
+ * Get clipping counter value
+ *
+ * Set clipping counter to zero (typically at start of recording or playback) 
+ *
+ * Set the source of the peak meter to playback or to 
+ * record.
+ * @param: bool playback - If true playback peak meter is used.
+ *         If false recording peak meter is used.
+  reset the scales just in case recording and playback
+       use different viewport sizes. Normally we should be checking viewport
+       sizes every time but this will do for now *
+ * Reads peak values from the MAS, and detects clips. The 
+ * values are stored in pm_max_left pm_max_right for later
+ * evauluation. Consecutive calls to peak_meter_peek detect 
+ * that ocurred. This function could be used by a thread for
+ * busy reading the MAS.
+  read current values  *MUST* be static  check for clips
+       An clip is assumed when two consecutive readouts
+       of the volume are at full scale. This is proven
+       to be inaccurate in both ways: it may detect clips
+       when no clip occurred and it may fail to detect
+       a real clip. For software codecs, the peak is already
+       the max of a bunch of samples, so use one max value
+       or you fail to detect clipping!  peaks are searched -> we have to find the maximum. When
+       many calls of peak_meter_peek the maximum value will be
+       stored in pm_max_xxx. This maximum is reset by the
+       functions peak_meter_read_x.  Ignore any unread peakmeter data  this value may need tweaking. Increase if you are
+                              getting trig events when you shouldn't with
+                              trig_stp_hold = 0  no more changes, if trigger was activated as release trigger  threshold exceeded?  reset trigger duration  reset dropout duration  if trig_duration is set to 0 the user wants to start
+                     recording immediately  trigger duration exceeded  threshold exceeded?  reset lowtime  volume is below threshold  dropout occurred?  trig_status == TRIG_RETRIG  the gap has already expired  threshold exceeded?  restart hold time countdown  gap time expired?  start threshold exceeded?  stop threshold exceeded  below any threshold  still within the gap time  stop threshold exceeded  hold time expired  restore stop hold value  check levels next time peakmeter drawn *
+ * Reads out the peak volume of the left channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  pm_max_left contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_l  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_left so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the peak volume of the right channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  peak_meter_r contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_r  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_right so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the current peak-hold values since the last call.
+ * This is used by the histogram feature in the recording screen.
+ * Values are in the range 0 <= peak_x < MAX_PEAK. MAX_PEAK is typ 32767.
+ *
+ * Reset the detected clips. This method is for
+ * use by the user interface.
+ * @param int unused - This parameter was added to
+ * make the function compatible with set_int
+ *
+ * Scales a peak value as read from the MAS to the range of meterwidth.
+ * The scaling is performed according to the scaling method (dBfs / linear)
+ * and the range (peak_meter_range_min .. peak_meter_range_max).
+ * @param unsigned short val - The volume value. Range: 0 <= val < MAX_PEAK
+ * @param int meterwidht - The widht of the meter in pixel
+ * @return unsigned short - A value 0 <= return value <= meterwidth
+  different scaling is used for dBfs and linear percent  scale the samples dBfs  Scale for linear percent display  scale the samples  sets *left and *right to the current *unscaled* values  only read the volume info from MAS if peek since last read*
+ * Draws a peak meter in the specified size at the specified position.
+ * @param int x - The x coordinate. 
+ *                Make sure that 0 <= x and x + width < display->getwidth()
+ * @param int y - The y coordinate. 
+ *                Make sure that 0 <= y and y + height < display->getheight()
+ * @param int width - The width of the peak meter. Note that for display
+ *                    of clips a 3 pixel wide area is used ->
+ *                    width > 3
+ * @param int height - The height of the peak meter. height > 3
+  if disabled only draw the peak meter  scale the samples dBfs if the scale has changed -> recalculate the scale 
+           (The scale becomes invalid when the range changed.)  find the real x-coords for predefined interesting
+                       dBfs values. These only are recalculated when the
+                       scaling of the meter changed.  when scaling linear we simly make 10% steps  mark scale valid to avoid recalculating dBfs values
+               of the scale.  apply release  reset max values after timeout  check for new max values  draw the peak meter  draw left  draw right  draw scale end  draw dots for scale marks  The x-coordinates of interesting scale mark points 
+           have been calculated before  cliplight  if clipping, cliplight setting on and in recording screen  turn on main unit light if setting set to main or both turn remote light unit on if setting set to remote or both  HAVE_REMOTE_LCD  HAVE_BACKLIGHT  display threshold value HAVE_RECORDING display a bar to show how many calls to peak_meter_peek
+       have ocurred since the last display  display a bar to show how many ticks have passed since 
+       the last redraw *
+ * Defines the parameters of the trigger. After these parameters are defined
+ * the trigger can be started either by peak_meter_attack_trigger or by
+ * peak_meter_release_trigger. Note that you can pass either linear (%) or
+ * logarithmic (db) values to the thresholds. Positive values are intepreted as
+ * percent (0 is 0% .. 100 is 100%). Negative values are interpreted as db.
+ * To avoid ambiguosity of the value 0 the negative values are shifted by -1.
+ * Thus -75 is -74db .. -1 is 0db.
+ * @param start_threshold - The threshold used for attack trigger. Negative
+ *                          values are interpreted as db -1, positive as %.
+ * @param start_duration - The minimum time span within which start_threshold
+ *                         must be exceeded to fire the attack trigger.
+ * @param start_dropout - The maximum time span the level may fall below
+ *                        start_threshold without releasing the attack trigger.
+ * @param stop_threshold - The threshold the volume must fall below to release
+ *                         the release trigger.Negative values are
+ *                         interpreted as db -1, positive as %.
+ * @param stop_hold - The minimum time the volume must fall below the
+ *                    stop_threshold to release the trigger.
+ * @param
+  db  linear percent  db  linear percent *
+ * Enables or disables the trigger.
+ * @param on - If true the trigger is turned on.
+  don't use set_trigger here as that would fire an undesired event *
+ * Registers the listener function that listenes on trig_status changes.
+ * @param listener - The function that is called with each change of
+ *                   trig_status. May be set to NULL if no callback is desired.
+ *
+ * Fetches the status of the trigger.
+ * TRIG_OFF: the trigger is inactive
+ * TRIG_RELEASED:  The volume level is below the threshold
+ * TRIG_ACTIVATED: The volume level has exceeded the threshold, but the trigger
+ *                 hasn't been fired yet.
+ * TRIG_FIRED:     The volume exceeds the threshold
+ *
+ * To activate the trigger call either peak_meter_attack_trigger or
+ * peak_meter_release_trigger. To turn the trigger off call
+ * peak_meter_trigger_off.
+  & TRIG_PIT_MASK; Peek only once per refresh when disk is  spinning, but as often as possible  otherwise.  Sleep until end of current tick.  get update interval, clear buffer, reset drawing position  fill history buffer  HAVE_HISTOGRAM **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Philipp Pertermann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** selects between playback and recording peaks  Current values and cumulation  current values (last peak_meter_peek)  maximum values between peak meter draws  max. peak values between peakhold calls  used for AGC and histogram display  Clip hold  when true a clip has occurred  clip hold timeouts  Temporarily en- / disables peak meter. This is especially for external
+   applications to detect if the peak_meter is in use and needs drawing at all * Parameters * Range  minimum of range in samples  maximum of range in samples  range width in samples  true if peakmeter displays dBfs  true if peeked at peakmeter before drawing  minimum of range in 1/100 dB  maximum of range in 1/100 dB  range width in 1/100 dB  Timing behaviour  peak hold timeout ticks  peak release in units per read  clip hold timeout ticks  true if clip timeout is disabled  point in time when the threshold was exceeded  point in time when the volume fell below the threshold The output value of the trigger. See TRIG_XXX constants for valid values  clipping counter (only used for recording)  clipping count  counting or not  debug only  HAVE_LCD_COLOR  HAVE_LCD_COLOR  LCD_DEPTH > 1  LCD_DEPTH > 1  HAVE_HISTOGRAM  precalculated peak values that represent magical
+   dBfs values. Used to draw the scale    0 db  - 3 db  - 6 db  - 9 db  -12 db  -18 db  -24 db  -30 db  -40 db  -50 db  -60 db  -inf   *
+ * Calculates dB Value for the peak meter, uses peak value as input
+ * @param int sample - The input value 
+ *                    Make sure that 0 <= value < SAMPLE_RANGE
+ *
+ * @return int - The 2 digit fixed point result of the euation
+ *               20 * log (sample / SAMPLE_RANGE) + 90
+ *               Output range is 0-9000 (that is 0.0 - 90.0 dB).
+ *               Normally 0dB is full scale, here it is shifted +90dB.
+ *               The calculation is based on the results of a linear
+ *               approximation tool written specifically for this problem
+ *               by Andreas Zwirtes (radhard@gmx.de). The result has an
+ *               accurracy of better than 2%. It is highly runtime optimized,
+ *               the cascading if-clauses do an successive approximation on
+ *               the input value. This avoids big lookup-tables and
+ *               for-loops.
+ *               Improved by Jvo Studer for errors < 0.2dB for critical
+ *               range of -12dB to 0dB (78.0 to 90.0dB).
+  return n+m*(isample-istart)/100  Range 1-5  Range 1-3  Range 1  Range 2  Range 3  Range 4-5  Range 4  Range 5  Range 6-9  Range 6  Range 7  Range 8  Range 9 *
+ * A helper function for peak_meter_db2sample. Don't call it separately but
+ * use peak_meter_db2sample. If one or both of min and max are outside the
+ * range 0 <= min (or max) < 8961 the behaviour of this function is
+ * undefined. It may not return.
+ * @param int min - The minimum of the value range that is searched.
+ * @param int max - The maximum of the value range that is searched.
+ * @param int db  - The value in dBfs * (-100) for which the according
+ *                  minimal peak sample is searched.
+ * @return int - A linear volume value with 0 <= value < MAX_PEAK
+ *
+ * Converts a value representing dBfs to a linear
+ * scaled volume info as it is used by the MAS.
+ * An incredibly inefficiant function which is
+ * the vague inverse of calc_db. This really 
+ * should be replaced by something better soon.
+ * 
+ * @param int db - A dBfs * 100 value with 
+ *                 -9000 < value <= 0
+ * @return int - The return value is in the range of
+ *               0 <= return value < MAX_PEAK
+  what is the maximum pseudo db value  range check: db value to big  range check: db value too small  value in range: find the matching linear value  as this is a dirty function anyway, we want to adjust the 
+           full scale hit manually to avoid users complaining that when
+           they adjust maximum for 0 dBfs and display it in percent it 
+           shows 99%. That is due to precision loss and this is the 
+           optical fix *
+ * Set the min value for restriction of the value range.
+ * @param int newmin - depending whether dBfs is used
+ * newmin is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmin <= 0
+ * for linear: 0 <= newmin <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values.
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Set the max value for restriction of the value range.
+ * @param int newmax - depending wether dBfs is used
+ * newmax is a value in dBfs * 100 or in linear percent values.
+ * for dBfs: -9000 < newmax <= 0
+ * for linear: 0 <= newmax <= 100
+  Avoid division by zero. *
+ * Returns the minimum value of the range the meter 
+ * displays. If the scale is set to dBfs it returns
+ * dBfs values * 100 or linear percent values
+ * @return: using dBfs : -9000 < value <= 0
+ *          using linear scale: 0 <= value <= 100
+ *
+ * Returns whether the meter is currently displaying dBfs or percent values.
+ * @return bool - true if the meter is displaying dBfs
+                  false if the meter is displaying percent values.
+ *
+ * Specifies whether the values displayed are scaled
+ * as dBfs or as linear percent values.
+ * @param use - set to true for dBfs, 
+ *              set to false for linear scaling in percent
+ *
+ * Initialize the range of the meter. Only values
+ * that are in the range of [range_min ... range_max]
+ * are displayed.
+ * @param bool dbfs - set to true for dBfs, 
+ *                    set to false for linear scaling in percent 
+ * @param int range_min - Specifies the lower value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ * @param int range_max - Specifies the upper value of the range. 
+ *                        Pass a value dBfs * 100 when dbfs is set to true.
+ *                        Pass a percent value when dbfs is set to false.
+ *
+ * Initialize the peak meter with all relevant values concerning times.
+ * @param int release - Set the maximum amount of pixels the meter is allowed
+ *                      to decrease with each redraw
+ * @param int hold_ms - Select the time in ms for the time the peak indicator
+ *                      is reset after a peak occurred.
+ * @param int clip_hold_sec - Select the time in seconds for the time the peak
+ *                            indicator is reset after a peak occurred.
+  convert ms to ticks *
+ * Enable/disable clip counting
+ *
+ * Get clipping counter value
+ *
+ * Set clipping counter to zero (typically at start of recording or playback) 
+ *
+ * Set the source of the peak meter to playback or to 
+ * record.
+ * @param: bool playback - If true playback peak meter is used.
+ *         If false recording peak meter is used.
+  reset the scales just in case recording and playback
+       use different viewport sizes. Normally we should be checking viewport
+       sizes every time but this will do for now *
+ * Reads peak values from the MAS, and detects clips. The 
+ * values are stored in pm_max_left pm_max_right for later
+ * evauluation. Consecutive calls to peak_meter_peek detect 
+ * that ocurred. This function could be used by a thread for
+ * busy reading the MAS.
+  read current values  *MUST* be static  check for clips
+       An clip is assumed when two consecutive readouts
+       of the volume are at full scale. This is proven
+       to be inaccurate in both ways: it may detect clips
+       when no clip occurred and it may fail to detect
+       a real clip. For software codecs, the peak is already
+       the max of a bunch of samples, so use one max value
+       or you fail to detect clipping!  peaks are searched -> we have to find the maximum. When
+       many calls of peak_meter_peek the maximum value will be
+       stored in pm_max_xxx. This maximum is reset by the
+       functions peak_meter_read_x.  Ignore any unread peakmeter data  this value may need tweaking. Increase if you are
+                              getting trig events when you shouldn't with
+                              trig_stp_hold = 0  no more changes, if trigger was activated as release trigger  threshold exceeded?  reset trigger duration  reset dropout duration  if trig_duration is set to 0 the user wants to start
+                     recording immediately  trigger duration exceeded  threshold exceeded?  reset lowtime  volume is below threshold  dropout occurred?  trig_status == TRIG_RETRIG  the gap has already expired  threshold exceeded?  restart hold time countdown  gap time expired?  start threshold exceeded?  stop threshold exceeded  below any threshold  still within the gap time  stop threshold exceeded  hold time expired  restore stop hold value  check levels next time peakmeter drawn *
+ * Reads out the peak volume of the left channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  pm_max_left contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_l  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_left so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the peak volume of the right channel.
+ * @return int - The maximum value that has been detected
+ * since the last call of peak_meter_read_l. The value
+ * is in the range 0 <= value < MAX_PEAK.
+  peak_meter_r contains the maximum of all peak values that were read
+       by peak_meter_peek since the last call of peak_meter_read_r  store max peak value for peak_meter_get_peakhold_x readout  reset pm_max_right so that subsequent calls of peak_meter_peek don't
+       get fooled by an old maximum value *
+ * Reads out the current peak-hold values since the last call.
+ * This is used by the histogram feature in the recording screen.
+ * Values are in the range 0 <= peak_x < MAX_PEAK. MAX_PEAK is typ 32767.
+ *
+ * Reset the detected clips. This method is for
+ * use by the user interface.
+ * @param int unused - This parameter was added to
+ * make the function compatible with set_int
+ *
+ * Scales a peak value as read from the MAS to the range of meterwidth.
+ * The scaling is performed according to the scaling method (dBfs / linear)
+ * and the range (peak_meter_range_min .. peak_meter_range_max).
+ * @param unsigned short val - The volume value. Range: 0 <= val < MAX_PEAK
+ * @param int meterwidht - The widht of the meter in pixel
+ * @return unsigned short - A value 0 <= return value <= meterwidth
+  different scaling is used for dBfs and linear percent  scale the samples dBfs  Scale for linear percent display  scale the samples  sets *left and *right to the current *unscaled* values  only read the volume info from MAS if peek since last read*
+ * Draws a peak meter in the specified size at the specified position.
+ * @param int x - The x coordinate. 
+ *                Make sure that 0 <= x and x + width < display->getwidth()
+ * @param int y - The y coordinate. 
+ *                Make sure that 0 <= y and y + height < display->getheight()
+ * @param int width - The width of the peak meter. Note that for display
+ *                    of clips a 3 pixel wide area is used ->
+ *                    width > 3
+ * @param int height - The height of the peak meter. height > 3
+  if disabled only draw the peak meter  scale the samples dBfs if the scale has changed -> recalculate the scale 
+           (The scale becomes invalid when the range changed.)  find the real x-coords for predefined interesting
+                       dBfs values. These only are recalculated when the
+                       scaling of the meter changed.  when scaling linear we simly make 10% steps  mark scale valid to avoid recalculating dBfs values
+               of the scale.  apply release  reset max values after timeout  check for new max values  draw the peak meter  draw left  draw right  draw scale end  draw dots for scale marks  The x-coordinates of interesting scale mark points 
+           have been calculated before  cliplight  if clipping, cliplight setting on and in recording screen  turn on main unit light if setting set to main or both turn remote light unit on if setting set to remote or both  HAVE_REMOTE_LCD  HAVE_BACKLIGHT  display threshold value HAVE_RECORDING display a bar to show how many calls to peak_meter_peek
+       have ocurred since the last display  display a bar to show how many ticks have passed since 
+       the last redraw *
+ * Defines the parameters of the trigger. After these parameters are defined
+ * the trigger can be started either by peak_meter_attack_trigger or by
+ * peak_meter_release_trigger. Note that you can pass either linear (%) or
+ * logarithmic (db) values to the thresholds. Positive values are intepreted as
+ * percent (0 is 0% .. 100 is 100%). Negative values are interpreted as db.
+ * To avoid ambiguosity of the value 0 the negative values are shifted by -1.
+ * Thus -75 is -74db .. -1 is 0db.
+ * @param start_threshold - The threshold used for attack trigger. Negative
+ *                          values are interpreted as db -1, positive as %.
+ * @param start_duration - The minimum time span within which start_threshold
+ *                         must be exceeded to fire the attack trigger.
+ * @param start_dropout - The maximum time span the level may fall below
+ *                        start_threshold without releasing the attack trigger.
+ * @param stop_threshold - The threshold the volume must fall below to release
+ *                         the release trigger.Negative values are
+ *                         interpreted as db -1, positive as %.
+ * @param stop_hold - The minimum time the volume must fall below the
+ *                    stop_threshold to release the trigger.
+ * @param
+  db  linear percent  db  linear percent *
+ * Enables or disables the trigger.
+ * @param on - If true the trigger is turned on.
+  don't use set_trigger here as that would fire an undesired event *
+ * Registers the listener function that listenes on trig_status changes.
+ * @param listener - The function that is called with each change of
+ *                   trig_status. May be set to NULL if no callback is desired.
+ *
+ * Fetches the status of the trigger.
+ * TRIG_OFF: the trigger is inactive
+ * TRIG_RELEASED:  The volume level is below the threshold
+ * TRIG_ACTIVATED: The volume level has exceeded the threshold, but the trigger
+ *                 hasn't been fired yet.
+ * TRIG_FIRED:     The volume exceeds the threshold
+ *
+ * To activate the trigger call either peak_meter_attack_trigger or
+ * peak_meter_release_trigger. To turn the trigger off call
+ * peak_meter_trigger_off.
+  & TRIG_PIT_MASK; Peek only once per refresh when disk is  spinning, but as often as possible  otherwise.  Sleep until end of current tick.  get update interval, clear buffer, reset drawing position  fill history buffer  HAVE_HISTOGRAM 

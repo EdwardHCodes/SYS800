@@ -1,0 +1,214 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David Härdeman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+ * A nice reference for MPEG header info:
+ * http://rockbox.haxx.se/docs/mpeghdr.html
+ *
+ #define DEBUG_VERBOSE Maximum number of bytes needed by Xing/Info/VBRI parser.  MPEG Version table, sorted by version index  Bitrate table for mpeg audio, indexed by row index and birate index  V1 L1  V1 L2  V1 L3  V2 L1  V2 L2+L3  Bitrate pointer table, indexed by version and layer  Sampling frequency table, indexed by version and frequency index  MPEG Version 1  MPEG version 2  MPEG version 2.5  check if 'head' is a valid mp3 frame header  bad sync?  bad version?  no layer?  bad bitrate?  no bitrate?  bad sample rate?  MPEG Audio Version  Layer  Rockbox: not used
+    info->protection = (header & PROTECTION_MASK) ? true : false;
+ Bitrate  Sampling frequency  Calculate number of bytes, calculation depends on layer  Frametime fraction denominator  48/32/24/16/12/8 kHz  integer number of milliseconds  44.1/22.05/11.025 kHz  layer 1  layer 2+3  Frametime fraction numerator  Rockbox: not used
+    info->mode_extension = (header & MODE_EXT_MASK) >> 4;
+    info->emphasis = header & EMPHASIS_MASK;
+ Compare MPEG version, layer and sampling frequency. If header1 is zero
+     * it is assumed both frame headers are of same type.  Helper function to read 4-byte in big endian format.  We will search until we find two consecutive MPEG frame headers with 
+     * the same MPEG version, layer and sampling frequency. The first header
+     * of this pair is assumed to be the first valid MPEG frame header of the
+     * whole stream.  Read 1 new byte.  Abort if max_offset is reached. Stop parsing.  We search for one _single_ valid header that has the same
+                 * type as the reference_header (if reference_header != 0). 
+                 * In this case we are finished.  The current header is valid. Now gather the frame size,
+                 * seek to this byte position and check if there is another
+                 * valid MPEG frame header of the same type.  Gather frame size from given header and seek to next
+                 * frame header.  Read possible next frame header and seek back to last frame
+                 * headers byte position.  If the current header is of the same type as the previous 
+                 * header we are finished.  Extract information from a 'Xing' or 'Info' header.  Is it a VBR file?  Is the frame count there?  Is byte count there?  Is table-of-contents there?  We don't care about this, but need to skip it  TODO: This sanity checking is rather silly, seeing as how the LAME
+       header contains a CRC field that can be used to verify integrity.  Invalid data  Extract information from a 'VBRI' header.  We don't parse the TOC, since we don't yet know how to (FIXME)  
+    int i, num_offsets, offset = 0;
+     Yes, it is a FhG VBR file  We don't parse the TOC (yet)  We don't parse the TOC, since we don't yet know how to (FIXME) 
+    num_offsets = bytes2int(0, 0, buf[18], buf[19]);
+    VDEBUGF("Offsets: %d\n", num_offsets);
+    VDEBUGF("Frames/entry: %ld\n", bytes2int(0, 0, buf[24], buf[25]));
+
+    for(i = 0; i < num_offsets; i++)
+    {
+       offset += bytes2int(0, 0, buf[26+i*2], buf[27+i*2]);;
+       VDEBUGF("%03d: %lx\n", i, offset - bytecount,);
+    }
+     Seek to next mpeg header and extract relevant information.  Next frame header is tmp bytes away.  Initialize info and frame  These two are needed for proper LAME gapless MP3 playback  Get the very first single MPEG frame.  Read the amount of frame data to the buffer that is required for the 
+     * vbr tag parsing. Skip the rest.  Calculate position of a possible VBR header  mono  mono  We want to skip the Xing frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  We want to skip the VBRI frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  There was no VBR header found. So, we seek back to beginning and
+         * search for the first MPEG frame header of the mp3 stream.  Max is 50%, in 1% increments  Find out the total number of frames  See if this really is a VBR file  buf needs to be the audio buffer with TOC generation enabled,
+   and at least MAX_XING_HEADER_SIZE bytes otherwise  Generate filepos table  Calculate the absolute frame number for this seek point  Advance from the last seek point to this one  Save a header for later use if header_template is empty.
+               We only save one header, and we want to save one in the
+               middle of the stream, just in case the first and the last
+               headers are corrupt.  Fill in the TOC entry  each toc is a single byte indicating how many 256ths of the
+             * way through the file, is that percent of the way through the
+             * song. the easy method, filepos*256/filesize, chokes when
+             * the upper 8 bits of the file position are nonzero 
+             * (i.e. files over 16mb in size).
+              instead of multiplying filepos by 256, we divide
+                 * filesize by 256.
+                  Use the template header and create a new one.
+       We ignore the Protection bit even if the rest of the stream is
+       protected.  This gives us plenty of space, 192..576 bytes  invalid header  estimate the number of frames based on the recording time  Clear the frame  Write the header to the buffer  Calculate position of VBR header  mono  mono  Create the Xing data  Copy the TOC  And some extra cool info **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David Härdeman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+ * A nice reference for MPEG header info:
+ * http://rockbox.haxx.se/docs/mpeghdr.html
+ *
+ #define DEBUG_VERBOSE Maximum number of bytes needed by Xing/Info/VBRI parser.  MPEG Version table, sorted by version index  Bitrate table for mpeg audio, indexed by row index and birate index  V1 L1  V1 L2  V1 L3  V2 L1  V2 L2+L3  Bitrate pointer table, indexed by version and layer  Sampling frequency table, indexed by version and frequency index  MPEG Version 1  MPEG version 2  MPEG version 2.5  check if 'head' is a valid mp3 frame header  bad sync?  bad version?  no layer?  bad bitrate?  no bitrate?  bad sample rate?  MPEG Audio Version  Layer  Rockbox: not used
+    info->protection = (header & PROTECTION_MASK) ? true : false;
+ Bitrate  Sampling frequency  Calculate number of bytes, calculation depends on layer  Frametime fraction denominator  48/32/24/16/12/8 kHz  integer number of milliseconds  44.1/22.05/11.025 kHz  layer 1  layer 2+3  Frametime fraction numerator  Rockbox: not used
+    info->mode_extension = (header & MODE_EXT_MASK) >> 4;
+    info->emphasis = header & EMPHASIS_MASK;
+ Compare MPEG version, layer and sampling frequency. If header1 is zero
+     * it is assumed both frame headers are of same type.  Helper function to read 4-byte in big endian format.  We will search until we find two consecutive MPEG frame headers with 
+     * the same MPEG version, layer and sampling frequency. The first header
+     * of this pair is assumed to be the first valid MPEG frame header of the
+     * whole stream.  Read 1 new byte.  Abort if max_offset is reached. Stop parsing.  We search for one _single_ valid header that has the same
+                 * type as the reference_header (if reference_header != 0). 
+                 * In this case we are finished.  The current header is valid. Now gather the frame size,
+                 * seek to this byte position and check if there is another
+                 * valid MPEG frame header of the same type.  Gather frame size from given header and seek to next
+                 * frame header.  Read possible next frame header and seek back to last frame
+                 * headers byte position.  If the current header is of the same type as the previous 
+                 * header we are finished.  Extract information from a 'Xing' or 'Info' header.  Is it a VBR file?  Is the frame count there?  Is byte count there?  Is table-of-contents there?  We don't care about this, but need to skip it  TODO: This sanity checking is rather silly, seeing as how the LAME
+       header contains a CRC field that can be used to verify integrity.  Invalid data  Extract information from a 'VBRI' header.  We don't parse the TOC, since we don't yet know how to (FIXME)  
+    int i, num_offsets, offset = 0;
+     Yes, it is a FhG VBR file  We don't parse the TOC (yet)  We don't parse the TOC, since we don't yet know how to (FIXME) 
+    num_offsets = bytes2int(0, 0, buf[18], buf[19]);
+    VDEBUGF("Offsets: %d\n", num_offsets);
+    VDEBUGF("Frames/entry: %ld\n", bytes2int(0, 0, buf[24], buf[25]));
+
+    for(i = 0; i < num_offsets; i++)
+    {
+       offset += bytes2int(0, 0, buf[26+i*2], buf[27+i*2]);;
+       VDEBUGF("%03d: %lx\n", i, offset - bytecount,);
+    }
+     Seek to next mpeg header and extract relevant information.  Next frame header is tmp bytes away.  Initialize info and frame  These two are needed for proper LAME gapless MP3 playback  Get the very first single MPEG frame.  Read the amount of frame data to the buffer that is required for the 
+     * vbr tag parsing. Skip the rest.  Calculate position of a possible VBR header  mono  mono  We want to skip the Xing frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  We want to skip the VBRI frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  There was no VBR header found. So, we seek back to beginning and
+         * search for the first MPEG frame header of the mp3 stream.  Max is 50%, in 1% increments  Find out the total number of frames  See if this really is a VBR file  buf needs to be the audio buffer with TOC generation enabled,
+   and at least MAX_XING_HEADER_SIZE bytes otherwise  Generate filepos table  Calculate the absolute frame number for this seek point  Advance from the last seek point to this one  Save a header for later use if header_template is empty.
+               We only save one header, and we want to save one in the
+               middle of the stream, just in case the first and the last
+               headers are corrupt.  Fill in the TOC entry  each toc is a single byte indicating how many 256ths of the
+             * way through the file, is that percent of the way through the
+             * song. the easy method, filepos*256/filesize, chokes when
+             * the upper 8 bits of the file position are nonzero 
+             * (i.e. files over 16mb in size).
+              instead of multiplying filepos by 256, we divide
+                 * filesize by 256.
+                  Use the template header and create a new one.
+       We ignore the Protection bit even if the rest of the stream is
+       protected.  This gives us plenty of space, 192..576 bytes  invalid header  estimate the number of frames based on the recording time  Clear the frame  Write the header to the buffer  Calculate position of VBR header  mono  mono  Create the Xing data  Copy the TOC  And some extra cool info **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2002 by Daniel Stenberg
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+ * Parts of this code has been stolen from the Ample project and was written
+ * by David Härdeman. It has since been extended and enhanced pretty much by
+ * all sorts of friendly Rockbox people.
+ *
+ * A nice reference for MPEG header info:
+ * http://rockbox.haxx.se/docs/mpeghdr.html
+ *
+ #define DEBUG_VERBOSE Maximum number of bytes needed by Xing/Info/VBRI parser.  MPEG Version table, sorted by version index  Bitrate table for mpeg audio, indexed by row index and birate index  V1 L1  V1 L2  V1 L3  V2 L1  V2 L2+L3  Bitrate pointer table, indexed by version and layer  Sampling frequency table, indexed by version and frequency index  MPEG Version 1  MPEG version 2  MPEG version 2.5  check if 'head' is a valid mp3 frame header  bad sync?  bad version?  no layer?  bad bitrate?  no bitrate?  bad sample rate?  MPEG Audio Version  Layer  Rockbox: not used
+    info->protection = (header & PROTECTION_MASK) ? true : false;
+ Bitrate  Sampling frequency  Calculate number of bytes, calculation depends on layer  Frametime fraction denominator  48/32/24/16/12/8 kHz  integer number of milliseconds  44.1/22.05/11.025 kHz  layer 1  layer 2+3  Frametime fraction numerator  Rockbox: not used
+    info->mode_extension = (header & MODE_EXT_MASK) >> 4;
+    info->emphasis = header & EMPHASIS_MASK;
+ Compare MPEG version, layer and sampling frequency. If header1 is zero
+     * it is assumed both frame headers are of same type.  Helper function to read 4-byte in big endian format.  We will search until we find two consecutive MPEG frame headers with 
+     * the same MPEG version, layer and sampling frequency. The first header
+     * of this pair is assumed to be the first valid MPEG frame header of the
+     * whole stream.  Read 1 new byte.  Abort if max_offset is reached. Stop parsing.  We search for one _single_ valid header that has the same
+                 * type as the reference_header (if reference_header != 0). 
+                 * In this case we are finished.  The current header is valid. Now gather the frame size,
+                 * seek to this byte position and check if there is another
+                 * valid MPEG frame header of the same type.  Gather frame size from given header and seek to next
+                 * frame header.  Read possible next frame header and seek back to last frame
+                 * headers byte position.  If the current header is of the same type as the previous 
+                 * header we are finished.  Extract information from a 'Xing' or 'Info' header.  Is it a VBR file?  Is the frame count there?  Is byte count there?  Is table-of-contents there?  We don't care about this, but need to skip it  TODO: This sanity checking is rather silly, seeing as how the LAME
+       header contains a CRC field that can be used to verify integrity.  Invalid data  Extract information from a 'VBRI' header.  We don't parse the TOC, since we don't yet know how to (FIXME)  
+    int i, num_offsets, offset = 0;
+     Yes, it is a FhG VBR file  We don't parse the TOC (yet)  We don't parse the TOC, since we don't yet know how to (FIXME) 
+    num_offsets = bytes2int(0, 0, buf[18], buf[19]);
+    VDEBUGF("Offsets: %d\n", num_offsets);
+    VDEBUGF("Frames/entry: %ld\n", bytes2int(0, 0, buf[24], buf[25]));
+
+    for(i = 0; i < num_offsets; i++)
+    {
+       offset += bytes2int(0, 0, buf[26+i*2], buf[27+i*2]);;
+       VDEBUGF("%03d: %lx\n", i, offset - bytecount,);
+    }
+     Seek to next mpeg header and extract relevant information.  Next frame header is tmp bytes away.  Initialize info and frame  These two are needed for proper LAME gapless MP3 playback  Get the very first single MPEG frame.  Read the amount of frame data to the buffer that is required for the 
+     * vbr tag parsing. Skip the rest.  Calculate position of a possible VBR header  mono  mono  We want to skip the Xing frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  We want to skip the VBRI frame when playing the stream  Now get the next frame to read the real info about the mp3 stream  There was no VBR header found. So, we seek back to beginning and
+         * search for the first MPEG frame header of the mp3 stream.  Max is 50%, in 1% increments  Find out the total number of frames  See if this really is a VBR file  buf needs to be the audio buffer with TOC generation enabled,
+   and at least MAX_XING_HEADER_SIZE bytes otherwise  Generate filepos table  Calculate the absolute frame number for this seek point  Advance from the last seek point to this one  Save a header for later use if header_template is empty.
+               We only save one header, and we want to save one in the
+               middle of the stream, just in case the first and the last
+               headers are corrupt.  Fill in the TOC entry  each toc is a single byte indicating how many 256ths of the
+             * way through the file, is that percent of the way through the
+             * song. the easy method, filepos*256/filesize, chokes when
+             * the upper 8 bits of the file position are nonzero 
+             * (i.e. files over 16mb in size).
+              instead of multiplying filepos by 256, we divide
+                 * filesize by 256.
+                  Use the template header and create a new one.
+       We ignore the Protection bit even if the rest of the stream is
+       protected.  This gives us plenty of space, 192..576 bytes  invalid header  estimate the number of frames based on the recording time  Clear the frame  Write the header to the buffer  Calculate position of VBR header  mono  mono  Create the Xing data  Copy the TOC  And some extra cool info 

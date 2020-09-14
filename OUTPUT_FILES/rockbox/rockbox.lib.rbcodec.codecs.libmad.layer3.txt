@@ -1,0 +1,511 @@
+
+ * libmad - MPEG audio decoder library
+ * Copyright (C) 2000-2004 Underbit Technologies, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * $Id$
+  depending on the cpu "leftshift32" may be supported or not  --- Layer III -----------------------------------------------------------  from side info  from main_data  scalefac_l and/or scalefac_s 
+ * scalefactor bit lengths
+ * derived from section 2.4.2.7 of ISO/IEC 11172-3
+ 
+ * number of LSF scalefactor band values
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ 
+ * MPEG-1 scalefactor band widths
+ * derived from Table B.8 of ISO/IEC 11172-3
+  long  short  long  short  long  short 
+ * MPEG-2 scalefactor band widths
+ * derived from Table B.2 of ISO/IEC 13818-3
+  long  short  long  short  long  short 
+ * MPEG 2.5 scalefactor band widths
+ * derived from public sources
+  the 8000 Hz short block scalefactor bands do not break after
+   the first 36 frequency lines, so this is probably wrong  long  short 
+ * scalefactor band preemphasis (used only when preflag is set)
+ * derived from Table B.6 of ISO/IEC 11172-3
+ 
+ * table for requantization
+ *
+ * rq_table[x].mantissa * 2^(rq_table[x].exponent) = x^(4/3)
+ *
+ * format rq_table: bit31-27=exponent bit26-0=mantissa
+ 
+ * fractional powers of two
+ * used for requantization and joint stereo decoding
+ *
+ * root_table[3 + x] = 2^(x/4)
+  2^(-3/4) == 0.59460355750136  2^(-2/4) == 0.70710678118655  2^(-1/4) == 0.84089641525371  2^( 0/4) == 1.00000000000000  2^(+1/4) == 1.18920711500272  2^(+2/4) == 1.41421356237310  2^(+3/4) == 1.68179283050743 
+ * coefficients for aliasing reduction
+ * derived from Table B.9 of ISO/IEC 11172-3
+ *
+ *  c[]  = { -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037 }
+ * cs[i] =    1 / sqrt(1 + c[i]^2)
+ * ca[i] = c[i] / sqrt(1 + c[i]^2)
+  +0.857492926  +0.881741997  +0.949628649  +0.983314592  +0.995517816  +0.999160558  +0.999899195  +0.999993155  -0.514495755  -0.471731969  -0.313377454  -0.181913200  -0.094574193  -0.040965583  -0.014198569  -0.003699975 
+ * IMDCT coefficients for short blocks
+ * derived from section 2.4.3.4.10.2 of ISO/IEC 11172-3
+ *
+ * imdct_s[i/even][k] = cos((PI / 24) * (2 *       (i / 2) + 7) * (2 * k + 1))
+ * imdct_s[i /odd][k] = cos((PI / 24) * (2 * (6 + (i-1)/2) + 7) * (2 * k + 1))
+ 
+ * windowing coefficients for long blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_l[i] = sin((PI / 36) * (i + 1/2))
+  0.043619387  0.130526192  0.216439614  0.300705800  0.382683432  0.461748613  0.537299608  0.608761429  0.675590208  0.737277337  0.793353340  0.843391446  0.887010833  0.923879533  0.953716951  0.976296007  0.991444861  0.999048222  0.999048222  0.991444861  0.976296007  0.953716951  0.923879533  0.887010833  0.843391446  0.793353340  0.737277337  0.675590208  0.608761429  0.537299608  0.461748613  0.382683432  0.300705800  0.216439614  0.130526192  0.043619387  FPM_ARM 
+ * windowing coefficients for short blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_s[i] = sin((PI / 12) * (i + 1/2))
+  0.130526192  0.382683432  0.608761429  0.793353340  0.923879533  0.991444861  0.991444861  0.923879533  0.793353340  0.608761429  0.382683432  0.130526192 
+ * coefficients for intensity stereo processing
+ * derived from section 2.4.3.4.9.3 of ISO/IEC 11172-3
+ *
+ * is_ratio[i] = tan(i * (PI / 12))
+ * is_table[i] = is_ratio[i] / (1 + is_ratio[i])
+  0.000000000  0.211324865  0.366025404  0.500000000  0.633974596  0.788675135  1.000000000 
+ * coefficients for LSF intensity stereo processing
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ *
+ * is_lsf_table[0][i] = (1 / sqrt(sqrt(2)))^(i + 1)
+ * is_lsf_table[1][i] = (1 /      sqrt(2)) ^(i + 1)
+  0.840896415  0.707106781  0.594603558  0.500000000  0.420448208  0.353553391  0.297301779  0.250000000  0.210224104  0.176776695  0.148650889  0.125000000  0.105112052  0.088388348  0.074325445  0.707106781  0.500000000  0.353553391  0.250000000  0.176776695  0.125000000  0.088388348  0.062500000  0.044194174  0.031250000  0.022097087  0.015625000  0.011048543  0.007812500  0.005524272 
+ * NAME:        III_sideinfo()
+ * DESCRIPTION: decode frame side information from a bitstream
+  window_switching_flag  not used  [preflag,] scalefac_scale, count1table_select 
+ * NAME:        III_scalefactors_lsf()
+ * DESCRIPTION: decode channel scalefactors for LSF from a bitstream
+  (mode_extension & I_STEREO) && gr1ch (i.e. ch == 1)  apparently not illegal 
+ * NAME:        III_scalefactors()
+ * DESCRIPTION: decode channel scalefactors of one granule from a bitstream
+  channel->block_type != 2 
+ * The Layer III formula for requantization and scaling is defined by
+ * section 2.4.3.4.7.1 of ISO/IEC 11172-3, as follows:
+ *
+ *   long blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210)) *
+ *           2^-(scalefac_multiplier *
+ *               (scalefac_l[sfb] + preflag * pretab[sfb]))
+ *
+ *   short blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210 - 8 * subblock_gain[w])) *
+ *           2^-(scalefac_multiplier * scalefac_s[sfb][w])
+ *
+ *   where:
+ *   scalefac_multiplier = (scalefac_scale + 1) / 2
+ *
+ * The routines III_exponents() and III_requantize() facilitate this
+ * calculation.
+ 
+ * NAME:        III_exponents()
+ * DESCRIPTION: calculate scalefactor exponents
+  long block subbands 0-1  this is probably wrong for 8000 Hz short/mixed blocks  channel->block_type != 2 
+ * NAME:        III_requantize()
+ * DESCRIPTION: requantize one (positive) value
+  assumes sign(frac) == sign(exp)  format rq_table: bit31-27=exponent bit26-0=mantissa  underflow  overflow  we must take care that sz >= bits and sz < sizeof(long) lest bits == 0 
+ * NAME:        III_huffdecode()
+ * DESCRIPTION: decode Huffman code words of one channel of one granule
+  big_values  start value  change table if region boundary  all remaining  clear cache  maxhuffcode(hufftab16,hufftab24)=17bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  x (0..14)  maxlinbits=13bit + sign(x,y)=2bit  cache underrun  y (0..14)  maxlinbits=13bit + sign(y)=1bit  cache underrun  maxlookup=4bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  maxlookup=4bit + sign(x,y)=2bit  cache underrun  x (0..1)  y (0..1)  big_values overrun  count1  hcod (1..6)  cache underrun  quad tables guaranteed to have at most one extra lookup  v (0..1)  w (0..1)  x (0..1)  y (0..1)  technically the bitstream is misformatted, but apparently
+         some encoders are just a bit sloppy with stuffing bits  rzero 
+ * NAME:        III_reorder()
+ * DESCRIPTION: reorder frequency lines of a short block into subband order
+  this is probably wrong for 8000 Hz mixed blocks 
+ * NAME:        III_stereo()
+ * DESCRIPTION: perform joint stereo processing on a granule
+  intensity stereo  first determine which scalefactor bands are to be processed  long blocks  short blocks  right_ch->block_type != 2  now do the actual processing  intensity_scale  !(header->flags & MAD_FLAG_LSF_EXT)  illegal intensity position  middle/side stereo  l = (m + s) / sqrt(2)  r = (m - s) / sqrt(2) 
+ * NAME:        III_aliasreduce()
+ * DESCRIPTION: perform frequency line alias reduction
+ 
+ * NAME:        imdct36
+ * DESCRIPTION: perform X[18]->x[36] IMDCT
+  emac optimized imdct36, it is very ugly and i hope to replace it soon.
+ * for now it is actually somewhat faster than the stock implementation. 
+  assumes FRACBITS = 28  MAD_F_ML0(hi, lo, X[4],  MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, X[13], MAD_F(0x061f78aa));  t6 = MAD_F_MLZ(hi, lo);                       MAD_F_ML0(hi, lo, (t14 = X[1] - X[10]), -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, (t15 = X[7] + X[16]),  MAD_F(0x061f78aa));  t4 = MAD_F_MLZ(hi, lo);                                       MAD_F_MLA(hi, lo, t14, -MAD_F(0x061f78aa));                   MAD_F_MLA(hi, lo, t15, -MAD_F(0x0ec835e8));                   t0 = MAD_F_MLZ(hi, lo);                                       t14  t15  t4  t0  MAD_F_MLA(hi, lo, (t8 =X[0]-X[11]-X[12]),  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, (t9 =X[2]-X[ 9]-X[14]),  MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, (t10=X[3]-X[ 8]-X[15]), -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, (t11=X[5]-X[ 6]-X[17]), -MAD_F(0x0fdcf549));  x[10] = -(x[7] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t9,   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x09bd7ca0));  x[19] = x[34] = MAD_F_MLZ(hi, lo) - t0;  MAD_F_ML0(hi, lo, t8,   MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0cb19346));  x[ 1] = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t10, -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0216a2a2));  x[25] = MAD_F_MLZ(hi, lo);  t12 = t8 - t10;  t13 = t9 + t11;  d5: t12  d6: t13  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0cb19346));  t1 = MAD_F_MLZ(hi, lo) + t6;  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0fdcf549));  t3 = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x0216a2a2));  t5 = MAD_F_MLZ(hi, lo) - t6;  t1  t3  t5  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0f9ee890));  x[11] = -(x[6] = MAD_F_MLZ(hi, lo) + t1);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x04cfb0e2));  x[23] = x[30] = MAD_F_MLZ(hi, lo) + t1;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0acf37ad));  x[18] = x[35] = MAD_F_MLZ(hi, lo) - t1;  MAD_F_ML0(hi, lo, X[4],   MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, X[13], -MAD_F(0x0ec835e8));  t3 += (t7 = MAD_F_MLZ(hi, lo));  t4 -= t7;  t7  t3  t4  MAD_F_MLA(hi, lo, X[1],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x09bd7ca0));  t2 = MAD_F_MLZ(hi, lo);  t2  MAD_F_MLA(hi, lo, X[0],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0f426cb5));  x[12] = -(x[5] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0bcbe352));  x[17] = -(x[0] = MAD_F_MLZ(hi, lo) + t2);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x03768962));  x[24] = x[29] = MAD_F_MLZ(hi, lo) + t2;  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0ffc19fd));  x[9] = -(x[8] = MAD_F_MLZ(hi, lo) + t3);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x07635284));  x[21] = x[32] = MAD_F_MLZ(hi, lo) + t3;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0898c779));  x[20] = x[33] = MAD_F_MLZ(hi, lo) - t3;  MAD_F_ML0(hi, lo, t12, -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, t13,  MAD_F(0x061f78aa));  x[22] = x[31] = MAD_F_MLZ(hi, lo) + t0;  MAD_F_ML0(hi, lo, t12, MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, t13, MAD_F(0x0ec835e8));  x[13] = -(x[4] = MAD_F_MLZ(hi, lo) + t4);  x[16] = -(x[1] = x[1]              + t4);  x[25] =  x[28] = x[25]             + t4;   MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0d7e8807));  x[15] = -(x[2] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0e313245));  x[14] = -(x[3] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x00b2aa3e));  x[26] = x[27] = MAD_F_MLZ(hi, lo) + t5;  pfew  if defined(CPU_COLDFIRE)  CPU_COLDFIRE 
+ * NAME:        III_imdct_l()
+ * DESCRIPTION: perform IMDCT and windowing for long blocks
+  IMDCT  windowing  normal window  loop unrolled implementation  reference implementation  start block   (i = 18; i < 24; ++i) z[i] unchanged  stop block   (i = 12; i < 18; ++i) z[i] unchanged  FPM_ARM 
+ * NAME:        III_imdct_s()
+ * DESCRIPTION: perform IMDCT and windowing for short blocks
+  IMDCT  windowing, overlapping and concatenation 
+ * NAME:        III_overlap()
+ * DESCRIPTION: perform overlap-add of windowed IMDCT outputs
+ 
+ * NAME:        III_overlap_z()
+ * DESCRIPTION: perform "overlap-add" of zero IMDCT outputs
+ 
+ * NAME:        III_freqinver()
+ * DESCRIPTION: perform subband frequency inversion for odd sample lines
+ 
+ * NAME:        III_decode()
+ * DESCRIPTION: decode frame main_data
+  48000 => 0, 44100 => 1, 32000 => 2,
+       24000 => 3, 22050 => 4, 16000 => 5  scalefactors, Huffman decoding, requantization  joint stereo processing  reordering, alias reduction, IMDCT, overlap-add, frequency inversion 
+         * According to ISO/IEC 11172-3, "Alias reduction is not applied for
+         * granules with block_type == 2 (short block)." However, other
+         * sources suggest alias reduction should indeed be performed on the
+         * lower two subbands of mixed blocks. Most other implementations do
+         * this, so by default we will too.
+          subbands 0-1  long blocks  short blocks  (nonzero) subbands 2-31 
+      i = 576;
+      while (i > 36 && xr[ch][i - 1] == 0)
+        --i;
+ saves ~600k cycles  long blocks  short blocks  remaining (zero) subbands 
+ * NAME:        layer->III()
+ * DESCRIPTION: decode a single Layer III frame
+  rockbox: do not allocate  allocate Layer III dynamic structures  rockbox: not used. Both pointers are linked to an array in
+   * ../mpa.c before calling this.  rockbox: This should not happen. Return with error.  rockbox  check frame sanity  check CRC word  decode frame side information  find main_data of next frame  syncword | layer  protection_bit  crc_check  ID  find main_data of this frame  decode main_data  designate ancillary bits  preload main_data buffer with up to 511 bytes for next frame(s) 
+ * libmad - MPEG audio decoder library
+ * Copyright (C) 2000-2004 Underbit Technologies, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * $Id$
+  depending on the cpu "leftshift32" may be supported or not  --- Layer III -----------------------------------------------------------  from side info  from main_data  scalefac_l and/or scalefac_s 
+ * scalefactor bit lengths
+ * derived from section 2.4.2.7 of ISO/IEC 11172-3
+ 
+ * number of LSF scalefactor band values
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ 
+ * MPEG-1 scalefactor band widths
+ * derived from Table B.8 of ISO/IEC 11172-3
+  long  short  long  short  long  short 
+ * MPEG-2 scalefactor band widths
+ * derived from Table B.2 of ISO/IEC 13818-3
+  long  short  long  short  long  short 
+ * MPEG 2.5 scalefactor band widths
+ * derived from public sources
+  the 8000 Hz short block scalefactor bands do not break after
+   the first 36 frequency lines, so this is probably wrong  long  short 
+ * scalefactor band preemphasis (used only when preflag is set)
+ * derived from Table B.6 of ISO/IEC 11172-3
+ 
+ * table for requantization
+ *
+ * rq_table[x].mantissa * 2^(rq_table[x].exponent) = x^(4/3)
+ *
+ * format rq_table: bit31-27=exponent bit26-0=mantissa
+ 
+ * fractional powers of two
+ * used for requantization and joint stereo decoding
+ *
+ * root_table[3 + x] = 2^(x/4)
+  2^(-3/4) == 0.59460355750136  2^(-2/4) == 0.70710678118655  2^(-1/4) == 0.84089641525371  2^( 0/4) == 1.00000000000000  2^(+1/4) == 1.18920711500272  2^(+2/4) == 1.41421356237310  2^(+3/4) == 1.68179283050743 
+ * coefficients for aliasing reduction
+ * derived from Table B.9 of ISO/IEC 11172-3
+ *
+ *  c[]  = { -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037 }
+ * cs[i] =    1 / sqrt(1 + c[i]^2)
+ * ca[i] = c[i] / sqrt(1 + c[i]^2)
+  +0.857492926  +0.881741997  +0.949628649  +0.983314592  +0.995517816  +0.999160558  +0.999899195  +0.999993155  -0.514495755  -0.471731969  -0.313377454  -0.181913200  -0.094574193  -0.040965583  -0.014198569  -0.003699975 
+ * IMDCT coefficients for short blocks
+ * derived from section 2.4.3.4.10.2 of ISO/IEC 11172-3
+ *
+ * imdct_s[i/even][k] = cos((PI / 24) * (2 *       (i / 2) + 7) * (2 * k + 1))
+ * imdct_s[i /odd][k] = cos((PI / 24) * (2 * (6 + (i-1)/2) + 7) * (2 * k + 1))
+ 
+ * windowing coefficients for long blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_l[i] = sin((PI / 36) * (i + 1/2))
+  0.043619387  0.130526192  0.216439614  0.300705800  0.382683432  0.461748613  0.537299608  0.608761429  0.675590208  0.737277337  0.793353340  0.843391446  0.887010833  0.923879533  0.953716951  0.976296007  0.991444861  0.999048222  0.999048222  0.991444861  0.976296007  0.953716951  0.923879533  0.887010833  0.843391446  0.793353340  0.737277337  0.675590208  0.608761429  0.537299608  0.461748613  0.382683432  0.300705800  0.216439614  0.130526192  0.043619387  FPM_ARM 
+ * windowing coefficients for short blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_s[i] = sin((PI / 12) * (i + 1/2))
+  0.130526192  0.382683432  0.608761429  0.793353340  0.923879533  0.991444861  0.991444861  0.923879533  0.793353340  0.608761429  0.382683432  0.130526192 
+ * coefficients for intensity stereo processing
+ * derived from section 2.4.3.4.9.3 of ISO/IEC 11172-3
+ *
+ * is_ratio[i] = tan(i * (PI / 12))
+ * is_table[i] = is_ratio[i] / (1 + is_ratio[i])
+  0.000000000  0.211324865  0.366025404  0.500000000  0.633974596  0.788675135  1.000000000 
+ * coefficients for LSF intensity stereo processing
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ *
+ * is_lsf_table[0][i] = (1 / sqrt(sqrt(2)))^(i + 1)
+ * is_lsf_table[1][i] = (1 /      sqrt(2)) ^(i + 1)
+  0.840896415  0.707106781  0.594603558  0.500000000  0.420448208  0.353553391  0.297301779  0.250000000  0.210224104  0.176776695  0.148650889  0.125000000  0.105112052  0.088388348  0.074325445  0.707106781  0.500000000  0.353553391  0.250000000  0.176776695  0.125000000  0.088388348  0.062500000  0.044194174  0.031250000  0.022097087  0.015625000  0.011048543  0.007812500  0.005524272 
+ * NAME:        III_sideinfo()
+ * DESCRIPTION: decode frame side information from a bitstream
+  window_switching_flag  not used  [preflag,] scalefac_scale, count1table_select 
+ * NAME:        III_scalefactors_lsf()
+ * DESCRIPTION: decode channel scalefactors for LSF from a bitstream
+  (mode_extension & I_STEREO) && gr1ch (i.e. ch == 1)  apparently not illegal 
+ * NAME:        III_scalefactors()
+ * DESCRIPTION: decode channel scalefactors of one granule from a bitstream
+  channel->block_type != 2 
+ * The Layer III formula for requantization and scaling is defined by
+ * section 2.4.3.4.7.1 of ISO/IEC 11172-3, as follows:
+ *
+ *   long blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210)) *
+ *           2^-(scalefac_multiplier *
+ *               (scalefac_l[sfb] + preflag * pretab[sfb]))
+ *
+ *   short blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210 - 8 * subblock_gain[w])) *
+ *           2^-(scalefac_multiplier * scalefac_s[sfb][w])
+ *
+ *   where:
+ *   scalefac_multiplier = (scalefac_scale + 1) / 2
+ *
+ * The routines III_exponents() and III_requantize() facilitate this
+ * calculation.
+ 
+ * NAME:        III_exponents()
+ * DESCRIPTION: calculate scalefactor exponents
+  long block subbands 0-1  this is probably wrong for 8000 Hz short/mixed blocks  channel->block_type != 2 
+ * NAME:        III_requantize()
+ * DESCRIPTION: requantize one (positive) value
+  assumes sign(frac) == sign(exp)  format rq_table: bit31-27=exponent bit26-0=mantissa  underflow  overflow  we must take care that sz >= bits and sz < sizeof(long) lest bits == 0 
+ * NAME:        III_huffdecode()
+ * DESCRIPTION: decode Huffman code words of one channel of one granule
+  big_values  start value  change table if region boundary  all remaining  clear cache  maxhuffcode(hufftab16,hufftab24)=17bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  x (0..14)  maxlinbits=13bit + sign(x,y)=2bit  cache underrun  y (0..14)  maxlinbits=13bit + sign(y)=1bit  cache underrun  maxlookup=4bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  maxlookup=4bit + sign(x,y)=2bit  cache underrun  x (0..1)  y (0..1)  big_values overrun  count1  hcod (1..6)  cache underrun  quad tables guaranteed to have at most one extra lookup  v (0..1)  w (0..1)  x (0..1)  y (0..1)  technically the bitstream is misformatted, but apparently
+         some encoders are just a bit sloppy with stuffing bits  rzero 
+ * NAME:        III_reorder()
+ * DESCRIPTION: reorder frequency lines of a short block into subband order
+  this is probably wrong for 8000 Hz mixed blocks 
+ * NAME:        III_stereo()
+ * DESCRIPTION: perform joint stereo processing on a granule
+  intensity stereo  first determine which scalefactor bands are to be processed  long blocks  short blocks  right_ch->block_type != 2  now do the actual processing  intensity_scale  !(header->flags & MAD_FLAG_LSF_EXT)  illegal intensity position  middle/side stereo  l = (m + s) / sqrt(2)  r = (m - s) / sqrt(2) 
+ * NAME:        III_aliasreduce()
+ * DESCRIPTION: perform frequency line alias reduction
+ 
+ * NAME:        imdct36
+ * DESCRIPTION: perform X[18]->x[36] IMDCT
+  emac optimized imdct36, it is very ugly and i hope to replace it soon.
+ * for now it is actually somewhat faster than the stock implementation. 
+  assumes FRACBITS = 28  MAD_F_ML0(hi, lo, X[4],  MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, X[13], MAD_F(0x061f78aa));  t6 = MAD_F_MLZ(hi, lo);                       MAD_F_ML0(hi, lo, (t14 = X[1] - X[10]), -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, (t15 = X[7] + X[16]),  MAD_F(0x061f78aa));  t4 = MAD_F_MLZ(hi, lo);                                       MAD_F_MLA(hi, lo, t14, -MAD_F(0x061f78aa));                   MAD_F_MLA(hi, lo, t15, -MAD_F(0x0ec835e8));                   t0 = MAD_F_MLZ(hi, lo);                                       t14  t15  t4  t0  MAD_F_MLA(hi, lo, (t8 =X[0]-X[11]-X[12]),  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, (t9 =X[2]-X[ 9]-X[14]),  MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, (t10=X[3]-X[ 8]-X[15]), -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, (t11=X[5]-X[ 6]-X[17]), -MAD_F(0x0fdcf549));  x[10] = -(x[7] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t9,   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x09bd7ca0));  x[19] = x[34] = MAD_F_MLZ(hi, lo) - t0;  MAD_F_ML0(hi, lo, t8,   MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0cb19346));  x[ 1] = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t10, -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0216a2a2));  x[25] = MAD_F_MLZ(hi, lo);  t12 = t8 - t10;  t13 = t9 + t11;  d5: t12  d6: t13  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0cb19346));  t1 = MAD_F_MLZ(hi, lo) + t6;  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0fdcf549));  t3 = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x0216a2a2));  t5 = MAD_F_MLZ(hi, lo) - t6;  t1  t3  t5  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0f9ee890));  x[11] = -(x[6] = MAD_F_MLZ(hi, lo) + t1);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x04cfb0e2));  x[23] = x[30] = MAD_F_MLZ(hi, lo) + t1;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0acf37ad));  x[18] = x[35] = MAD_F_MLZ(hi, lo) - t1;  MAD_F_ML0(hi, lo, X[4],   MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, X[13], -MAD_F(0x0ec835e8));  t3 += (t7 = MAD_F_MLZ(hi, lo));  t4 -= t7;  t7  t3  t4  MAD_F_MLA(hi, lo, X[1],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x09bd7ca0));  t2 = MAD_F_MLZ(hi, lo);  t2  MAD_F_MLA(hi, lo, X[0],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0f426cb5));  x[12] = -(x[5] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0bcbe352));  x[17] = -(x[0] = MAD_F_MLZ(hi, lo) + t2);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x03768962));  x[24] = x[29] = MAD_F_MLZ(hi, lo) + t2;  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0ffc19fd));  x[9] = -(x[8] = MAD_F_MLZ(hi, lo) + t3);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x07635284));  x[21] = x[32] = MAD_F_MLZ(hi, lo) + t3;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0898c779));  x[20] = x[33] = MAD_F_MLZ(hi, lo) - t3;  MAD_F_ML0(hi, lo, t12, -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, t13,  MAD_F(0x061f78aa));  x[22] = x[31] = MAD_F_MLZ(hi, lo) + t0;  MAD_F_ML0(hi, lo, t12, MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, t13, MAD_F(0x0ec835e8));  x[13] = -(x[4] = MAD_F_MLZ(hi, lo) + t4);  x[16] = -(x[1] = x[1]              + t4);  x[25] =  x[28] = x[25]             + t4;   MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0d7e8807));  x[15] = -(x[2] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0e313245));  x[14] = -(x[3] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x00b2aa3e));  x[26] = x[27] = MAD_F_MLZ(hi, lo) + t5;  pfew  if defined(CPU_COLDFIRE)  CPU_COLDFIRE 
+ * NAME:        III_imdct_l()
+ * DESCRIPTION: perform IMDCT and windowing for long blocks
+  IMDCT  windowing  normal window  loop unrolled implementation  reference implementation  start block   (i = 18; i < 24; ++i) z[i] unchanged  stop block   (i = 12; i < 18; ++i) z[i] unchanged  FPM_ARM 
+ * NAME:        III_imdct_s()
+ * DESCRIPTION: perform IMDCT and windowing for short blocks
+  IMDCT  windowing, overlapping and concatenation 
+ * NAME:        III_overlap()
+ * DESCRIPTION: perform overlap-add of windowed IMDCT outputs
+ 
+ * NAME:        III_overlap_z()
+ * DESCRIPTION: perform "overlap-add" of zero IMDCT outputs
+ 
+ * NAME:        III_freqinver()
+ * DESCRIPTION: perform subband frequency inversion for odd sample lines
+ 
+ * NAME:        III_decode()
+ * DESCRIPTION: decode frame main_data
+  48000 => 0, 44100 => 1, 32000 => 2,
+       24000 => 3, 22050 => 4, 16000 => 5  scalefactors, Huffman decoding, requantization  joint stereo processing  reordering, alias reduction, IMDCT, overlap-add, frequency inversion 
+         * According to ISO/IEC 11172-3, "Alias reduction is not applied for
+         * granules with block_type == 2 (short block)." However, other
+         * sources suggest alias reduction should indeed be performed on the
+         * lower two subbands of mixed blocks. Most other implementations do
+         * this, so by default we will too.
+          subbands 0-1  long blocks  short blocks  (nonzero) subbands 2-31 
+      i = 576;
+      while (i > 36 && xr[ch][i - 1] == 0)
+        --i;
+ saves ~600k cycles  long blocks  short blocks  remaining (zero) subbands 
+ * NAME:        layer->III()
+ * DESCRIPTION: decode a single Layer III frame
+  rockbox: do not allocate  allocate Layer III dynamic structures  rockbox: not used. Both pointers are linked to an array in
+   * ../mpa.c before calling this.  rockbox: This should not happen. Return with error.  rockbox  check frame sanity  check CRC word  decode frame side information  find main_data of next frame  syncword | layer  protection_bit  crc_check  ID  find main_data of this frame  decode main_data  designate ancillary bits  preload main_data buffer with up to 511 bytes for next frame(s) 
+ * libmad - MPEG audio decoder library
+ * Copyright (C) 2000-2004 Underbit Technologies, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * $Id$
+  depending on the cpu "leftshift32" may be supported or not  --- Layer III -----------------------------------------------------------  from side info  from main_data  scalefac_l and/or scalefac_s 
+ * scalefactor bit lengths
+ * derived from section 2.4.2.7 of ISO/IEC 11172-3
+ 
+ * number of LSF scalefactor band values
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ 
+ * MPEG-1 scalefactor band widths
+ * derived from Table B.8 of ISO/IEC 11172-3
+  long  short  long  short  long  short 
+ * MPEG-2 scalefactor band widths
+ * derived from Table B.2 of ISO/IEC 13818-3
+  long  short  long  short  long  short 
+ * MPEG 2.5 scalefactor band widths
+ * derived from public sources
+  the 8000 Hz short block scalefactor bands do not break after
+   the first 36 frequency lines, so this is probably wrong  long  short 
+ * scalefactor band preemphasis (used only when preflag is set)
+ * derived from Table B.6 of ISO/IEC 11172-3
+ 
+ * table for requantization
+ *
+ * rq_table[x].mantissa * 2^(rq_table[x].exponent) = x^(4/3)
+ *
+ * format rq_table: bit31-27=exponent bit26-0=mantissa
+ 
+ * fractional powers of two
+ * used for requantization and joint stereo decoding
+ *
+ * root_table[3 + x] = 2^(x/4)
+  2^(-3/4) == 0.59460355750136  2^(-2/4) == 0.70710678118655  2^(-1/4) == 0.84089641525371  2^( 0/4) == 1.00000000000000  2^(+1/4) == 1.18920711500272  2^(+2/4) == 1.41421356237310  2^(+3/4) == 1.68179283050743 
+ * coefficients for aliasing reduction
+ * derived from Table B.9 of ISO/IEC 11172-3
+ *
+ *  c[]  = { -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037 }
+ * cs[i] =    1 / sqrt(1 + c[i]^2)
+ * ca[i] = c[i] / sqrt(1 + c[i]^2)
+  +0.857492926  +0.881741997  +0.949628649  +0.983314592  +0.995517816  +0.999160558  +0.999899195  +0.999993155  -0.514495755  -0.471731969  -0.313377454  -0.181913200  -0.094574193  -0.040965583  -0.014198569  -0.003699975 
+ * IMDCT coefficients for short blocks
+ * derived from section 2.4.3.4.10.2 of ISO/IEC 11172-3
+ *
+ * imdct_s[i/even][k] = cos((PI / 24) * (2 *       (i / 2) + 7) * (2 * k + 1))
+ * imdct_s[i /odd][k] = cos((PI / 24) * (2 * (6 + (i-1)/2) + 7) * (2 * k + 1))
+ 
+ * windowing coefficients for long blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_l[i] = sin((PI / 36) * (i + 1/2))
+  0.043619387  0.130526192  0.216439614  0.300705800  0.382683432  0.461748613  0.537299608  0.608761429  0.675590208  0.737277337  0.793353340  0.843391446  0.887010833  0.923879533  0.953716951  0.976296007  0.991444861  0.999048222  0.999048222  0.991444861  0.976296007  0.953716951  0.923879533  0.887010833  0.843391446  0.793353340  0.737277337  0.675590208  0.608761429  0.537299608  0.461748613  0.382683432  0.300705800  0.216439614  0.130526192  0.043619387  FPM_ARM 
+ * windowing coefficients for short blocks
+ * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+ *
+ * window_s[i] = sin((PI / 12) * (i + 1/2))
+  0.130526192  0.382683432  0.608761429  0.793353340  0.923879533  0.991444861  0.991444861  0.923879533  0.793353340  0.608761429  0.382683432  0.130526192 
+ * coefficients for intensity stereo processing
+ * derived from section 2.4.3.4.9.3 of ISO/IEC 11172-3
+ *
+ * is_ratio[i] = tan(i * (PI / 12))
+ * is_table[i] = is_ratio[i] / (1 + is_ratio[i])
+  0.000000000  0.211324865  0.366025404  0.500000000  0.633974596  0.788675135  1.000000000 
+ * coefficients for LSF intensity stereo processing
+ * derived from section 2.4.3.2 of ISO/IEC 13818-3
+ *
+ * is_lsf_table[0][i] = (1 / sqrt(sqrt(2)))^(i + 1)
+ * is_lsf_table[1][i] = (1 /      sqrt(2)) ^(i + 1)
+  0.840896415  0.707106781  0.594603558  0.500000000  0.420448208  0.353553391  0.297301779  0.250000000  0.210224104  0.176776695  0.148650889  0.125000000  0.105112052  0.088388348  0.074325445  0.707106781  0.500000000  0.353553391  0.250000000  0.176776695  0.125000000  0.088388348  0.062500000  0.044194174  0.031250000  0.022097087  0.015625000  0.011048543  0.007812500  0.005524272 
+ * NAME:        III_sideinfo()
+ * DESCRIPTION: decode frame side information from a bitstream
+  window_switching_flag  not used  [preflag,] scalefac_scale, count1table_select 
+ * NAME:        III_scalefactors_lsf()
+ * DESCRIPTION: decode channel scalefactors for LSF from a bitstream
+  (mode_extension & I_STEREO) && gr1ch (i.e. ch == 1)  apparently not illegal 
+ * NAME:        III_scalefactors()
+ * DESCRIPTION: decode channel scalefactors of one granule from a bitstream
+  channel->block_type != 2 
+ * The Layer III formula for requantization and scaling is defined by
+ * section 2.4.3.4.7.1 of ISO/IEC 11172-3, as follows:
+ *
+ *   long blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210)) *
+ *           2^-(scalefac_multiplier *
+ *               (scalefac_l[sfb] + preflag * pretab[sfb]))
+ *
+ *   short blocks:
+ *   xr[i] = sign(is[i]) * abs(is[i])^(4/3) *
+ *           2^((1/4) * (global_gain - 210 - 8 * subblock_gain[w])) *
+ *           2^-(scalefac_multiplier * scalefac_s[sfb][w])
+ *
+ *   where:
+ *   scalefac_multiplier = (scalefac_scale + 1) / 2
+ *
+ * The routines III_exponents() and III_requantize() facilitate this
+ * calculation.
+ 
+ * NAME:        III_exponents()
+ * DESCRIPTION: calculate scalefactor exponents
+  long block subbands 0-1  this is probably wrong for 8000 Hz short/mixed blocks  channel->block_type != 2 
+ * NAME:        III_requantize()
+ * DESCRIPTION: requantize one (positive) value
+  assumes sign(frac) == sign(exp)  format rq_table: bit31-27=exponent bit26-0=mantissa  underflow  overflow  we must take care that sz >= bits and sz < sizeof(long) lest bits == 0 
+ * NAME:        III_huffdecode()
+ * DESCRIPTION: decode Huffman code words of one channel of one granule
+  big_values  start value  change table if region boundary  all remaining  clear cache  maxhuffcode(hufftab16,hufftab24)=17bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  x (0..14)  maxlinbits=13bit + sign(x,y)=2bit  cache underrun  y (0..14)  maxlinbits=13bit + sign(y)=1bit  cache underrun  maxlookup=4bit + sign(x,y)=2bit  cache underrun  hcod (0..19)  maxlookup=4bit + sign(x,y)=2bit  cache underrun  x (0..1)  y (0..1)  big_values overrun  count1  hcod (1..6)  cache underrun  quad tables guaranteed to have at most one extra lookup  v (0..1)  w (0..1)  x (0..1)  y (0..1)  technically the bitstream is misformatted, but apparently
+         some encoders are just a bit sloppy with stuffing bits  rzero 
+ * NAME:        III_reorder()
+ * DESCRIPTION: reorder frequency lines of a short block into subband order
+  this is probably wrong for 8000 Hz mixed blocks 
+ * NAME:        III_stereo()
+ * DESCRIPTION: perform joint stereo processing on a granule
+  intensity stereo  first determine which scalefactor bands are to be processed  long blocks  short blocks  right_ch->block_type != 2  now do the actual processing  intensity_scale  !(header->flags & MAD_FLAG_LSF_EXT)  illegal intensity position  middle/side stereo  l = (m + s) / sqrt(2)  r = (m - s) / sqrt(2) 
+ * NAME:        III_aliasreduce()
+ * DESCRIPTION: perform frequency line alias reduction
+ 
+ * NAME:        imdct36
+ * DESCRIPTION: perform X[18]->x[36] IMDCT
+  emac optimized imdct36, it is very ugly and i hope to replace it soon.
+ * for now it is actually somewhat faster than the stock implementation. 
+  assumes FRACBITS = 28  MAD_F_ML0(hi, lo, X[4],  MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, X[13], MAD_F(0x061f78aa));  t6 = MAD_F_MLZ(hi, lo);                       MAD_F_ML0(hi, lo, (t14 = X[1] - X[10]), -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, (t15 = X[7] + X[16]),  MAD_F(0x061f78aa));  t4 = MAD_F_MLZ(hi, lo);                                       MAD_F_MLA(hi, lo, t14, -MAD_F(0x061f78aa));                   MAD_F_MLA(hi, lo, t15, -MAD_F(0x0ec835e8));                   t0 = MAD_F_MLZ(hi, lo);                                       t14  t15  t4  t0  MAD_F_MLA(hi, lo, (t8 =X[0]-X[11]-X[12]),  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, (t9 =X[2]-X[ 9]-X[14]),  MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, (t10=X[3]-X[ 8]-X[15]), -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, (t11=X[5]-X[ 6]-X[17]), -MAD_F(0x0fdcf549));  x[10] = -(x[7] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t9,   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x09bd7ca0));  x[19] = x[34] = MAD_F_MLZ(hi, lo) - t0;  MAD_F_ML0(hi, lo, t8,   MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, t10,  MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0cb19346));  x[ 1] = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, t8,  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, t9,  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, t10, -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, t11, -MAD_F(0x0216a2a2));  x[25] = MAD_F_MLZ(hi, lo);  t12 = t8 - t10;  t13 = t9 + t11;  d5: t12  d6: t13  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0cb19346));  t1 = MAD_F_MLZ(hi, lo) + t6;  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[16],  MAD_F(0x0fdcf549));  t3 = MAD_F_MLZ(hi, lo);  MAD_F_ML0(hi, lo, X[1],  -MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[7],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[10], -MAD_F(0x09bd7ca0));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x0216a2a2));  t5 = MAD_F_MLZ(hi, lo) - t6;  t1  t3  t5  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0f9ee890));  x[11] = -(x[6] = MAD_F_MLZ(hi, lo) + t1);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x04cfb0e2));  x[23] = x[30] = MAD_F_MLZ(hi, lo) + t1;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0acf37ad));  x[18] = x[35] = MAD_F_MLZ(hi, lo) - t1;  MAD_F_ML0(hi, lo, X[4],   MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, X[13], -MAD_F(0x0ec835e8));  t3 += (t7 = MAD_F_MLZ(hi, lo));  t4 -= t7;  t7  t3  t4  MAD_F_MLA(hi, lo, X[1],  -MAD_F(0x0cb19346));  MAD_F_MLA(hi, lo, X[7],   MAD_F(0x0fdcf549));  MAD_F_MLA(hi, lo, X[10],  MAD_F(0x0216a2a2));  MAD_F_MLA(hi, lo, X[16], -MAD_F(0x09bd7ca0));  t2 = MAD_F_MLZ(hi, lo);  t2  MAD_F_MLA(hi, lo, X[0],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0f426cb5));  x[12] = -(x[5] = MAD_F_MLZ(hi, lo));  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0bcbe352));  x[17] = -(x[0] = MAD_F_MLZ(hi, lo) + t2);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x03768962));  x[24] = x[29] = MAD_F_MLZ(hi, lo) + t2;  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0ffc19fd));  x[9] = -(x[8] = MAD_F_MLZ(hi, lo) + t3);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x07635284));  x[21] = x[32] = MAD_F_MLZ(hi, lo) + t3;  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0898c779));  x[20] = x[33] = MAD_F_MLZ(hi, lo) - t3;  MAD_F_ML0(hi, lo, t12, -MAD_F(0x0ec835e8));  MAD_F_MLA(hi, lo, t13,  MAD_F(0x061f78aa));  x[22] = x[31] = MAD_F_MLZ(hi, lo) + t0;  MAD_F_ML0(hi, lo, t12, MAD_F(0x061f78aa));  MAD_F_MLA(hi, lo, t13, MAD_F(0x0ec835e8));  x[13] = -(x[4] = MAD_F_MLZ(hi, lo) + t4);  x[16] = -(x[1] = x[1]              + t4);  x[25] =  x[28] = x[25]             + t4;   MAD_F_ML0(hi, lo, X[0],   MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[6],   MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[9],   MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[12],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[15],  MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x0d7e8807));  x[15] = -(x[2] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],   MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[2],   MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[3],   MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[5],   MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x00b2aa3e));  MAD_F_MLA(hi, lo, X[8],   MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[11],  MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[14],  MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[17],  MAD_F(0x0e313245));  x[14] = -(x[3] = MAD_F_MLZ(hi, lo) + t5);  MAD_F_ML0(hi, lo, X[0],  -MAD_F(0x0ffc19fd));  MAD_F_MLA(hi, lo, X[2],  -MAD_F(0x0f9ee890));  MAD_F_MLA(hi, lo, X[3],  -MAD_F(0x0f426cb5));  MAD_F_MLA(hi, lo, X[5],  -MAD_F(0x0e313245));  MAD_F_MLA(hi, lo, X[6],  -MAD_F(0x0d7e8807));  MAD_F_MLA(hi, lo, X[8],  -MAD_F(0x0bcbe352));  MAD_F_MLA(hi, lo, X[9],  -MAD_F(0x0acf37ad));  MAD_F_MLA(hi, lo, X[11], -MAD_F(0x0898c779));  MAD_F_MLA(hi, lo, X[12], -MAD_F(0x07635284));  MAD_F_MLA(hi, lo, X[14], -MAD_F(0x04cfb0e2));  MAD_F_MLA(hi, lo, X[15], -MAD_F(0x03768962));  MAD_F_MLA(hi, lo, X[17], -MAD_F(0x00b2aa3e));  x[26] = x[27] = MAD_F_MLZ(hi, lo) + t5;  pfew  if defined(CPU_COLDFIRE)  CPU_COLDFIRE 
+ * NAME:        III_imdct_l()
+ * DESCRIPTION: perform IMDCT and windowing for long blocks
+  IMDCT  windowing  normal window  loop unrolled implementation  reference implementation  start block   (i = 18; i < 24; ++i) z[i] unchanged  stop block   (i = 12; i < 18; ++i) z[i] unchanged  FPM_ARM 
+ * NAME:        III_imdct_s()
+ * DESCRIPTION: perform IMDCT and windowing for short blocks
+  IMDCT  windowing, overlapping and concatenation 
+ * NAME:        III_overlap()
+ * DESCRIPTION: perform overlap-add of windowed IMDCT outputs
+ 
+ * NAME:        III_overlap_z()
+ * DESCRIPTION: perform "overlap-add" of zero IMDCT outputs
+ 
+ * NAME:        III_freqinver()
+ * DESCRIPTION: perform subband frequency inversion for odd sample lines
+ 
+ * NAME:        III_decode()
+ * DESCRIPTION: decode frame main_data
+  48000 => 0, 44100 => 1, 32000 => 2,
+       24000 => 3, 22050 => 4, 16000 => 5  scalefactors, Huffman decoding, requantization  joint stereo processing  reordering, alias reduction, IMDCT, overlap-add, frequency inversion 
+         * According to ISO/IEC 11172-3, "Alias reduction is not applied for
+         * granules with block_type == 2 (short block)." However, other
+         * sources suggest alias reduction should indeed be performed on the
+         * lower two subbands of mixed blocks. Most other implementations do
+         * this, so by default we will too.
+          subbands 0-1  long blocks  short blocks  (nonzero) subbands 2-31 
+      i = 576;
+      while (i > 36 && xr[ch][i - 1] == 0)
+        --i;
+ saves ~600k cycles  long blocks  short blocks  remaining (zero) subbands 
+ * NAME:        layer->III()
+ * DESCRIPTION: decode a single Layer III frame
+  rockbox: do not allocate  allocate Layer III dynamic structures  rockbox: not used. Both pointers are linked to an array in
+   * ../mpa.c before calling this.  rockbox: This should not happen. Return with error.  rockbox  check frame sanity  check CRC word  decode frame side information  find main_data of next frame  syncword | layer  protection_bit  crc_check  ID  find main_data of this frame  decode main_data  designate ancillary bits  preload main_data buffer with up to 511 bytes for next frame(s) 

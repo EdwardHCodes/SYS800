@@ -1,0 +1,283 @@
+*************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008    Lechner Michael / smoking gnu
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * ----------------------------------------------------------------------------
+ *
+ * INTRODUCTION:
+ * OK, this is an attempt to write an instrument tuner for rockbox.
+ * It uses a Schmitt trigger algorithm, which I copied from
+ * tuneit [ (c) 2004 Mario Lang <mlang@delysid.org> ], for detecting the
+ * fundamental freqency of a sound. A FFT algorithm would be more accurate
+ * but also much slower.
+ *
+ * TODO:
+ * - Adapt the Yin FFT algorithm, which would reduce complexity from O(n^2)
+ *   to O(nlogn), theoretically reducing latency by a factor of ~10. -David
+ *
+ * MAJOR CHANGES:
+ * 08.03.2008        Started coding
+ * 21.03.2008        Pitch detection works more or less
+ *                   Button definitions for most targets added
+ * 02.04.2008        Proper GUI added
+ *                   Todo, Major Changes and Current Limitations added
+ * 08.19.2009        Brought the code up to date with current plugin standards
+ *                   Made it work more nicely with color, BW and grayscale
+ *                   Changed pitch detection to use the Yin algorithm (better
+ *                      detection, but slower -- would be ~4x faster with
+ *                      fixed point math, I think).  Code was poached from the
+ *                      Aubio sound processing library (aubio.org). -David
+ * 08.31.2009        Lots of changes:
+ *                   Added a menu to tweak settings
+ *                   Converted everything to fixed point (greatly improving
+ *                       latency)
+ *                   Improved the display
+ *                   Improved efficiency with judicious use of cpu_boost, the
+ *                       backlight, and volume detection to limit unneeded
+ *                       calculation
+ *                   Fixed a problem that caused an octave-off error
+ *                   -David
+ * 05.14.2010        Multibuffer continuous recording with two buffers
+ *
+ *
+ * CURRENT LIMITATIONS:
+ * - No gapless recording.  Strictly speaking true gappless isn't possible,
+ *   since the algorithm takes longer to calculate than the length of the
+ *   sample, but latency could be improved a bit with proper use of the DMA
+ *   recording functions.
+ * - Due to how the Yin algorithm works, latency is higher for lower
+ *   frequencies.
+  Some fixed point calculation stuff  I adapted these ones from the Rockbox fixed point library  Operators for fixed point  Some defines for converting between period and frequency   I introduce some divisors in this because the fixed point  variables aren't big enough to hold higher than a certain  value.  This loses a bit of precision but it means we      don't have to use 32.32 variables (yikes).                 With an 18-bit decimal precision, the max value in the     integer part is 8192.  Divide 44100 by 7 and it'll fit in  that variable.                                             Some constants for tuning  The recording buffer size  This is how much is sampled at a time.  It also determines latency -- if BUFFER_SIZE == sample_rate then    there'll be one sample per second, or a latency of one second.  Furthermore, the lowest detectable frequency will be about twice    the number of reads per second                                  If we ever switch to Yin FFT algorithm then this needs to be
+   a power of 2  The threshold for the YIN algorithm  0.10  Structure for the reference frequency (frequency of A)
+ * It's used for scaling the frequency before finding out
+ * the note. The frequency is scaled in a way that the main
+ * algorithm can assume the frequency of A to be 440 Hz.
+  Frequency in Hz  440/frequency    log2(factor)     Index of the entry for 440 Hz in the table (default frequency for A)  How loud the audio has to be to start displaying pitch   Must be between 0 and 100                                Change to AUDIO_SRC_LINEIN if you want to record from line-in  How many decimal places to display for the Hz value  Where to put the various GUI elements  Subdivisions of the whole 100-cent scale  Bitmaps for drawing the note names.  These need to have height
+   <= (bar_grad_y - note_y), or 15/32 * LCD_HEIGHT
+  which of the two buffers to use?  which of the two buffers to record?  It's stereo, so make the buffer twice as big  Notes within one (reference) scale  Name of the note, e.g. "A#"  Note frequency, Hz           log2(frequency)              GUI  Settings for the plugin  Index of the frequency of A  Which note to display as 'C'.  0=C, 1=D-flat, 2=D, ..., 11=B. This is useful if you   use a transposing instrument. In that case, this       setting tells which 'real' note is played by the       instrument if you play a written 'C'. Thus, this       setting is the number of semitones from the real 'C'   up to the 'instrument key'.                            By default, the real 'C' is displayed as 'C' ================================================================= Settings loading and saving(adapted from the clock plugin)      ================================================================= The settings as they exist on the hard disk, so that
+ * we can know at saving time if changes have been made --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- file doesn't exist  Initializes the settings with default values at least  basic consistency check --------------------------------------------------------------------- does file exist? ================================================================= MENU                                                            ================================================================= Keymaps  Option strings  This has to match yin_threshold_table  clamp the sample size between min and max  sample size must be divisible by 4 - round up  Displays the menu. Returns true iff the user selects 'quit'.  Range depends on the size of the buffer  Return to the tuner ================================================================= Binary Log                                                      ================================================================= Fixed-point log base 2 Adapted from python code at
+   http://en.wikipedia.org/wiki/Binary_logarithm#Algorithm
+ Integer part while x<1  while x>=2  Fractional part  while fp > 0  if x >= 2 ================================================================= GUI Stuff                                                       ================================================================= Draw the note bitmap  Draw the red bar and the white lines  Color screens  Greyscale screens  Draw graduation lines on the off-by readout  Color screens  Greyscale screens  Calculate how wrong the note is and draw the GUI  We calculate the frequency and its log as if  the reference frequency of A were 440 Hz.     This calculates a log freq offset for note A  Get the frequency to within the range of our reference table,  i.e. into the right octave.                                    The red bar  Raise the displayed pitch an octave minus key_transposition  semitones, effectively lowering it.  Note that the pitch     displayed alongside the frequency is unaffected.            -----------------------------------------------------------------------
+ * Functions for the Yin algorithm
+ *
+ * These were all adapted from the versions in Aubio v0.3.2
+ * Here's what the Aubio documentation has to say:
+ *
+ * This algorithm was developped by A. de Cheveigne and H. Kawahara and
+ * published in:
+ *
+ * de Cheveign?, A., Kawahara, H. (2002) "YIN, a fundamental frequency
+ * estimator for speech and music", J. Acoust. Soc. Am. 111, 1917-1930.
+ *
+ * see http://recherche.ircam.fr/equipes/pcm/pub/people/cheveign.html
+------------------------------------------------------------------------- Find the index of the minimum element of an array of floats  Original floating point version:  tmp = s0 + (pf/2.0f) * (pf * ( s0 - 2.0f*s1 + s2 ) -
+             3.0f*s0 + 4.0f*s1 - s2); Converted to explicit operator precedence:  tmp = s0 + ((pf/2.0f) * ((((pf * ((s0 - (2*s1)) + s2)) -
+            (3*s0)) + (4*s1)) - s2));  I made it look like this so I could easily track the precedence and  make sure it matched the original expression                         Oy, this is when I really wish I could do C++ operator overloading   init resold to something big (in case x[pos+-span]<0))  increase frac  exactpos += (frac-QUADINT_STEP)*span - span/2.0f;  Calculate the period of the note in the
+     buffer using the YIN algorithm  The yin pointer is just a buffer that the algorithm uses as a work
+     space.  It needs to be half the length of the input buffer. return FP_ZERO;----------------------------------------------------------------- Operate on only one channel of the stereo signal  now tally holds the average of the squares of all the samples  It must be between 0 and 0x7fff^2, so it fits in 32 bits       Stop the recording when the buffer is full  Do not overrun the reader. Reuse current buffer if full.  Always record full buffer, even if not required  SIMULATOR  Start recording  Always record full buffer, even if not required  The main program loop  For tracking the latency 
+    long timer;
+    char debug_string[20];
+     wait for the buffer to be filled  Only do the heavy lifting if the volume is high enough  This returns the period of the detected pitch in samples  Hz = sample rate / period  Move to next buffer if not empty (but empty *shouldn't* happen
+             * here).  SIMULATOR  Display a preselected frequency  Init recording, tuning, and GUI  Disable all talking before initializing IRAM  Stop all playback  --------- Init the audio recording -----------------  set to maximum gain  Highest C on piano is approx 4.186 kHz, so we need just over
+     * 8.372 kHz to pass it.  avoid divsion by zero  GUI  Put the note right between the top and bottom text elements *************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008    Lechner Michael / smoking gnu
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * ----------------------------------------------------------------------------
+ *
+ * INTRODUCTION:
+ * OK, this is an attempt to write an instrument tuner for rockbox.
+ * It uses a Schmitt trigger algorithm, which I copied from
+ * tuneit [ (c) 2004 Mario Lang <mlang@delysid.org> ], for detecting the
+ * fundamental freqency of a sound. A FFT algorithm would be more accurate
+ * but also much slower.
+ *
+ * TODO:
+ * - Adapt the Yin FFT algorithm, which would reduce complexity from O(n^2)
+ *   to O(nlogn), theoretically reducing latency by a factor of ~10. -David
+ *
+ * MAJOR CHANGES:
+ * 08.03.2008        Started coding
+ * 21.03.2008        Pitch detection works more or less
+ *                   Button definitions for most targets added
+ * 02.04.2008        Proper GUI added
+ *                   Todo, Major Changes and Current Limitations added
+ * 08.19.2009        Brought the code up to date with current plugin standards
+ *                   Made it work more nicely with color, BW and grayscale
+ *                   Changed pitch detection to use the Yin algorithm (better
+ *                      detection, but slower -- would be ~4x faster with
+ *                      fixed point math, I think).  Code was poached from the
+ *                      Aubio sound processing library (aubio.org). -David
+ * 08.31.2009        Lots of changes:
+ *                   Added a menu to tweak settings
+ *                   Converted everything to fixed point (greatly improving
+ *                       latency)
+ *                   Improved the display
+ *                   Improved efficiency with judicious use of cpu_boost, the
+ *                       backlight, and volume detection to limit unneeded
+ *                       calculation
+ *                   Fixed a problem that caused an octave-off error
+ *                   -David
+ * 05.14.2010        Multibuffer continuous recording with two buffers
+ *
+ *
+ * CURRENT LIMITATIONS:
+ * - No gapless recording.  Strictly speaking true gappless isn't possible,
+ *   since the algorithm takes longer to calculate than the length of the
+ *   sample, but latency could be improved a bit with proper use of the DMA
+ *   recording functions.
+ * - Due to how the Yin algorithm works, latency is higher for lower
+ *   frequencies.
+  Some fixed point calculation stuff  I adapted these ones from the Rockbox fixed point library  Operators for fixed point  Some defines for converting between period and frequency   I introduce some divisors in this because the fixed point  variables aren't big enough to hold higher than a certain  value.  This loses a bit of precision but it means we      don't have to use 32.32 variables (yikes).                 With an 18-bit decimal precision, the max value in the     integer part is 8192.  Divide 44100 by 7 and it'll fit in  that variable.                                             Some constants for tuning  The recording buffer size  This is how much is sampled at a time.  It also determines latency -- if BUFFER_SIZE == sample_rate then    there'll be one sample per second, or a latency of one second.  Furthermore, the lowest detectable frequency will be about twice    the number of reads per second                                  If we ever switch to Yin FFT algorithm then this needs to be
+   a power of 2  The threshold for the YIN algorithm  0.10  Structure for the reference frequency (frequency of A)
+ * It's used for scaling the frequency before finding out
+ * the note. The frequency is scaled in a way that the main
+ * algorithm can assume the frequency of A to be 440 Hz.
+  Frequency in Hz  440/frequency    log2(factor)     Index of the entry for 440 Hz in the table (default frequency for A)  How loud the audio has to be to start displaying pitch   Must be between 0 and 100                                Change to AUDIO_SRC_LINEIN if you want to record from line-in  How many decimal places to display for the Hz value  Where to put the various GUI elements  Subdivisions of the whole 100-cent scale  Bitmaps for drawing the note names.  These need to have height
+   <= (bar_grad_y - note_y), or 15/32 * LCD_HEIGHT
+  which of the two buffers to use?  which of the two buffers to record?  It's stereo, so make the buffer twice as big  Notes within one (reference) scale  Name of the note, e.g. "A#"  Note frequency, Hz           log2(frequency)              GUI  Settings for the plugin  Index of the frequency of A  Which note to display as 'C'.  0=C, 1=D-flat, 2=D, ..., 11=B. This is useful if you   use a transposing instrument. In that case, this       setting tells which 'real' note is played by the       instrument if you play a written 'C'. Thus, this       setting is the number of semitones from the real 'C'   up to the 'instrument key'.                            By default, the real 'C' is displayed as 'C' ================================================================= Settings loading and saving(adapted from the clock plugin)      ================================================================= The settings as they exist on the hard disk, so that
+ * we can know at saving time if changes have been made --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- file doesn't exist  Initializes the settings with default values at least  basic consistency check --------------------------------------------------------------------- does file exist? ================================================================= MENU                                                            ================================================================= Keymaps  Option strings  This has to match yin_threshold_table  clamp the sample size between min and max  sample size must be divisible by 4 - round up  Displays the menu. Returns true iff the user selects 'quit'.  Range depends on the size of the buffer  Return to the tuner ================================================================= Binary Log                                                      ================================================================= Fixed-point log base 2 Adapted from python code at
+   http://en.wikipedia.org/wiki/Binary_logarithm#Algorithm
+ Integer part while x<1  while x>=2  Fractional part  while fp > 0  if x >= 2 ================================================================= GUI Stuff                                                       ================================================================= Draw the note bitmap  Draw the red bar and the white lines  Color screens  Greyscale screens  Draw graduation lines on the off-by readout  Color screens  Greyscale screens  Calculate how wrong the note is and draw the GUI  We calculate the frequency and its log as if  the reference frequency of A were 440 Hz.     This calculates a log freq offset for note A  Get the frequency to within the range of our reference table,  i.e. into the right octave.                                    The red bar  Raise the displayed pitch an octave minus key_transposition  semitones, effectively lowering it.  Note that the pitch     displayed alongside the frequency is unaffected.            -----------------------------------------------------------------------
+ * Functions for the Yin algorithm
+ *
+ * These were all adapted from the versions in Aubio v0.3.2
+ * Here's what the Aubio documentation has to say:
+ *
+ * This algorithm was developped by A. de Cheveigne and H. Kawahara and
+ * published in:
+ *
+ * de Cheveign?, A., Kawahara, H. (2002) "YIN, a fundamental frequency
+ * estimator for speech and music", J. Acoust. Soc. Am. 111, 1917-1930.
+ *
+ * see http://recherche.ircam.fr/equipes/pcm/pub/people/cheveign.html
+------------------------------------------------------------------------- Find the index of the minimum element of an array of floats  Original floating point version:  tmp = s0 + (pf/2.0f) * (pf * ( s0 - 2.0f*s1 + s2 ) -
+             3.0f*s0 + 4.0f*s1 - s2); Converted to explicit operator precedence:  tmp = s0 + ((pf/2.0f) * ((((pf * ((s0 - (2*s1)) + s2)) -
+            (3*s0)) + (4*s1)) - s2));  I made it look like this so I could easily track the precedence and  make sure it matched the original expression                         Oy, this is when I really wish I could do C++ operator overloading   init resold to something big (in case x[pos+-span]<0))  increase frac  exactpos += (frac-QUADINT_STEP)*span - span/2.0f;  Calculate the period of the note in the
+     buffer using the YIN algorithm  The yin pointer is just a buffer that the algorithm uses as a work
+     space.  It needs to be half the length of the input buffer. return FP_ZERO;----------------------------------------------------------------- Operate on only one channel of the stereo signal  now tally holds the average of the squares of all the samples  It must be between 0 and 0x7fff^2, so it fits in 32 bits       Stop the recording when the buffer is full  Do not overrun the reader. Reuse current buffer if full.  Always record full buffer, even if not required  SIMULATOR  Start recording  Always record full buffer, even if not required  The main program loop  For tracking the latency 
+    long timer;
+    char debug_string[20];
+     wait for the buffer to be filled  Only do the heavy lifting if the volume is high enough  This returns the period of the detected pitch in samples  Hz = sample rate / period  Move to next buffer if not empty (but empty *shouldn't* happen
+             * here).  SIMULATOR  Display a preselected frequency  Init recording, tuning, and GUI  Disable all talking before initializing IRAM  Stop all playback  --------- Init the audio recording -----------------  set to maximum gain  Highest C on piano is approx 4.186 kHz, so we need just over
+     * 8.372 kHz to pass it.  avoid divsion by zero  GUI  Put the note right between the top and bottom text elements *************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008    Lechner Michael / smoking gnu
+ *
+ * All files in this archive are subject to the GNU General Public License.
+ * See the file COPYING in the source tree root for full license agreement.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * ----------------------------------------------------------------------------
+ *
+ * INTRODUCTION:
+ * OK, this is an attempt to write an instrument tuner for rockbox.
+ * It uses a Schmitt trigger algorithm, which I copied from
+ * tuneit [ (c) 2004 Mario Lang <mlang@delysid.org> ], for detecting the
+ * fundamental freqency of a sound. A FFT algorithm would be more accurate
+ * but also much slower.
+ *
+ * TODO:
+ * - Adapt the Yin FFT algorithm, which would reduce complexity from O(n^2)
+ *   to O(nlogn), theoretically reducing latency by a factor of ~10. -David
+ *
+ * MAJOR CHANGES:
+ * 08.03.2008        Started coding
+ * 21.03.2008        Pitch detection works more or less
+ *                   Button definitions for most targets added
+ * 02.04.2008        Proper GUI added
+ *                   Todo, Major Changes and Current Limitations added
+ * 08.19.2009        Brought the code up to date with current plugin standards
+ *                   Made it work more nicely with color, BW and grayscale
+ *                   Changed pitch detection to use the Yin algorithm (better
+ *                      detection, but slower -- would be ~4x faster with
+ *                      fixed point math, I think).  Code was poached from the
+ *                      Aubio sound processing library (aubio.org). -David
+ * 08.31.2009        Lots of changes:
+ *                   Added a menu to tweak settings
+ *                   Converted everything to fixed point (greatly improving
+ *                       latency)
+ *                   Improved the display
+ *                   Improved efficiency with judicious use of cpu_boost, the
+ *                       backlight, and volume detection to limit unneeded
+ *                       calculation
+ *                   Fixed a problem that caused an octave-off error
+ *                   -David
+ * 05.14.2010        Multibuffer continuous recording with two buffers
+ *
+ *
+ * CURRENT LIMITATIONS:
+ * - No gapless recording.  Strictly speaking true gappless isn't possible,
+ *   since the algorithm takes longer to calculate than the length of the
+ *   sample, but latency could be improved a bit with proper use of the DMA
+ *   recording functions.
+ * - Due to how the Yin algorithm works, latency is higher for lower
+ *   frequencies.
+  Some fixed point calculation stuff  I adapted these ones from the Rockbox fixed point library  Operators for fixed point  Some defines for converting between period and frequency   I introduce some divisors in this because the fixed point  variables aren't big enough to hold higher than a certain  value.  This loses a bit of precision but it means we      don't have to use 32.32 variables (yikes).                 With an 18-bit decimal precision, the max value in the     integer part is 8192.  Divide 44100 by 7 and it'll fit in  that variable.                                             Some constants for tuning  The recording buffer size  This is how much is sampled at a time.  It also determines latency -- if BUFFER_SIZE == sample_rate then    there'll be one sample per second, or a latency of one second.  Furthermore, the lowest detectable frequency will be about twice    the number of reads per second                                  If we ever switch to Yin FFT algorithm then this needs to be
+   a power of 2  The threshold for the YIN algorithm  0.10  Structure for the reference frequency (frequency of A)
+ * It's used for scaling the frequency before finding out
+ * the note. The frequency is scaled in a way that the main
+ * algorithm can assume the frequency of A to be 440 Hz.
+  Frequency in Hz  440/frequency    log2(factor)     Index of the entry for 440 Hz in the table (default frequency for A)  How loud the audio has to be to start displaying pitch   Must be between 0 and 100                                Change to AUDIO_SRC_LINEIN if you want to record from line-in  How many decimal places to display for the Hz value  Where to put the various GUI elements  Subdivisions of the whole 100-cent scale  Bitmaps for drawing the note names.  These need to have height
+   <= (bar_grad_y - note_y), or 15/32 * LCD_HEIGHT
+  which of the two buffers to use?  which of the two buffers to record?  It's stereo, so make the buffer twice as big  Notes within one (reference) scale  Name of the note, e.g. "A#"  Note frequency, Hz           log2(frequency)              GUI  Settings for the plugin  Index of the frequency of A  Which note to display as 'C'.  0=C, 1=D-flat, 2=D, ..., 11=B. This is useful if you   use a transposing instrument. In that case, this       setting tells which 'real' note is played by the       instrument if you play a written 'C'. Thus, this       setting is the number of semitones from the real 'C'   up to the 'instrument key'.                            By default, the real 'C' is displayed as 'C' ================================================================= Settings loading and saving(adapted from the clock plugin)      ================================================================= The settings as they exist on the hard disk, so that
+ * we can know at saving time if changes have been made --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- file doesn't exist  Initializes the settings with default values at least  basic consistency check --------------------------------------------------------------------- does file exist? ================================================================= MENU                                                            ================================================================= Keymaps  Option strings  This has to match yin_threshold_table  clamp the sample size between min and max  sample size must be divisible by 4 - round up  Displays the menu. Returns true iff the user selects 'quit'.  Range depends on the size of the buffer  Return to the tuner ================================================================= Binary Log                                                      ================================================================= Fixed-point log base 2 Adapted from python code at
+   http://en.wikipedia.org/wiki/Binary_logarithm#Algorithm
+ Integer part while x<1  while x>=2  Fractional part  while fp > 0  if x >= 2 ================================================================= GUI Stuff                                                       ================================================================= Draw the note bitmap  Draw the red bar and the white lines  Color screens  Greyscale screens  Draw graduation lines on the off-by readout  Color screens  Greyscale screens  Calculate how wrong the note is and draw the GUI  We calculate the frequency and its log as if  the reference frequency of A were 440 Hz.     This calculates a log freq offset for note A  Get the frequency to within the range of our reference table,  i.e. into the right octave.                                    The red bar  Raise the displayed pitch an octave minus key_transposition  semitones, effectively lowering it.  Note that the pitch     displayed alongside the frequency is unaffected.            -----------------------------------------------------------------------
+ * Functions for the Yin algorithm
+ *
+ * These were all adapted from the versions in Aubio v0.3.2
+ * Here's what the Aubio documentation has to say:
+ *
+ * This algorithm was developped by A. de Cheveigne and H. Kawahara and
+ * published in:
+ *
+ * de Cheveign?, A., Kawahara, H. (2002) "YIN, a fundamental frequency
+ * estimator for speech and music", J. Acoust. Soc. Am. 111, 1917-1930.
+ *
+ * see http://recherche.ircam.fr/equipes/pcm/pub/people/cheveign.html
+------------------------------------------------------------------------- Find the index of the minimum element of an array of floats  Original floating point version:  tmp = s0 + (pf/2.0f) * (pf * ( s0 - 2.0f*s1 + s2 ) -
+             3.0f*s0 + 4.0f*s1 - s2); Converted to explicit operator precedence:  tmp = s0 + ((pf/2.0f) * ((((pf * ((s0 - (2*s1)) + s2)) -
+            (3*s0)) + (4*s1)) - s2));  I made it look like this so I could easily track the precedence and  make sure it matched the original expression                         Oy, this is when I really wish I could do C++ operator overloading   init resold to something big (in case x[pos+-span]<0))  increase frac  exactpos += (frac-QUADINT_STEP)*span - span/2.0f;  Calculate the period of the note in the
+     buffer using the YIN algorithm  The yin pointer is just a buffer that the algorithm uses as a work
+     space.  It needs to be half the length of the input buffer. return FP_ZERO;----------------------------------------------------------------- Operate on only one channel of the stereo signal  now tally holds the average of the squares of all the samples  It must be between 0 and 0x7fff^2, so it fits in 32 bits       Stop the recording when the buffer is full  Do not overrun the reader. Reuse current buffer if full.  Always record full buffer, even if not required  SIMULATOR  Start recording  Always record full buffer, even if not required  The main program loop  For tracking the latency 
+    long timer;
+    char debug_string[20];
+     wait for the buffer to be filled  Only do the heavy lifting if the volume is high enough  This returns the period of the detected pitch in samples  Hz = sample rate / period  Move to next buffer if not empty (but empty *shouldn't* happen
+             * here).  SIMULATOR  Display a preselected frequency  Init recording, tuning, and GUI  Disable all talking before initializing IRAM  Stop all playback  --------- Init the audio recording -----------------  set to maximum gain  Highest C on piano is approx 4.186 kHz, so we need just over
+     * 8.372 kHz to pass it.  avoid divsion by zero  GUI  Put the note right between the top and bottom text elements 

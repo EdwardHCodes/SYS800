@@ -1,0 +1,187 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2019 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** lua events from rockbox *****************************************************
+ * This library allows events to be subscribed / recieved within a lua script
+ * most events in rb are synchronous so flags are set and later checked by a
+ * secondary thread to make them (semi?) asynchronous.
+ *
+ * There are a few caveats to be aware of:
+ * FIRST, The main lua state is halted till the lua callback(s) are finished
+ *     Yielding will not return control to your script from within a callback
+ *     Also, subsequent callbacks may be delayed by the code in your lua callback
+ * SECOND, You must store the value returned from the event_register function
+ *         you might get away with it for a bit but gc will destroy your callback
+ *         eventually if you do not store the event
+ * THIRD, You only get one cb per event type
+ *     ["action", "button", "custom", "playback", "timer"]
+ * (Re-registration of an event overwrites the previous one)
+ *
+ * Usage:
+ * possible events =["action", "button", "custom", "playback", "timer"]
+ *
+ * local ev = rockev.register("event", cb_function, [timeout / flags])
+ *    cb_function([id] [, data]) ... end
+ *
+ *
+ * rockev.trigger("event", [true/false], [id])
+ * sets an event to triggered,
+ * NOTE!, CUSTOM_EVENT must be unset manually
+ * id is only passed to callback by custom and playback events
+ *
+ * rockev.suspend(["event"/nil][true/false]) passing nil suspends all events.
+ * stops event from executing, any event before re-enabling will be lost.
+ * Passing false, unregistering or re-registering an event will clear the suspend
+ *
+ * rockev.unregister(evX)
+ * Use unregister(evX) to remove an event
+ * Unregistering is not necessary before script end, it will be
+ * cleaned up on script exit
+ *
+ *******************************************************************************
+ * *
+  We don't need strcmp() etc. wrappers  timer resolution  event & suspend states THREAD_AVAILEVENT  = 0x20,THREAD_AVAILEVENT  = 0x40,THREAD_AVAILEVENT  = 0x80, thread states THREAD_AVAILSTATE  = 0x1,THREAD_AVAILSTATE  = 0x2,THREAD_AVAILSTATE  = 0x4,THREAD_AVAILSTATE  = 0x8,THREAD_AVAILSTATE  = 0x10,THREAD_AVAILSTATE  = 0x20,THREAD_AVAILSTATE  = 0x80, lua  rockbox  callbacks  returns previous flag status and clears it  mutex lock and unlock routines allow us to execute the event thread without
+ * trashing the lua state on error, yield, or sleep in the callback functions  must wait till event thread is done to continue  if callback error, pass error to the main lua state  our hook is already active  preserve prior hook  load cb function from lua registry  call the saved function  coroutine.yield() disallowed  push error string on stack  timer interrupt callback  check next event  check next event  only send ACTION_NONE once  check next event  check next event  we are safe to release back to main lua state  thread is exiting -- clean up  attach EVENT_METATABLE to ud so we get notified on garbage collection  store references  free references  wait for thread to exit  make sure we don't double free  Timer is used to poll waiting events  playback events are synchronous we need to return ASAP so set a flag flags 0x1  0x2  0x4  0x8  0x10 0x20 0x40 if function is already registered , unregister it  copy passed lua function on top of stack  store ref for later call/release  attach EVENT_METATABLE to ud so we get notified on garbage collection  cb_data is on top of stack  nothing to wait for kill thread  set __gc field so we can clean-up our objects  lua ev_data->NEWL = NULL; rockbox ev_data->event_stack = NULL; callbacks *****************************************************************************
+ * LUA INTERFACE **************************************************************
+*******************************************************************************
+ register (event, cb [, args]  we need to lock our optional args before... cb_data is on top of stack  fall through  don't remove suspend  see register_playbk_events() for flags  playback events are not triggered by timeout  returns cb_data Arg 1 is event pass nil to suspend all  don't resume invalid events  don't trigger invalid events  allow user to pass an id to some of the callback functions **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2019 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** lua events from rockbox *****************************************************
+ * This library allows events to be subscribed / recieved within a lua script
+ * most events in rb are synchronous so flags are set and later checked by a
+ * secondary thread to make them (semi?) asynchronous.
+ *
+ * There are a few caveats to be aware of:
+ * FIRST, The main lua state is halted till the lua callback(s) are finished
+ *     Yielding will not return control to your script from within a callback
+ *     Also, subsequent callbacks may be delayed by the code in your lua callback
+ * SECOND, You must store the value returned from the event_register function
+ *         you might get away with it for a bit but gc will destroy your callback
+ *         eventually if you do not store the event
+ * THIRD, You only get one cb per event type
+ *     ["action", "button", "custom", "playback", "timer"]
+ * (Re-registration of an event overwrites the previous one)
+ *
+ * Usage:
+ * possible events =["action", "button", "custom", "playback", "timer"]
+ *
+ * local ev = rockev.register("event", cb_function, [timeout / flags])
+ *    cb_function([id] [, data]) ... end
+ *
+ *
+ * rockev.trigger("event", [true/false], [id])
+ * sets an event to triggered,
+ * NOTE!, CUSTOM_EVENT must be unset manually
+ * id is only passed to callback by custom and playback events
+ *
+ * rockev.suspend(["event"/nil][true/false]) passing nil suspends all events.
+ * stops event from executing, any event before re-enabling will be lost.
+ * Passing false, unregistering or re-registering an event will clear the suspend
+ *
+ * rockev.unregister(evX)
+ * Use unregister(evX) to remove an event
+ * Unregistering is not necessary before script end, it will be
+ * cleaned up on script exit
+ *
+ *******************************************************************************
+ * *
+  We don't need strcmp() etc. wrappers  timer resolution  event & suspend states THREAD_AVAILEVENT  = 0x20,THREAD_AVAILEVENT  = 0x40,THREAD_AVAILEVENT  = 0x80, thread states THREAD_AVAILSTATE  = 0x1,THREAD_AVAILSTATE  = 0x2,THREAD_AVAILSTATE  = 0x4,THREAD_AVAILSTATE  = 0x8,THREAD_AVAILSTATE  = 0x10,THREAD_AVAILSTATE  = 0x20,THREAD_AVAILSTATE  = 0x80, lua  rockbox  callbacks  returns previous flag status and clears it  mutex lock and unlock routines allow us to execute the event thread without
+ * trashing the lua state on error, yield, or sleep in the callback functions  must wait till event thread is done to continue  if callback error, pass error to the main lua state  our hook is already active  preserve prior hook  load cb function from lua registry  call the saved function  coroutine.yield() disallowed  push error string on stack  timer interrupt callback  check next event  check next event  only send ACTION_NONE once  check next event  check next event  we are safe to release back to main lua state  thread is exiting -- clean up  attach EVENT_METATABLE to ud so we get notified on garbage collection  store references  free references  wait for thread to exit  make sure we don't double free  Timer is used to poll waiting events  playback events are synchronous we need to return ASAP so set a flag flags 0x1  0x2  0x4  0x8  0x10 0x20 0x40 if function is already registered , unregister it  copy passed lua function on top of stack  store ref for later call/release  attach EVENT_METATABLE to ud so we get notified on garbage collection  cb_data is on top of stack  nothing to wait for kill thread  set __gc field so we can clean-up our objects  lua ev_data->NEWL = NULL; rockbox ev_data->event_stack = NULL; callbacks *****************************************************************************
+ * LUA INTERFACE **************************************************************
+*******************************************************************************
+ register (event, cb [, args]  we need to lock our optional args before... cb_data is on top of stack  fall through  don't remove suspend  see register_playbk_events() for flags  playback events are not triggered by timeout  returns cb_data Arg 1 is event pass nil to suspend all  don't resume invalid events  don't trigger invalid events  allow user to pass an id to some of the callback functions **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2019 William Wilgus
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** lua events from rockbox *****************************************************
+ * This library allows events to be subscribed / recieved within a lua script
+ * most events in rb are synchronous so flags are set and later checked by a
+ * secondary thread to make them (semi?) asynchronous.
+ *
+ * There are a few caveats to be aware of:
+ * FIRST, The main lua state is halted till the lua callback(s) are finished
+ *     Yielding will not return control to your script from within a callback
+ *     Also, subsequent callbacks may be delayed by the code in your lua callback
+ * SECOND, You must store the value returned from the event_register function
+ *         you might get away with it for a bit but gc will destroy your callback
+ *         eventually if you do not store the event
+ * THIRD, You only get one cb per event type
+ *     ["action", "button", "custom", "playback", "timer"]
+ * (Re-registration of an event overwrites the previous one)
+ *
+ * Usage:
+ * possible events =["action", "button", "custom", "playback", "timer"]
+ *
+ * local ev = rockev.register("event", cb_function, [timeout / flags])
+ *    cb_function([id] [, data]) ... end
+ *
+ *
+ * rockev.trigger("event", [true/false], [id])
+ * sets an event to triggered,
+ * NOTE!, CUSTOM_EVENT must be unset manually
+ * id is only passed to callback by custom and playback events
+ *
+ * rockev.suspend(["event"/nil][true/false]) passing nil suspends all events.
+ * stops event from executing, any event before re-enabling will be lost.
+ * Passing false, unregistering or re-registering an event will clear the suspend
+ *
+ * rockev.unregister(evX)
+ * Use unregister(evX) to remove an event
+ * Unregistering is not necessary before script end, it will be
+ * cleaned up on script exit
+ *
+ *******************************************************************************
+ * *
+  We don't need strcmp() etc. wrappers  timer resolution  event & suspend states THREAD_AVAILEVENT  = 0x20,THREAD_AVAILEVENT  = 0x40,THREAD_AVAILEVENT  = 0x80, thread states THREAD_AVAILSTATE  = 0x1,THREAD_AVAILSTATE  = 0x2,THREAD_AVAILSTATE  = 0x4,THREAD_AVAILSTATE  = 0x8,THREAD_AVAILSTATE  = 0x10,THREAD_AVAILSTATE  = 0x20,THREAD_AVAILSTATE  = 0x80, lua  rockbox  callbacks  returns previous flag status and clears it  mutex lock and unlock routines allow us to execute the event thread without
+ * trashing the lua state on error, yield, or sleep in the callback functions  must wait till event thread is done to continue  if callback error, pass error to the main lua state  our hook is already active  preserve prior hook  load cb function from lua registry  call the saved function  coroutine.yield() disallowed  push error string on stack  timer interrupt callback  check next event  check next event  only send ACTION_NONE once  check next event  check next event  we are safe to release back to main lua state  thread is exiting -- clean up  attach EVENT_METATABLE to ud so we get notified on garbage collection  store references  free references  wait for thread to exit  make sure we don't double free  Timer is used to poll waiting events  playback events are synchronous we need to return ASAP so set a flag flags 0x1  0x2  0x4  0x8  0x10 0x20 0x40 if function is already registered , unregister it  copy passed lua function on top of stack  store ref for later call/release  attach EVENT_METATABLE to ud so we get notified on garbage collection  cb_data is on top of stack  nothing to wait for kill thread  set __gc field so we can clean-up our objects  lua ev_data->NEWL = NULL; rockbox ev_data->event_stack = NULL; callbacks *****************************************************************************
+ * LUA INTERFACE **************************************************************
+*******************************************************************************
+ register (event, cb [, args]  we need to lock our optional args before... cb_data is on top of stack  fall through  don't remove suspend  see register_playbk_events() for flags  playback events are not triggered by timeout  returns cb_data Arg 1 is event pass nil to suspend all  don't resume invalid events  don't trigger invalid events  allow user to pass an id to some of the callback functions 

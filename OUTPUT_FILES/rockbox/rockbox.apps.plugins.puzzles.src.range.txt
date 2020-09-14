@@ -1,0 +1,892 @@
+
+ * range.c: implementation of the Nikoli game 'Kurodoko' / 'Kuromasu'.
+ 
+ * Puzzle rules: the player is given a WxH grid of white squares, some
+ * of which contain numbers. The goal is to paint some of the squares
+ * black, such that:
+ *
+ *  - no cell (err, cell = square) with a number is painted black
+ *  - no black cells have an adjacent (horz/vert) black cell
+ *  - the white cells are all connected (through other white cells)
+ *  - if a cell contains a number n, let h and v be the lengths of the
+ *    maximal horizontal and vertical white sequences containing that
+ *    cell.  Then n must equal h + v - 1.
+  example instance with its encoding and textual representation, both
+ * solved and unsolved (made by thegame.solve and thegame.text_format)
+ *
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * | 3|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  |  | 5|  |
+ * +--+--+--+--+--+--+--+
+ * |  |  | 7|  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * |  |13|  |  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ * | 4|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  | 4|  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ *
+ * 7x7:d7b3e8e5c7a7c13e4d8b4d
+ *
+ * +--+--+--+--+--+--+--+
+ * |..|..|..|..| 7|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 3|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..|..|##|..| 5|..|
+ * +--+--+--+--+--+--+--+
+ * |..|..| 7|..| 7|##|..|
+ * +--+--+--+--+--+--+--+
+ * |..|13|..|..|..|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 4|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..| 4|..|..|##|..|
+ * +--+--+--+--+--+--+--+
+  ----------------------------------------------------------------------
+ * Game parameters, presets, states
+  rationale: I want all four combinations of {odd/even, odd/even}, as
+ * they play out differently with respect to two-way symmetry.  I also
+ * want them to be generated relatively fast yet still be large enough
+ * to be entertaining for a decent amount of time, and I want them to
+ * make good use of monitor real estate (the typical screen resolution
+ * is why I do 13x9 and not 9x13).
+  structure copy  structure copy  struct copy  FIXME check for puzzle_size overflow and decoding issues  structure copy  copy the poin_tee_, set a new value of the poin_ter_  ----------------------------------------------------------------------
+ * The solver subsystem.
+ *
+ * The solver is used for two purposes:
+ *  - To solve puzzles when the user selects `Solve'.
+ *  - To test solubility of a grid as clues are being removed from it
+ *    during the puzzle generation.
+ *
+ * It supports the following ways of reasoning:
+ *
+ *  - A cell adjacent to a black cell must be white.
+ *
+ *  - If painting a square black would bisect the white regions, that
+ *    square is white (by finding biconnected components' cut points)
+ *
+ *  - A cell with number n, covering at most k white squares in three
+ *    directions must white-cover n-k squares in the last direction.
+ *
+ *  - A cell with number n known to cover k squares, if extending the
+ *    cover by one square in a given direction causes the cell to
+ *    cover _more_ than n squares, that extension cell must be black.
+ *
+ *    (either if the square already covers n, or if it extends into a
+ *    chunk of size > n - k)
+ *
+ *  - Recursion.  Pick any cell and see if this leads to either a
+ *    contradiction or a solution (and then act appropriately).
+ *
+ *
+ * TODO:
+ *
+ * (propagation upper limit)
+ *  - If one has two numbers on the same line, the smaller limits the
+ *    larger.  Example: in |b|_|_|8|4|_|_|b|, only two _'s can be both
+ *    white and connected to the "8" cell; so that cell will propagate
+ *    at least four cells orthogonally to the displayed line (which is
+ *    better than the current "at least 2").
+ *
+ * (propagation upper limit)
+ *  - cells can't propagate into other cells if doing so exceeds that
+ *    number.  Example: in |b|4|.|.|2|b|, at most one _ can be white;
+ *    otherwise, the |2| would have too many reaching white cells.
+ *
+ * (propagation lower and upper limit)
+ *  - `Full Combo': in each four directions d_1 ... d_4, find a set of
+ *    possible propagation distances S_1 ... S_4.  For each i=1..4,
+ *    for each x in S_i: if not exists (y, z, w) in the other sets
+ *    such that (x+y+z+w+1 == clue value): then remove x from S_i.
+ *    Repeat until this stabilizes.  If any cell would contradict
+  white is for pencil marks, empty is undecided  must match dr and dc  new_game_desc entry point in the solver subsystem  only recurse if all else fails  `dfs root`.parent == `dfs root`  returns the `lowpoint` of (r, c)  FIXME: add enum alias for smallest and largest (or N)  ----------------------------------------------------------------------
+ * Puzzle generation
+ *
+ * Generating kurodoko instances is rather straightforward:
+ *
+ *  - Start with a white grid and add black squares at randomly chosen
+ *    locations, unless colouring that square black would violate
+ *    either the adjacency or connectedness constraints.
+ *
+ *  - For each white square, compute the number it would contain if it
+ *    were given as a clue.
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    for each white square (in a random order), see if the board is
+ *    solvable when that square is not given as a clue.  If not, don't
+ *    give it as a clue, otherwise do.
+ *
+ * This never fails, but it's only _almost_ what I do.  The real final
+ * step is this:
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    first remove all clues that are two-way rotationally symmetric
+ *    to a black square.  If this leaves the puzzle unsolvable, throw
+ *    it out and try again.  Otherwise, remove all _pairs_ of clues
+ *    (that are rotationally symmetric) which can be removed without
+ *    rendering the puzzle unsolvable.
+ *
+ * This can fail even if one only removes the black and symmetric
+ * clues; indeed it happens often (avg. once or twice per puzzle) when
+ * generating 1xN instances.  (If you add black cells they must be in
+ * the end, and if you only add one, it's ambiguous where).
+  forward declarations of internal calls  I don't need it, I shouldn't use it I like the puzzles that result from n / 3, but maybe this
+     * could be made a (generation, i.e. non-full) parameter?  if you're out of bounds, we skip you  I can't be black  I have black neighbour: I'm white 
+     * do a partition/pivot of shuffle_1toN into three groups:
+     * (1) squares rotationally-symmetric to (3)
+     * (2) squares not in (1) or (3)
+     * (3) black squares
+     *
+     * They go from [0, left), [left, right) and [right, n) in
+     * shuffle_1toN (and from there into state->grid[ ])
+     *
+     * Then, remove clues from the grid one by one in shuffle_1toN
+     * order, until the solver becomes unhappy.  If we didn't remove
+     * all of (1), return (-1).  Else, we're happy.
+      do the partition  branch prediction: I don't think I'll go here  if i is the center square, then i == (j = rotate(i))
+         * when i and j are one, removing i and j removes only one  if the solver is sound, refilling all removed clues means
+         * we have filled all squares, i.e. solved the puzzle.  I might be unable to store clues in my puzzle_size *grid;  Definition: a puzzle instance is _good_ if:
+ *  - it has a unique solution
+ *  - the solver can find this solution without using recursion
+ *  - the solution contains at least one black square
+ *  - the clues are 2-way rotationally symmetric
+ *
+ * (the idea being: the generator can not output any _bad_ puzzles)
+ *
+ * Theorem: validate_params, when full != 0, discards exactly the set
+ * of parameters for which there are _no_ good puzzle instances.
+ *
+ * Proof: it's an immediate consequence of the five lemmas below.
+ *
+ * Observation: not only do puzzles on non-tiny grids exist, the
+ * generator is pretty fast about coming up with them.  On my pre-2004
+ * desktop box, it generates 100 puzzles on the highest preset (16x11)
+ * in 8.383 seconds, or <= 0.1 second per puzzle.
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 1x1 grid, there are no good puzzles.
+ *
+ * Proof: the one square can't be a clue because at least one square
+ * is black.  But both a white square and a black square satisfy the
+ * solution criteria, so the puzzle is ambiguous (and hence bad).
+ *
+ * Lemma: On a 1x2 grid, there are no good puzzles.
+ *
+ * Proof: let's name the squares l and r.  Note that there can be at
+ * most one black square, or adjacency is violated.  By assumption at
+ * least one square is black, so let's call that one l.  By clue
+ * symmetry, neither l nor r can be given as a clue, so the puzzle
+ * instance is blank and thus ambiguous.
+ *
+ * Corollary: On a 2x1 grid, there are no good puzzles.
+ * Proof: rotate the above proof 90 degrees ;-)
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 2x2 grid, there are no soluble puzzles with 2-way
+ * rotational symmetric clues and at least one black square.
+ *
+ * Proof: Let's name the squares a, b, c, and d, with a and b on the
+ * top row, a and c in the left column.  Let's consider the case where
+ * a is black.  Then no other square can be black: b and c would both
+ * violate the adjacency constraint; d would disconnect b from c.
+ *
+ * So exactly one square is black (and by 4-way rotation symmetry of
+ * the 2x2 square, it doesn't matter which one, so let's stick to a).
+ * By 2-way rotational symmetry of the clues and the rule about not
+ * painting numbers black, neither a nor d can be clues.  A blank
+ * puzzle would be ambiguous, so one of {b, c} is a clue; by symmetry,
+ * so is the other one.
+ *
+ * It is readily seen that their clue value is 2.  But "a is black"
+ * and "d is black" are both valid solutions in this case, so the
+ * puzzle is ambiguous (and hence bad).
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a wxh grid with w, h >= 1 and (w > 2 or h > 2), there is
+ * at least one good puzzle.
+ *
+ * Proof: assume that w > h (otherwise rotate the proof again).  Paint
+ * the top left and bottom right corners black, and fill a clue into
+ * all the other squares.  Present this board to the solver code (or
+ * player, hypothetically), except with the two black squares as blank
+ * squares.
+ *
+ * For an Nx1 puzzle, observe that every clue is N - 2, and there are
+ * N - 2 of them in one connected sequence, so the remaining two
+ * squares can be deduced to be black, which solves the puzzle.
+ *
+ * For any other puzzle, let j be a cell in the same row as a black
+ * cell, but not in the same column (such a cell doesn't exist in 2x3
+ * puzzles, but we assume w > h and such cells exist in 3x2 puzzles).
+ *
+ * Note that the number of cells in axis parallel `rays' going out
+ * from j exceeds j's clue value by one.  Only one such cell is a
+ * non-clue, so it must be black.  Similarly for the other corner (let
+ * j' be a cell in the same row as the _other_ black cell, but not in
+ * the same column as _any_ black cell; repeat this argument at j').
+ *
+ * This fills the grid and satisfies all clues and the adjacency
+ * constraint and doesn't paint on top of any clues.  All that is left
+ * to see is connectedness.
+ *
+ * Observe that the white cells in each column form a single connected
+ * `run', and each column contains a white cell adjacent to a white
+ * cell in the column to the right, if that column exists.
+ *
+ * Thus, any cell in the left-most column can reach any other cell:
+ * first go to the target column (by repeatedly going to the cell in
+ * your current column that lets you go right, then going right), then
+ * go up or down to the desired cell.
+ *
+ * As reachability is symmetric (in undirected graphs) and transitive,
+ * any cell can reach any left-column cell, and from there any other
+ * cell.
+  ----------------------------------------------------------------------
+ * Game encoding and decoding
+ 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		  maximum cell value  do nothing  I don't need it, I shouldn't use it  structure copy  do nothing  ----------------------------------------------------------------------
+ * User interface: ascii
+  or may be used uninitialized  "|%d|%d|...|\n"  "+--+--+...+\n%s\n+--+--+...+\n"  +1: NUL terminator  +1: NUL terminator  ----------------------------------------------------------------------
+ * User interfaces: interactive
+  cursor position  or (x, y) < TILESIZE)  are considered inside 
+	 * Utterly awful hack, exactly analogous to the one in Slant,
+	 * to configure the left and right mouse buttons the opposite
+	 * way round.
+	 *
+	 * The original puzzle submitter thought it would be more
+	 * useful to have the left button turn an empty square into a
+	 * dotted one, on the grounds that that was what you did most
+	 * often; I (SGT) felt instinctively that the left button
+	 * ought to place black squares and the right button place
+	 * dots, on the grounds that that was consistent with many
+	 * other puzzles in which the left button fills in the data
+	 * used by the solution checker while the right button places
+	 * pencil marks for the user's convenience.
+	 *
+	 * My first beta-player wasn't sure either, so I thought I'd
+	 * pre-emptively put in a 'configuration' mechanism just in
+	 * case.
+	  (do_pre ? "..." : "") concat (do_post ? "..." : "")  We used to set a flag here in the game_ui indicating
+             * that the player had used the hint function. I (SGT)
+             * retired it, on grounds of consistency with other games
+             * (most of these games will still flash to indicate
+             * completion if you solved and undid it, so why not if
+             * you got a hint?) and because the flash is as much about
+             * checking you got it all right than about congratulating
+             * you on a job well done.  note: fallthrough _into_ these cases 
+     * Check that all the white cells form a single connected component.
+     
+         * Report this error by choosing one component to be the
+         * canonical one (we pick the largest, arbitrarily
+         * tie-breaking towards lower array indices) and highlighting
+         * as an error any square in a different component.
+          if report != NULL, this is ignored  ----------------------------------------------------------------------
+ * Drawing routines.
+  mkhighlight needs it, I don't  only happens if animating moves  the (non-existing) timer should not be running  ----------------------------------------------------------------------
+ * User interface: print
+  And that's about it ;-) ************************************************* game_request_keys  wants_statusbar  flags 
+ * range.c: implementation of the Nikoli game 'Kurodoko' / 'Kuromasu'.
+ 
+ * Puzzle rules: the player is given a WxH grid of white squares, some
+ * of which contain numbers. The goal is to paint some of the squares
+ * black, such that:
+ *
+ *  - no cell (err, cell = square) with a number is painted black
+ *  - no black cells have an adjacent (horz/vert) black cell
+ *  - the white cells are all connected (through other white cells)
+ *  - if a cell contains a number n, let h and v be the lengths of the
+ *    maximal horizontal and vertical white sequences containing that
+ *    cell.  Then n must equal h + v - 1.
+  example instance with its encoding and textual representation, both
+ * solved and unsolved (made by thegame.solve and thegame.text_format)
+ *
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * | 3|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  |  | 5|  |
+ * +--+--+--+--+--+--+--+
+ * |  |  | 7|  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * |  |13|  |  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ * | 4|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  | 4|  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ *
+ * 7x7:d7b3e8e5c7a7c13e4d8b4d
+ *
+ * +--+--+--+--+--+--+--+
+ * |..|..|..|..| 7|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 3|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..|..|##|..| 5|..|
+ * +--+--+--+--+--+--+--+
+ * |..|..| 7|..| 7|##|..|
+ * +--+--+--+--+--+--+--+
+ * |..|13|..|..|..|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 4|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..| 4|..|..|##|..|
+ * +--+--+--+--+--+--+--+
+  ----------------------------------------------------------------------
+ * Game parameters, presets, states
+  rationale: I want all four combinations of {odd/even, odd/even}, as
+ * they play out differently with respect to two-way symmetry.  I also
+ * want them to be generated relatively fast yet still be large enough
+ * to be entertaining for a decent amount of time, and I want them to
+ * make good use of monitor real estate (the typical screen resolution
+ * is why I do 13x9 and not 9x13).
+  structure copy  structure copy  struct copy  FIXME check for puzzle_size overflow and decoding issues  structure copy  copy the poin_tee_, set a new value of the poin_ter_  ----------------------------------------------------------------------
+ * The solver subsystem.
+ *
+ * The solver is used for two purposes:
+ *  - To solve puzzles when the user selects `Solve'.
+ *  - To test solubility of a grid as clues are being removed from it
+ *    during the puzzle generation.
+ *
+ * It supports the following ways of reasoning:
+ *
+ *  - A cell adjacent to a black cell must be white.
+ *
+ *  - If painting a square black would bisect the white regions, that
+ *    square is white (by finding biconnected components' cut points)
+ *
+ *  - A cell with number n, covering at most k white squares in three
+ *    directions must white-cover n-k squares in the last direction.
+ *
+ *  - A cell with number n known to cover k squares, if extending the
+ *    cover by one square in a given direction causes the cell to
+ *    cover _more_ than n squares, that extension cell must be black.
+ *
+ *    (either if the square already covers n, or if it extends into a
+ *    chunk of size > n - k)
+ *
+ *  - Recursion.  Pick any cell and see if this leads to either a
+ *    contradiction or a solution (and then act appropriately).
+ *
+ *
+ * TODO:
+ *
+ * (propagation upper limit)
+ *  - If one has two numbers on the same line, the smaller limits the
+ *    larger.  Example: in |b|_|_|8|4|_|_|b|, only two _'s can be both
+ *    white and connected to the "8" cell; so that cell will propagate
+ *    at least four cells orthogonally to the displayed line (which is
+ *    better than the current "at least 2").
+ *
+ * (propagation upper limit)
+ *  - cells can't propagate into other cells if doing so exceeds that
+ *    number.  Example: in |b|4|.|.|2|b|, at most one _ can be white;
+ *    otherwise, the |2| would have too many reaching white cells.
+ *
+ * (propagation lower and upper limit)
+ *  - `Full Combo': in each four directions d_1 ... d_4, find a set of
+ *    possible propagation distances S_1 ... S_4.  For each i=1..4,
+ *    for each x in S_i: if not exists (y, z, w) in the other sets
+ *    such that (x+y+z+w+1 == clue value): then remove x from S_i.
+ *    Repeat until this stabilizes.  If any cell would contradict
+  white is for pencil marks, empty is undecided  must match dr and dc  new_game_desc entry point in the solver subsystem  only recurse if all else fails  `dfs root`.parent == `dfs root`  returns the `lowpoint` of (r, c)  FIXME: add enum alias for smallest and largest (or N)  ----------------------------------------------------------------------
+ * Puzzle generation
+ *
+ * Generating kurodoko instances is rather straightforward:
+ *
+ *  - Start with a white grid and add black squares at randomly chosen
+ *    locations, unless colouring that square black would violate
+ *    either the adjacency or connectedness constraints.
+ *
+ *  - For each white square, compute the number it would contain if it
+ *    were given as a clue.
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    for each white square (in a random order), see if the board is
+ *    solvable when that square is not given as a clue.  If not, don't
+ *    give it as a clue, otherwise do.
+ *
+ * This never fails, but it's only _almost_ what I do.  The real final
+ * step is this:
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    first remove all clues that are two-way rotationally symmetric
+ *    to a black square.  If this leaves the puzzle unsolvable, throw
+ *    it out and try again.  Otherwise, remove all _pairs_ of clues
+ *    (that are rotationally symmetric) which can be removed without
+ *    rendering the puzzle unsolvable.
+ *
+ * This can fail even if one only removes the black and symmetric
+ * clues; indeed it happens often (avg. once or twice per puzzle) when
+ * generating 1xN instances.  (If you add black cells they must be in
+ * the end, and if you only add one, it's ambiguous where).
+  forward declarations of internal calls  I don't need it, I shouldn't use it I like the puzzles that result from n / 3, but maybe this
+     * could be made a (generation, i.e. non-full) parameter?  if you're out of bounds, we skip you  I can't be black  I have black neighbour: I'm white 
+     * do a partition/pivot of shuffle_1toN into three groups:
+     * (1) squares rotationally-symmetric to (3)
+     * (2) squares not in (1) or (3)
+     * (3) black squares
+     *
+     * They go from [0, left), [left, right) and [right, n) in
+     * shuffle_1toN (and from there into state->grid[ ])
+     *
+     * Then, remove clues from the grid one by one in shuffle_1toN
+     * order, until the solver becomes unhappy.  If we didn't remove
+     * all of (1), return (-1).  Else, we're happy.
+      do the partition  branch prediction: I don't think I'll go here  if i is the center square, then i == (j = rotate(i))
+         * when i and j are one, removing i and j removes only one  if the solver is sound, refilling all removed clues means
+         * we have filled all squares, i.e. solved the puzzle.  I might be unable to store clues in my puzzle_size *grid;  Definition: a puzzle instance is _good_ if:
+ *  - it has a unique solution
+ *  - the solver can find this solution without using recursion
+ *  - the solution contains at least one black square
+ *  - the clues are 2-way rotationally symmetric
+ *
+ * (the idea being: the generator can not output any _bad_ puzzles)
+ *
+ * Theorem: validate_params, when full != 0, discards exactly the set
+ * of parameters for which there are _no_ good puzzle instances.
+ *
+ * Proof: it's an immediate consequence of the five lemmas below.
+ *
+ * Observation: not only do puzzles on non-tiny grids exist, the
+ * generator is pretty fast about coming up with them.  On my pre-2004
+ * desktop box, it generates 100 puzzles on the highest preset (16x11)
+ * in 8.383 seconds, or <= 0.1 second per puzzle.
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 1x1 grid, there are no good puzzles.
+ *
+ * Proof: the one square can't be a clue because at least one square
+ * is black.  But both a white square and a black square satisfy the
+ * solution criteria, so the puzzle is ambiguous (and hence bad).
+ *
+ * Lemma: On a 1x2 grid, there are no good puzzles.
+ *
+ * Proof: let's name the squares l and r.  Note that there can be at
+ * most one black square, or adjacency is violated.  By assumption at
+ * least one square is black, so let's call that one l.  By clue
+ * symmetry, neither l nor r can be given as a clue, so the puzzle
+ * instance is blank and thus ambiguous.
+ *
+ * Corollary: On a 2x1 grid, there are no good puzzles.
+ * Proof: rotate the above proof 90 degrees ;-)
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 2x2 grid, there are no soluble puzzles with 2-way
+ * rotational symmetric clues and at least one black square.
+ *
+ * Proof: Let's name the squares a, b, c, and d, with a and b on the
+ * top row, a and c in the left column.  Let's consider the case where
+ * a is black.  Then no other square can be black: b and c would both
+ * violate the adjacency constraint; d would disconnect b from c.
+ *
+ * So exactly one square is black (and by 4-way rotation symmetry of
+ * the 2x2 square, it doesn't matter which one, so let's stick to a).
+ * By 2-way rotational symmetry of the clues and the rule about not
+ * painting numbers black, neither a nor d can be clues.  A blank
+ * puzzle would be ambiguous, so one of {b, c} is a clue; by symmetry,
+ * so is the other one.
+ *
+ * It is readily seen that their clue value is 2.  But "a is black"
+ * and "d is black" are both valid solutions in this case, so the
+ * puzzle is ambiguous (and hence bad).
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a wxh grid with w, h >= 1 and (w > 2 or h > 2), there is
+ * at least one good puzzle.
+ *
+ * Proof: assume that w > h (otherwise rotate the proof again).  Paint
+ * the top left and bottom right corners black, and fill a clue into
+ * all the other squares.  Present this board to the solver code (or
+ * player, hypothetically), except with the two black squares as blank
+ * squares.
+ *
+ * For an Nx1 puzzle, observe that every clue is N - 2, and there are
+ * N - 2 of them in one connected sequence, so the remaining two
+ * squares can be deduced to be black, which solves the puzzle.
+ *
+ * For any other puzzle, let j be a cell in the same row as a black
+ * cell, but not in the same column (such a cell doesn't exist in 2x3
+ * puzzles, but we assume w > h and such cells exist in 3x2 puzzles).
+ *
+ * Note that the number of cells in axis parallel `rays' going out
+ * from j exceeds j's clue value by one.  Only one such cell is a
+ * non-clue, so it must be black.  Similarly for the other corner (let
+ * j' be a cell in the same row as the _other_ black cell, but not in
+ * the same column as _any_ black cell; repeat this argument at j').
+ *
+ * This fills the grid and satisfies all clues and the adjacency
+ * constraint and doesn't paint on top of any clues.  All that is left
+ * to see is connectedness.
+ *
+ * Observe that the white cells in each column form a single connected
+ * `run', and each column contains a white cell adjacent to a white
+ * cell in the column to the right, if that column exists.
+ *
+ * Thus, any cell in the left-most column can reach any other cell:
+ * first go to the target column (by repeatedly going to the cell in
+ * your current column that lets you go right, then going right), then
+ * go up or down to the desired cell.
+ *
+ * As reachability is symmetric (in undirected graphs) and transitive,
+ * any cell can reach any left-column cell, and from there any other
+ * cell.
+  ----------------------------------------------------------------------
+ * Game encoding and decoding
+ 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		  maximum cell value  do nothing  I don't need it, I shouldn't use it  structure copy  do nothing  ----------------------------------------------------------------------
+ * User interface: ascii
+  or may be used uninitialized  "|%d|%d|...|\n"  "+--+--+...+\n%s\n+--+--+...+\n"  +1: NUL terminator  +1: NUL terminator  ----------------------------------------------------------------------
+ * User interfaces: interactive
+  cursor position  or (x, y) < TILESIZE)  are considered inside 
+	 * Utterly awful hack, exactly analogous to the one in Slant,
+	 * to configure the left and right mouse buttons the opposite
+	 * way round.
+	 *
+	 * The original puzzle submitter thought it would be more
+	 * useful to have the left button turn an empty square into a
+	 * dotted one, on the grounds that that was what you did most
+	 * often; I (SGT) felt instinctively that the left button
+	 * ought to place black squares and the right button place
+	 * dots, on the grounds that that was consistent with many
+	 * other puzzles in which the left button fills in the data
+	 * used by the solution checker while the right button places
+	 * pencil marks for the user's convenience.
+	 *
+	 * My first beta-player wasn't sure either, so I thought I'd
+	 * pre-emptively put in a 'configuration' mechanism just in
+	 * case.
+	  (do_pre ? "..." : "") concat (do_post ? "..." : "")  We used to set a flag here in the game_ui indicating
+             * that the player had used the hint function. I (SGT)
+             * retired it, on grounds of consistency with other games
+             * (most of these games will still flash to indicate
+             * completion if you solved and undid it, so why not if
+             * you got a hint?) and because the flash is as much about
+             * checking you got it all right than about congratulating
+             * you on a job well done.  note: fallthrough _into_ these cases 
+     * Check that all the white cells form a single connected component.
+     
+         * Report this error by choosing one component to be the
+         * canonical one (we pick the largest, arbitrarily
+         * tie-breaking towards lower array indices) and highlighting
+         * as an error any square in a different component.
+          if report != NULL, this is ignored  ----------------------------------------------------------------------
+ * Drawing routines.
+  mkhighlight needs it, I don't  only happens if animating moves  the (non-existing) timer should not be running  ----------------------------------------------------------------------
+ * User interface: print
+  And that's about it ;-) ************************************************* game_request_keys  wants_statusbar  flags 
+ * range.c: implementation of the Nikoli game 'Kurodoko' / 'Kuromasu'.
+ 
+ * Puzzle rules: the player is given a WxH grid of white squares, some
+ * of which contain numbers. The goal is to paint some of the squares
+ * black, such that:
+ *
+ *  - no cell (err, cell = square) with a number is painted black
+ *  - no black cells have an adjacent (horz/vert) black cell
+ *  - the white cells are all connected (through other white cells)
+ *  - if a cell contains a number n, let h and v be the lengths of the
+ *    maximal horizontal and vertical white sequences containing that
+ *    cell.  Then n must equal h + v - 1.
+  example instance with its encoding and textual representation, both
+ * solved and unsolved (made by thegame.solve and thegame.text_format)
+ *
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * | 3|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  |  |  |  | 5|  |
+ * +--+--+--+--+--+--+--+
+ * |  |  | 7|  | 7|  |  |
+ * +--+--+--+--+--+--+--+
+ * |  |13|  |  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ * | 4|  |  |  |  |  | 8|
+ * +--+--+--+--+--+--+--+
+ * |  |  | 4|  |  |  |  |
+ * +--+--+--+--+--+--+--+
+ *
+ * 7x7:d7b3e8e5c7a7c13e4d8b4d
+ *
+ * +--+--+--+--+--+--+--+
+ * |..|..|..|..| 7|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 3|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..|..|##|..| 5|..|
+ * +--+--+--+--+--+--+--+
+ * |..|..| 7|..| 7|##|..|
+ * +--+--+--+--+--+--+--+
+ * |..|13|..|..|..|..|..|
+ * +--+--+--+--+--+--+--+
+ * | 4|..|##|..|##|..| 8|
+ * +--+--+--+--+--+--+--+
+ * |##|..| 4|..|..|##|..|
+ * +--+--+--+--+--+--+--+
+  ----------------------------------------------------------------------
+ * Game parameters, presets, states
+  rationale: I want all four combinations of {odd/even, odd/even}, as
+ * they play out differently with respect to two-way symmetry.  I also
+ * want them to be generated relatively fast yet still be large enough
+ * to be entertaining for a decent amount of time, and I want them to
+ * make good use of monitor real estate (the typical screen resolution
+ * is why I do 13x9 and not 9x13).
+  structure copy  structure copy  struct copy  FIXME check for puzzle_size overflow and decoding issues  structure copy  copy the poin_tee_, set a new value of the poin_ter_  ----------------------------------------------------------------------
+ * The solver subsystem.
+ *
+ * The solver is used for two purposes:
+ *  - To solve puzzles when the user selects `Solve'.
+ *  - To test solubility of a grid as clues are being removed from it
+ *    during the puzzle generation.
+ *
+ * It supports the following ways of reasoning:
+ *
+ *  - A cell adjacent to a black cell must be white.
+ *
+ *  - If painting a square black would bisect the white regions, that
+ *    square is white (by finding biconnected components' cut points)
+ *
+ *  - A cell with number n, covering at most k white squares in three
+ *    directions must white-cover n-k squares in the last direction.
+ *
+ *  - A cell with number n known to cover k squares, if extending the
+ *    cover by one square in a given direction causes the cell to
+ *    cover _more_ than n squares, that extension cell must be black.
+ *
+ *    (either if the square already covers n, or if it extends into a
+ *    chunk of size > n - k)
+ *
+ *  - Recursion.  Pick any cell and see if this leads to either a
+ *    contradiction or a solution (and then act appropriately).
+ *
+ *
+ * TODO:
+ *
+ * (propagation upper limit)
+ *  - If one has two numbers on the same line, the smaller limits the
+ *    larger.  Example: in |b|_|_|8|4|_|_|b|, only two _'s can be both
+ *    white and connected to the "8" cell; so that cell will propagate
+ *    at least four cells orthogonally to the displayed line (which is
+ *    better than the current "at least 2").
+ *
+ * (propagation upper limit)
+ *  - cells can't propagate into other cells if doing so exceeds that
+ *    number.  Example: in |b|4|.|.|2|b|, at most one _ can be white;
+ *    otherwise, the |2| would have too many reaching white cells.
+ *
+ * (propagation lower and upper limit)
+ *  - `Full Combo': in each four directions d_1 ... d_4, find a set of
+ *    possible propagation distances S_1 ... S_4.  For each i=1..4,
+ *    for each x in S_i: if not exists (y, z, w) in the other sets
+ *    such that (x+y+z+w+1 == clue value): then remove x from S_i.
+ *    Repeat until this stabilizes.  If any cell would contradict
+  white is for pencil marks, empty is undecided  must match dr and dc  new_game_desc entry point in the solver subsystem  only recurse if all else fails  `dfs root`.parent == `dfs root`  returns the `lowpoint` of (r, c)  FIXME: add enum alias for smallest and largest (or N)  ----------------------------------------------------------------------
+ * Puzzle generation
+ *
+ * Generating kurodoko instances is rather straightforward:
+ *
+ *  - Start with a white grid and add black squares at randomly chosen
+ *    locations, unless colouring that square black would violate
+ *    either the adjacency or connectedness constraints.
+ *
+ *  - For each white square, compute the number it would contain if it
+ *    were given as a clue.
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    for each white square (in a random order), see if the board is
+ *    solvable when that square is not given as a clue.  If not, don't
+ *    give it as a clue, otherwise do.
+ *
+ * This never fails, but it's only _almost_ what I do.  The real final
+ * step is this:
+ *
+ *  - From a starting point of "give _every_ white square as a clue",
+ *    first remove all clues that are two-way rotationally symmetric
+ *    to a black square.  If this leaves the puzzle unsolvable, throw
+ *    it out and try again.  Otherwise, remove all _pairs_ of clues
+ *    (that are rotationally symmetric) which can be removed without
+ *    rendering the puzzle unsolvable.
+ *
+ * This can fail even if one only removes the black and symmetric
+ * clues; indeed it happens often (avg. once or twice per puzzle) when
+ * generating 1xN instances.  (If you add black cells they must be in
+ * the end, and if you only add one, it's ambiguous where).
+  forward declarations of internal calls  I don't need it, I shouldn't use it I like the puzzles that result from n / 3, but maybe this
+     * could be made a (generation, i.e. non-full) parameter?  if you're out of bounds, we skip you  I can't be black  I have black neighbour: I'm white 
+     * do a partition/pivot of shuffle_1toN into three groups:
+     * (1) squares rotationally-symmetric to (3)
+     * (2) squares not in (1) or (3)
+     * (3) black squares
+     *
+     * They go from [0, left), [left, right) and [right, n) in
+     * shuffle_1toN (and from there into state->grid[ ])
+     *
+     * Then, remove clues from the grid one by one in shuffle_1toN
+     * order, until the solver becomes unhappy.  If we didn't remove
+     * all of (1), return (-1).  Else, we're happy.
+      do the partition  branch prediction: I don't think I'll go here  if i is the center square, then i == (j = rotate(i))
+         * when i and j are one, removing i and j removes only one  if the solver is sound, refilling all removed clues means
+         * we have filled all squares, i.e. solved the puzzle.  I might be unable to store clues in my puzzle_size *grid;  Definition: a puzzle instance is _good_ if:
+ *  - it has a unique solution
+ *  - the solver can find this solution without using recursion
+ *  - the solution contains at least one black square
+ *  - the clues are 2-way rotationally symmetric
+ *
+ * (the idea being: the generator can not output any _bad_ puzzles)
+ *
+ * Theorem: validate_params, when full != 0, discards exactly the set
+ * of parameters for which there are _no_ good puzzle instances.
+ *
+ * Proof: it's an immediate consequence of the five lemmas below.
+ *
+ * Observation: not only do puzzles on non-tiny grids exist, the
+ * generator is pretty fast about coming up with them.  On my pre-2004
+ * desktop box, it generates 100 puzzles on the highest preset (16x11)
+ * in 8.383 seconds, or <= 0.1 second per puzzle.
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 1x1 grid, there are no good puzzles.
+ *
+ * Proof: the one square can't be a clue because at least one square
+ * is black.  But both a white square and a black square satisfy the
+ * solution criteria, so the puzzle is ambiguous (and hence bad).
+ *
+ * Lemma: On a 1x2 grid, there are no good puzzles.
+ *
+ * Proof: let's name the squares l and r.  Note that there can be at
+ * most one black square, or adjacency is violated.  By assumption at
+ * least one square is black, so let's call that one l.  By clue
+ * symmetry, neither l nor r can be given as a clue, so the puzzle
+ * instance is blank and thus ambiguous.
+ *
+ * Corollary: On a 2x1 grid, there are no good puzzles.
+ * Proof: rotate the above proof 90 degrees ;-)
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a 2x2 grid, there are no soluble puzzles with 2-way
+ * rotational symmetric clues and at least one black square.
+ *
+ * Proof: Let's name the squares a, b, c, and d, with a and b on the
+ * top row, a and c in the left column.  Let's consider the case where
+ * a is black.  Then no other square can be black: b and c would both
+ * violate the adjacency constraint; d would disconnect b from c.
+ *
+ * So exactly one square is black (and by 4-way rotation symmetry of
+ * the 2x2 square, it doesn't matter which one, so let's stick to a).
+ * By 2-way rotational symmetry of the clues and the rule about not
+ * painting numbers black, neither a nor d can be clues.  A blank
+ * puzzle would be ambiguous, so one of {b, c} is a clue; by symmetry,
+ * so is the other one.
+ *
+ * It is readily seen that their clue value is 2.  But "a is black"
+ * and "d is black" are both valid solutions in this case, so the
+ * puzzle is ambiguous (and hence bad).
+ *
+ * ----------------------------------------------------------------------
+ *
+ * Lemma: On a wxh grid with w, h >= 1 and (w > 2 or h > 2), there is
+ * at least one good puzzle.
+ *
+ * Proof: assume that w > h (otherwise rotate the proof again).  Paint
+ * the top left and bottom right corners black, and fill a clue into
+ * all the other squares.  Present this board to the solver code (or
+ * player, hypothetically), except with the two black squares as blank
+ * squares.
+ *
+ * For an Nx1 puzzle, observe that every clue is N - 2, and there are
+ * N - 2 of them in one connected sequence, so the remaining two
+ * squares can be deduced to be black, which solves the puzzle.
+ *
+ * For any other puzzle, let j be a cell in the same row as a black
+ * cell, but not in the same column (such a cell doesn't exist in 2x3
+ * puzzles, but we assume w > h and such cells exist in 3x2 puzzles).
+ *
+ * Note that the number of cells in axis parallel `rays' going out
+ * from j exceeds j's clue value by one.  Only one such cell is a
+ * non-clue, so it must be black.  Similarly for the other corner (let
+ * j' be a cell in the same row as the _other_ black cell, but not in
+ * the same column as _any_ black cell; repeat this argument at j').
+ *
+ * This fills the grid and satisfies all clues and the adjacency
+ * constraint and doesn't paint on top of any clues.  All that is left
+ * to see is connectedness.
+ *
+ * Observe that the white cells in each column form a single connected
+ * `run', and each column contains a white cell adjacent to a white
+ * cell in the column to the right, if that column exists.
+ *
+ * Thus, any cell in the left-most column can reach any other cell:
+ * first go to the target column (by repeatedly going to the cell in
+ * your current column that lets you go right, then going right), then
+ * go up or down to the desired cell.
+ *
+ * As reachability is symmetric (in undirected graphs) and transitive,
+ * any cell can reach any left-column cell, and from there any other
+ * cell.
+  ----------------------------------------------------------------------
+ * Game encoding and decoding
+ 
+		 * If there's a number in the very top left or
+		 * bottom right, there's no point putting an
+		 * unnecessary _ before or after it.
+		  maximum cell value  do nothing  I don't need it, I shouldn't use it  structure copy  do nothing  ----------------------------------------------------------------------
+ * User interface: ascii
+  or may be used uninitialized  "|%d|%d|...|\n"  "+--+--+...+\n%s\n+--+--+...+\n"  +1: NUL terminator  +1: NUL terminator  ----------------------------------------------------------------------
+ * User interfaces: interactive
+  cursor position  or (x, y) < TILESIZE)  are considered inside 
+	 * Utterly awful hack, exactly analogous to the one in Slant,
+	 * to configure the left and right mouse buttons the opposite
+	 * way round.
+	 *
+	 * The original puzzle submitter thought it would be more
+	 * useful to have the left button turn an empty square into a
+	 * dotted one, on the grounds that that was what you did most
+	 * often; I (SGT) felt instinctively that the left button
+	 * ought to place black squares and the right button place
+	 * dots, on the grounds that that was consistent with many
+	 * other puzzles in which the left button fills in the data
+	 * used by the solution checker while the right button places
+	 * pencil marks for the user's convenience.
+	 *
+	 * My first beta-player wasn't sure either, so I thought I'd
+	 * pre-emptively put in a 'configuration' mechanism just in
+	 * case.
+	  (do_pre ? "..." : "") concat (do_post ? "..." : "")  We used to set a flag here in the game_ui indicating
+             * that the player had used the hint function. I (SGT)
+             * retired it, on grounds of consistency with other games
+             * (most of these games will still flash to indicate
+             * completion if you solved and undid it, so why not if
+             * you got a hint?) and because the flash is as much about
+             * checking you got it all right than about congratulating
+             * you on a job well done.  note: fallthrough _into_ these cases 
+     * Check that all the white cells form a single connected component.
+     
+         * Report this error by choosing one component to be the
+         * canonical one (we pick the largest, arbitrarily
+         * tie-breaking towards lower array indices) and highlighting
+         * as an error any square in a different component.
+          if report != NULL, this is ignored  ----------------------------------------------------------------------
+ * Drawing routines.
+  mkhighlight needs it, I don't  only happens if animating moves  the (non-existing) timer should not be running  ----------------------------------------------------------------------
+ * User interface: print
+  And that's about it ;-) ************************************************* game_request_keys  wants_statusbar  flags 

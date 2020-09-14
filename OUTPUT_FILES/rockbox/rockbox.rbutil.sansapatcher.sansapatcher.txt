@@ -1,0 +1,292 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The offset of the MI4 image header in the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with sansa_alloc_buf() in main().
+ Partition table parsing code taken from Rockbox  parse partitions  extended?  not handled yet  Calculate the starting position of the firmware partition  NOTE: memmem implementation copied from glibc-2.2.4 - it's a GNU
+   extension and is not universally.  In addition, early versions of
+   memmem had a serious bug - the meaning of needle and haystack were
+   reversed.  Copyright (C) 1991,92,93,94,96,97,98,2000 Free Software Foundation, Inc.
+   This file is part of the GNU C Library.
+
+   The GNU C Library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public
+   License as published by the Free Software Foundation; either
+   version 2.1 of the License, or (at your option) any later version.
+
+   The GNU C Library is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public
+   License along with the GNU C Library; if not, write to the Free
+   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+   02111-1307 USA.   Return the first occurrence of NEEDLE in HAYSTACK.   The first occurrence of the empty string is deemed to occur at
+       the beginning of the string.   Sanity check, otherwise the loop might search through the whole
+     memory.  
+ * CRC32 implementation taken from:
+ *
+ * efone - Distributed internet phone system.
+ *
+ * (c) 1999,2000 Krzysztof Dabrowski
+ * (c) 1999,2000 ElysiuM deeZine
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+  crc_tab[] -- this crcTable is being build by chksum_crc32GenTab().
+ *              so make sure, you call it before using the other
+ *              functions!
+  chksum_crc() -- to a given block, this one calculates the
+ *                 crc32-checksum until the length is
+ *                 reached. the crc32-checksum will be
+ *                 the result.
+  chksum_crc32gentab() --      to a global crc_tab[256], this one will
+ *                              calculate the crcTable for crc32-checksums.
+ *                              it is generated to the polynom [..]
+  Known keys for Sansa E200 and C200 firmwares:  "sansa"  "sansa_gh"  sansa 103  c200 1.00.03  c200 1.00.04 and up c200 1.01.05 and up c200 1.01.07 
+
+tea_decrypt() from http://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm
+
+"Following is an adaptation of the reference encryption and decryption
+routines in C, released into the public domain by David Wheeler and
+Roger Needham:"
+
+ NOTE: The mi4 version of TEA uses a different initial value to sum compared
+         to the reference implementation and the main loop is 8 iterations, not
+         32.
+ set up  a key schedule constant  cache key  basic cycle start  end cycle  mi4 files are encrypted in 64-bit blocks (two little-endian 32-bit
+   integers) and the key is incremented after each block
+  Now increment the key  Add a dummy DSA signature  We identify an E200 based on the following criteria:
+
+   1) Exactly two partitions;
+   2) First partition is type "W95 FAT32" (0x0b or 0x0c);
+   3) Second partition is type "OS/2 hidden C: drive" (0x84);
+   4) The "PPBL" string appears at offset 0 in the 2nd partition;
+   5) The "PPMI" string appears at offset PPMI_OFFSET in the 2nd partition.
+ Check partition layout  Bad partition layout, abort  Check Bootloader header  No bootloader header, abort  Sanity/safety check - the bootloader can't be larger than PPMI_OFFSET  Load Sansa bootloader and check for "Sansa C200" magic string  C200  E200  Check Main firmware header  No bootloader header, abort  Check main mi4 file header  Some sanity checks:
+
+       1) Main MI4 image without RBBL and < 100000 bytes -> old install
+       2) Main MI4 image with RBBL but no second image -> old install
+      Look for an original firmware after the first image  Remember the disk name  Prepare original firmware for writing to the firmware partition by decrypting
+   and updating the header  Decrypt anything that needs decrypting.  TODO: Check different keys  Increase plaintext value to full file  Update CRC checksum  Add Rockbox-specific header  Read 512 bytes from PPMI_OFFSET - the PPMI header plus the mi4 header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Firstly look for an original firmware after the first image  We have a valid MI4 file after a bootloader, so we use this.  No valid MI4 file, so read the first image.  Step 1 - read bootloader into RAM.  Create PPMI header  copy bootloader to sansa->sectorbuf+0x200  Load original firmware from Sansa to the space after the bootloader  Now write the whole thing back to the Sansa  Load original firmware from Sansa to sansa->sectorbuf+0x200  Create PPMI header  Now write the whole thing back to the Sansa * List number of MI4 images on the player, return number.
+  Check Main firmware header  Look for an original firmware after the first image  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - check we have an OF on the Sansa to upgrade. We expect the 
+       Rockbox bootloader to be installed and the OF to be after it on disk.  Read 512 bytes from PPMI_OFFSET - the PPMI header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Look for an original firmware after the first image  We don't have a valid MI4 file after a bootloader, so do nothing.  Step 2 - read OF into RAM.  Load original firmware from file  Check we have a valid MI4 file.  Decrypt and build the header  Step 3 - write the OF to the Sansa  Step 4 - zero out the nvparams section - we have to do this or we end up
+       with multiple copies of the nvparams data and don't know which one to
+       work with for the database rebuild disabling trick in our bootloader  Update the PPBL (bootloader) image in the hidden firmware partition  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - read bootloader into RAM.  Step 2 - Build the header  Step 3 - write the bootloader to the Sansa **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The offset of the MI4 image header in the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with sansa_alloc_buf() in main().
+ Partition table parsing code taken from Rockbox  parse partitions  extended?  not handled yet  Calculate the starting position of the firmware partition  NOTE: memmem implementation copied from glibc-2.2.4 - it's a GNU
+   extension and is not universally.  In addition, early versions of
+   memmem had a serious bug - the meaning of needle and haystack were
+   reversed.  Copyright (C) 1991,92,93,94,96,97,98,2000 Free Software Foundation, Inc.
+   This file is part of the GNU C Library.
+
+   The GNU C Library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public
+   License as published by the Free Software Foundation; either
+   version 2.1 of the License, or (at your option) any later version.
+
+   The GNU C Library is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public
+   License along with the GNU C Library; if not, write to the Free
+   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+   02111-1307 USA.   Return the first occurrence of NEEDLE in HAYSTACK.   The first occurrence of the empty string is deemed to occur at
+       the beginning of the string.   Sanity check, otherwise the loop might search through the whole
+     memory.  
+ * CRC32 implementation taken from:
+ *
+ * efone - Distributed internet phone system.
+ *
+ * (c) 1999,2000 Krzysztof Dabrowski
+ * (c) 1999,2000 ElysiuM deeZine
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+  crc_tab[] -- this crcTable is being build by chksum_crc32GenTab().
+ *              so make sure, you call it before using the other
+ *              functions!
+  chksum_crc() -- to a given block, this one calculates the
+ *                 crc32-checksum until the length is
+ *                 reached. the crc32-checksum will be
+ *                 the result.
+  chksum_crc32gentab() --      to a global crc_tab[256], this one will
+ *                              calculate the crcTable for crc32-checksums.
+ *                              it is generated to the polynom [..]
+  Known keys for Sansa E200 and C200 firmwares:  "sansa"  "sansa_gh"  sansa 103  c200 1.00.03  c200 1.00.04 and up c200 1.01.05 and up c200 1.01.07 
+
+tea_decrypt() from http://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm
+
+"Following is an adaptation of the reference encryption and decryption
+routines in C, released into the public domain by David Wheeler and
+Roger Needham:"
+
+ NOTE: The mi4 version of TEA uses a different initial value to sum compared
+         to the reference implementation and the main loop is 8 iterations, not
+         32.
+ set up  a key schedule constant  cache key  basic cycle start  end cycle  mi4 files are encrypted in 64-bit blocks (two little-endian 32-bit
+   integers) and the key is incremented after each block
+  Now increment the key  Add a dummy DSA signature  We identify an E200 based on the following criteria:
+
+   1) Exactly two partitions;
+   2) First partition is type "W95 FAT32" (0x0b or 0x0c);
+   3) Second partition is type "OS/2 hidden C: drive" (0x84);
+   4) The "PPBL" string appears at offset 0 in the 2nd partition;
+   5) The "PPMI" string appears at offset PPMI_OFFSET in the 2nd partition.
+ Check partition layout  Bad partition layout, abort  Check Bootloader header  No bootloader header, abort  Sanity/safety check - the bootloader can't be larger than PPMI_OFFSET  Load Sansa bootloader and check for "Sansa C200" magic string  C200  E200  Check Main firmware header  No bootloader header, abort  Check main mi4 file header  Some sanity checks:
+
+       1) Main MI4 image without RBBL and < 100000 bytes -> old install
+       2) Main MI4 image with RBBL but no second image -> old install
+      Look for an original firmware after the first image  Remember the disk name  Prepare original firmware for writing to the firmware partition by decrypting
+   and updating the header  Decrypt anything that needs decrypting.  TODO: Check different keys  Increase plaintext value to full file  Update CRC checksum  Add Rockbox-specific header  Read 512 bytes from PPMI_OFFSET - the PPMI header plus the mi4 header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Firstly look for an original firmware after the first image  We have a valid MI4 file after a bootloader, so we use this.  No valid MI4 file, so read the first image.  Step 1 - read bootloader into RAM.  Create PPMI header  copy bootloader to sansa->sectorbuf+0x200  Load original firmware from Sansa to the space after the bootloader  Now write the whole thing back to the Sansa  Load original firmware from Sansa to sansa->sectorbuf+0x200  Create PPMI header  Now write the whole thing back to the Sansa * List number of MI4 images on the player, return number.
+  Check Main firmware header  Look for an original firmware after the first image  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - check we have an OF on the Sansa to upgrade. We expect the 
+       Rockbox bootloader to be installed and the OF to be after it on disk.  Read 512 bytes from PPMI_OFFSET - the PPMI header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Look for an original firmware after the first image  We don't have a valid MI4 file after a bootloader, so do nothing.  Step 2 - read OF into RAM.  Load original firmware from file  Check we have a valid MI4 file.  Decrypt and build the header  Step 3 - write the OF to the Sansa  Step 4 - zero out the nvparams section - we have to do this or we end up
+       with multiple copies of the nvparams data and don't know which one to
+       work with for the database rebuild disabling trick in our bootloader  Update the PPBL (bootloader) image in the hidden firmware partition  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - read bootloader into RAM.  Step 2 - Build the header  Step 3 - write the bootloader to the Sansa **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2006-2007 Dave Chapman
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The offset of the MI4 image header in the firmware partition  Windows requires the buffer for disk I/O to be aligned in memory on a
+   multiple of the disk volume size - so we use a single global variable
+   and initialise it with sansa_alloc_buf() in main().
+ Partition table parsing code taken from Rockbox  parse partitions  extended?  not handled yet  Calculate the starting position of the firmware partition  NOTE: memmem implementation copied from glibc-2.2.4 - it's a GNU
+   extension and is not universally.  In addition, early versions of
+   memmem had a serious bug - the meaning of needle and haystack were
+   reversed.  Copyright (C) 1991,92,93,94,96,97,98,2000 Free Software Foundation, Inc.
+   This file is part of the GNU C Library.
+
+   The GNU C Library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public
+   License as published by the Free Software Foundation; either
+   version 2.1 of the License, or (at your option) any later version.
+
+   The GNU C Library is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public
+   License along with the GNU C Library; if not, write to the Free
+   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+   02111-1307 USA.   Return the first occurrence of NEEDLE in HAYSTACK.   The first occurrence of the empty string is deemed to occur at
+       the beginning of the string.   Sanity check, otherwise the loop might search through the whole
+     memory.  
+ * CRC32 implementation taken from:
+ *
+ * efone - Distributed internet phone system.
+ *
+ * (c) 1999,2000 Krzysztof Dabrowski
+ * (c) 1999,2000 ElysiuM deeZine
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
+  crc_tab[] -- this crcTable is being build by chksum_crc32GenTab().
+ *              so make sure, you call it before using the other
+ *              functions!
+  chksum_crc() -- to a given block, this one calculates the
+ *                 crc32-checksum until the length is
+ *                 reached. the crc32-checksum will be
+ *                 the result.
+  chksum_crc32gentab() --      to a global crc_tab[256], this one will
+ *                              calculate the crcTable for crc32-checksums.
+ *                              it is generated to the polynom [..]
+  Known keys for Sansa E200 and C200 firmwares:  "sansa"  "sansa_gh"  sansa 103  c200 1.00.03  c200 1.00.04 and up c200 1.01.05 and up c200 1.01.07 
+
+tea_decrypt() from http://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm
+
+"Following is an adaptation of the reference encryption and decryption
+routines in C, released into the public domain by David Wheeler and
+Roger Needham:"
+
+ NOTE: The mi4 version of TEA uses a different initial value to sum compared
+         to the reference implementation and the main loop is 8 iterations, not
+         32.
+ set up  a key schedule constant  cache key  basic cycle start  end cycle  mi4 files are encrypted in 64-bit blocks (two little-endian 32-bit
+   integers) and the key is incremented after each block
+  Now increment the key  Add a dummy DSA signature  We identify an E200 based on the following criteria:
+
+   1) Exactly two partitions;
+   2) First partition is type "W95 FAT32" (0x0b or 0x0c);
+   3) Second partition is type "OS/2 hidden C: drive" (0x84);
+   4) The "PPBL" string appears at offset 0 in the 2nd partition;
+   5) The "PPMI" string appears at offset PPMI_OFFSET in the 2nd partition.
+ Check partition layout  Bad partition layout, abort  Check Bootloader header  No bootloader header, abort  Sanity/safety check - the bootloader can't be larger than PPMI_OFFSET  Load Sansa bootloader and check for "Sansa C200" magic string  C200  E200  Check Main firmware header  No bootloader header, abort  Check main mi4 file header  Some sanity checks:
+
+       1) Main MI4 image without RBBL and < 100000 bytes -> old install
+       2) Main MI4 image with RBBL but no second image -> old install
+      Look for an original firmware after the first image  Remember the disk name  Prepare original firmware for writing to the firmware partition by decrypting
+   and updating the header  Decrypt anything that needs decrypting.  TODO: Check different keys  Increase plaintext value to full file  Update CRC checksum  Add Rockbox-specific header  Read 512 bytes from PPMI_OFFSET - the PPMI header plus the mi4 header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Firstly look for an original firmware after the first image  We have a valid MI4 file after a bootloader, so we use this.  No valid MI4 file, so read the first image.  Step 1 - read bootloader into RAM.  Create PPMI header  copy bootloader to sansa->sectorbuf+0x200  Load original firmware from Sansa to the space after the bootloader  Now write the whole thing back to the Sansa  Load original firmware from Sansa to sansa->sectorbuf+0x200  Create PPMI header  Now write the whole thing back to the Sansa * List number of MI4 images on the player, return number.
+  Check Main firmware header  Look for an original firmware after the first image  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - check we have an OF on the Sansa to upgrade. We expect the 
+       Rockbox bootloader to be installed and the OF to be after it on disk.  Read 512 bytes from PPMI_OFFSET - the PPMI header  No need to check PPMI magic - it's done during init to confirm
+       this is an E200  Look for an original firmware after the first image  We don't have a valid MI4 file after a bootloader, so do nothing.  Step 2 - read OF into RAM.  Load original firmware from file  Check we have a valid MI4 file.  Decrypt and build the header  Step 3 - write the OF to the Sansa  Step 4 - zero out the nvparams section - we have to do this or we end up
+       with multiple copies of the nvparams data and don't know which one to
+       work with for the database rebuild disabling trick in our bootloader  Update the PPBL (bootloader) image in the hidden firmware partition  Prevent an erroneous "may be used uninitialised" gcc warning  Keep gcc happy when building for rbutil  Step 1 - read bootloader into RAM.  Step 2 - Build the header  Step 3 - write the bootloader to the Sansa 

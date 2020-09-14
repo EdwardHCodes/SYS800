@@ -1,0 +1,1150 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Cache memory layout:
+ * x - array of struct dircache_entry
+ * r - reserved buffer
+ * d - name buffer for the name entry of the struct dircache_entry
+ * 0 - zero bytes to assist free name block sentinel scanning (not 0xfe or 0xff)
+ * |xxxxxx|rrrrrrrrr|0|dddddd|0|
+ *
+ * Subsequent x are allocated from the front, d are allocated from the back,
+ * using the reserve buffer for entries added after initial scan.
+ *
+ * After a while the cache may look like:
+ * |xxxxxxxx|rrrrr|0|dddddddd|0|
+ *
+ * After a reboot, the reserve buffer is restored in it's size, so that the
+ * total allocation size grows:
+ * |xxxxxxxx|rrrrrrrrr|0|dddddddd|0|
+ *
+ *
+ * Cache structure:
+ * Format is memory position independent and uses only indexes as links. The
+ * buffer pointers are offset back by one entry to make the array 1-based so
+ * that an index of 0 may be considered an analog of a NULL pointer.
+ *
+ * Entry elements are linked together analagously to the filesystem directory
+ * structure with minor variations that are helpful to the cache's algorithms.
+ * Each volume has a special root structure in the dircache structure, not an
+ * entry in the cache, comprising a forest of volume trees which facilitates
+ * mounting or dismounting of specified volumes on the fly.
+ *
+ * Indexes identifying a volume are computed as: index = -volume - 1
+ * Returning the volume from these indexes is thus: volume = -index - 1
+ * Such indexes are used in root binding and as the 'up' index for an entry
+ * who's parent is the root directory.
+ *
+ * Open files list:
+ * When dircache is made it is the maintainer of the main volume open files
+ * lists, even when it is off. Any files open before dircache is enabled or
+ * initialized must be bound to cache entries by the scan and build operation.
+ * It maintains these lists in a special way.
+ *
+ * Queued (unresolved) bindings are at the back and resolved at the front.
+ * A pointer to the first of each kind of binding is provided to skip to help
+ * iterating one sublist or another.
+ *
+ * r0->r1->r2->q0->q1->q2->NULL
+ * ^resolved0  ^queued0
+  scan and build parameter data  scan directory stream  scanned entry info  halt all scanning  end of stack pointer  current top of stack  cache index of directory  pointer to ce->down  previous item accessed  "recursion" stack  !DIRCACHE_NATIVE  HAVE_MULTIVOLUME  DIRCACHE_NATIVE  dir entry contents are complete  dir entry contents are in-progress  frontier entry permanent mark (very sticky!)  override FRONTIER_ZONED sticky (not stored)  build a volume  merged DCM_BUILD messages  Throw some warnings if about the limits if things may not work  data structure used by cache entries  next at same level  first at child level (if directory)  size of file in bytes (if file)  parent index (-volume-1 if root)  indirect storage (.tinyname == 0)  length of name - (MAX_TINYNAME+1)  direct storage (.tinyname == 1)  entry # in parent - max 0xffff  # of entries used - max 21  if == 1, name fits in .namebuf  (FRONTIER_* bitflags)  entry file attributes  first file cluster - max 0x0ffffff4  FAT write date  FAT write time  file last-modified time  entry serial number  spare us some tedium  thread and kernel stuff  struct that is both used during run time and for persistent storage  cache-wide data  first index of free entry list  total size of data (including holes)  bytes of .size bytes actually used  entry count (including holes)  used when persisting  index of first name in name block  size of all names (including holes)  amount of wasted name space  hint of next free name in buffer  per-volume data  per volume cache data  cache status of this volume  (FRONTIER_* bitflags)  dircache serial number of root  index of first entry of volume root  when did scan start (scanning)  how long to build volume? (ready)  these remain unchanged between cache resets  last reported size at boot  reserved used at last build  last serialnumber generated  struct that is used only for the cache in main memory  cache setting and build info  dircache suspend count  dircache master enable switch  current/last thread id  thread has exited  cache buffer info  buflib buffer handle  size of buflib allocation - 1  don't move due to other allocs  address of buffer - ENTRYSIZE  alias of .p to assist entry resolution  alias of .p to assist name resolution  buflib ops callbacks  per-volume data  first resolved binding in list  first queued binding in list  if building, struct sab in use  "overloaded" macros to get volume structures  reserve over 75% full? *
+ * remove the snapshot file
+ *
+ * open or create the snapshot file
+  HAVE_EEPROM_SETTINGS *
+ * clean up the memory allocation to make viewing in a hex editor more friendly
+ * and highlight problems
+  DIRCACHE_DUMPSTER *
+ * relocate the cache when the buffer has moved
+ *
+ * add a "don't move" lock count
+ *
+ * remove a "don't move" lock count
+ * Open file bindings management * compare the basic file information and return 'true' if they are logically
+   equivalent or the same item, else return 'false' if not *
+ * bind a file to the cache; "queued" or "resolved" depending upon whether or
+ * not it has entry information
+  already resolved *
+ * remove a binding from the cache
+  no need to reset it *
+ * resolve a queued binding with the information from the given source file
+  quickly check the queued list to see if it's there  srcinfop may be the actual one *
+ * dissolve a resolved binding on its volume
+ *
+ * dissolve all resolved bindings on a given volume
+ * Dircache buffer management **
+ * allocate the cache's memory block
+  pad with one extra-- see alloc_name() and free_name() *
+ * put the allocation in dircache control
+  DIRCACHE_DUMPSTER  set it up as a 1-based array  new buffer *
+ * remove the allocation from dircache control and return the handle
+  don't mind .p; it might get changed by the callback even after
+           this call; buffer presence is determined by the following: *
+ * return the number of bytes remaining in the buffer
+ *
+ * return the amount of reserve space used
+ * Internal cache structure control functions **
+ * generate the next serial number in the sequence
+ *
+ * return the dircache volume pointer for the special index
+ *
+ * return the cache entry referenced by idx (NULL if outside buffer)
+ *
+ * return the index of the cache entry (0 if outside buffer)
+ *
+ * return the frontier flags for the index
+  idx < 0 *
+ *  return the sublist down pointer for the sublist that contains entry 'idx'
+  NOTE: 'idx' must refer to a directory or the result is undefined  a normal entry  a volume root *
+ * return a pointer to the index referencing the cache entry that 'idx'
+ * references
+ *
+ * if required, adjust the lists and directory read of any scan and build in
+ * progress
+  removing an item being scanned; set the component position to the
+           entry before this  removed at item in the directory who's immediate contents are
+               being scanned  was first item; rewind it  the directory being scanned or a parent of it has been removed;
+               abort its build or cache traversal *
+ * get a pointer to an allocated name given a cache index
+ *
+ * get the cache buffer index of the given name
+ *
+ * copy the entry's name to a buffer (which assumed to be of sufficient size)
+ *
+ * set the namesfree hint to a new position
+ *
+ * allocate a buffer to use for a new name
+  scan for a free gap starting at the hint point - first fit  found a sentinel; see if there are enough in a row  check end byte and every MAX_TINYNAME+1 bytes from the end;
+                   the minimum-length indirectly allocated string that could be
+                   in between must have at least one character at one of those
+                   locations  exhausted  wrap  initial hint was at names start  if only a tiny block remains after buffer, claim it and
+                   hide it from scans since it's too small for indirect
+                   allocation  no sufficiently long free gaps; allocate anew *
+ * mark a name as free and note that its bytes are available
+  merge with any adjacent tiny blocks *
+ * allocate and assign a name to the entry
+ *
+ * free the name for the entry
+ *
+ * assign a new name to the entry
+  needs a new name allocation; if the new name fits in the freed block,
+       it will use it immediately without a lengthy search *
+ * allocate a dircache_entry from memory using freed ones if available
+  reuse a freed entry  allocate a new one *
+ * free an entry's allocations in the cache; must not be linked to anything
+ * by this time (orphan!)
+  was an established entry; find any associated resolved binding and
+           dissolve it;  bindings are kept strictly synchronized with changes
+           to the storage so a simple serial number comparison is sufficient  no serialnum says "it's free" (for cache-wide iterators)  add to free list *
+ * allocates a new entry of with the name specified by 'basename'
+ *
+ * unlink the entry at *prevp and adjust the scanner if needed
+  unlink it from its list  adjust scanner iterator if needed *
+ * free the entire subtree in the referenced parent down index
+ *
+ * free the specified file entry and its children
+  can't remove a root/invalid  gonna get all this contents (normally the "." and "..") *
+ * insert the new entry into the parent, sorted into position
+  DIRCACHE_NATIVE: the entires are sorted into the spot it would be on
+     * the storage medium based upon the directory entry number, in-progress
+     * scans will catch it or miss it in just the same way they would if
+     * directly scanning the disk. If this is behind an init scan, it gets
+     * added anyway; if in front of it, then scanning will compare what it
+     * finds in order to avoid adding a duplicate.
+     *
+     * All others: the order of entries of the host filesystem is not known so
+     * this must be placed at the end so that a build scan won't miss it and
+     * add a duplicate since it will be comparing any entries it finds in front
+     * of it.
+      now, nothing should be equal to ours or that is a bug since it
+           would already exist (and it shouldn't because it's just been
+           created or moved)  DIRCACHE_NATIVE *
+ * unlink the entry from its parent and return its pointer to the caller
+ *
+ * set the frontier indicator for the given cache index
+ *
+ * remove all messages from the queue, responding to anyone waiting
+  respond to any synchronous build queries; since we're already
+           building and thusly allocated, any additional requests can be
+           processed async *
+ * service dircache_queue during a scan and build
+  only count externally generated commands  this reminds us to keep moving after we're done here; a volume we passed
+       up earlier could have been mounted and need refreshing; it just condenses
+       a slew of requests into one and isn't mistaken for an externally generated
+       command *
+ * scan and build the contents of a subdirectory
+  open directory stream  first pass: read directory  release control and process queued events  else an immediate-contents directory scan  rewind list  there are entries ahead of us; they will be what was just
+                   read or something to be subsequently read; if it belongs
+                   ahead of this one, insert a new entry before it; if it's
+                   the entry just scanned, do nothing further and continue
+                   with the next  already there  not fatal; just don't include it  link it in  this needs scanning  copy remaining FS info  resolve queued user bindings  end while  second pass: "recurse!"  directory completed or removed/deepest level  scan completed/initial directory removed  even if it got zoned from outside it is about to be scanned in
+           its entirety and may be considered new again  set up info for next open
+         * IF_MV: "volume" was set when scan began  end while *
+ * scan and build the contents of a directory or volume root
+  infop should have been fully opened meaning that all its parent
+       directory information is filled in and intact; the binding information
+       should also filled in beforehand  allocate the stack right now to the max demand *
+ * scan and build the entire tree for a volume
+  gather everything sab_process_dir() needs in order to begin a scan  probably not mounted *
+ * this function is the back end to the public API's like readdir()
+  no parent cached => no entries cached  if not settled, just readthrough; no binding information is needed for
+       this; if it becomes settled, we'll get scan->dcfile caught up and do
+       subsequent reads with the cache  rewound?  validate last entry scanned; it might have been replaced between
+           calls or not there at all any more; if so, start the cache reader
+           at the beginning and fast-forward to the correct point as indicated
+           by the FS scanner  end of dir  cache reader is caught up to FS scan  basic dirent information  FS scan information  dircache scan information  return whether this needs decoding *
+ * rewind the directory scan cursor
+ *
+ * this function is the back end to file API internal scanning, which requires
+ * much more detail about the directory entries; this is allowed to make
+ * assumptions about cache state because the cache will not be altered during
+ * the scan process; an additional important property of internal scanning is
+ * that any available binding information is not ignored even when a scan
+ * directory is frontier zoned.
+  call with writer exclusion  assume binding "not found"  is parent cached? if not, readthrough because nothing is here yet  rewound?  the directory being read is reported to be incompletely cached;
+           readthrough and if the entry exists, return it with its binding
+           information; otherwise return the uncached read result while
+           maintaining the last index  entry matches next one to read  end of dir  FS entry information that we maintain  file code file scanning does not need time information  FS entry directory information  dircache file binding information  return whether this needs decoding *
+ * rewind the scan position for an internal scan
+  !DIRCACHE_NATIVE (for all others)  we require access to the host functions  add "." and ".."  save current paths size  append entry  restore path  DIRCACHE_* *
+ * reset the cache for the specified volume
+  idle => nothing happening there  stop any scan and build on this one  if this call is for all volumes, subsequent code will just reset
+           the cache memory usage and the freeing of individual entries may
+           be skipped  set it back to unscanned *
+ * reset the entire cache state for all volumes
+  no buffer => nothing cached  blast all the volumes  DIRCACHE_DUMPSTER  reset the memory  dircache.last_serialnum stays  dircache.reserve_used stays  dircache.last_size stays *
+ * checks each "idle" volume and builds it
+  this does reader locking but we already own that  can't already be "scanning" because that's us; doesn't retry
+           "ready" volumes  measure how long it takes to build the cache for each volume  whatever happened, it's ready unless reset  reset  grow  shrink if not suspended *
+ * allocate buffer and return whether or not a synchronous build should take
+ * place; if 'realloced' is NULL, it's just a query about what will happen
+  called holding dircache lock  HAVE_EEPROM_SETTINGS  start a transparent rebuild  start a non-transparent rebuild  we'll use the entire audiobuf to allocate the dircache  try to allocate at least the min and no more than the limit  start a transparent rebuild  if we got suspended, don't keep this huge buffer around *
+ * compact the dircache buffer after a successful full build
+  called holding dircache lock  cache got bigger than expected; never mind that  slide the names up in memory  fix up name indexes  assumes beelzelib doesn't do things like calling callbacks or changing
+       the pointer as a result of the shrink operation; it doesn't as of now
+       but if it ever does that may very well cause deadlock problems since
+       we're holding filesystem locks *
+ * internal thread that controls cache building; exits when no more requests
+ * are pending or the cache is suspended
+  calls made within the loop reopen the lock  nothing left to do/suspended  background-only builds are not allowed if a synchronous build is
+           required first; test what needs to be done and if it checks out,
+           do it for real below  if it was reallocated, compact it *
+ * post a scan and build message to the thread, starting it if required
+  mustn't recreate until it exits so that the stack isn't reused *
+ * wait for the dircache thread to finish building; intended for waiting for a
+ * non-transparent build to finish when dircache_resume() returns > 0
+ *
+ * call after mounting a volume or all volumes
+  call with writer exclusion *
+ * call after unmounting a volume; specifying < 0 for all or >= 0 for the
+ * specific one
+  call with writer exclusion  HAVE_MULTIVOLUME  backend to dircache_suspend() and dircache_disable()  grab the buffer away into our control; the cache won't need it now  backend to dircache_resume() and dircache_enable()  poll for response *
+ * service to dircache_enable() and dircache_load(); "build_now" starts a build
+ * immediately if the cache was not enabled
+ *
+ * service to dircache_disable()
+ *
+ * disables dircache without freeing the buffer (so it can be re-enabled
+ * afterwards with dircache_resume(); usually called when accepting an USB
+ * connection
+ *
+ * re-enables the dircache if previously suspended by dircache_suspend
+ * or dircache_steal_buffer(), re-using the already allocated buffer if
+ * available
+ *
+ * returns: 0 if the background build is started or dircache is still
+ *          suspended
+ *          > 0 if the build is non-background
+ *          < 0 upon failure
+ *
+ * as dircache_resume() but globally enables it; called by settings and init
+ *
+ * as dircache_suspend() but also frees the buffer; usually called on shutdown
+ * or when deactivated
+ *
+ * have dircache give up its allocation; call dircache_resume() to restart it
+ * Dircache live updating **
+ * obtain binding information for the file's root volume; this is the starting
+ * point for internal path parsing and binding
+  root has a binding  root is idle *
+ * called by file code when the first reference to a file or directory is
+ * opened
+  requires write exclusion *
+ * called by file code when the last reference to a file or directory is
+ * closed
+  requires write exclusion *
+ * called by file code when a file is newly created
+  requires write exclusion  no parent binding => no child binding  failed allocation; parent cache contents are not complete  file binding will have been queued when it was opened; just resolve  scan-in the contents of the new directory at this level only *
+ * called by file code when a file or directory is removed
+  requires write exclusion  no binding yet  if binding was resolved; it should now be queued via above call *
+ * called by file code when a file is renamed
+  requires write exclusion  new parent directory not cached; there is nowhere to put it so
+           nuke it  else no entry anyway  binding not resolved on the old file but it's going into a resolved
+           parent which means the parent would be missing an entry in the cache;
+           downgrade the parent  unlink the entry but keep it; it needs to be re-sorted since the
+       underlying FS probably changed the order  update other name-related information before inserting  place it into its new home  lastly, update the entry name itself  it's not really the same one now so re-stamp it  it cannot be kept around without a valid name *
+ * called by file code to synchronize file entry information
+  requires write exclusion  binding unresolved  a root (should never be called for this) * Dircache paths and files **
+ * helper for returning a path and serial hash represented by an index
+  entry is an orphan split from any root  go all the way up then move back down from the root  idx < 0  prepend the volume specifier for volumes > 0  HAVE_MULTIVOLUME *
+ * validate the file's entry/binding serial number
+ * the dircache file's serial number must match the indexed entry's or the
+ * file reference is stale
+  idx < 0 *
+ * Obtain the hash of the serial numbers of the canonical path, index to root
+ *
+ * Initialize the fileref
+ *
+ * usermode function to construct a full absolute path from dircache into the
+ * given buffer given the dircache file info
+ *
+ * returns:
+ *   success - the length of the string, not including the trailing null or the
+ *             buffer length required if the buffer is too small (return is >=
+ *             size)
+ *   failure - a negative value
+ *
+ * errors:
+ *   EBADF  - Bad file number
+ *   EFAULT - Bad address
+ *   ENOENT - No such file or directory
+  if missing buffer space, still return what's needed a la strlcpy  first and foremost, there must be a cache and the serial number must
+       check out *
+ * Test a path to various levels of rigor and optionally return dircache file
+ * info for the given path.
+ *
+ * If the file reference is used, it is checked first and the path is checked
+ * only if all specified file reference checks fail.
+ *
+ * returns:
+ *   success: 0 = not cached (very weak)
+ *            1 = serial number checks out for the reference (weak)
+ *            2 = serial number and hash check out for the reference (medium)
+ *            3 = path is valid; reference updated if specified (strong)
+ *   failure: a negative value
+ *            if file definitely doesn't exist (errno = ENOENT)
+ *            other error
+ *
+ * errors (including but not limited to):
+ *   EFAULT       - Bad address
+ *   EINVAL       - Invalid argument
+ *   ENAMETOOLONG - File or path name too long
+ *   ENOENT       - No such file or directory
+ *   ENOTDIR      - Not a directory
+  search nothing?  bad!  -- File reference search --  cache not enabled; not cached  don't use fileref  serial number bad  only check idx and serialnum  reference is most likely still valid  -- Path cache and storage search --  rc > 0  found by file reference  rc = 0  reference bad/unused and no path  rc = 0  check path with cache and/or storage  checked storage too: absent for sure  no base info available  only cache; something didn't exist: indecisive  rc = 0  parent not a frontier; absent  else checked only cache; parent is incomplete: indecisive  found by path in the cache afterall *
+ * Compare dircache file references (no validity check is made)
+ *
+ * returns: 0 - no match
+ *          1 - indexes match
+ *          2 - serial numbers match
+ *          3 - serial and hashes match
+ * Debug screen/info stuff **
+ * return cache state parameters
+  if any one is scanning then overall status is "scanning"  sum the time the scanning has taken so far  if all the rest are idle and at least one is ready, then
+               status is "ready".  sum the build ticks of all "ready" volumes  if all are idle; then the whole cache is "idle"  report usage only if there is something ready or being built *
+ * dump RAW binary of buffer and CSV of all valid paths and volumes to disk
+  open both now so they're in the cache  bin  CSV  DIRCACHE_DUMPSTER * Misc. stuff **
+ * set the dircache file to initial values
+  NOTE: This is hazardous to the filesystem of any sort of removable
+         storage unless it may be determined that the filesystem from save
+         to load is identical. If it's not possible to do so in a timely
+         manner, it's not worth persisting the cache.  dircache persistence file header magic  dircache persistence file header  DIRCACHE_MAGIC  metadata of the cache!  CRC32 of data  CRC32 of header through datacrc *
+ * verify that the clean status is A-ok
+ *
+ * function to load the internal cache structure from disk to initialize
+ * the dircache really fast with little disk access.
+  sanity check the header  allocate so that exactly the reserve size remains  from this point on, we're actually dealing with the cache in RAM  convert back to in-RAM representation  read the dircache file into memory; start with the entries  continue with the names; fix up indexes to them if needed  only names will be changed in relative position so fix up those
+       references  nothing should be open besides the dircache file itself therefore
+           no bindings need be resolved; the cache will have its own entry
+           but that should get cleaned up when removing the file  enable the cache but do not try to build it  cache successfully loaded *
+ * function to save the internal cache stucture to disk for fast loading
+ * on boot
+  save the header structure along with the cache metadata  store the size since it better detects an invalid header  write the template header  write the dircache entries  continue with the names  rewrite the header with CRC info  as of now, no changes to the volumes should be allowed at all since
+       that makes what was saved completely invalid  HAVE_EEPROM_SETTINGS *
+ * main one-time initialization function that must be called before any other
+ * operations within the dircache
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Cache memory layout:
+ * x - array of struct dircache_entry
+ * r - reserved buffer
+ * d - name buffer for the name entry of the struct dircache_entry
+ * 0 - zero bytes to assist free name block sentinel scanning (not 0xfe or 0xff)
+ * |xxxxxx|rrrrrrrrr|0|dddddd|0|
+ *
+ * Subsequent x are allocated from the front, d are allocated from the back,
+ * using the reserve buffer for entries added after initial scan.
+ *
+ * After a while the cache may look like:
+ * |xxxxxxxx|rrrrr|0|dddddddd|0|
+ *
+ * After a reboot, the reserve buffer is restored in it's size, so that the
+ * total allocation size grows:
+ * |xxxxxxxx|rrrrrrrrr|0|dddddddd|0|
+ *
+ *
+ * Cache structure:
+ * Format is memory position independent and uses only indexes as links. The
+ * buffer pointers are offset back by one entry to make the array 1-based so
+ * that an index of 0 may be considered an analog of a NULL pointer.
+ *
+ * Entry elements are linked together analagously to the filesystem directory
+ * structure with minor variations that are helpful to the cache's algorithms.
+ * Each volume has a special root structure in the dircache structure, not an
+ * entry in the cache, comprising a forest of volume trees which facilitates
+ * mounting or dismounting of specified volumes on the fly.
+ *
+ * Indexes identifying a volume are computed as: index = -volume - 1
+ * Returning the volume from these indexes is thus: volume = -index - 1
+ * Such indexes are used in root binding and as the 'up' index for an entry
+ * who's parent is the root directory.
+ *
+ * Open files list:
+ * When dircache is made it is the maintainer of the main volume open files
+ * lists, even when it is off. Any files open before dircache is enabled or
+ * initialized must be bound to cache entries by the scan and build operation.
+ * It maintains these lists in a special way.
+ *
+ * Queued (unresolved) bindings are at the back and resolved at the front.
+ * A pointer to the first of each kind of binding is provided to skip to help
+ * iterating one sublist or another.
+ *
+ * r0->r1->r2->q0->q1->q2->NULL
+ * ^resolved0  ^queued0
+  scan and build parameter data  scan directory stream  scanned entry info  halt all scanning  end of stack pointer  current top of stack  cache index of directory  pointer to ce->down  previous item accessed  "recursion" stack  !DIRCACHE_NATIVE  HAVE_MULTIVOLUME  DIRCACHE_NATIVE  dir entry contents are complete  dir entry contents are in-progress  frontier entry permanent mark (very sticky!)  override FRONTIER_ZONED sticky (not stored)  build a volume  merged DCM_BUILD messages  Throw some warnings if about the limits if things may not work  data structure used by cache entries  next at same level  first at child level (if directory)  size of file in bytes (if file)  parent index (-volume-1 if root)  indirect storage (.tinyname == 0)  length of name - (MAX_TINYNAME+1)  direct storage (.tinyname == 1)  entry # in parent - max 0xffff  # of entries used - max 21  if == 1, name fits in .namebuf  (FRONTIER_* bitflags)  entry file attributes  first file cluster - max 0x0ffffff4  FAT write date  FAT write time  file last-modified time  entry serial number  spare us some tedium  thread and kernel stuff  struct that is both used during run time and for persistent storage  cache-wide data  first index of free entry list  total size of data (including holes)  bytes of .size bytes actually used  entry count (including holes)  used when persisting  index of first name in name block  size of all names (including holes)  amount of wasted name space  hint of next free name in buffer  per-volume data  per volume cache data  cache status of this volume  (FRONTIER_* bitflags)  dircache serial number of root  index of first entry of volume root  when did scan start (scanning)  how long to build volume? (ready)  these remain unchanged between cache resets  last reported size at boot  reserved used at last build  last serialnumber generated  struct that is used only for the cache in main memory  cache setting and build info  dircache suspend count  dircache master enable switch  current/last thread id  thread has exited  cache buffer info  buflib buffer handle  size of buflib allocation - 1  don't move due to other allocs  address of buffer - ENTRYSIZE  alias of .p to assist entry resolution  alias of .p to assist name resolution  buflib ops callbacks  per-volume data  first resolved binding in list  first queued binding in list  if building, struct sab in use  "overloaded" macros to get volume structures  reserve over 75% full? *
+ * remove the snapshot file
+ *
+ * open or create the snapshot file
+  HAVE_EEPROM_SETTINGS *
+ * clean up the memory allocation to make viewing in a hex editor more friendly
+ * and highlight problems
+  DIRCACHE_DUMPSTER *
+ * relocate the cache when the buffer has moved
+ *
+ * add a "don't move" lock count
+ *
+ * remove a "don't move" lock count
+ * Open file bindings management * compare the basic file information and return 'true' if they are logically
+   equivalent or the same item, else return 'false' if not *
+ * bind a file to the cache; "queued" or "resolved" depending upon whether or
+ * not it has entry information
+  already resolved *
+ * remove a binding from the cache
+  no need to reset it *
+ * resolve a queued binding with the information from the given source file
+  quickly check the queued list to see if it's there  srcinfop may be the actual one *
+ * dissolve a resolved binding on its volume
+ *
+ * dissolve all resolved bindings on a given volume
+ * Dircache buffer management **
+ * allocate the cache's memory block
+  pad with one extra-- see alloc_name() and free_name() *
+ * put the allocation in dircache control
+  DIRCACHE_DUMPSTER  set it up as a 1-based array  new buffer *
+ * remove the allocation from dircache control and return the handle
+  don't mind .p; it might get changed by the callback even after
+           this call; buffer presence is determined by the following: *
+ * return the number of bytes remaining in the buffer
+ *
+ * return the amount of reserve space used
+ * Internal cache structure control functions **
+ * generate the next serial number in the sequence
+ *
+ * return the dircache volume pointer for the special index
+ *
+ * return the cache entry referenced by idx (NULL if outside buffer)
+ *
+ * return the index of the cache entry (0 if outside buffer)
+ *
+ * return the frontier flags for the index
+  idx < 0 *
+ *  return the sublist down pointer for the sublist that contains entry 'idx'
+  NOTE: 'idx' must refer to a directory or the result is undefined  a normal entry  a volume root *
+ * return a pointer to the index referencing the cache entry that 'idx'
+ * references
+ *
+ * if required, adjust the lists and directory read of any scan and build in
+ * progress
+  removing an item being scanned; set the component position to the
+           entry before this  removed at item in the directory who's immediate contents are
+               being scanned  was first item; rewind it  the directory being scanned or a parent of it has been removed;
+               abort its build or cache traversal *
+ * get a pointer to an allocated name given a cache index
+ *
+ * get the cache buffer index of the given name
+ *
+ * copy the entry's name to a buffer (which assumed to be of sufficient size)
+ *
+ * set the namesfree hint to a new position
+ *
+ * allocate a buffer to use for a new name
+  scan for a free gap starting at the hint point - first fit  found a sentinel; see if there are enough in a row  check end byte and every MAX_TINYNAME+1 bytes from the end;
+                   the minimum-length indirectly allocated string that could be
+                   in between must have at least one character at one of those
+                   locations  exhausted  wrap  initial hint was at names start  if only a tiny block remains after buffer, claim it and
+                   hide it from scans since it's too small for indirect
+                   allocation  no sufficiently long free gaps; allocate anew *
+ * mark a name as free and note that its bytes are available
+  merge with any adjacent tiny blocks *
+ * allocate and assign a name to the entry
+ *
+ * free the name for the entry
+ *
+ * assign a new name to the entry
+  needs a new name allocation; if the new name fits in the freed block,
+       it will use it immediately without a lengthy search *
+ * allocate a dircache_entry from memory using freed ones if available
+  reuse a freed entry  allocate a new one *
+ * free an entry's allocations in the cache; must not be linked to anything
+ * by this time (orphan!)
+  was an established entry; find any associated resolved binding and
+           dissolve it;  bindings are kept strictly synchronized with changes
+           to the storage so a simple serial number comparison is sufficient  no serialnum says "it's free" (for cache-wide iterators)  add to free list *
+ * allocates a new entry of with the name specified by 'basename'
+ *
+ * unlink the entry at *prevp and adjust the scanner if needed
+  unlink it from its list  adjust scanner iterator if needed *
+ * free the entire subtree in the referenced parent down index
+ *
+ * free the specified file entry and its children
+  can't remove a root/invalid  gonna get all this contents (normally the "." and "..") *
+ * insert the new entry into the parent, sorted into position
+  DIRCACHE_NATIVE: the entires are sorted into the spot it would be on
+     * the storage medium based upon the directory entry number, in-progress
+     * scans will catch it or miss it in just the same way they would if
+     * directly scanning the disk. If this is behind an init scan, it gets
+     * added anyway; if in front of it, then scanning will compare what it
+     * finds in order to avoid adding a duplicate.
+     *
+     * All others: the order of entries of the host filesystem is not known so
+     * this must be placed at the end so that a build scan won't miss it and
+     * add a duplicate since it will be comparing any entries it finds in front
+     * of it.
+      now, nothing should be equal to ours or that is a bug since it
+           would already exist (and it shouldn't because it's just been
+           created or moved)  DIRCACHE_NATIVE *
+ * unlink the entry from its parent and return its pointer to the caller
+ *
+ * set the frontier indicator for the given cache index
+ *
+ * remove all messages from the queue, responding to anyone waiting
+  respond to any synchronous build queries; since we're already
+           building and thusly allocated, any additional requests can be
+           processed async *
+ * service dircache_queue during a scan and build
+  only count externally generated commands  this reminds us to keep moving after we're done here; a volume we passed
+       up earlier could have been mounted and need refreshing; it just condenses
+       a slew of requests into one and isn't mistaken for an externally generated
+       command *
+ * scan and build the contents of a subdirectory
+  open directory stream  first pass: read directory  release control and process queued events  else an immediate-contents directory scan  rewind list  there are entries ahead of us; they will be what was just
+                   read or something to be subsequently read; if it belongs
+                   ahead of this one, insert a new entry before it; if it's
+                   the entry just scanned, do nothing further and continue
+                   with the next  already there  not fatal; just don't include it  link it in  this needs scanning  copy remaining FS info  resolve queued user bindings  end while  second pass: "recurse!"  directory completed or removed/deepest level  scan completed/initial directory removed  even if it got zoned from outside it is about to be scanned in
+           its entirety and may be considered new again  set up info for next open
+         * IF_MV: "volume" was set when scan began  end while *
+ * scan and build the contents of a directory or volume root
+  infop should have been fully opened meaning that all its parent
+       directory information is filled in and intact; the binding information
+       should also filled in beforehand  allocate the stack right now to the max demand *
+ * scan and build the entire tree for a volume
+  gather everything sab_process_dir() needs in order to begin a scan  probably not mounted *
+ * this function is the back end to the public API's like readdir()
+  no parent cached => no entries cached  if not settled, just readthrough; no binding information is needed for
+       this; if it becomes settled, we'll get scan->dcfile caught up and do
+       subsequent reads with the cache  rewound?  validate last entry scanned; it might have been replaced between
+           calls or not there at all any more; if so, start the cache reader
+           at the beginning and fast-forward to the correct point as indicated
+           by the FS scanner  end of dir  cache reader is caught up to FS scan  basic dirent information  FS scan information  dircache scan information  return whether this needs decoding *
+ * rewind the directory scan cursor
+ *
+ * this function is the back end to file API internal scanning, which requires
+ * much more detail about the directory entries; this is allowed to make
+ * assumptions about cache state because the cache will not be altered during
+ * the scan process; an additional important property of internal scanning is
+ * that any available binding information is not ignored even when a scan
+ * directory is frontier zoned.
+  call with writer exclusion  assume binding "not found"  is parent cached? if not, readthrough because nothing is here yet  rewound?  the directory being read is reported to be incompletely cached;
+           readthrough and if the entry exists, return it with its binding
+           information; otherwise return the uncached read result while
+           maintaining the last index  entry matches next one to read  end of dir  FS entry information that we maintain  file code file scanning does not need time information  FS entry directory information  dircache file binding information  return whether this needs decoding *
+ * rewind the scan position for an internal scan
+  !DIRCACHE_NATIVE (for all others)  we require access to the host functions  add "." and ".."  save current paths size  append entry  restore path  DIRCACHE_* *
+ * reset the cache for the specified volume
+  idle => nothing happening there  stop any scan and build on this one  if this call is for all volumes, subsequent code will just reset
+           the cache memory usage and the freeing of individual entries may
+           be skipped  set it back to unscanned *
+ * reset the entire cache state for all volumes
+  no buffer => nothing cached  blast all the volumes  DIRCACHE_DUMPSTER  reset the memory  dircache.last_serialnum stays  dircache.reserve_used stays  dircache.last_size stays *
+ * checks each "idle" volume and builds it
+  this does reader locking but we already own that  can't already be "scanning" because that's us; doesn't retry
+           "ready" volumes  measure how long it takes to build the cache for each volume  whatever happened, it's ready unless reset  reset  grow  shrink if not suspended *
+ * allocate buffer and return whether or not a synchronous build should take
+ * place; if 'realloced' is NULL, it's just a query about what will happen
+  called holding dircache lock  HAVE_EEPROM_SETTINGS  start a transparent rebuild  start a non-transparent rebuild  we'll use the entire audiobuf to allocate the dircache  try to allocate at least the min and no more than the limit  start a transparent rebuild  if we got suspended, don't keep this huge buffer around *
+ * compact the dircache buffer after a successful full build
+  called holding dircache lock  cache got bigger than expected; never mind that  slide the names up in memory  fix up name indexes  assumes beelzelib doesn't do things like calling callbacks or changing
+       the pointer as a result of the shrink operation; it doesn't as of now
+       but if it ever does that may very well cause deadlock problems since
+       we're holding filesystem locks *
+ * internal thread that controls cache building; exits when no more requests
+ * are pending or the cache is suspended
+  calls made within the loop reopen the lock  nothing left to do/suspended  background-only builds are not allowed if a synchronous build is
+           required first; test what needs to be done and if it checks out,
+           do it for real below  if it was reallocated, compact it *
+ * post a scan and build message to the thread, starting it if required
+  mustn't recreate until it exits so that the stack isn't reused *
+ * wait for the dircache thread to finish building; intended for waiting for a
+ * non-transparent build to finish when dircache_resume() returns > 0
+ *
+ * call after mounting a volume or all volumes
+  call with writer exclusion *
+ * call after unmounting a volume; specifying < 0 for all or >= 0 for the
+ * specific one
+  call with writer exclusion  HAVE_MULTIVOLUME  backend to dircache_suspend() and dircache_disable()  grab the buffer away into our control; the cache won't need it now  backend to dircache_resume() and dircache_enable()  poll for response *
+ * service to dircache_enable() and dircache_load(); "build_now" starts a build
+ * immediately if the cache was not enabled
+ *
+ * service to dircache_disable()
+ *
+ * disables dircache without freeing the buffer (so it can be re-enabled
+ * afterwards with dircache_resume(); usually called when accepting an USB
+ * connection
+ *
+ * re-enables the dircache if previously suspended by dircache_suspend
+ * or dircache_steal_buffer(), re-using the already allocated buffer if
+ * available
+ *
+ * returns: 0 if the background build is started or dircache is still
+ *          suspended
+ *          > 0 if the build is non-background
+ *          < 0 upon failure
+ *
+ * as dircache_resume() but globally enables it; called by settings and init
+ *
+ * as dircache_suspend() but also frees the buffer; usually called on shutdown
+ * or when deactivated
+ *
+ * have dircache give up its allocation; call dircache_resume() to restart it
+ * Dircache live updating **
+ * obtain binding information for the file's root volume; this is the starting
+ * point for internal path parsing and binding
+  root has a binding  root is idle *
+ * called by file code when the first reference to a file or directory is
+ * opened
+  requires write exclusion *
+ * called by file code when the last reference to a file or directory is
+ * closed
+  requires write exclusion *
+ * called by file code when a file is newly created
+  requires write exclusion  no parent binding => no child binding  failed allocation; parent cache contents are not complete  file binding will have been queued when it was opened; just resolve  scan-in the contents of the new directory at this level only *
+ * called by file code when a file or directory is removed
+  requires write exclusion  no binding yet  if binding was resolved; it should now be queued via above call *
+ * called by file code when a file is renamed
+  requires write exclusion  new parent directory not cached; there is nowhere to put it so
+           nuke it  else no entry anyway  binding not resolved on the old file but it's going into a resolved
+           parent which means the parent would be missing an entry in the cache;
+           downgrade the parent  unlink the entry but keep it; it needs to be re-sorted since the
+       underlying FS probably changed the order  update other name-related information before inserting  place it into its new home  lastly, update the entry name itself  it's not really the same one now so re-stamp it  it cannot be kept around without a valid name *
+ * called by file code to synchronize file entry information
+  requires write exclusion  binding unresolved  a root (should never be called for this) * Dircache paths and files **
+ * helper for returning a path and serial hash represented by an index
+  entry is an orphan split from any root  go all the way up then move back down from the root  idx < 0  prepend the volume specifier for volumes > 0  HAVE_MULTIVOLUME *
+ * validate the file's entry/binding serial number
+ * the dircache file's serial number must match the indexed entry's or the
+ * file reference is stale
+  idx < 0 *
+ * Obtain the hash of the serial numbers of the canonical path, index to root
+ *
+ * Initialize the fileref
+ *
+ * usermode function to construct a full absolute path from dircache into the
+ * given buffer given the dircache file info
+ *
+ * returns:
+ *   success - the length of the string, not including the trailing null or the
+ *             buffer length required if the buffer is too small (return is >=
+ *             size)
+ *   failure - a negative value
+ *
+ * errors:
+ *   EBADF  - Bad file number
+ *   EFAULT - Bad address
+ *   ENOENT - No such file or directory
+  if missing buffer space, still return what's needed a la strlcpy  first and foremost, there must be a cache and the serial number must
+       check out *
+ * Test a path to various levels of rigor and optionally return dircache file
+ * info for the given path.
+ *
+ * If the file reference is used, it is checked first and the path is checked
+ * only if all specified file reference checks fail.
+ *
+ * returns:
+ *   success: 0 = not cached (very weak)
+ *            1 = serial number checks out for the reference (weak)
+ *            2 = serial number and hash check out for the reference (medium)
+ *            3 = path is valid; reference updated if specified (strong)
+ *   failure: a negative value
+ *            if file definitely doesn't exist (errno = ENOENT)
+ *            other error
+ *
+ * errors (including but not limited to):
+ *   EFAULT       - Bad address
+ *   EINVAL       - Invalid argument
+ *   ENAMETOOLONG - File or path name too long
+ *   ENOENT       - No such file or directory
+ *   ENOTDIR      - Not a directory
+  search nothing?  bad!  -- File reference search --  cache not enabled; not cached  don't use fileref  serial number bad  only check idx and serialnum  reference is most likely still valid  -- Path cache and storage search --  rc > 0  found by file reference  rc = 0  reference bad/unused and no path  rc = 0  check path with cache and/or storage  checked storage too: absent for sure  no base info available  only cache; something didn't exist: indecisive  rc = 0  parent not a frontier; absent  else checked only cache; parent is incomplete: indecisive  found by path in the cache afterall *
+ * Compare dircache file references (no validity check is made)
+ *
+ * returns: 0 - no match
+ *          1 - indexes match
+ *          2 - serial numbers match
+ *          3 - serial and hashes match
+ * Debug screen/info stuff **
+ * return cache state parameters
+  if any one is scanning then overall status is "scanning"  sum the time the scanning has taken so far  if all the rest are idle and at least one is ready, then
+               status is "ready".  sum the build ticks of all "ready" volumes  if all are idle; then the whole cache is "idle"  report usage only if there is something ready or being built *
+ * dump RAW binary of buffer and CSV of all valid paths and volumes to disk
+  open both now so they're in the cache  bin  CSV  DIRCACHE_DUMPSTER * Misc. stuff **
+ * set the dircache file to initial values
+  NOTE: This is hazardous to the filesystem of any sort of removable
+         storage unless it may be determined that the filesystem from save
+         to load is identical. If it's not possible to do so in a timely
+         manner, it's not worth persisting the cache.  dircache persistence file header magic  dircache persistence file header  DIRCACHE_MAGIC  metadata of the cache!  CRC32 of data  CRC32 of header through datacrc *
+ * verify that the clean status is A-ok
+ *
+ * function to load the internal cache structure from disk to initialize
+ * the dircache really fast with little disk access.
+  sanity check the header  allocate so that exactly the reserve size remains  from this point on, we're actually dealing with the cache in RAM  convert back to in-RAM representation  read the dircache file into memory; start with the entries  continue with the names; fix up indexes to them if needed  only names will be changed in relative position so fix up those
+       references  nothing should be open besides the dircache file itself therefore
+           no bindings need be resolved; the cache will have its own entry
+           but that should get cleaned up when removing the file  enable the cache but do not try to build it  cache successfully loaded *
+ * function to save the internal cache stucture to disk for fast loading
+ * on boot
+  save the header structure along with the cache metadata  store the size since it better detects an invalid header  write the template header  write the dircache entries  continue with the names  rewrite the header with CRC info  as of now, no changes to the volumes should be allowed at all since
+       that makes what was saved completely invalid  HAVE_EEPROM_SETTINGS *
+ * main one-time initialization function that must be called before any other
+ * operations within the dircache
+ **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2005 by Miika Pekkarinen
+ * Copyright (C) 2014 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Cache memory layout:
+ * x - array of struct dircache_entry
+ * r - reserved buffer
+ * d - name buffer for the name entry of the struct dircache_entry
+ * 0 - zero bytes to assist free name block sentinel scanning (not 0xfe or 0xff)
+ * |xxxxxx|rrrrrrrrr|0|dddddd|0|
+ *
+ * Subsequent x are allocated from the front, d are allocated from the back,
+ * using the reserve buffer for entries added after initial scan.
+ *
+ * After a while the cache may look like:
+ * |xxxxxxxx|rrrrr|0|dddddddd|0|
+ *
+ * After a reboot, the reserve buffer is restored in it's size, so that the
+ * total allocation size grows:
+ * |xxxxxxxx|rrrrrrrrr|0|dddddddd|0|
+ *
+ *
+ * Cache structure:
+ * Format is memory position independent and uses only indexes as links. The
+ * buffer pointers are offset back by one entry to make the array 1-based so
+ * that an index of 0 may be considered an analog of a NULL pointer.
+ *
+ * Entry elements are linked together analagously to the filesystem directory
+ * structure with minor variations that are helpful to the cache's algorithms.
+ * Each volume has a special root structure in the dircache structure, not an
+ * entry in the cache, comprising a forest of volume trees which facilitates
+ * mounting or dismounting of specified volumes on the fly.
+ *
+ * Indexes identifying a volume are computed as: index = -volume - 1
+ * Returning the volume from these indexes is thus: volume = -index - 1
+ * Such indexes are used in root binding and as the 'up' index for an entry
+ * who's parent is the root directory.
+ *
+ * Open files list:
+ * When dircache is made it is the maintainer of the main volume open files
+ * lists, even when it is off. Any files open before dircache is enabled or
+ * initialized must be bound to cache entries by the scan and build operation.
+ * It maintains these lists in a special way.
+ *
+ * Queued (unresolved) bindings are at the back and resolved at the front.
+ * A pointer to the first of each kind of binding is provided to skip to help
+ * iterating one sublist or another.
+ *
+ * r0->r1->r2->q0->q1->q2->NULL
+ * ^resolved0  ^queued0
+  scan and build parameter data  scan directory stream  scanned entry info  halt all scanning  end of stack pointer  current top of stack  cache index of directory  pointer to ce->down  previous item accessed  "recursion" stack  !DIRCACHE_NATIVE  HAVE_MULTIVOLUME  DIRCACHE_NATIVE  dir entry contents are complete  dir entry contents are in-progress  frontier entry permanent mark (very sticky!)  override FRONTIER_ZONED sticky (not stored)  build a volume  merged DCM_BUILD messages  Throw some warnings if about the limits if things may not work  data structure used by cache entries  next at same level  first at child level (if directory)  size of file in bytes (if file)  parent index (-volume-1 if root)  indirect storage (.tinyname == 0)  length of name - (MAX_TINYNAME+1)  direct storage (.tinyname == 1)  entry # in parent - max 0xffff  # of entries used - max 21  if == 1, name fits in .namebuf  (FRONTIER_* bitflags)  entry file attributes  first file cluster - max 0x0ffffff4  FAT write date  FAT write time  file last-modified time  entry serial number  spare us some tedium  thread and kernel stuff  struct that is both used during run time and for persistent storage  cache-wide data  first index of free entry list  total size of data (including holes)  bytes of .size bytes actually used  entry count (including holes)  used when persisting  index of first name in name block  size of all names (including holes)  amount of wasted name space  hint of next free name in buffer  per-volume data  per volume cache data  cache status of this volume  (FRONTIER_* bitflags)  dircache serial number of root  index of first entry of volume root  when did scan start (scanning)  how long to build volume? (ready)  these remain unchanged between cache resets  last reported size at boot  reserved used at last build  last serialnumber generated  struct that is used only for the cache in main memory  cache setting and build info  dircache suspend count  dircache master enable switch  current/last thread id  thread has exited  cache buffer info  buflib buffer handle  size of buflib allocation - 1  don't move due to other allocs  address of buffer - ENTRYSIZE  alias of .p to assist entry resolution  alias of .p to assist name resolution  buflib ops callbacks  per-volume data  first resolved binding in list  first queued binding in list  if building, struct sab in use  "overloaded" macros to get volume structures  reserve over 75% full? *
+ * remove the snapshot file
+ *
+ * open or create the snapshot file
+  HAVE_EEPROM_SETTINGS *
+ * clean up the memory allocation to make viewing in a hex editor more friendly
+ * and highlight problems
+  DIRCACHE_DUMPSTER *
+ * relocate the cache when the buffer has moved
+ *
+ * add a "don't move" lock count
+ *
+ * remove a "don't move" lock count
+ * Open file bindings management * compare the basic file information and return 'true' if they are logically
+   equivalent or the same item, else return 'false' if not *
+ * bind a file to the cache; "queued" or "resolved" depending upon whether or
+ * not it has entry information
+  already resolved *
+ * remove a binding from the cache
+  no need to reset it *
+ * resolve a queued binding with the information from the given source file
+  quickly check the queued list to see if it's there  srcinfop may be the actual one *
+ * dissolve a resolved binding on its volume
+ *
+ * dissolve all resolved bindings on a given volume
+ * Dircache buffer management **
+ * allocate the cache's memory block
+  pad with one extra-- see alloc_name() and free_name() *
+ * put the allocation in dircache control
+  DIRCACHE_DUMPSTER  set it up as a 1-based array  new buffer *
+ * remove the allocation from dircache control and return the handle
+  don't mind .p; it might get changed by the callback even after
+           this call; buffer presence is determined by the following: *
+ * return the number of bytes remaining in the buffer
+ *
+ * return the amount of reserve space used
+ * Internal cache structure control functions **
+ * generate the next serial number in the sequence
+ *
+ * return the dircache volume pointer for the special index
+ *
+ * return the cache entry referenced by idx (NULL if outside buffer)
+ *
+ * return the index of the cache entry (0 if outside buffer)
+ *
+ * return the frontier flags for the index
+  idx < 0 *
+ *  return the sublist down pointer for the sublist that contains entry 'idx'
+  NOTE: 'idx' must refer to a directory or the result is undefined  a normal entry  a volume root *
+ * return a pointer to the index referencing the cache entry that 'idx'
+ * references
+ *
+ * if required, adjust the lists and directory read of any scan and build in
+ * progress
+  removing an item being scanned; set the component position to the
+           entry before this  removed at item in the directory who's immediate contents are
+               being scanned  was first item; rewind it  the directory being scanned or a parent of it has been removed;
+               abort its build or cache traversal *
+ * get a pointer to an allocated name given a cache index
+ *
+ * get the cache buffer index of the given name
+ *
+ * copy the entry's name to a buffer (which assumed to be of sufficient size)
+ *
+ * set the namesfree hint to a new position
+ *
+ * allocate a buffer to use for a new name
+  scan for a free gap starting at the hint point - first fit  found a sentinel; see if there are enough in a row  check end byte and every MAX_TINYNAME+1 bytes from the end;
+                   the minimum-length indirectly allocated string that could be
+                   in between must have at least one character at one of those
+                   locations  exhausted  wrap  initial hint was at names start  if only a tiny block remains after buffer, claim it and
+                   hide it from scans since it's too small for indirect
+                   allocation  no sufficiently long free gaps; allocate anew *
+ * mark a name as free and note that its bytes are available
+  merge with any adjacent tiny blocks *
+ * allocate and assign a name to the entry
+ *
+ * free the name for the entry
+ *
+ * assign a new name to the entry
+  needs a new name allocation; if the new name fits in the freed block,
+       it will use it immediately without a lengthy search *
+ * allocate a dircache_entry from memory using freed ones if available
+  reuse a freed entry  allocate a new one *
+ * free an entry's allocations in the cache; must not be linked to anything
+ * by this time (orphan!)
+  was an established entry; find any associated resolved binding and
+           dissolve it;  bindings are kept strictly synchronized with changes
+           to the storage so a simple serial number comparison is sufficient  no serialnum says "it's free" (for cache-wide iterators)  add to free list *
+ * allocates a new entry of with the name specified by 'basename'
+ *
+ * unlink the entry at *prevp and adjust the scanner if needed
+  unlink it from its list  adjust scanner iterator if needed *
+ * free the entire subtree in the referenced parent down index
+ *
+ * free the specified file entry and its children
+  can't remove a root/invalid  gonna get all this contents (normally the "." and "..") *
+ * insert the new entry into the parent, sorted into position
+  DIRCACHE_NATIVE: the entires are sorted into the spot it would be on
+     * the storage medium based upon the directory entry number, in-progress
+     * scans will catch it or miss it in just the same way they would if
+     * directly scanning the disk. If this is behind an init scan, it gets
+     * added anyway; if in front of it, then scanning will compare what it
+     * finds in order to avoid adding a duplicate.
+     *
+     * All others: the order of entries of the host filesystem is not known so
+     * this must be placed at the end so that a build scan won't miss it and
+     * add a duplicate since it will be comparing any entries it finds in front
+     * of it.
+      now, nothing should be equal to ours or that is a bug since it
+           would already exist (and it shouldn't because it's just been
+           created or moved)  DIRCACHE_NATIVE *
+ * unlink the entry from its parent and return its pointer to the caller
+ *
+ * set the frontier indicator for the given cache index
+ *
+ * remove all messages from the queue, responding to anyone waiting
+  respond to any synchronous build queries; since we're already
+           building and thusly allocated, any additional requests can be
+           processed async *
+ * service dircache_queue during a scan and build
+  only count externally generated commands  this reminds us to keep moving after we're done here; a volume we passed
+       up earlier could have been mounted and need refreshing; it just condenses
+       a slew of requests into one and isn't mistaken for an externally generated
+       command *
+ * scan and build the contents of a subdirectory
+  open directory stream  first pass: read directory  release control and process queued events  else an immediate-contents directory scan  rewind list  there are entries ahead of us; they will be what was just
+                   read or something to be subsequently read; if it belongs
+                   ahead of this one, insert a new entry before it; if it's
+                   the entry just scanned, do nothing further and continue
+                   with the next  already there  not fatal; just don't include it  link it in  this needs scanning  copy remaining FS info  resolve queued user bindings  end while  second pass: "recurse!"  directory completed or removed/deepest level  scan completed/initial directory removed  even if it got zoned from outside it is about to be scanned in
+           its entirety and may be considered new again  set up info for next open
+         * IF_MV: "volume" was set when scan began  end while *
+ * scan and build the contents of a directory or volume root
+  infop should have been fully opened meaning that all its parent
+       directory information is filled in and intact; the binding information
+       should also filled in beforehand  allocate the stack right now to the max demand *
+ * scan and build the entire tree for a volume
+  gather everything sab_process_dir() needs in order to begin a scan  probably not mounted *
+ * this function is the back end to the public API's like readdir()
+  no parent cached => no entries cached  if not settled, just readthrough; no binding information is needed for
+       this; if it becomes settled, we'll get scan->dcfile caught up and do
+       subsequent reads with the cache  rewound?  validate last entry scanned; it might have been replaced between
+           calls or not there at all any more; if so, start the cache reader
+           at the beginning and fast-forward to the correct point as indicated
+           by the FS scanner  end of dir  cache reader is caught up to FS scan  basic dirent information  FS scan information  dircache scan information  return whether this needs decoding *
+ * rewind the directory scan cursor
+ *
+ * this function is the back end to file API internal scanning, which requires
+ * much more detail about the directory entries; this is allowed to make
+ * assumptions about cache state because the cache will not be altered during
+ * the scan process; an additional important property of internal scanning is
+ * that any available binding information is not ignored even when a scan
+ * directory is frontier zoned.
+  call with writer exclusion  assume binding "not found"  is parent cached? if not, readthrough because nothing is here yet  rewound?  the directory being read is reported to be incompletely cached;
+           readthrough and if the entry exists, return it with its binding
+           information; otherwise return the uncached read result while
+           maintaining the last index  entry matches next one to read  end of dir  FS entry information that we maintain  file code file scanning does not need time information  FS entry directory information  dircache file binding information  return whether this needs decoding *
+ * rewind the scan position for an internal scan
+  !DIRCACHE_NATIVE (for all others)  we require access to the host functions  add "." and ".."  save current paths size  append entry  restore path  DIRCACHE_* *
+ * reset the cache for the specified volume
+  idle => nothing happening there  stop any scan and build on this one  if this call is for all volumes, subsequent code will just reset
+           the cache memory usage and the freeing of individual entries may
+           be skipped  set it back to unscanned *
+ * reset the entire cache state for all volumes
+  no buffer => nothing cached  blast all the volumes  DIRCACHE_DUMPSTER  reset the memory  dircache.last_serialnum stays  dircache.reserve_used stays  dircache.last_size stays *
+ * checks each "idle" volume and builds it
+  this does reader locking but we already own that  can't already be "scanning" because that's us; doesn't retry
+           "ready" volumes  measure how long it takes to build the cache for each volume  whatever happened, it's ready unless reset  reset  grow  shrink if not suspended *
+ * allocate buffer and return whether or not a synchronous build should take
+ * place; if 'realloced' is NULL, it's just a query about what will happen
+  called holding dircache lock  HAVE_EEPROM_SETTINGS  start a transparent rebuild  start a non-transparent rebuild  we'll use the entire audiobuf to allocate the dircache  try to allocate at least the min and no more than the limit  start a transparent rebuild  if we got suspended, don't keep this huge buffer around *
+ * compact the dircache buffer after a successful full build
+  called holding dircache lock  cache got bigger than expected; never mind that  slide the names up in memory  fix up name indexes  assumes beelzelib doesn't do things like calling callbacks or changing
+       the pointer as a result of the shrink operation; it doesn't as of now
+       but if it ever does that may very well cause deadlock problems since
+       we're holding filesystem locks *
+ * internal thread that controls cache building; exits when no more requests
+ * are pending or the cache is suspended
+  calls made within the loop reopen the lock  nothing left to do/suspended  background-only builds are not allowed if a synchronous build is
+           required first; test what needs to be done and if it checks out,
+           do it for real below  if it was reallocated, compact it *
+ * post a scan and build message to the thread, starting it if required
+  mustn't recreate until it exits so that the stack isn't reused *
+ * wait for the dircache thread to finish building; intended for waiting for a
+ * non-transparent build to finish when dircache_resume() returns > 0
+ *
+ * call after mounting a volume or all volumes
+  call with writer exclusion *
+ * call after unmounting a volume; specifying < 0 for all or >= 0 for the
+ * specific one
+  call with writer exclusion  HAVE_MULTIVOLUME  backend to dircache_suspend() and dircache_disable()  grab the buffer away into our control; the cache won't need it now  backend to dircache_resume() and dircache_enable()  poll for response *
+ * service to dircache_enable() and dircache_load(); "build_now" starts a build
+ * immediately if the cache was not enabled
+ *
+ * service to dircache_disable()
+ *
+ * disables dircache without freeing the buffer (so it can be re-enabled
+ * afterwards with dircache_resume(); usually called when accepting an USB
+ * connection
+ *
+ * re-enables the dircache if previously suspended by dircache_suspend
+ * or dircache_steal_buffer(), re-using the already allocated buffer if
+ * available
+ *
+ * returns: 0 if the background build is started or dircache is still
+ *          suspended
+ *          > 0 if the build is non-background
+ *          < 0 upon failure
+ *
+ * as dircache_resume() but globally enables it; called by settings and init
+ *
+ * as dircache_suspend() but also frees the buffer; usually called on shutdown
+ * or when deactivated
+ *
+ * have dircache give up its allocation; call dircache_resume() to restart it
+ * Dircache live updating **
+ * obtain binding information for the file's root volume; this is the starting
+ * point for internal path parsing and binding
+  root has a binding  root is idle *
+ * called by file code when the first reference to a file or directory is
+ * opened
+  requires write exclusion *
+ * called by file code when the last reference to a file or directory is
+ * closed
+  requires write exclusion *
+ * called by file code when a file is newly created
+  requires write exclusion  no parent binding => no child binding  failed allocation; parent cache contents are not complete  file binding will have been queued when it was opened; just resolve  scan-in the contents of the new directory at this level only *
+ * called by file code when a file or directory is removed
+  requires write exclusion  no binding yet  if binding was resolved; it should now be queued via above call *
+ * called by file code when a file is renamed
+  requires write exclusion  new parent directory not cached; there is nowhere to put it so
+           nuke it  else no entry anyway  binding not resolved on the old file but it's going into a resolved
+           parent which means the parent would be missing an entry in the cache;
+           downgrade the parent  unlink the entry but keep it; it needs to be re-sorted since the
+       underlying FS probably changed the order  update other name-related information before inserting  place it into its new home  lastly, update the entry name itself  it's not really the same one now so re-stamp it  it cannot be kept around without a valid name *
+ * called by file code to synchronize file entry information
+  requires write exclusion  binding unresolved  a root (should never be called for this) * Dircache paths and files **
+ * helper for returning a path and serial hash represented by an index
+  entry is an orphan split from any root  go all the way up then move back down from the root  idx < 0  prepend the volume specifier for volumes > 0  HAVE_MULTIVOLUME *
+ * validate the file's entry/binding serial number
+ * the dircache file's serial number must match the indexed entry's or the
+ * file reference is stale
+  idx < 0 *
+ * Obtain the hash of the serial numbers of the canonical path, index to root
+ *
+ * Initialize the fileref
+ *
+ * usermode function to construct a full absolute path from dircache into the
+ * given buffer given the dircache file info
+ *
+ * returns:
+ *   success - the length of the string, not including the trailing null or the
+ *             buffer length required if the buffer is too small (return is >=
+ *             size)
+ *   failure - a negative value
+ *
+ * errors:
+ *   EBADF  - Bad file number
+ *   EFAULT - Bad address
+ *   ENOENT - No such file or directory
+  if missing buffer space, still return what's needed a la strlcpy  first and foremost, there must be a cache and the serial number must
+       check out *
+ * Test a path to various levels of rigor and optionally return dircache file
+ * info for the given path.
+ *
+ * If the file reference is used, it is checked first and the path is checked
+ * only if all specified file reference checks fail.
+ *
+ * returns:
+ *   success: 0 = not cached (very weak)
+ *            1 = serial number checks out for the reference (weak)
+ *            2 = serial number and hash check out for the reference (medium)
+ *            3 = path is valid; reference updated if specified (strong)
+ *   failure: a negative value
+ *            if file definitely doesn't exist (errno = ENOENT)
+ *            other error
+ *
+ * errors (including but not limited to):
+ *   EFAULT       - Bad address
+ *   EINVAL       - Invalid argument
+ *   ENAMETOOLONG - File or path name too long
+ *   ENOENT       - No such file or directory
+ *   ENOTDIR      - Not a directory
+  search nothing?  bad!  -- File reference search --  cache not enabled; not cached  don't use fileref  serial number bad  only check idx and serialnum  reference is most likely still valid  -- Path cache and storage search --  rc > 0  found by file reference  rc = 0  reference bad/unused and no path  rc = 0  check path with cache and/or storage  checked storage too: absent for sure  no base info available  only cache; something didn't exist: indecisive  rc = 0  parent not a frontier; absent  else checked only cache; parent is incomplete: indecisive  found by path in the cache afterall *
+ * Compare dircache file references (no validity check is made)
+ *
+ * returns: 0 - no match
+ *          1 - indexes match
+ *          2 - serial numbers match
+ *          3 - serial and hashes match
+ * Debug screen/info stuff **
+ * return cache state parameters
+  if any one is scanning then overall status is "scanning"  sum the time the scanning has taken so far  if all the rest are idle and at least one is ready, then
+               status is "ready".  sum the build ticks of all "ready" volumes  if all are idle; then the whole cache is "idle"  report usage only if there is something ready or being built *
+ * dump RAW binary of buffer and CSV of all valid paths and volumes to disk
+  open both now so they're in the cache  bin  CSV  DIRCACHE_DUMPSTER * Misc. stuff **
+ * set the dircache file to initial values
+  NOTE: This is hazardous to the filesystem of any sort of removable
+         storage unless it may be determined that the filesystem from save
+         to load is identical. If it's not possible to do so in a timely
+         manner, it's not worth persisting the cache.  dircache persistence file header magic  dircache persistence file header  DIRCACHE_MAGIC  metadata of the cache!  CRC32 of data  CRC32 of header through datacrc *
+ * verify that the clean status is A-ok
+ *
+ * function to load the internal cache structure from disk to initialize
+ * the dircache really fast with little disk access.
+  sanity check the header  allocate so that exactly the reserve size remains  from this point on, we're actually dealing with the cache in RAM  convert back to in-RAM representation  read the dircache file into memory; start with the entries  continue with the names; fix up indexes to them if needed  only names will be changed in relative position so fix up those
+       references  nothing should be open besides the dircache file itself therefore
+           no bindings need be resolved; the cache will have its own entry
+           but that should get cleaned up when removing the file  enable the cache but do not try to build it  cache successfully loaded *
+ * function to save the internal cache stucture to disk for fast loading
+ * on boot
+  save the header structure along with the cache metadata  store the size since it better detects an invalid header  write the template header  write the dircache entries  continue with the names  rewrite the header with CRC info  as of now, no changes to the volumes should be allowed at all since
+       that makes what was saved completely invalid  HAVE_EEPROM_SETTINGS *
+ * main one-time initialization function that must be called before any other
+ * operations within the dircache
+ 

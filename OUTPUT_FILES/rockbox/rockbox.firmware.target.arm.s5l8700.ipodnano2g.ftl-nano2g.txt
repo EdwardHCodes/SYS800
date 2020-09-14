@@ -1,0 +1,346 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Michael Sparmann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define FTL_FORCEMOUNT Keeps the state of a scattered page block.
+   This structure is used in memory only, not on flash,
+   but it equals the one the OFW uses.  The ftl_cxt.nextblockusn at the time the block was allocated,
+       needed in order to be able to remove the oldest ones first.  The vBlock number at which the scattered pages are stored  the lBlock number for which those pages are  Pointer to ftl_offsets, contains the mapping which lPage is
+       currently stored at which scattered vPage.  Pages used in the vBlock, i.e. next page number to be written  Pages that are still up to date in this block, i.e. need to be
+       moved when this vBlock is deallocated.  A flag whether all pages are still sequential in this block.
+       Initialized to 1 on allocation, zeroed as soon as anything is
+       written out of sequence, so that the block will need copying
+       when committing to get the pages back into the right order.
+       This is used to half the number of block erases needed when
+       writing huge amounts of sequential data.  Keeps the state of the FTL, both on flash and in memory  Update sequence number of the FTL context, decremented
+       every time a new revision of FTL meta data is written.  Update sequence number for user data blocks. Incremented
+       every time a portion of user pages is written, so that
+       a consistency check can determine which copy of a user
+       page is the most recent one.  Count of currently free pages in the block pool  Index to the first free hyperblock in the blockpool ring buffer  This is a counter that is used to better distribute block
+       wear. It is incremented on every block erase, and if it
+       gets too high (300 on writes, 20 on sync), the most and
+       least worn hyperblock will be swapped (causing an additional
+       block write) and the counter will be decreased by 20.  Ring buffer of currently free hyperblocks. nextfreeidx is the
+       index to freecount free ones, the other ones are currently
+       allocated for scattered page hyperblocks.  Alignment to 32 bits  vPages where the block map is stored  Probably additional map page number space for bigger chips  vPages where the erase counters are stored  Seems to be padding  Pointer to ftl_map used by Whimory, not used by us  Pointer to ftl_erasectr used by Whimory, not used by us  Pointer to ftl_log used by Whimory, not used by us  Flag used to indicate that some erase counter pages should be committed
+       because they were changed more than 100 times since the last commit.  Seems to be unused  vBlocks used to store the FTL context, map, and erase
+       counter pages. This is also a ring buffer, and the oldest
+       page gets swapped with the least used page from the block
+       pool ring buffer when a new one is allocated.  The last used vPage number from ftlctrlblocks  Set on context sync, reset on write, so obviously never
+       zero in the context written to the flash  Seems to be unused, but gets loaded from flash by Whimory.  Keeps the state of the bank's VFL, both on flash and in memory.
+   There is one of these per bank.  Cross-bank update sequence number, incremented on every VFL
+       context commit on any bank.  See ftl_cxt.ftlctrlblocks. This is stored to the VFL contexts
+       in order to be able to find the most recent FTL context copy
+       when mounting the FTL. The VFL context number this will be
+       written to on an FTL context commit is chosen semi-randomly.  Alignment to 32 bits  Decrementing update counter for VFL context commits per bank  Number of the currently active VFL context block, it's an index
+       into vflcxtblocks.  Number of the first free page in the active VFL context block  Seems to be unused  Incremented every time a block erase error leads to a remap,
+       but doesn't seem to be read anywhere.  Number of spare blocks used  pBlock number of the first spare block  Total number of spare blocks  Block remap table. Contains the vBlock number the n-th spare
+       block is used as a replacement for. 0 = unused, 0xFFFF = bad.  Bad block table. Each bit represents 8 blocks. 1 = OK, 0 = Bad.
+       If the entry is zero, you should look at the remap table to see
+       if the block is remapped, and if yes, where the replacement is.  pBlock numbers used to store the VFL context. This is a ring
+       buffer. On a VFL context write, always 8 pages are written,
+       and it passes if at least 4 of them can be read back.  Blocks scheduled for remapping are stored at the end of the
+       remap table. This is the first index used for them.  Probably padding  First checksum (addition)  Second checksum (XOR), there is a bug in whimory regarding this.  Layout of the spare bytes of each page on the flash  The layout used for actual user data (types 0x40 and 0x41)  The lPage, i.e. Sector, number  The update sequence number of that page,
+           copied from ftl_cxt.nextblockusn on write  Seems to be unused  Type field, 0x40 (data page) or 0x41
+           (last data page of hyperblock)  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  The layout used for meta data (other types)  ftl_cxt.usn for FTL stuff, ftl_vfl_cxt.updatecount for VFL stuff  Index of the thing inside the page,
+           for example number / index of the map or erase counter page  Seems to be unused  Seems to be unused  Seems to be unused  Type field:
+            0x43: FTL context page
+            0x44: Block map page
+            0x46: Erase counter page
+            0x47: "FTL is currently mounted", i.e. unclean shutdown, mark
+            0x80: VFL context page  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  Keeps track of troublesome blocks, only in memory, lost on unmount.  vBlock number of the block giving trouble  Bank of the block giving trouble  Error counter, incremented by 3 on error, decremented by 1 on erase,
+       remaping will be done when it reaches 6.  Pointer to an info structure regarding the flash type used  Number of banks we detected a chip on  Block map, used vor pBlock to vBlock mapping  VFL context for each bank  FTL context  Temporary data buffers for internal use by the FTL  Temporary spare byte buffer for internal use by the FTL  Lowlevel BBT for each bank  Erase counters for the vBlocks  Used by ftl_log  Structs keeping record of scattered page blocks  Global cross-bank update sequence number of the VFL context  Keeps track (temporarily) of troublesome blocks  Counts erase counter page changes, after 100 of them the affected
+   page will be committed to the flash.  Buffer needed for copying pages around while moving or committing blocks.
+   This can't be shared with ftl_buffer, because this one could be overwritten
+   during the copying operation in order to e.g. commit a CXT.  Needed to store the old scattered page offsets in order to be able to roll
+   back if something fails while compacting a scattered page block.  Pages per hyperblock (ftl_nand_type->pagesperblock * ftl_banks)  Reserved hyperblocks (ftl_nand_type->blocks
+                       - ftl_nand_type->userblocks - 0x17)  Finds a device info page for the specified bank and returns its number.
+   Used to check if one is present, and to read the lowlevel BBT.  Scan the last 10% of the flash for device info pages  Checks if all banks have proper device info pages  Loads the lowlevel BBT for a bank to the specified buffer.
+   This is based on some cryptic disassembly and not fully understood yet.  Calculates the checksums for the VFL context page of the specified bank  Checks if the checksums of the VFL context
+   of the specified bank are correct  The following line is pretty obviously a bug in Whimory,
+       but we do it the same way for compatibility.  Updates the checksums of the VFL context of the specified bank  Writes 8 copies of the VFL context of the specified bank to flash,
+   and succeeds if at least 4 can be read back properly.  Commits the VFL context of the specified bank to flash,
+   retries until it works or all available pages have been tried  Returns a pointer to the most recently updated VFL context,
+   used to find out the current FTL context vBlock numbers
+   (planetbeing's "maxthing")  Checks if the specified pBlock is marked bad in the supplied lowlevel BBT.
+   Only used while mounting the VFL.  Checks if the specified vBlock could be remapped  Sets or unsets the bad bit of the specified vBlock
+   in the specified bank's VFL context  Tries to read a VFL context from the specified bank, pBlock and page  Translates a bank and vBlock to a pBlock, following remaps  Checks if remapping is scheduled for the specified bank and vBlock  Schedules remapping for the specified bank and vBlock  Removes the specified bank and vBlock combination
+   from the remap scheduled list  Logs that there is trouble for the specified vBlock on the specified bank.
+   The vBlock will be scheduled for remap
+   if there is too much trouble with it.  Logs a successful erase for the specified vBlock on the specified bank  Tries to remap the specified vBlock on the specified bank,
+   not caring about data in there.
+   If it worked, it will return the new pBlock number,
+   if not (no more spare blocks available), it will return zero.  Reads the specified vPage, dealing with all kinds of trouble  Multi-bank version of ftl_vfl_read, will read ftl_banks pages in parallel  Writes the specified vPage, dealing with all kinds of trouble  Mounts the VFL on all banks  Temporary BBT buffer if we're readonly,
+       as we won't need it again after mounting return 1; Mounts the actual FTL  This will trip if there was an unclean unmount before.  Returns a pointer to the ftl_log entry for the specified vBlock,
+   or null, if there is none  Exposed function: Read highlevel sectors  Performs a vBlock erase, dealing with hardware,
+   remapping and all kinds of trouble  Highlevel vBlock erase, that increments the erase counter for the block  Allocates a block from the pool,
+   returning its vBlock number, or 0xFFFFFFFF on error  Releases a vBlock back into the pool  Commits the location of the FTL context blocks
+   to a semi-randomly chosen VFL context  Saves the n-th erase counter page to the flash,
+   because it is too dirty or needs to be moved.  Increments ftl_cxt.ftlctrlpage to the next available FTL context page,
+   allocating a new context block if neccessary.  Copies a vPage from one location to another  Copies a pBlock to a vBlock  Clears ftl_log.issequential, if something violating that is written.  Copies all pages that are currently used from the scattered page block in
+   use by the supplied ftl_log entry to a newly-allocated one, and releases
+   the old one.
+   In other words: It kicks the pages containing old garbage out of it to make
+   space again. This is usually done when a scattered page block is being
+   removed because it is full, but less than half of the pages in there are
+   still in use and rest is just filled with old crap.  Commits an ftl_log entry to proper blocks, no matter what's in there.  Fills the rest of a scattered page block that was actually written
+   sequentially until now, in order to be able to save a block erase by
+   committing it without needing to copy it again.
+   If this fails for whichever reason, it will be committed the usual way.  If a log entry is supplied, its scattered page block will be removed in
+   whatever way seems most appropriate. Else, the oldest scattered page block
+   will be freed by committing it.  Initialize a log entry to the values for an empty scattered page block  Allocates a log entry for the specified vBlock,
+   first making space, if neccessary.  Commits the FTL block map, erase counters, and context to flash  Swaps the most and least worn block on the flash,
+   to better distribute wear. It will not do anything
+   if the wear spread is lower than 5 erases.  Exposed function: Write highlevel sectors  Exposed function: Performes a sync / unmount,
+   i.e. commits all scattered page blocks,
+   distributes wear, and commits the FTL context.  Initializes and mounts the FTL.
+   As long as nothing was written, you won't need to unmount it.
+   Before shutting down after writing something, call ftl_sync(),
+   which will just do nothing if everything was already clean. return 1;**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Michael Sparmann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define FTL_FORCEMOUNT Keeps the state of a scattered page block.
+   This structure is used in memory only, not on flash,
+   but it equals the one the OFW uses.  The ftl_cxt.nextblockusn at the time the block was allocated,
+       needed in order to be able to remove the oldest ones first.  The vBlock number at which the scattered pages are stored  the lBlock number for which those pages are  Pointer to ftl_offsets, contains the mapping which lPage is
+       currently stored at which scattered vPage.  Pages used in the vBlock, i.e. next page number to be written  Pages that are still up to date in this block, i.e. need to be
+       moved when this vBlock is deallocated.  A flag whether all pages are still sequential in this block.
+       Initialized to 1 on allocation, zeroed as soon as anything is
+       written out of sequence, so that the block will need copying
+       when committing to get the pages back into the right order.
+       This is used to half the number of block erases needed when
+       writing huge amounts of sequential data.  Keeps the state of the FTL, both on flash and in memory  Update sequence number of the FTL context, decremented
+       every time a new revision of FTL meta data is written.  Update sequence number for user data blocks. Incremented
+       every time a portion of user pages is written, so that
+       a consistency check can determine which copy of a user
+       page is the most recent one.  Count of currently free pages in the block pool  Index to the first free hyperblock in the blockpool ring buffer  This is a counter that is used to better distribute block
+       wear. It is incremented on every block erase, and if it
+       gets too high (300 on writes, 20 on sync), the most and
+       least worn hyperblock will be swapped (causing an additional
+       block write) and the counter will be decreased by 20.  Ring buffer of currently free hyperblocks. nextfreeidx is the
+       index to freecount free ones, the other ones are currently
+       allocated for scattered page hyperblocks.  Alignment to 32 bits  vPages where the block map is stored  Probably additional map page number space for bigger chips  vPages where the erase counters are stored  Seems to be padding  Pointer to ftl_map used by Whimory, not used by us  Pointer to ftl_erasectr used by Whimory, not used by us  Pointer to ftl_log used by Whimory, not used by us  Flag used to indicate that some erase counter pages should be committed
+       because they were changed more than 100 times since the last commit.  Seems to be unused  vBlocks used to store the FTL context, map, and erase
+       counter pages. This is also a ring buffer, and the oldest
+       page gets swapped with the least used page from the block
+       pool ring buffer when a new one is allocated.  The last used vPage number from ftlctrlblocks  Set on context sync, reset on write, so obviously never
+       zero in the context written to the flash  Seems to be unused, but gets loaded from flash by Whimory.  Keeps the state of the bank's VFL, both on flash and in memory.
+   There is one of these per bank.  Cross-bank update sequence number, incremented on every VFL
+       context commit on any bank.  See ftl_cxt.ftlctrlblocks. This is stored to the VFL contexts
+       in order to be able to find the most recent FTL context copy
+       when mounting the FTL. The VFL context number this will be
+       written to on an FTL context commit is chosen semi-randomly.  Alignment to 32 bits  Decrementing update counter for VFL context commits per bank  Number of the currently active VFL context block, it's an index
+       into vflcxtblocks.  Number of the first free page in the active VFL context block  Seems to be unused  Incremented every time a block erase error leads to a remap,
+       but doesn't seem to be read anywhere.  Number of spare blocks used  pBlock number of the first spare block  Total number of spare blocks  Block remap table. Contains the vBlock number the n-th spare
+       block is used as a replacement for. 0 = unused, 0xFFFF = bad.  Bad block table. Each bit represents 8 blocks. 1 = OK, 0 = Bad.
+       If the entry is zero, you should look at the remap table to see
+       if the block is remapped, and if yes, where the replacement is.  pBlock numbers used to store the VFL context. This is a ring
+       buffer. On a VFL context write, always 8 pages are written,
+       and it passes if at least 4 of them can be read back.  Blocks scheduled for remapping are stored at the end of the
+       remap table. This is the first index used for them.  Probably padding  First checksum (addition)  Second checksum (XOR), there is a bug in whimory regarding this.  Layout of the spare bytes of each page on the flash  The layout used for actual user data (types 0x40 and 0x41)  The lPage, i.e. Sector, number  The update sequence number of that page,
+           copied from ftl_cxt.nextblockusn on write  Seems to be unused  Type field, 0x40 (data page) or 0x41
+           (last data page of hyperblock)  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  The layout used for meta data (other types)  ftl_cxt.usn for FTL stuff, ftl_vfl_cxt.updatecount for VFL stuff  Index of the thing inside the page,
+           for example number / index of the map or erase counter page  Seems to be unused  Seems to be unused  Seems to be unused  Type field:
+            0x43: FTL context page
+            0x44: Block map page
+            0x46: Erase counter page
+            0x47: "FTL is currently mounted", i.e. unclean shutdown, mark
+            0x80: VFL context page  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  Keeps track of troublesome blocks, only in memory, lost on unmount.  vBlock number of the block giving trouble  Bank of the block giving trouble  Error counter, incremented by 3 on error, decremented by 1 on erase,
+       remaping will be done when it reaches 6.  Pointer to an info structure regarding the flash type used  Number of banks we detected a chip on  Block map, used vor pBlock to vBlock mapping  VFL context for each bank  FTL context  Temporary data buffers for internal use by the FTL  Temporary spare byte buffer for internal use by the FTL  Lowlevel BBT for each bank  Erase counters for the vBlocks  Used by ftl_log  Structs keeping record of scattered page blocks  Global cross-bank update sequence number of the VFL context  Keeps track (temporarily) of troublesome blocks  Counts erase counter page changes, after 100 of them the affected
+   page will be committed to the flash.  Buffer needed for copying pages around while moving or committing blocks.
+   This can't be shared with ftl_buffer, because this one could be overwritten
+   during the copying operation in order to e.g. commit a CXT.  Needed to store the old scattered page offsets in order to be able to roll
+   back if something fails while compacting a scattered page block.  Pages per hyperblock (ftl_nand_type->pagesperblock * ftl_banks)  Reserved hyperblocks (ftl_nand_type->blocks
+                       - ftl_nand_type->userblocks - 0x17)  Finds a device info page for the specified bank and returns its number.
+   Used to check if one is present, and to read the lowlevel BBT.  Scan the last 10% of the flash for device info pages  Checks if all banks have proper device info pages  Loads the lowlevel BBT for a bank to the specified buffer.
+   This is based on some cryptic disassembly and not fully understood yet.  Calculates the checksums for the VFL context page of the specified bank  Checks if the checksums of the VFL context
+   of the specified bank are correct  The following line is pretty obviously a bug in Whimory,
+       but we do it the same way for compatibility.  Updates the checksums of the VFL context of the specified bank  Writes 8 copies of the VFL context of the specified bank to flash,
+   and succeeds if at least 4 can be read back properly.  Commits the VFL context of the specified bank to flash,
+   retries until it works or all available pages have been tried  Returns a pointer to the most recently updated VFL context,
+   used to find out the current FTL context vBlock numbers
+   (planetbeing's "maxthing")  Checks if the specified pBlock is marked bad in the supplied lowlevel BBT.
+   Only used while mounting the VFL.  Checks if the specified vBlock could be remapped  Sets or unsets the bad bit of the specified vBlock
+   in the specified bank's VFL context  Tries to read a VFL context from the specified bank, pBlock and page  Translates a bank and vBlock to a pBlock, following remaps  Checks if remapping is scheduled for the specified bank and vBlock  Schedules remapping for the specified bank and vBlock  Removes the specified bank and vBlock combination
+   from the remap scheduled list  Logs that there is trouble for the specified vBlock on the specified bank.
+   The vBlock will be scheduled for remap
+   if there is too much trouble with it.  Logs a successful erase for the specified vBlock on the specified bank  Tries to remap the specified vBlock on the specified bank,
+   not caring about data in there.
+   If it worked, it will return the new pBlock number,
+   if not (no more spare blocks available), it will return zero.  Reads the specified vPage, dealing with all kinds of trouble  Multi-bank version of ftl_vfl_read, will read ftl_banks pages in parallel  Writes the specified vPage, dealing with all kinds of trouble  Mounts the VFL on all banks  Temporary BBT buffer if we're readonly,
+       as we won't need it again after mounting return 1; Mounts the actual FTL  This will trip if there was an unclean unmount before.  Returns a pointer to the ftl_log entry for the specified vBlock,
+   or null, if there is none  Exposed function: Read highlevel sectors  Performs a vBlock erase, dealing with hardware,
+   remapping and all kinds of trouble  Highlevel vBlock erase, that increments the erase counter for the block  Allocates a block from the pool,
+   returning its vBlock number, or 0xFFFFFFFF on error  Releases a vBlock back into the pool  Commits the location of the FTL context blocks
+   to a semi-randomly chosen VFL context  Saves the n-th erase counter page to the flash,
+   because it is too dirty or needs to be moved.  Increments ftl_cxt.ftlctrlpage to the next available FTL context page,
+   allocating a new context block if neccessary.  Copies a vPage from one location to another  Copies a pBlock to a vBlock  Clears ftl_log.issequential, if something violating that is written.  Copies all pages that are currently used from the scattered page block in
+   use by the supplied ftl_log entry to a newly-allocated one, and releases
+   the old one.
+   In other words: It kicks the pages containing old garbage out of it to make
+   space again. This is usually done when a scattered page block is being
+   removed because it is full, but less than half of the pages in there are
+   still in use and rest is just filled with old crap.  Commits an ftl_log entry to proper blocks, no matter what's in there.  Fills the rest of a scattered page block that was actually written
+   sequentially until now, in order to be able to save a block erase by
+   committing it without needing to copy it again.
+   If this fails for whichever reason, it will be committed the usual way.  If a log entry is supplied, its scattered page block will be removed in
+   whatever way seems most appropriate. Else, the oldest scattered page block
+   will be freed by committing it.  Initialize a log entry to the values for an empty scattered page block  Allocates a log entry for the specified vBlock,
+   first making space, if neccessary.  Commits the FTL block map, erase counters, and context to flash  Swaps the most and least worn block on the flash,
+   to better distribute wear. It will not do anything
+   if the wear spread is lower than 5 erases.  Exposed function: Write highlevel sectors  Exposed function: Performes a sync / unmount,
+   i.e. commits all scattered page blocks,
+   distributes wear, and commits the FTL context.  Initializes and mounts the FTL.
+   As long as nothing was written, you won't need to unmount it.
+   Before shutting down after writing something, call ftl_sync(),
+   which will just do nothing if everything was already clean. return 1;**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 by Michael Sparmann
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************#define FTL_FORCEMOUNT Keeps the state of a scattered page block.
+   This structure is used in memory only, not on flash,
+   but it equals the one the OFW uses.  The ftl_cxt.nextblockusn at the time the block was allocated,
+       needed in order to be able to remove the oldest ones first.  The vBlock number at which the scattered pages are stored  the lBlock number for which those pages are  Pointer to ftl_offsets, contains the mapping which lPage is
+       currently stored at which scattered vPage.  Pages used in the vBlock, i.e. next page number to be written  Pages that are still up to date in this block, i.e. need to be
+       moved when this vBlock is deallocated.  A flag whether all pages are still sequential in this block.
+       Initialized to 1 on allocation, zeroed as soon as anything is
+       written out of sequence, so that the block will need copying
+       when committing to get the pages back into the right order.
+       This is used to half the number of block erases needed when
+       writing huge amounts of sequential data.  Keeps the state of the FTL, both on flash and in memory  Update sequence number of the FTL context, decremented
+       every time a new revision of FTL meta data is written.  Update sequence number for user data blocks. Incremented
+       every time a portion of user pages is written, so that
+       a consistency check can determine which copy of a user
+       page is the most recent one.  Count of currently free pages in the block pool  Index to the first free hyperblock in the blockpool ring buffer  This is a counter that is used to better distribute block
+       wear. It is incremented on every block erase, and if it
+       gets too high (300 on writes, 20 on sync), the most and
+       least worn hyperblock will be swapped (causing an additional
+       block write) and the counter will be decreased by 20.  Ring buffer of currently free hyperblocks. nextfreeidx is the
+       index to freecount free ones, the other ones are currently
+       allocated for scattered page hyperblocks.  Alignment to 32 bits  vPages where the block map is stored  Probably additional map page number space for bigger chips  vPages where the erase counters are stored  Seems to be padding  Pointer to ftl_map used by Whimory, not used by us  Pointer to ftl_erasectr used by Whimory, not used by us  Pointer to ftl_log used by Whimory, not used by us  Flag used to indicate that some erase counter pages should be committed
+       because they were changed more than 100 times since the last commit.  Seems to be unused  vBlocks used to store the FTL context, map, and erase
+       counter pages. This is also a ring buffer, and the oldest
+       page gets swapped with the least used page from the block
+       pool ring buffer when a new one is allocated.  The last used vPage number from ftlctrlblocks  Set on context sync, reset on write, so obviously never
+       zero in the context written to the flash  Seems to be unused, but gets loaded from flash by Whimory.  Keeps the state of the bank's VFL, both on flash and in memory.
+   There is one of these per bank.  Cross-bank update sequence number, incremented on every VFL
+       context commit on any bank.  See ftl_cxt.ftlctrlblocks. This is stored to the VFL contexts
+       in order to be able to find the most recent FTL context copy
+       when mounting the FTL. The VFL context number this will be
+       written to on an FTL context commit is chosen semi-randomly.  Alignment to 32 bits  Decrementing update counter for VFL context commits per bank  Number of the currently active VFL context block, it's an index
+       into vflcxtblocks.  Number of the first free page in the active VFL context block  Seems to be unused  Incremented every time a block erase error leads to a remap,
+       but doesn't seem to be read anywhere.  Number of spare blocks used  pBlock number of the first spare block  Total number of spare blocks  Block remap table. Contains the vBlock number the n-th spare
+       block is used as a replacement for. 0 = unused, 0xFFFF = bad.  Bad block table. Each bit represents 8 blocks. 1 = OK, 0 = Bad.
+       If the entry is zero, you should look at the remap table to see
+       if the block is remapped, and if yes, where the replacement is.  pBlock numbers used to store the VFL context. This is a ring
+       buffer. On a VFL context write, always 8 pages are written,
+       and it passes if at least 4 of them can be read back.  Blocks scheduled for remapping are stored at the end of the
+       remap table. This is the first index used for them.  Probably padding  First checksum (addition)  Second checksum (XOR), there is a bug in whimory regarding this.  Layout of the spare bytes of each page on the flash  The layout used for actual user data (types 0x40 and 0x41)  The lPage, i.e. Sector, number  The update sequence number of that page,
+           copied from ftl_cxt.nextblockusn on write  Seems to be unused  Type field, 0x40 (data page) or 0x41
+           (last data page of hyperblock)  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  The layout used for meta data (other types)  ftl_cxt.usn for FTL stuff, ftl_vfl_cxt.updatecount for VFL stuff  Index of the thing inside the page,
+           for example number / index of the map or erase counter page  Seems to be unused  Seems to be unused  Seems to be unused  Type field:
+            0x43: FTL context page
+            0x44: Block map page
+            0x46: Erase counter page
+            0x47: "FTL is currently mounted", i.e. unclean shutdown, mark
+            0x80: VFL context page  ECC mark, usually 0xFF. If an error occurred while reading the
+           page during a copying operation earlier, this will be 0x55.  Seems to be unused  ECC data for the user data  ECC data for the first 0xC bytes above  Keeps track of troublesome blocks, only in memory, lost on unmount.  vBlock number of the block giving trouble  Bank of the block giving trouble  Error counter, incremented by 3 on error, decremented by 1 on erase,
+       remaping will be done when it reaches 6.  Pointer to an info structure regarding the flash type used  Number of banks we detected a chip on  Block map, used vor pBlock to vBlock mapping  VFL context for each bank  FTL context  Temporary data buffers for internal use by the FTL  Temporary spare byte buffer for internal use by the FTL  Lowlevel BBT for each bank  Erase counters for the vBlocks  Used by ftl_log  Structs keeping record of scattered page blocks  Global cross-bank update sequence number of the VFL context  Keeps track (temporarily) of troublesome blocks  Counts erase counter page changes, after 100 of them the affected
+   page will be committed to the flash.  Buffer needed for copying pages around while moving or committing blocks.
+   This can't be shared with ftl_buffer, because this one could be overwritten
+   during the copying operation in order to e.g. commit a CXT.  Needed to store the old scattered page offsets in order to be able to roll
+   back if something fails while compacting a scattered page block.  Pages per hyperblock (ftl_nand_type->pagesperblock * ftl_banks)  Reserved hyperblocks (ftl_nand_type->blocks
+                       - ftl_nand_type->userblocks - 0x17)  Finds a device info page for the specified bank and returns its number.
+   Used to check if one is present, and to read the lowlevel BBT.  Scan the last 10% of the flash for device info pages  Checks if all banks have proper device info pages  Loads the lowlevel BBT for a bank to the specified buffer.
+   This is based on some cryptic disassembly and not fully understood yet.  Calculates the checksums for the VFL context page of the specified bank  Checks if the checksums of the VFL context
+   of the specified bank are correct  The following line is pretty obviously a bug in Whimory,
+       but we do it the same way for compatibility.  Updates the checksums of the VFL context of the specified bank  Writes 8 copies of the VFL context of the specified bank to flash,
+   and succeeds if at least 4 can be read back properly.  Commits the VFL context of the specified bank to flash,
+   retries until it works or all available pages have been tried  Returns a pointer to the most recently updated VFL context,
+   used to find out the current FTL context vBlock numbers
+   (planetbeing's "maxthing")  Checks if the specified pBlock is marked bad in the supplied lowlevel BBT.
+   Only used while mounting the VFL.  Checks if the specified vBlock could be remapped  Sets or unsets the bad bit of the specified vBlock
+   in the specified bank's VFL context  Tries to read a VFL context from the specified bank, pBlock and page  Translates a bank and vBlock to a pBlock, following remaps  Checks if remapping is scheduled for the specified bank and vBlock  Schedules remapping for the specified bank and vBlock  Removes the specified bank and vBlock combination
+   from the remap scheduled list  Logs that there is trouble for the specified vBlock on the specified bank.
+   The vBlock will be scheduled for remap
+   if there is too much trouble with it.  Logs a successful erase for the specified vBlock on the specified bank  Tries to remap the specified vBlock on the specified bank,
+   not caring about data in there.
+   If it worked, it will return the new pBlock number,
+   if not (no more spare blocks available), it will return zero.  Reads the specified vPage, dealing with all kinds of trouble  Multi-bank version of ftl_vfl_read, will read ftl_banks pages in parallel  Writes the specified vPage, dealing with all kinds of trouble  Mounts the VFL on all banks  Temporary BBT buffer if we're readonly,
+       as we won't need it again after mounting return 1; Mounts the actual FTL  This will trip if there was an unclean unmount before.  Returns a pointer to the ftl_log entry for the specified vBlock,
+   or null, if there is none  Exposed function: Read highlevel sectors  Performs a vBlock erase, dealing with hardware,
+   remapping and all kinds of trouble  Highlevel vBlock erase, that increments the erase counter for the block  Allocates a block from the pool,
+   returning its vBlock number, or 0xFFFFFFFF on error  Releases a vBlock back into the pool  Commits the location of the FTL context blocks
+   to a semi-randomly chosen VFL context  Saves the n-th erase counter page to the flash,
+   because it is too dirty or needs to be moved.  Increments ftl_cxt.ftlctrlpage to the next available FTL context page,
+   allocating a new context block if neccessary.  Copies a vPage from one location to another  Copies a pBlock to a vBlock  Clears ftl_log.issequential, if something violating that is written.  Copies all pages that are currently used from the scattered page block in
+   use by the supplied ftl_log entry to a newly-allocated one, and releases
+   the old one.
+   In other words: It kicks the pages containing old garbage out of it to make
+   space again. This is usually done when a scattered page block is being
+   removed because it is full, but less than half of the pages in there are
+   still in use and rest is just filled with old crap.  Commits an ftl_log entry to proper blocks, no matter what's in there.  Fills the rest of a scattered page block that was actually written
+   sequentially until now, in order to be able to save a block erase by
+   committing it without needing to copy it again.
+   If this fails for whichever reason, it will be committed the usual way.  If a log entry is supplied, its scattered page block will be removed in
+   whatever way seems most appropriate. Else, the oldest scattered page block
+   will be freed by committing it.  Initialize a log entry to the values for an empty scattered page block  Allocates a log entry for the specified vBlock,
+   first making space, if neccessary.  Commits the FTL block map, erase counters, and context to flash  Swaps the most and least worn block on the flash,
+   to better distribute wear. It will not do anything
+   if the wear spread is lower than 5 erases.  Exposed function: Write highlevel sectors  Exposed function: Performes a sync / unmount,
+   i.e. commits all scattered page blocks,
+   distributes wear, and commits the FTL context.  Initializes and mounts the FTL.
+   As long as nothing was written, you won't need to unmount it.
+   Before shutting down after writing something, call ftl_sync(),
+   which will just do nothing if everything was already clean. return 1;

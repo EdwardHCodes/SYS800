@@ -1,0 +1,283 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (c) 2008 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** voltages (millivolt) of 0%, 10%, ... 100% when charging disabled  Toshiba Gigabeat S Li Ion 700mAH figured from discharge curve  voltages (millivolt) of 0%, 10%, ... 100% when charging enabled  Toshiba Gigabeat S Li Ion 700mAH figured from charge curve  Returns battery voltage from ADC [millivolts]  ADC reading 0-1023 = 2400mV-4700mV  Returns the application supply voltage from ADC [millvolts]  Returns battery charge current from ADC [milliamps]  Positive reading = charger to battery
+     * Negative reading = battery to charger terminal
+     * ADC reading -512-511 = -2875mA-2875mA  Estimate power dissipation in the charge path regulator in mW.  BATTISNS is shorted to BATT so we don't need to use the
+     * battery current reading.  Returns battery temperature from ADC [deg-C]  E[volts] = value * 2.3V / 1023
+     * R[ohms] = E/I = E[volts] / 0.00002[A] (Thermistor bias current source)
+     *
+     * Steinhart-Hart thermistor equation:
+     * [A + B*ln(R) + D*ln^3(R)] = 1 / T[°K]
+     *
+     * Coeffients that fit experimental data (one thermistor so far, one run):
+     * A = 0.0013002631685462800
+     * B = 0.0002000841932612330
+     * D = 0.0000000640446750919
+      These have degree deltas > 1  (except the final two) so leave them
+         * out. 70 deg C upper limit is quite sufficient.  INF  171  145  130  121  114  108  104  100   96   93   91   88   86   84   82   81   79   78   76   75   74   72   71   70   69   68   67   66   65   64   63   62   61   60   59   58   57   56   55   54   53   52   51   50   49   48   47   46   45   44   43   42   41   40   39   38   37   36   35   34   33   32   31   30   29   28   27   26   25   24   23   22   21   20   19   18   17   16   15   14   13   12   11   10    9    8    7    6    5    4    3    2    1    0   -1   -2   -3   -4   -5 * Charger control * All code has a preference for the main charger being connected over
+ * USB. USB is considered in the algorithm only if it is the sole source.  Interrupt Sense 0 bits  Detect input changes  Total allowed charging time  Filtered charging current  Shutdown notification  Service the watchdog timer, if things
+                                        go very wrong, cease and shut down.  Current ICHRG and VCHRG regulator
+                                      * setting (register bits)  Force change in regulator setting  Battery < threshold debounce  Countdown to CHGCURR error  10s debounce  If not serviced, poweroff in 10s  4s debounce  Temperature monitoring  Within range  Went out of range, wait to come back  Min temp  Max temp  Update filtered charger current - exponential moving average  Return true if the main charger is connected.  Return the voltage level which should automatically trigger
+ * another recharge cycle based upon which power source is available.
+ * Assumes at least one is.  Return greater of supply (BP) or filtered battery voltage.  Get smoothed readings for initializing filtered data.  Get unique readings  Discard extremes  Update filtered battery voltage instead of waiting for filter
+ * decay.  Sets the charge current limit based upon state. charge_state should be
+ * set before calling.  These are actually zeros but reflect this setting  Main(+USB): Charge slowly from the adapter until voltage is
+         * sufficient for normal charging.
+         *
+         * USB: The truth is that things will probably not make it this far.
+         * Cover the case, just in case the disk isn't used and it is
+         * manageable.  Must maintain battery when on USB power only - utterly nasty
+         * but true and something retailos does (it will even end up charging
+         * the battery but not reporting that it is doing so).
+         * Float lower than MAX - could end up slightly discharging after
+         * a full charge but this is safer than maxing it out.  Slower settings to so that the linear regulator doesn't dissipate
+         * an excessive amount of power when coming out of precharge state.  USB-only, DISCHARGING, = maintaining battery  Take very good care not to write garbage.  Table is corrupted somehow. We shouldn't run at all.
+             *
+             * Explanation: On two occasions, even though this driver monitors
+             *              the regulator register settings on each step and
+             *              ensures that only valid table indexes are used,
+             *              the current and voltage seem to be misregulated,
+             *              resulting in excessively high battery voltage that
+             *              will trip the battery protection. After careful
+             *              review it seems that two possibilities exist:
+             *              This code or data got trashed at some point or
+             *              there really is a hardware bug of some sort. So
+             *              far the cause is unknown. Voltage is also
+             *              monitored in the CHARGING case for that reason.
+             *              The solution for data or code corruption is to
+             *              just panic and refuse to run the device. The
+             *              solution for overvoltage due to hardware bug is to
+             *              disable the charging. The action taken will reveal
+             *              the true cause, thus _who_ is responsible.
+             *              "Burning lithium is baaaad", so sayeth The Council
+             *              of Seven Ascended Masters.  Turn on 5K pulldown.  Turn regulator logically ON. Hardware may still override.
+                  Enable charge current conversion  Charge path regulator turn on takes ~100ms max.  Force regulator OFF.  Turn regulator OFF.  Failed. Force poweroff by not servicing the watchdog.  Here because OFF was requested state  Stop the charger - if USB only then the regulator will not really be
+ * turned off. ERROR or DISABLED will turn it off however.  Return OK if it is acceptable to start the regulator.  Not an error condition?  Is the battery even connected?  No tolerance for any over/under temp - wait for it to
+         * come back into safe range.  Temperature range before beginning charging  Temperature range after out-of-range detected -
+               charging will self-resume  Any events that should stop the regulator?  Overvoltage at CHRGRAW?  CHGCURR sensed?  Debounce transient states  Charger may need to be reinserted  Protect against any conceivable overcharge/voltage condition
+             * before hardware protection must intervene. Disable charger
+             * until reboot.  Watch to not overheat FET (nothing should go over about 1012.7mW).
+             * Trying a higher voltage AC adapter can work (up to 6.90V) but
+             * we'll just reject that. Reducing current for adapters that bring
+             * CHRGRAW to > 4.900V is another possible action.  Force off for all states including maintaining the battery level
+             * on USB.  Must maintain watchdog timer and charger thus must always be able to
+       run even if playback is starved.  Use watchdog to shut system down if we lose control of the charging
+     * hardware.  Divide CHRGRAW input by 10  Turn off BATTDETB. It's worthless on MESx0V since the battery
+         * isn't removable (nor the thermistor).  Register has the wrong value - set error condition and disable
+         * since something is wrong.  Disable charger use  Returns true if the unit is charging the batteries.  Filtered battery charge current  Charger pulled - turn off current sources (though hardware
+     * will have done that anyway).  Reset state and clear any error. If disabled, the charger
+         * will not have been started or will have been stopped already.  Might need to reevaluate these bits in charger_none.  USB connected but not configured. Maintain battery to the
+             * greatest degree possible. It probably won't be enough but the
+             * discharge won't be so severe.  Restore status  Maintaining - keep filter going and check charge state  Failed to read current  If main is connected, ignore USB plugs.  Main charger plugged - try charge  USB power only  USB charger plugged - try charge  Main charger pulled - go to battery maintenence.  Failed to read current  Battery voltage may have dropped and a charge cycle should
+         * start again. Debounced.  Try starting a cycle now if battery isn't already topped
+             * off to allow user to ensure the battery is full.  Still above threshold - reset counter  Coundown to restart  Battery is deeply discharged - precharge at lower current.  Ok for fast charge  DISCHARGING:  Very low - precharge  Switch to normal charge mode.  TRICKLE:  Constant-current stage  Constant-voltage stage  Reg. mode is more informative than an operational necessity.  Monitor and stop if current drops below threshold.  Accurate I-level can't be determined since device also
+             * powers through the I sense. This simply stops the reporting
+             * of charging but the regulator remains on.  CHARGING: TOPOFF:  switch  Check if charger timer expired and stop it if so.  Time ran out - error  Main charging algorithm - called from powermgmt.c  Switch by input state  switch  Disable starts while shutting down  The hardware setting doesn't match. It could have turned the
+             * charger off in a race of plugging/unplugging or the setting
+             * was changed in one of the calls.  Disable the charger and prepare for poweroff - called off-thread so we
+ * signal the charging thread to prepare to quit.  Power management thread will set it false again **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (c) 2008 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** voltages (millivolt) of 0%, 10%, ... 100% when charging disabled  Toshiba Gigabeat S Li Ion 700mAH figured from discharge curve  voltages (millivolt) of 0%, 10%, ... 100% when charging enabled  Toshiba Gigabeat S Li Ion 700mAH figured from charge curve  Returns battery voltage from ADC [millivolts]  ADC reading 0-1023 = 2400mV-4700mV  Returns the application supply voltage from ADC [millvolts]  Returns battery charge current from ADC [milliamps]  Positive reading = charger to battery
+     * Negative reading = battery to charger terminal
+     * ADC reading -512-511 = -2875mA-2875mA  Estimate power dissipation in the charge path regulator in mW.  BATTISNS is shorted to BATT so we don't need to use the
+     * battery current reading.  Returns battery temperature from ADC [deg-C]  E[volts] = value * 2.3V / 1023
+     * R[ohms] = E/I = E[volts] / 0.00002[A] (Thermistor bias current source)
+     *
+     * Steinhart-Hart thermistor equation:
+     * [A + B*ln(R) + D*ln^3(R)] = 1 / T[°K]
+     *
+     * Coeffients that fit experimental data (one thermistor so far, one run):
+     * A = 0.0013002631685462800
+     * B = 0.0002000841932612330
+     * D = 0.0000000640446750919
+      These have degree deltas > 1  (except the final two) so leave them
+         * out. 70 deg C upper limit is quite sufficient.  INF  171  145  130  121  114  108  104  100   96   93   91   88   86   84   82   81   79   78   76   75   74   72   71   70   69   68   67   66   65   64   63   62   61   60   59   58   57   56   55   54   53   52   51   50   49   48   47   46   45   44   43   42   41   40   39   38   37   36   35   34   33   32   31   30   29   28   27   26   25   24   23   22   21   20   19   18   17   16   15   14   13   12   11   10    9    8    7    6    5    4    3    2    1    0   -1   -2   -3   -4   -5 * Charger control * All code has a preference for the main charger being connected over
+ * USB. USB is considered in the algorithm only if it is the sole source.  Interrupt Sense 0 bits  Detect input changes  Total allowed charging time  Filtered charging current  Shutdown notification  Service the watchdog timer, if things
+                                        go very wrong, cease and shut down.  Current ICHRG and VCHRG regulator
+                                      * setting (register bits)  Force change in regulator setting  Battery < threshold debounce  Countdown to CHGCURR error  10s debounce  If not serviced, poweroff in 10s  4s debounce  Temperature monitoring  Within range  Went out of range, wait to come back  Min temp  Max temp  Update filtered charger current - exponential moving average  Return true if the main charger is connected.  Return the voltage level which should automatically trigger
+ * another recharge cycle based upon which power source is available.
+ * Assumes at least one is.  Return greater of supply (BP) or filtered battery voltage.  Get smoothed readings for initializing filtered data.  Get unique readings  Discard extremes  Update filtered battery voltage instead of waiting for filter
+ * decay.  Sets the charge current limit based upon state. charge_state should be
+ * set before calling.  These are actually zeros but reflect this setting  Main(+USB): Charge slowly from the adapter until voltage is
+         * sufficient for normal charging.
+         *
+         * USB: The truth is that things will probably not make it this far.
+         * Cover the case, just in case the disk isn't used and it is
+         * manageable.  Must maintain battery when on USB power only - utterly nasty
+         * but true and something retailos does (it will even end up charging
+         * the battery but not reporting that it is doing so).
+         * Float lower than MAX - could end up slightly discharging after
+         * a full charge but this is safer than maxing it out.  Slower settings to so that the linear regulator doesn't dissipate
+         * an excessive amount of power when coming out of precharge state.  USB-only, DISCHARGING, = maintaining battery  Take very good care not to write garbage.  Table is corrupted somehow. We shouldn't run at all.
+             *
+             * Explanation: On two occasions, even though this driver monitors
+             *              the regulator register settings on each step and
+             *              ensures that only valid table indexes are used,
+             *              the current and voltage seem to be misregulated,
+             *              resulting in excessively high battery voltage that
+             *              will trip the battery protection. After careful
+             *              review it seems that two possibilities exist:
+             *              This code or data got trashed at some point or
+             *              there really is a hardware bug of some sort. So
+             *              far the cause is unknown. Voltage is also
+             *              monitored in the CHARGING case for that reason.
+             *              The solution for data or code corruption is to
+             *              just panic and refuse to run the device. The
+             *              solution for overvoltage due to hardware bug is to
+             *              disable the charging. The action taken will reveal
+             *              the true cause, thus _who_ is responsible.
+             *              "Burning lithium is baaaad", so sayeth The Council
+             *              of Seven Ascended Masters.  Turn on 5K pulldown.  Turn regulator logically ON. Hardware may still override.
+                  Enable charge current conversion  Charge path regulator turn on takes ~100ms max.  Force regulator OFF.  Turn regulator OFF.  Failed. Force poweroff by not servicing the watchdog.  Here because OFF was requested state  Stop the charger - if USB only then the regulator will not really be
+ * turned off. ERROR or DISABLED will turn it off however.  Return OK if it is acceptable to start the regulator.  Not an error condition?  Is the battery even connected?  No tolerance for any over/under temp - wait for it to
+         * come back into safe range.  Temperature range before beginning charging  Temperature range after out-of-range detected -
+               charging will self-resume  Any events that should stop the regulator?  Overvoltage at CHRGRAW?  CHGCURR sensed?  Debounce transient states  Charger may need to be reinserted  Protect against any conceivable overcharge/voltage condition
+             * before hardware protection must intervene. Disable charger
+             * until reboot.  Watch to not overheat FET (nothing should go over about 1012.7mW).
+             * Trying a higher voltage AC adapter can work (up to 6.90V) but
+             * we'll just reject that. Reducing current for adapters that bring
+             * CHRGRAW to > 4.900V is another possible action.  Force off for all states including maintaining the battery level
+             * on USB.  Must maintain watchdog timer and charger thus must always be able to
+       run even if playback is starved.  Use watchdog to shut system down if we lose control of the charging
+     * hardware.  Divide CHRGRAW input by 10  Turn off BATTDETB. It's worthless on MESx0V since the battery
+         * isn't removable (nor the thermistor).  Register has the wrong value - set error condition and disable
+         * since something is wrong.  Disable charger use  Returns true if the unit is charging the batteries.  Filtered battery charge current  Charger pulled - turn off current sources (though hardware
+     * will have done that anyway).  Reset state and clear any error. If disabled, the charger
+         * will not have been started or will have been stopped already.  Might need to reevaluate these bits in charger_none.  USB connected but not configured. Maintain battery to the
+             * greatest degree possible. It probably won't be enough but the
+             * discharge won't be so severe.  Restore status  Maintaining - keep filter going and check charge state  Failed to read current  If main is connected, ignore USB plugs.  Main charger plugged - try charge  USB power only  USB charger plugged - try charge  Main charger pulled - go to battery maintenence.  Failed to read current  Battery voltage may have dropped and a charge cycle should
+         * start again. Debounced.  Try starting a cycle now if battery isn't already topped
+             * off to allow user to ensure the battery is full.  Still above threshold - reset counter  Coundown to restart  Battery is deeply discharged - precharge at lower current.  Ok for fast charge  DISCHARGING:  Very low - precharge  Switch to normal charge mode.  TRICKLE:  Constant-current stage  Constant-voltage stage  Reg. mode is more informative than an operational necessity.  Monitor and stop if current drops below threshold.  Accurate I-level can't be determined since device also
+             * powers through the I sense. This simply stops the reporting
+             * of charging but the regulator remains on.  CHARGING: TOPOFF:  switch  Check if charger timer expired and stop it if so.  Time ran out - error  Main charging algorithm - called from powermgmt.c  Switch by input state  switch  Disable starts while shutting down  The hardware setting doesn't match. It could have turned the
+             * charger off in a race of plugging/unplugging or the setting
+             * was changed in one of the calls.  Disable the charger and prepare for poweroff - called off-thread so we
+ * signal the charging thread to prepare to quit.  Power management thread will set it false again **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (c) 2008 by Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** voltages (millivolt) of 0%, 10%, ... 100% when charging disabled  Toshiba Gigabeat S Li Ion 700mAH figured from discharge curve  voltages (millivolt) of 0%, 10%, ... 100% when charging enabled  Toshiba Gigabeat S Li Ion 700mAH figured from charge curve  Returns battery voltage from ADC [millivolts]  ADC reading 0-1023 = 2400mV-4700mV  Returns the application supply voltage from ADC [millvolts]  Returns battery charge current from ADC [milliamps]  Positive reading = charger to battery
+     * Negative reading = battery to charger terminal
+     * ADC reading -512-511 = -2875mA-2875mA  Estimate power dissipation in the charge path regulator in mW.  BATTISNS is shorted to BATT so we don't need to use the
+     * battery current reading.  Returns battery temperature from ADC [deg-C]  E[volts] = value * 2.3V / 1023
+     * R[ohms] = E/I = E[volts] / 0.00002[A] (Thermistor bias current source)
+     *
+     * Steinhart-Hart thermistor equation:
+     * [A + B*ln(R) + D*ln^3(R)] = 1 / T[°K]
+     *
+     * Coeffients that fit experimental data (one thermistor so far, one run):
+     * A = 0.0013002631685462800
+     * B = 0.0002000841932612330
+     * D = 0.0000000640446750919
+      These have degree deltas > 1  (except the final two) so leave them
+         * out. 70 deg C upper limit is quite sufficient.  INF  171  145  130  121  114  108  104  100   96   93   91   88   86   84   82   81   79   78   76   75   74   72   71   70   69   68   67   66   65   64   63   62   61   60   59   58   57   56   55   54   53   52   51   50   49   48   47   46   45   44   43   42   41   40   39   38   37   36   35   34   33   32   31   30   29   28   27   26   25   24   23   22   21   20   19   18   17   16   15   14   13   12   11   10    9    8    7    6    5    4    3    2    1    0   -1   -2   -3   -4   -5 * Charger control * All code has a preference for the main charger being connected over
+ * USB. USB is considered in the algorithm only if it is the sole source.  Interrupt Sense 0 bits  Detect input changes  Total allowed charging time  Filtered charging current  Shutdown notification  Service the watchdog timer, if things
+                                        go very wrong, cease and shut down.  Current ICHRG and VCHRG regulator
+                                      * setting (register bits)  Force change in regulator setting  Battery < threshold debounce  Countdown to CHGCURR error  10s debounce  If not serviced, poweroff in 10s  4s debounce  Temperature monitoring  Within range  Went out of range, wait to come back  Min temp  Max temp  Update filtered charger current - exponential moving average  Return true if the main charger is connected.  Return the voltage level which should automatically trigger
+ * another recharge cycle based upon which power source is available.
+ * Assumes at least one is.  Return greater of supply (BP) or filtered battery voltage.  Get smoothed readings for initializing filtered data.  Get unique readings  Discard extremes  Update filtered battery voltage instead of waiting for filter
+ * decay.  Sets the charge current limit based upon state. charge_state should be
+ * set before calling.  These are actually zeros but reflect this setting  Main(+USB): Charge slowly from the adapter until voltage is
+         * sufficient for normal charging.
+         *
+         * USB: The truth is that things will probably not make it this far.
+         * Cover the case, just in case the disk isn't used and it is
+         * manageable.  Must maintain battery when on USB power only - utterly nasty
+         * but true and something retailos does (it will even end up charging
+         * the battery but not reporting that it is doing so).
+         * Float lower than MAX - could end up slightly discharging after
+         * a full charge but this is safer than maxing it out.  Slower settings to so that the linear regulator doesn't dissipate
+         * an excessive amount of power when coming out of precharge state.  USB-only, DISCHARGING, = maintaining battery  Take very good care not to write garbage.  Table is corrupted somehow. We shouldn't run at all.
+             *
+             * Explanation: On two occasions, even though this driver monitors
+             *              the regulator register settings on each step and
+             *              ensures that only valid table indexes are used,
+             *              the current and voltage seem to be misregulated,
+             *              resulting in excessively high battery voltage that
+             *              will trip the battery protection. After careful
+             *              review it seems that two possibilities exist:
+             *              This code or data got trashed at some point or
+             *              there really is a hardware bug of some sort. So
+             *              far the cause is unknown. Voltage is also
+             *              monitored in the CHARGING case for that reason.
+             *              The solution for data or code corruption is to
+             *              just panic and refuse to run the device. The
+             *              solution for overvoltage due to hardware bug is to
+             *              disable the charging. The action taken will reveal
+             *              the true cause, thus _who_ is responsible.
+             *              "Burning lithium is baaaad", so sayeth The Council
+             *              of Seven Ascended Masters.  Turn on 5K pulldown.  Turn regulator logically ON. Hardware may still override.
+                  Enable charge current conversion  Charge path regulator turn on takes ~100ms max.  Force regulator OFF.  Turn regulator OFF.  Failed. Force poweroff by not servicing the watchdog.  Here because OFF was requested state  Stop the charger - if USB only then the regulator will not really be
+ * turned off. ERROR or DISABLED will turn it off however.  Return OK if it is acceptable to start the regulator.  Not an error condition?  Is the battery even connected?  No tolerance for any over/under temp - wait for it to
+         * come back into safe range.  Temperature range before beginning charging  Temperature range after out-of-range detected -
+               charging will self-resume  Any events that should stop the regulator?  Overvoltage at CHRGRAW?  CHGCURR sensed?  Debounce transient states  Charger may need to be reinserted  Protect against any conceivable overcharge/voltage condition
+             * before hardware protection must intervene. Disable charger
+             * until reboot.  Watch to not overheat FET (nothing should go over about 1012.7mW).
+             * Trying a higher voltage AC adapter can work (up to 6.90V) but
+             * we'll just reject that. Reducing current for adapters that bring
+             * CHRGRAW to > 4.900V is another possible action.  Force off for all states including maintaining the battery level
+             * on USB.  Must maintain watchdog timer and charger thus must always be able to
+       run even if playback is starved.  Use watchdog to shut system down if we lose control of the charging
+     * hardware.  Divide CHRGRAW input by 10  Turn off BATTDETB. It's worthless on MESx0V since the battery
+         * isn't removable (nor the thermistor).  Register has the wrong value - set error condition and disable
+         * since something is wrong.  Disable charger use  Returns true if the unit is charging the batteries.  Filtered battery charge current  Charger pulled - turn off current sources (though hardware
+     * will have done that anyway).  Reset state and clear any error. If disabled, the charger
+         * will not have been started or will have been stopped already.  Might need to reevaluate these bits in charger_none.  USB connected but not configured. Maintain battery to the
+             * greatest degree possible. It probably won't be enough but the
+             * discharge won't be so severe.  Restore status  Maintaining - keep filter going and check charge state  Failed to read current  If main is connected, ignore USB plugs.  Main charger plugged - try charge  USB power only  USB charger plugged - try charge  Main charger pulled - go to battery maintenence.  Failed to read current  Battery voltage may have dropped and a charge cycle should
+         * start again. Debounced.  Try starting a cycle now if battery isn't already topped
+             * off to allow user to ensure the battery is full.  Still above threshold - reset counter  Coundown to restart  Battery is deeply discharged - precharge at lower current.  Ok for fast charge  DISCHARGING:  Very low - precharge  Switch to normal charge mode.  TRICKLE:  Constant-current stage  Constant-voltage stage  Reg. mode is more informative than an operational necessity.  Monitor and stop if current drops below threshold.  Accurate I-level can't be determined since device also
+             * powers through the I sense. This simply stops the reporting
+             * of charging but the regulator remains on.  CHARGING: TOPOFF:  switch  Check if charger timer expired and stop it if so.  Time ran out - error  Main charging algorithm - called from powermgmt.c  Switch by input state  switch  Disable starts while shutting down  The hardware setting doesn't match. It could have turned the
+             * charger off in a race of plugging/unplugging or the setting
+             * was changed in one of the calls.  Disable the charger and prepare for poweroff - called off-thread so we
+ * signal the charging thread to prepare to quit.  Power management thread will set it false again 

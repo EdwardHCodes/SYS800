@@ -1,0 +1,301 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id: fat32format.c 30351 2011-08-25 19:58:47Z thomasjfox $
+ *
+ *
+ * FAT32 formatting functions.  Based on:
+ *
+ * Fat32 formatter version 1.03
+ * (c) Tom Thornhill 2005
+ * This software is covered by the GPL. 
+ * By using this tool, you agree to absolve Ridgecrop of an liabilities for 
+ * lost data.
+ * Please backup any data you value before using this tool.
+ *
+ *
+ * Modified June 2007 by Dave Chapman for use in ipodpatcher
+ * Modified September 2011 by Frank Gevaerts for use in sansa eraser
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following functions are not the most efficient, but are
+   self-contained and don't require needing to know endianness of CPU
+   at compile-time.
+
+   Note that htole16/htole32 exist on some platforms, so for
+   simplicity we use different names.
+
+ Big-endian  Big-endian  A large aligned buffer for disk I/O  TODO: Pass these as parameters to the various create_ functions  can be zero for default or 1,2,4,8,16,32 or 64  Recommended values  calculated before format  Calculated later  Common fields.  if zero, use dTotSec32 instead  Fat 32/16 only  == 0x29 if next three fields are ok  0x41615252 zeros 0x61417272 0xFFFFFFFF 0xFFFFFFFF zeros 0xAA550000 Write "count" zero sectors, starting at sector "sector"  Write 128 sectors at a time 
+28.2  CALCULATING THE VOLUME SERIAL NUMBER
+
+For example, say a disk was formatted on 26 Dec 95 at 9:55 PM and 41.94
+seconds.  DOS takes the date and time just before it writes it to the
+disk.
+
+Low order word is calculated:               Volume Serial Number is:
+    Month & Day         12/26   0c1ah
+    Sec & Hundrenths    41:94   295eh               3578:1d02
+                                -----
+                                3578h
+
+High order word is calculated:
+    Hours & Minutes     21:55   1537h
+    Year                1995    07cbh
+                                -----
+                                1d02h
+ TODO 
+This is the Microsoft calculation from FATGEN
+    
+    uint32_t RootDirSectors = 0;
+    uint32_t TmpVal1, TmpVal2, FATSz;
+
+    TmpVal1 = DskSize - ( ReservedSecCnt + RootDirSectors);
+    TmpVal2 = (256 * SecPerClus) + NumFATs;
+    TmpVal2 = TmpVal2 / 2;
+    FATSz = (TmpVal1 + (TmpVal2 - 1)) / TmpVal2;
+
+    return( FatSz );
+ This is based on 
+       http://hjem.get2net.dk/rune_moeller_barnkob/filesystems/fat.html
+       I've made the obvious changes for FAT32
+      round up  1 sector per cluster  512 MB to 8,191 MB 4 KB  ret = 0x8;  8,192 MB to 16,383 MB 8 KB  ret = 0x10;  16,384 MB to 32,767 MB 16 KB  ret = 0x20;  Larger than 32,768 MB 32 KB  ret = 0x40;  fill out the boot sector and fs info  FSInfo sect  clusters 0-1 reserved, we used cluster 2 for the root dir  We know the buffer is aligned  First FAT Sector  Reserved cluster 1 media id in low byte  Reserved cluster 2 EOC  end of cluster chain for root dir  Only support hard disks at the moment  Checks on Disk Size  low end limit - 65536 sectors  I suspect that most FAT32 implementations would mount this
+           volume just fine, but the spec says that we shouldn't do
+           this, so we won't  This is a more fundamental limitation on FAT32 - the total
+           sector count in the root dir is 32bit. With a bit of
+           creativity, FAT32 could be extended to handle at least 2^28
+           clusters There would need to be an extra field in the
+           FSInfo sector, and the old sector count could be set to
+           0xffffffff. This is non standard though, the Windows FAT
+           driver FASTFAT.SYS won't understand this. Perhaps a future
+           version of FAT32 and FASTFAT will handle this.  First zero out ReservedSect + FatSize * NumFats + SectorsPerCluster  Work out the Cluster count  check for a cluster count of >2^28, since the upper 4 bits of
+       the cluster values in the FAT are reserved.  Sanity check, make sure the fat is big enough.
+       Convert the cluster count into a Fat sector count, and check
+       the fat size value we calculated earlier is OK.  
+       Write boot sector, fats
+       Sector 0 Boot Sector
+       Sector 1 FSInfo 
+       Sector 2 More boot code - we write zeros here
+       Sector 3 unused
+       Sector 4 unused
+       Sector 5 unused
+       Sector 6 Backup boot sector
+       Sector 7 Backup FSInfo sector
+       Sector 8 Backup 'more boot code'
+       zero'd sectors upto ReservedSectCount
+       FAT1  ReservedSectCount to ReservedSectCount + FatSize
+       ...
+       FATn  ReservedSectCount to ReservedSectCount + FatSize
+       RootDir - allocated to cluster2
+      Once zero_sectors has run, any data on the drive is basically lost...  Create the boot sector structure  Create the first FAT sector  Write the first fat sector in the right places **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id: fat32format.c 30351 2011-08-25 19:58:47Z thomasjfox $
+ *
+ *
+ * FAT32 formatting functions.  Based on:
+ *
+ * Fat32 formatter version 1.03
+ * (c) Tom Thornhill 2005
+ * This software is covered by the GPL. 
+ * By using this tool, you agree to absolve Ridgecrop of an liabilities for 
+ * lost data.
+ * Please backup any data you value before using this tool.
+ *
+ *
+ * Modified June 2007 by Dave Chapman for use in ipodpatcher
+ * Modified September 2011 by Frank Gevaerts for use in sansa eraser
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following functions are not the most efficient, but are
+   self-contained and don't require needing to know endianness of CPU
+   at compile-time.
+
+   Note that htole16/htole32 exist on some platforms, so for
+   simplicity we use different names.
+
+ Big-endian  Big-endian  A large aligned buffer for disk I/O  TODO: Pass these as parameters to the various create_ functions  can be zero for default or 1,2,4,8,16,32 or 64  Recommended values  calculated before format  Calculated later  Common fields.  if zero, use dTotSec32 instead  Fat 32/16 only  == 0x29 if next three fields are ok  0x41615252 zeros 0x61417272 0xFFFFFFFF 0xFFFFFFFF zeros 0xAA550000 Write "count" zero sectors, starting at sector "sector"  Write 128 sectors at a time 
+28.2  CALCULATING THE VOLUME SERIAL NUMBER
+
+For example, say a disk was formatted on 26 Dec 95 at 9:55 PM and 41.94
+seconds.  DOS takes the date and time just before it writes it to the
+disk.
+
+Low order word is calculated:               Volume Serial Number is:
+    Month & Day         12/26   0c1ah
+    Sec & Hundrenths    41:94   295eh               3578:1d02
+                                -----
+                                3578h
+
+High order word is calculated:
+    Hours & Minutes     21:55   1537h
+    Year                1995    07cbh
+                                -----
+                                1d02h
+ TODO 
+This is the Microsoft calculation from FATGEN
+    
+    uint32_t RootDirSectors = 0;
+    uint32_t TmpVal1, TmpVal2, FATSz;
+
+    TmpVal1 = DskSize - ( ReservedSecCnt + RootDirSectors);
+    TmpVal2 = (256 * SecPerClus) + NumFATs;
+    TmpVal2 = TmpVal2 / 2;
+    FATSz = (TmpVal1 + (TmpVal2 - 1)) / TmpVal2;
+
+    return( FatSz );
+ This is based on 
+       http://hjem.get2net.dk/rune_moeller_barnkob/filesystems/fat.html
+       I've made the obvious changes for FAT32
+      round up  1 sector per cluster  512 MB to 8,191 MB 4 KB  ret = 0x8;  8,192 MB to 16,383 MB 8 KB  ret = 0x10;  16,384 MB to 32,767 MB 16 KB  ret = 0x20;  Larger than 32,768 MB 32 KB  ret = 0x40;  fill out the boot sector and fs info  FSInfo sect  clusters 0-1 reserved, we used cluster 2 for the root dir  We know the buffer is aligned  First FAT Sector  Reserved cluster 1 media id in low byte  Reserved cluster 2 EOC  end of cluster chain for root dir  Only support hard disks at the moment  Checks on Disk Size  low end limit - 65536 sectors  I suspect that most FAT32 implementations would mount this
+           volume just fine, but the spec says that we shouldn't do
+           this, so we won't  This is a more fundamental limitation on FAT32 - the total
+           sector count in the root dir is 32bit. With a bit of
+           creativity, FAT32 could be extended to handle at least 2^28
+           clusters There would need to be an extra field in the
+           FSInfo sector, and the old sector count could be set to
+           0xffffffff. This is non standard though, the Windows FAT
+           driver FASTFAT.SYS won't understand this. Perhaps a future
+           version of FAT32 and FASTFAT will handle this.  First zero out ReservedSect + FatSize * NumFats + SectorsPerCluster  Work out the Cluster count  check for a cluster count of >2^28, since the upper 4 bits of
+       the cluster values in the FAT are reserved.  Sanity check, make sure the fat is big enough.
+       Convert the cluster count into a Fat sector count, and check
+       the fat size value we calculated earlier is OK.  
+       Write boot sector, fats
+       Sector 0 Boot Sector
+       Sector 1 FSInfo 
+       Sector 2 More boot code - we write zeros here
+       Sector 3 unused
+       Sector 4 unused
+       Sector 5 unused
+       Sector 6 Backup boot sector
+       Sector 7 Backup FSInfo sector
+       Sector 8 Backup 'more boot code'
+       zero'd sectors upto ReservedSectCount
+       FAT1  ReservedSectCount to ReservedSectCount + FatSize
+       ...
+       FATn  ReservedSectCount to ReservedSectCount + FatSize
+       RootDir - allocated to cluster2
+      Once zero_sectors has run, any data on the drive is basically lost...  Create the boot sector structure  Create the first FAT sector  Write the first fat sector in the right places **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id: fat32format.c 30351 2011-08-25 19:58:47Z thomasjfox $
+ *
+ *
+ * FAT32 formatting functions.  Based on:
+ *
+ * Fat32 formatter version 1.03
+ * (c) Tom Thornhill 2005
+ * This software is covered by the GPL. 
+ * By using this tool, you agree to absolve Ridgecrop of an liabilities for 
+ * lost data.
+ * Please backup any data you value before using this tool.
+ *
+ *
+ * Modified June 2007 by Dave Chapman for use in ipodpatcher
+ * Modified September 2011 by Frank Gevaerts for use in sansa eraser
+ *
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** The following functions are not the most efficient, but are
+   self-contained and don't require needing to know endianness of CPU
+   at compile-time.
+
+   Note that htole16/htole32 exist on some platforms, so for
+   simplicity we use different names.
+
+ Big-endian  Big-endian  A large aligned buffer for disk I/O  TODO: Pass these as parameters to the various create_ functions  can be zero for default or 1,2,4,8,16,32 or 64  Recommended values  calculated before format  Calculated later  Common fields.  if zero, use dTotSec32 instead  Fat 32/16 only  == 0x29 if next three fields are ok  0x41615252 zeros 0x61417272 0xFFFFFFFF 0xFFFFFFFF zeros 0xAA550000 Write "count" zero sectors, starting at sector "sector"  Write 128 sectors at a time 
+28.2  CALCULATING THE VOLUME SERIAL NUMBER
+
+For example, say a disk was formatted on 26 Dec 95 at 9:55 PM and 41.94
+seconds.  DOS takes the date and time just before it writes it to the
+disk.
+
+Low order word is calculated:               Volume Serial Number is:
+    Month & Day         12/26   0c1ah
+    Sec & Hundrenths    41:94   295eh               3578:1d02
+                                -----
+                                3578h
+
+High order word is calculated:
+    Hours & Minutes     21:55   1537h
+    Year                1995    07cbh
+                                -----
+                                1d02h
+ TODO 
+This is the Microsoft calculation from FATGEN
+    
+    uint32_t RootDirSectors = 0;
+    uint32_t TmpVal1, TmpVal2, FATSz;
+
+    TmpVal1 = DskSize - ( ReservedSecCnt + RootDirSectors);
+    TmpVal2 = (256 * SecPerClus) + NumFATs;
+    TmpVal2 = TmpVal2 / 2;
+    FATSz = (TmpVal1 + (TmpVal2 - 1)) / TmpVal2;
+
+    return( FatSz );
+ This is based on 
+       http://hjem.get2net.dk/rune_moeller_barnkob/filesystems/fat.html
+       I've made the obvious changes for FAT32
+      round up  1 sector per cluster  512 MB to 8,191 MB 4 KB  ret = 0x8;  8,192 MB to 16,383 MB 8 KB  ret = 0x10;  16,384 MB to 32,767 MB 16 KB  ret = 0x20;  Larger than 32,768 MB 32 KB  ret = 0x40;  fill out the boot sector and fs info  FSInfo sect  clusters 0-1 reserved, we used cluster 2 for the root dir  We know the buffer is aligned  First FAT Sector  Reserved cluster 1 media id in low byte  Reserved cluster 2 EOC  end of cluster chain for root dir  Only support hard disks at the moment  Checks on Disk Size  low end limit - 65536 sectors  I suspect that most FAT32 implementations would mount this
+           volume just fine, but the spec says that we shouldn't do
+           this, so we won't  This is a more fundamental limitation on FAT32 - the total
+           sector count in the root dir is 32bit. With a bit of
+           creativity, FAT32 could be extended to handle at least 2^28
+           clusters There would need to be an extra field in the
+           FSInfo sector, and the old sector count could be set to
+           0xffffffff. This is non standard though, the Windows FAT
+           driver FASTFAT.SYS won't understand this. Perhaps a future
+           version of FAT32 and FASTFAT will handle this.  First zero out ReservedSect + FatSize * NumFats + SectorsPerCluster  Work out the Cluster count  check for a cluster count of >2^28, since the upper 4 bits of
+       the cluster values in the FAT are reserved.  Sanity check, make sure the fat is big enough.
+       Convert the cluster count into a Fat sector count, and check
+       the fat size value we calculated earlier is OK.  
+       Write boot sector, fats
+       Sector 0 Boot Sector
+       Sector 1 FSInfo 
+       Sector 2 More boot code - we write zeros here
+       Sector 3 unused
+       Sector 4 unused
+       Sector 5 unused
+       Sector 6 Backup boot sector
+       Sector 7 Backup FSInfo sector
+       Sector 8 Backup 'more boot code'
+       zero'd sectors upto ReservedSectCount
+       FAT1  ReservedSectCount to ReservedSectCount + FatSize
+       ...
+       FATn  ReservedSectCount to ReservedSectCount + FatSize
+       RootDir - allocated to cluster2
+      Once zero_sectors has run, any data on the drive is basically lost...  Create the boot sector structure  Create the first FAT sector  Write the first fat sector in the right places 

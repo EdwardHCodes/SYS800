@@ -1,0 +1,211 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Driver Architecture:
+ * The driver has two interfaces: the good'n'old i2c_* api and a more
+ * advanced one specific to the imx233 dma architecture. The i2c_* api is
+ * implemented with the imx233_i2c_* one.
+ * Since each i2c transfer must be split into several dma transfers and we
+ * cannot do dynamic allocation, we allow for at most I2C_NR_STAGES stages.
+ * A typical read memory transfer will require 3 stages thus 4 is safe:
+ * - one with start, device address and memory address
+ * - one with repeated start and device address
+ * - one with data read and stop
+ * To make the interface easier to use and to handle the DMA/cache related
+ * issues, all the data transfers are done in a statically allocated buffer
+ * which is managed by the driver. The driver will ensure that all transfers
+ * are cache aligned and will copy back the data to user buffers at the end.
+ * The I2C_BUFFER_SIZE define controls the size of the buffer. All transfers
+ * should probably fit within 512 bytes.
+ *
+ * On top of this, transfers are queued using the 'next' field of imx233_i2c_xfer_t.
+ * Each time a transfer is programmed, it is translated to dma transfers using
+ * the dma API.
+ *
+ * Internal DMA API to build the transfer.
+ * NOTE the api does not perform any locking, it is up to the caller to ensure
+ * that there only one transfer beint built at any time.
+  start building a transfer  add a stage
+ * NOTE for transmit, the data is copied to a buffer so the buffer can be freed
+ * afer this function return. For receive, buffer must exists until transfer is
+ * complete. This function assumes any receive transfer is final (master will
+ * send NAK).  end building a transfer and start the transfer  abort transfer (will call imx233_i2c_transfer_complete)  set speed  callback function when transfer is finished *
+ * Advanced API
+  NOTE these variables are not marked as volatile because all functions
+ * do all operation with IRQ disabled, so they won't change their value
+ * in the middle of a function  pointer to the current transfer  pointer to the last transfer  timeout  timeout callback  called in IRQ context or with IRQ disabled  translate transfer using DMA API  START + addr  data + stop if no second stage  (if second stage) data + stop  I2C_READ  (if write stage)  START + addr  data  START + addr  read data + stop  kick transfer  setup timer for timeout  unqueue head and notify completion, called with IRQ disabled  notify  unqueue  callback function when transfer is finished, called with IRQ disabled  cancel timeout
+     * NOTE because IRQ are disabled, the timeout callback will not be called
+     * until we enable them back, at which point we will have disabled the timeout
+     * so the completion routine will not be called twice.  notify completion and unqueue
+     * WARNING completion callback can queue other transfers, so the only part
+     * of the queue that cannot change is this transaction, everything else can
+     * change  in transaction  unqueue head  in case of failure, skip others  if there is anything left, start it  do not fire again  avoid any race with the irq handler  before queuing, update link to last transfer in each transfer  no transfer pending: start one  kick transfer now  pending transer: queue and let the irq handler process it for us *
+ * DMA API implementation
+  Used for DMA  PIO words  copy buffer pointers  padded to next multiple of cache line size (32 bytes)  Current transfer  current end  clear softreset  Errata (imx233):
+     * When RETAIN_CLOCK is set, the ninth clock pulse (ACK) is not generated. However, the SDA
+     * line is read at the proper timing interval. If RETAIN_CLOCK is cleared, the ninth clock pulse is
+     * generated.
+     * HW_I2C_CTRL1[ACK_MODE] has default value of 0. It should be set to 1 to enable the fix for
+     * this issue.
+      setup pins (must be done when shutdown)  wakeup  align buffer end on cache boundary  copy data to buffer  record pointers for finalization  assume that any read is final (send nak on last)  FIXME there is a race condition here: if dma irq fires right before we
+     * reset the channel, it will most likely trigger an IRQ anyway. It is
+     * extremely unlikely but ideally, we should check this in the IRQ handler
+     * with an id/counter.  check for various errors  the core doesn't like this error, this is a workaround to prevent lock up  sleep  See I2C specification for standard- and fast-mode timings
+     * Clock is derived APBX which we assume to be running at 24 MHz.  Fast-mode @ 400 kHz  HIGH_COUNT=0.6us, RCV_COUNT=0.2us  LOW_COUNT=1.3us, XMIT_COUNT=0.6us  BUS_FREE=0.9us LEADIN_COUNT=0.55us  Standard-mode @ 100 kHz  HIGH_COUNT=5us, RCV_COUNT=2us  LOW_COUNT=5.3us, XMIT_COUNT=2us  BUS_FREE=2us LEADIN_COUNT=2us  reset dma channel on error  clear irq flags  handle completion * Public API  synchronous callback: record status and release semaphore  common init  kick  wait  assume 1 byte  assume 1 byte **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Driver Architecture:
+ * The driver has two interfaces: the good'n'old i2c_* api and a more
+ * advanced one specific to the imx233 dma architecture. The i2c_* api is
+ * implemented with the imx233_i2c_* one.
+ * Since each i2c transfer must be split into several dma transfers and we
+ * cannot do dynamic allocation, we allow for at most I2C_NR_STAGES stages.
+ * A typical read memory transfer will require 3 stages thus 4 is safe:
+ * - one with start, device address and memory address
+ * - one with repeated start and device address
+ * - one with data read and stop
+ * To make the interface easier to use and to handle the DMA/cache related
+ * issues, all the data transfers are done in a statically allocated buffer
+ * which is managed by the driver. The driver will ensure that all transfers
+ * are cache aligned and will copy back the data to user buffers at the end.
+ * The I2C_BUFFER_SIZE define controls the size of the buffer. All transfers
+ * should probably fit within 512 bytes.
+ *
+ * On top of this, transfers are queued using the 'next' field of imx233_i2c_xfer_t.
+ * Each time a transfer is programmed, it is translated to dma transfers using
+ * the dma API.
+ *
+ * Internal DMA API to build the transfer.
+ * NOTE the api does not perform any locking, it is up to the caller to ensure
+ * that there only one transfer beint built at any time.
+  start building a transfer  add a stage
+ * NOTE for transmit, the data is copied to a buffer so the buffer can be freed
+ * afer this function return. For receive, buffer must exists until transfer is
+ * complete. This function assumes any receive transfer is final (master will
+ * send NAK).  end building a transfer and start the transfer  abort transfer (will call imx233_i2c_transfer_complete)  set speed  callback function when transfer is finished *
+ * Advanced API
+  NOTE these variables are not marked as volatile because all functions
+ * do all operation with IRQ disabled, so they won't change their value
+ * in the middle of a function  pointer to the current transfer  pointer to the last transfer  timeout  timeout callback  called in IRQ context or with IRQ disabled  translate transfer using DMA API  START + addr  data + stop if no second stage  (if second stage) data + stop  I2C_READ  (if write stage)  START + addr  data  START + addr  read data + stop  kick transfer  setup timer for timeout  unqueue head and notify completion, called with IRQ disabled  notify  unqueue  callback function when transfer is finished, called with IRQ disabled  cancel timeout
+     * NOTE because IRQ are disabled, the timeout callback will not be called
+     * until we enable them back, at which point we will have disabled the timeout
+     * so the completion routine will not be called twice.  notify completion and unqueue
+     * WARNING completion callback can queue other transfers, so the only part
+     * of the queue that cannot change is this transaction, everything else can
+     * change  in transaction  unqueue head  in case of failure, skip others  if there is anything left, start it  do not fire again  avoid any race with the irq handler  before queuing, update link to last transfer in each transfer  no transfer pending: start one  kick transfer now  pending transer: queue and let the irq handler process it for us *
+ * DMA API implementation
+  Used for DMA  PIO words  copy buffer pointers  padded to next multiple of cache line size (32 bytes)  Current transfer  current end  clear softreset  Errata (imx233):
+     * When RETAIN_CLOCK is set, the ninth clock pulse (ACK) is not generated. However, the SDA
+     * line is read at the proper timing interval. If RETAIN_CLOCK is cleared, the ninth clock pulse is
+     * generated.
+     * HW_I2C_CTRL1[ACK_MODE] has default value of 0. It should be set to 1 to enable the fix for
+     * this issue.
+      setup pins (must be done when shutdown)  wakeup  align buffer end on cache boundary  copy data to buffer  record pointers for finalization  assume that any read is final (send nak on last)  FIXME there is a race condition here: if dma irq fires right before we
+     * reset the channel, it will most likely trigger an IRQ anyway. It is
+     * extremely unlikely but ideally, we should check this in the IRQ handler
+     * with an id/counter.  check for various errors  the core doesn't like this error, this is a workaround to prevent lock up  sleep  See I2C specification for standard- and fast-mode timings
+     * Clock is derived APBX which we assume to be running at 24 MHz.  Fast-mode @ 400 kHz  HIGH_COUNT=0.6us, RCV_COUNT=0.2us  LOW_COUNT=1.3us, XMIT_COUNT=0.6us  BUS_FREE=0.9us LEADIN_COUNT=0.55us  Standard-mode @ 100 kHz  HIGH_COUNT=5us, RCV_COUNT=2us  LOW_COUNT=5.3us, XMIT_COUNT=2us  BUS_FREE=2us LEADIN_COUNT=2us  reset dma channel on error  clear irq flags  handle completion * Public API  synchronous callback: record status and release semaphore  common init  kick  wait  assume 1 byte  assume 1 byte **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2011 by Amaury Pouly
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ****************************************************************************
+ * Driver Architecture:
+ * The driver has two interfaces: the good'n'old i2c_* api and a more
+ * advanced one specific to the imx233 dma architecture. The i2c_* api is
+ * implemented with the imx233_i2c_* one.
+ * Since each i2c transfer must be split into several dma transfers and we
+ * cannot do dynamic allocation, we allow for at most I2C_NR_STAGES stages.
+ * A typical read memory transfer will require 3 stages thus 4 is safe:
+ * - one with start, device address and memory address
+ * - one with repeated start and device address
+ * - one with data read and stop
+ * To make the interface easier to use and to handle the DMA/cache related
+ * issues, all the data transfers are done in a statically allocated buffer
+ * which is managed by the driver. The driver will ensure that all transfers
+ * are cache aligned and will copy back the data to user buffers at the end.
+ * The I2C_BUFFER_SIZE define controls the size of the buffer. All transfers
+ * should probably fit within 512 bytes.
+ *
+ * On top of this, transfers are queued using the 'next' field of imx233_i2c_xfer_t.
+ * Each time a transfer is programmed, it is translated to dma transfers using
+ * the dma API.
+ *
+ * Internal DMA API to build the transfer.
+ * NOTE the api does not perform any locking, it is up to the caller to ensure
+ * that there only one transfer beint built at any time.
+  start building a transfer  add a stage
+ * NOTE for transmit, the data is copied to a buffer so the buffer can be freed
+ * afer this function return. For receive, buffer must exists until transfer is
+ * complete. This function assumes any receive transfer is final (master will
+ * send NAK).  end building a transfer and start the transfer  abort transfer (will call imx233_i2c_transfer_complete)  set speed  callback function when transfer is finished *
+ * Advanced API
+  NOTE these variables are not marked as volatile because all functions
+ * do all operation with IRQ disabled, so they won't change their value
+ * in the middle of a function  pointer to the current transfer  pointer to the last transfer  timeout  timeout callback  called in IRQ context or with IRQ disabled  translate transfer using DMA API  START + addr  data + stop if no second stage  (if second stage) data + stop  I2C_READ  (if write stage)  START + addr  data  START + addr  read data + stop  kick transfer  setup timer for timeout  unqueue head and notify completion, called with IRQ disabled  notify  unqueue  callback function when transfer is finished, called with IRQ disabled  cancel timeout
+     * NOTE because IRQ are disabled, the timeout callback will not be called
+     * until we enable them back, at which point we will have disabled the timeout
+     * so the completion routine will not be called twice.  notify completion and unqueue
+     * WARNING completion callback can queue other transfers, so the only part
+     * of the queue that cannot change is this transaction, everything else can
+     * change  in transaction  unqueue head  in case of failure, skip others  if there is anything left, start it  do not fire again  avoid any race with the irq handler  before queuing, update link to last transfer in each transfer  no transfer pending: start one  kick transfer now  pending transer: queue and let the irq handler process it for us *
+ * DMA API implementation
+  Used for DMA  PIO words  copy buffer pointers  padded to next multiple of cache line size (32 bytes)  Current transfer  current end  clear softreset  Errata (imx233):
+     * When RETAIN_CLOCK is set, the ninth clock pulse (ACK) is not generated. However, the SDA
+     * line is read at the proper timing interval. If RETAIN_CLOCK is cleared, the ninth clock pulse is
+     * generated.
+     * HW_I2C_CTRL1[ACK_MODE] has default value of 0. It should be set to 1 to enable the fix for
+     * this issue.
+      setup pins (must be done when shutdown)  wakeup  align buffer end on cache boundary  copy data to buffer  record pointers for finalization  assume that any read is final (send nak on last)  FIXME there is a race condition here: if dma irq fires right before we
+     * reset the channel, it will most likely trigger an IRQ anyway. It is
+     * extremely unlikely but ideally, we should check this in the IRQ handler
+     * with an id/counter.  check for various errors  the core doesn't like this error, this is a workaround to prevent lock up  sleep  See I2C specification for standard- and fast-mode timings
+     * Clock is derived APBX which we assume to be running at 24 MHz.  Fast-mode @ 400 kHz  HIGH_COUNT=0.6us, RCV_COUNT=0.2us  LOW_COUNT=1.3us, XMIT_COUNT=0.6us  BUS_FREE=0.9us LEADIN_COUNT=0.55us  Standard-mode @ 100 kHz  HIGH_COUNT=5us, RCV_COUNT=2us  LOW_COUNT=5.3us, XMIT_COUNT=2us  BUS_FREE=2us LEADIN_COUNT=2us  reset dma channel on error  clear irq flags  handle completion * Public API  synchronous callback: record status and release semaphore  common init  kick  wait  assume 1 byte  assume 1 byte 

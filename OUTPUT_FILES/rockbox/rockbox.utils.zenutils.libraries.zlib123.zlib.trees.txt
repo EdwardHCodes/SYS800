@@ -1,0 +1,601 @@
+ trees.c -- output deflated data using Huffman coding
+ * Copyright (C) 1995-2005 Jean-loup Gailly
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process uses several Huffman trees. The more
+ *      common source values are represented by shorter bit sequences.
+ *
+ *      Each code tree is stored in a compressed form which is itself
+ * a Huffman encoding of the lengths of all the code strings (in
+ * ascending order by source values).  The actual code strings are
+ * reconstructed from the lengths in the inflate process, as described
+ * in the deflate specification.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"'Deflate' Compressed Data Format Specification".
+ *      Available in ftp.uu.net:/pub/archiving/zip/doc/deflate-1.1.doc
+ *
+ *      Storer, James A.
+ *          Data Compression:  Methods and Theory, pp. 49-50.
+ *          Computer Science Press, 1988.  ISBN 0-7167-8156-5.
+ *
+ *      Sedgewick, R.
+ *          Algorithms, p290.
+ *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
+  @(#) $Id$  #define GEN_TREES_H  ===========================================================================
+ * Constants
+  Bit length codes must not exceed MAX_BL_BITS bits  end of block literal code  repeat previous bit length 3-6 times (2 bits of repeat count)  repeat a zero length 3-10 times  (3 bits of repeat count)  repeat a zero length 11-138 times  (7 bits of repeat count)  extra bits for each length code  extra bits for each distance code  extra bits for each bit length code  The lengths of the bit length codes are sent in order of decreasing
+ * probability, to avoid transmitting the lengths for unused bit length codes.
+  Number of bits used within bi_buf. (bi_buf might be implemented on
+ * more than 16 bits on some systems.)
+  ===========================================================================
+ * Local data. These are initialized only once.
+  see definition of array dist_code below  non ANSI compilers may not accept trees.h  The static literal tree. Since the bit lengths are imposed, there is no
+ * need for the L_CODES extra codes used during heap construction. However
+ * The codes 286 and 287 are needed to build a canonical tree (see _tr_init
+ * below).
+  The static distance tree. (Actually a trivial tree since all codes use
+ * 5 bits.)
+  Distance codes. The first 256 values correspond to the distances
+ * 3 .. 258, the last 256 values correspond to the top 8 bits of
+ * the 15 bit distances.
+  length code for each normalized match length (0 == MIN_MATCH)  First normalized length for each code (0 = MIN_MATCH)  First normalized distance for each code (0 = distance of 1)  GEN_TREES_H  static tree or NULL  extra bits for each code or NULL  base index for extra_bits  max number of elements in the tree  max bit length for the codes  ===========================================================================
+ * Local (static) routines in this file.
+  Send a code of the given tree. c and tree must not have side effects  DEBUG  ===========================================================================
+ * Output a short LSB first on the stream.
+ * IN assertion: there is enough room in pendingBuf.
+  ===========================================================================
+ * Send a value on a given number of bits.
+ * IN assertion: length <= 16 and value fits in length bits.
+  value to send  number of bits  If not enough room in bi_buf, use (valid) bits from bi_buf and
+     * (16 - bi_valid) bits from value, leaving (width - (16-bi_valid))
+     * unused bits in value.
+      !DEBUG  DEBUG  the arguments must not have side effects  ===========================================================================
+ * Initialize the various 'constant' tables.
+  iterates over tree elements  bit counter  length value  code value  distance index  number of codes at each bit length for an optimal tree  For some embedded targets, global variables are not initialized:  Initialize the mapping length (0..255) -> length code (0..28)  Note that the length 255 (match length 258) can be represented
+     * in two different ways: code 284 + 5 bits or code 285, so we
+     * overwrite length_code[255] to use the best encoding:
+      Initialize the mapping dist (0..32K) -> dist code (0..29)  from now on, all distances are divided by 128  Construct the codes of the static literal tree  Codes 286 and 287 do not exist, but we must include them in the
+     * tree construction to get a canonical Huffman tree (longest code
+     * all ones)
+      The static distance tree is trivial:  defined(GEN_TREES_H) || !defined(STDC)  ===========================================================================
+ * Genererate the file trees.h describing the static trees.
+  GEN_TREES_H  ===========================================================================
+ * Initialize the tree data structures for a new zlib stream.
+  enough lookahead for inflate  Initialize the first block of the first file:  ===========================================================================
+ * Initialize a new block.
+  iterates over tree elements  Initialize the trees.  Index within the heap array of least frequent node in the Huffman tree  ===========================================================================
+ * Remove the smallest element from the heap and recreate the heap with
+ * one less element. Updates heap and heap_len.
+  ===========================================================================
+ * Compares to subtrees, using the tree depth as tie breaker when
+ * the subtrees have equal frequency. This minimizes the worst case length.
+  ===========================================================================
+ * Restore the heap property by moving down the tree starting at node k,
+ * exchanging a node with the smallest of its two sons if necessary, stopping
+ * when the heap property is re-established (each father smaller than its
+ * two sons).
+  the tree to restore  node to move down  left son of k  Set j to the smallest of the two sons:  Exit if v is smaller than both sons  Exchange v with the smallest son  And continue down the tree, setting j to the left son of k  ===========================================================================
+ * Compute the optimal bit lengths for a tree and update the total bit length
+ * for the current block.
+ * IN assertion: the fields freq and dad are set, heap[heap_max] and
+ *    above are the tree nodes sorted by increasing frequency.
+ * OUT assertions: the field len is set to the optimal bit length, the
+ *     array bl_count contains the frequencies for each bit length.
+ *     The length opt_len is updated; static_len is also updated if stree is
+ *     not null.
+  the tree descriptor  heap index  iterate over the tree elements  bit length  extra bits  frequency  number of elements with bit length too large  In a first pass, compute the optimal bit lengths (which may
+     * overflow in the case of the bit length tree).
+      root of the heap  We overwrite tree[n].Dad which is no longer needed  not a leaf node  This happens for example on obj2 and pic of the Calgary corpus  Find the first bit length which could increase:  move one leaf down the tree  move one overflow item as its brother  The brother of the overflow item also moves one step up,
+         * but this does not affect bl_count[max_length]
+          Now recompute all bit lengths, scanning in increasing frequency.
+     * h is still equal to HEAP_SIZE. (It is simpler to reconstruct all
+     * lengths instead of fixing only the wrong ones. This idea is taken
+     * from 'ar' written by Haruhiko Okumura.)
+      ===========================================================================
+ * Generate the codes for a given tree and bit counts (which need not be
+ * optimal).
+ * IN assertion: the array bl_count contains the bit length statistics for
+ * the given tree and the field len is set for all tree elements.
+ * OUT assertion: the field code is set for all tree elements of non
+ *     zero code length.
+  the tree to decorate  largest code with non zero frequency  number of codes at each bit length  next code value for each bit length  running code value  bit index  code index  The distribution counts are first used to generate the code values
+     * without bit reversal.
+      Check that the bit counts in bl_count are consistent. The last code
+     * must be all ones.
+      Now reverse the bits  ===========================================================================
+ * Construct one Huffman tree and assigns the code bit strings and lengths.
+ * Update the total bit length for the current block.
+ * IN assertion: the field freq is set for all tree elements.
+ * OUT assertions: the fields len and code are set to the optimal bit length
+ *     and corresponding code. The length opt_len is updated; static_len is
+ *     also updated if stree is not null. The field max_code is set.
+  the tree descriptor  iterate over heap elements  largest code with non zero frequency  new node being created  Construct the initial heap, with least frequent element in
+     * heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
+     * heap[0] is not used.
+      The pkzip format requires that at least one distance code exists,
+     * and that at least one bit should be sent even if there is only one
+     * possible code. So to avoid special checks later on we force at least
+     * two codes of non zero frequency.
+      node is 0 or 1 so it does not have extra bits  The elements heap[heap_len/2+1 .. heap_len] are leaves of the tree,
+     * establish sub-heaps of increasing lengths:
+      Construct the Huffman tree by repeatedly combining the least two
+     * frequent nodes.
+      next internal node of the tree  n = node of least frequency  m = node of next least frequency  keep the nodes sorted by frequency  Create a new node father of n and m  and insert the new node in the heap  At this point, the fields freq and dad are set. We can now
+     * generate the bit lengths.
+      The field len is now set, we can generate the bit codes  ===========================================================================
+ * Scan a literal or distance tree to determine the frequencies of the codes
+ * in the bit length tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  guard  ===========================================================================
+ * Send a literal or distance tree in compressed form, using the codes in
+ * bl_tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  tree[max_code+1].Len = -1;  guard already set  ===========================================================================
+ * Construct the Huffman tree for the bit lengths and return the index in
+ * bl_order of the last bit length code to send.
+  index of last bit length code of non zero freq  Determine the bit length frequencies for literal and distance trees  Build the bit length tree:  opt_len now includes the length of the tree representations, except
+     * the lengths of the bit lengths codes and the 5+5+4 bits for the counts.
+      Determine the number of bit length codes to send. The pkzip format
+     * requires that at least 4 bit length codes be sent. (appnote.txt says
+     * 3 but the actual value used is 4.)
+      Update opt_len to include the bit length tree and counts  ===========================================================================
+ * Send the header for a block using dynamic Huffman trees: the counts, the
+ * lengths of the bit length codes, the literal tree and the distance tree.
+ * IN assertion: lcodes >= 257, dcodes >= 1, blcodes >= 4.
+  number of codes for each tree  index in bl_order  not +255 as stated in appnote.txt  not -3 as stated in appnote.txt  literal tree  distance tree  ===========================================================================
+ * Send a stored block
+  input block  length of input block  true if this is the last block for a file  send block type  with header  ===========================================================================
+ * Send one empty static block to give enough lookahead for inflate.
+ * This takes 10 bits, of which 7 may remain in the bit buffer.
+ * The current inflate code requires 9 bits of lookahead. If the
+ * last two codes for the previous block (real code plus EOB) were coded
+ * on 5 bits or less, inflate may have only 5+3 bits of lookahead to decode
+ * the last real code. In this case we send two empty static blocks instead
+ * of one. (There are no problems if the previous block is stored or fixed.)
+ * To simplify the code, we assume the worst case of last real code encoded
+ * on one bit only.
+  3 for block type, 7 for EOB  Of the 10 bits for the empty block, we have already sent
+     * (10 - bi_valid) bits. The lookahead for the last real code (before
+     * the EOB of the previous block) was thus at least one plus the length
+     * of the EOB plus what we have just sent of the empty static block.
+      ===========================================================================
+ * Determine the best encoding for the current block: dynamic trees, static
+ * trees or store, and output the encoded block to the zip file.
+  input block, or NULL if too old  length of input block  true if this is the last block for a file  opt_len and static_len in bytes  index of last bit length code of non zero freq  Build the Huffman trees unless a stored block is forced  Check if the file is binary or text  Construct the literal and distance trees  At this point, opt_len and static_len are the total bit lengths of
+         * the compressed block data, excluding the tree representations.
+          Build the bit length tree for the above two trees, and get the index
+         * in bl_order of the last bit length code to send.
+          Determine the best encoding. Compute the block lengths in bytes.  force a stored block  force stored block  4: two words for the lengths  The test buf != NULL is only necessary if LIT_BUFSIZE > WSIZE.
+         * Otherwise we can't have processed more than WSIZE input bytes since
+         * the last block flush, because compression would have been
+         * successful. If LIT_BUFSIZE <= WSIZE, it is never too late to
+         * transform a block into a stored block.
+          force static trees  The above check is made mod 2^32, for files larger than 512 MB
+     * and uLong implemented on 32 bits.
+      align on byte boundary  ===========================================================================
+ * Save the match info and tally the frequency counts. Return true if
+ * the current block must be flushed.
+  distance of matched string  match length-MIN_MATCH or unmatched char (if dist==0)  lc is the unmatched char  Here, lc is the match length - MIN_MATCH  dist = match distance - 1  Try to guess if it is profitable to stop the current block here  Compute an upper bound for the compressed length  We avoid equality with lit_bufsize because of wraparound at 64K
+     * on 16 bit machines and because stored blocks are restricted to
+     * 64K-1 bytes.
+      ===========================================================================
+ * Send the block data compressed using the given Huffman trees
+  literal tree  distance tree  distance of matched string  match length or unmatched char (if dist == 0)  running index in l_buf  the code to send  number of extra bits to send  send a literal byte  Here, lc is the match length - MIN_MATCH  send the length code  send the extra length bits  dist is now the match distance - 1  send the distance code  send the extra distance bits  literal or match pair ?  Check that the overlay between pending_buf and d_buf+l_buf is ok:  ===========================================================================
+ * Set the data type to BINARY or TEXT, using a crude approximation:
+ * set it to Z_TEXT if all symbols are either printable characters (33 to 255)
+ * or white spaces (9 to 13, or 32); or set it to Z_BINARY otherwise.
+ * IN assertion: the fields Freq of dyn_ltree are set.
+  ===========================================================================
+ * Reverse the first len bits of a code, using straightforward code (a faster
+ * method would use a table)
+ * IN assertion: 1 <= len <= 15
+  the value to invert  its bit length  ===========================================================================
+ * Flush the bit buffer, keeping at most 7 bits in it.
+  ===========================================================================
+ * Flush the bit buffer and align the output on a byte boundary
+  ===========================================================================
+ * Copy a stored block, storing first the length and its
+ * one's complement if requested.
+  the input data  its length  true if block header must be written  align on byte boundary  enough lookahead for inflate  trees.c -- output deflated data using Huffman coding
+ * Copyright (C) 1995-2005 Jean-loup Gailly
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process uses several Huffman trees. The more
+ *      common source values are represented by shorter bit sequences.
+ *
+ *      Each code tree is stored in a compressed form which is itself
+ * a Huffman encoding of the lengths of all the code strings (in
+ * ascending order by source values).  The actual code strings are
+ * reconstructed from the lengths in the inflate process, as described
+ * in the deflate specification.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"'Deflate' Compressed Data Format Specification".
+ *      Available in ftp.uu.net:/pub/archiving/zip/doc/deflate-1.1.doc
+ *
+ *      Storer, James A.
+ *          Data Compression:  Methods and Theory, pp. 49-50.
+ *          Computer Science Press, 1988.  ISBN 0-7167-8156-5.
+ *
+ *      Sedgewick, R.
+ *          Algorithms, p290.
+ *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
+  @(#) $Id$  #define GEN_TREES_H  ===========================================================================
+ * Constants
+  Bit length codes must not exceed MAX_BL_BITS bits  end of block literal code  repeat previous bit length 3-6 times (2 bits of repeat count)  repeat a zero length 3-10 times  (3 bits of repeat count)  repeat a zero length 11-138 times  (7 bits of repeat count)  extra bits for each length code  extra bits for each distance code  extra bits for each bit length code  The lengths of the bit length codes are sent in order of decreasing
+ * probability, to avoid transmitting the lengths for unused bit length codes.
+  Number of bits used within bi_buf. (bi_buf might be implemented on
+ * more than 16 bits on some systems.)
+  ===========================================================================
+ * Local data. These are initialized only once.
+  see definition of array dist_code below  non ANSI compilers may not accept trees.h  The static literal tree. Since the bit lengths are imposed, there is no
+ * need for the L_CODES extra codes used during heap construction. However
+ * The codes 286 and 287 are needed to build a canonical tree (see _tr_init
+ * below).
+  The static distance tree. (Actually a trivial tree since all codes use
+ * 5 bits.)
+  Distance codes. The first 256 values correspond to the distances
+ * 3 .. 258, the last 256 values correspond to the top 8 bits of
+ * the 15 bit distances.
+  length code for each normalized match length (0 == MIN_MATCH)  First normalized length for each code (0 = MIN_MATCH)  First normalized distance for each code (0 = distance of 1)  GEN_TREES_H  static tree or NULL  extra bits for each code or NULL  base index for extra_bits  max number of elements in the tree  max bit length for the codes  ===========================================================================
+ * Local (static) routines in this file.
+  Send a code of the given tree. c and tree must not have side effects  DEBUG  ===========================================================================
+ * Output a short LSB first on the stream.
+ * IN assertion: there is enough room in pendingBuf.
+  ===========================================================================
+ * Send a value on a given number of bits.
+ * IN assertion: length <= 16 and value fits in length bits.
+  value to send  number of bits  If not enough room in bi_buf, use (valid) bits from bi_buf and
+     * (16 - bi_valid) bits from value, leaving (width - (16-bi_valid))
+     * unused bits in value.
+      !DEBUG  DEBUG  the arguments must not have side effects  ===========================================================================
+ * Initialize the various 'constant' tables.
+  iterates over tree elements  bit counter  length value  code value  distance index  number of codes at each bit length for an optimal tree  For some embedded targets, global variables are not initialized:  Initialize the mapping length (0..255) -> length code (0..28)  Note that the length 255 (match length 258) can be represented
+     * in two different ways: code 284 + 5 bits or code 285, so we
+     * overwrite length_code[255] to use the best encoding:
+      Initialize the mapping dist (0..32K) -> dist code (0..29)  from now on, all distances are divided by 128  Construct the codes of the static literal tree  Codes 286 and 287 do not exist, but we must include them in the
+     * tree construction to get a canonical Huffman tree (longest code
+     * all ones)
+      The static distance tree is trivial:  defined(GEN_TREES_H) || !defined(STDC)  ===========================================================================
+ * Genererate the file trees.h describing the static trees.
+  GEN_TREES_H  ===========================================================================
+ * Initialize the tree data structures for a new zlib stream.
+  enough lookahead for inflate  Initialize the first block of the first file:  ===========================================================================
+ * Initialize a new block.
+  iterates over tree elements  Initialize the trees.  Index within the heap array of least frequent node in the Huffman tree  ===========================================================================
+ * Remove the smallest element from the heap and recreate the heap with
+ * one less element. Updates heap and heap_len.
+  ===========================================================================
+ * Compares to subtrees, using the tree depth as tie breaker when
+ * the subtrees have equal frequency. This minimizes the worst case length.
+  ===========================================================================
+ * Restore the heap property by moving down the tree starting at node k,
+ * exchanging a node with the smallest of its two sons if necessary, stopping
+ * when the heap property is re-established (each father smaller than its
+ * two sons).
+  the tree to restore  node to move down  left son of k  Set j to the smallest of the two sons:  Exit if v is smaller than both sons  Exchange v with the smallest son  And continue down the tree, setting j to the left son of k  ===========================================================================
+ * Compute the optimal bit lengths for a tree and update the total bit length
+ * for the current block.
+ * IN assertion: the fields freq and dad are set, heap[heap_max] and
+ *    above are the tree nodes sorted by increasing frequency.
+ * OUT assertions: the field len is set to the optimal bit length, the
+ *     array bl_count contains the frequencies for each bit length.
+ *     The length opt_len is updated; static_len is also updated if stree is
+ *     not null.
+  the tree descriptor  heap index  iterate over the tree elements  bit length  extra bits  frequency  number of elements with bit length too large  In a first pass, compute the optimal bit lengths (which may
+     * overflow in the case of the bit length tree).
+      root of the heap  We overwrite tree[n].Dad which is no longer needed  not a leaf node  This happens for example on obj2 and pic of the Calgary corpus  Find the first bit length which could increase:  move one leaf down the tree  move one overflow item as its brother  The brother of the overflow item also moves one step up,
+         * but this does not affect bl_count[max_length]
+          Now recompute all bit lengths, scanning in increasing frequency.
+     * h is still equal to HEAP_SIZE. (It is simpler to reconstruct all
+     * lengths instead of fixing only the wrong ones. This idea is taken
+     * from 'ar' written by Haruhiko Okumura.)
+      ===========================================================================
+ * Generate the codes for a given tree and bit counts (which need not be
+ * optimal).
+ * IN assertion: the array bl_count contains the bit length statistics for
+ * the given tree and the field len is set for all tree elements.
+ * OUT assertion: the field code is set for all tree elements of non
+ *     zero code length.
+  the tree to decorate  largest code with non zero frequency  number of codes at each bit length  next code value for each bit length  running code value  bit index  code index  The distribution counts are first used to generate the code values
+     * without bit reversal.
+      Check that the bit counts in bl_count are consistent. The last code
+     * must be all ones.
+      Now reverse the bits  ===========================================================================
+ * Construct one Huffman tree and assigns the code bit strings and lengths.
+ * Update the total bit length for the current block.
+ * IN assertion: the field freq is set for all tree elements.
+ * OUT assertions: the fields len and code are set to the optimal bit length
+ *     and corresponding code. The length opt_len is updated; static_len is
+ *     also updated if stree is not null. The field max_code is set.
+  the tree descriptor  iterate over heap elements  largest code with non zero frequency  new node being created  Construct the initial heap, with least frequent element in
+     * heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
+     * heap[0] is not used.
+      The pkzip format requires that at least one distance code exists,
+     * and that at least one bit should be sent even if there is only one
+     * possible code. So to avoid special checks later on we force at least
+     * two codes of non zero frequency.
+      node is 0 or 1 so it does not have extra bits  The elements heap[heap_len/2+1 .. heap_len] are leaves of the tree,
+     * establish sub-heaps of increasing lengths:
+      Construct the Huffman tree by repeatedly combining the least two
+     * frequent nodes.
+      next internal node of the tree  n = node of least frequency  m = node of next least frequency  keep the nodes sorted by frequency  Create a new node father of n and m  and insert the new node in the heap  At this point, the fields freq and dad are set. We can now
+     * generate the bit lengths.
+      The field len is now set, we can generate the bit codes  ===========================================================================
+ * Scan a literal or distance tree to determine the frequencies of the codes
+ * in the bit length tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  guard  ===========================================================================
+ * Send a literal or distance tree in compressed form, using the codes in
+ * bl_tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  tree[max_code+1].Len = -1;  guard already set  ===========================================================================
+ * Construct the Huffman tree for the bit lengths and return the index in
+ * bl_order of the last bit length code to send.
+  index of last bit length code of non zero freq  Determine the bit length frequencies for literal and distance trees  Build the bit length tree:  opt_len now includes the length of the tree representations, except
+     * the lengths of the bit lengths codes and the 5+5+4 bits for the counts.
+      Determine the number of bit length codes to send. The pkzip format
+     * requires that at least 4 bit length codes be sent. (appnote.txt says
+     * 3 but the actual value used is 4.)
+      Update opt_len to include the bit length tree and counts  ===========================================================================
+ * Send the header for a block using dynamic Huffman trees: the counts, the
+ * lengths of the bit length codes, the literal tree and the distance tree.
+ * IN assertion: lcodes >= 257, dcodes >= 1, blcodes >= 4.
+  number of codes for each tree  index in bl_order  not +255 as stated in appnote.txt  not -3 as stated in appnote.txt  literal tree  distance tree  ===========================================================================
+ * Send a stored block
+  input block  length of input block  true if this is the last block for a file  send block type  with header  ===========================================================================
+ * Send one empty static block to give enough lookahead for inflate.
+ * This takes 10 bits, of which 7 may remain in the bit buffer.
+ * The current inflate code requires 9 bits of lookahead. If the
+ * last two codes for the previous block (real code plus EOB) were coded
+ * on 5 bits or less, inflate may have only 5+3 bits of lookahead to decode
+ * the last real code. In this case we send two empty static blocks instead
+ * of one. (There are no problems if the previous block is stored or fixed.)
+ * To simplify the code, we assume the worst case of last real code encoded
+ * on one bit only.
+  3 for block type, 7 for EOB  Of the 10 bits for the empty block, we have already sent
+     * (10 - bi_valid) bits. The lookahead for the last real code (before
+     * the EOB of the previous block) was thus at least one plus the length
+     * of the EOB plus what we have just sent of the empty static block.
+      ===========================================================================
+ * Determine the best encoding for the current block: dynamic trees, static
+ * trees or store, and output the encoded block to the zip file.
+  input block, or NULL if too old  length of input block  true if this is the last block for a file  opt_len and static_len in bytes  index of last bit length code of non zero freq  Build the Huffman trees unless a stored block is forced  Check if the file is binary or text  Construct the literal and distance trees  At this point, opt_len and static_len are the total bit lengths of
+         * the compressed block data, excluding the tree representations.
+          Build the bit length tree for the above two trees, and get the index
+         * in bl_order of the last bit length code to send.
+          Determine the best encoding. Compute the block lengths in bytes.  force a stored block  force stored block  4: two words for the lengths  The test buf != NULL is only necessary if LIT_BUFSIZE > WSIZE.
+         * Otherwise we can't have processed more than WSIZE input bytes since
+         * the last block flush, because compression would have been
+         * successful. If LIT_BUFSIZE <= WSIZE, it is never too late to
+         * transform a block into a stored block.
+          force static trees  The above check is made mod 2^32, for files larger than 512 MB
+     * and uLong implemented on 32 bits.
+      align on byte boundary  ===========================================================================
+ * Save the match info and tally the frequency counts. Return true if
+ * the current block must be flushed.
+  distance of matched string  match length-MIN_MATCH or unmatched char (if dist==0)  lc is the unmatched char  Here, lc is the match length - MIN_MATCH  dist = match distance - 1  Try to guess if it is profitable to stop the current block here  Compute an upper bound for the compressed length  We avoid equality with lit_bufsize because of wraparound at 64K
+     * on 16 bit machines and because stored blocks are restricted to
+     * 64K-1 bytes.
+      ===========================================================================
+ * Send the block data compressed using the given Huffman trees
+  literal tree  distance tree  distance of matched string  match length or unmatched char (if dist == 0)  running index in l_buf  the code to send  number of extra bits to send  send a literal byte  Here, lc is the match length - MIN_MATCH  send the length code  send the extra length bits  dist is now the match distance - 1  send the distance code  send the extra distance bits  literal or match pair ?  Check that the overlay between pending_buf and d_buf+l_buf is ok:  ===========================================================================
+ * Set the data type to BINARY or TEXT, using a crude approximation:
+ * set it to Z_TEXT if all symbols are either printable characters (33 to 255)
+ * or white spaces (9 to 13, or 32); or set it to Z_BINARY otherwise.
+ * IN assertion: the fields Freq of dyn_ltree are set.
+  ===========================================================================
+ * Reverse the first len bits of a code, using straightforward code (a faster
+ * method would use a table)
+ * IN assertion: 1 <= len <= 15
+  the value to invert  its bit length  ===========================================================================
+ * Flush the bit buffer, keeping at most 7 bits in it.
+  ===========================================================================
+ * Flush the bit buffer and align the output on a byte boundary
+  ===========================================================================
+ * Copy a stored block, storing first the length and its
+ * one's complement if requested.
+  the input data  its length  true if block header must be written  align on byte boundary  enough lookahead for inflate  trees.c -- output deflated data using Huffman coding
+ * Copyright (C) 1995-2005 Jean-loup Gailly
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process uses several Huffman trees. The more
+ *      common source values are represented by shorter bit sequences.
+ *
+ *      Each code tree is stored in a compressed form which is itself
+ * a Huffman encoding of the lengths of all the code strings (in
+ * ascending order by source values).  The actual code strings are
+ * reconstructed from the lengths in the inflate process, as described
+ * in the deflate specification.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"'Deflate' Compressed Data Format Specification".
+ *      Available in ftp.uu.net:/pub/archiving/zip/doc/deflate-1.1.doc
+ *
+ *      Storer, James A.
+ *          Data Compression:  Methods and Theory, pp. 49-50.
+ *          Computer Science Press, 1988.  ISBN 0-7167-8156-5.
+ *
+ *      Sedgewick, R.
+ *          Algorithms, p290.
+ *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
+  @(#) $Id$  #define GEN_TREES_H  ===========================================================================
+ * Constants
+  Bit length codes must not exceed MAX_BL_BITS bits  end of block literal code  repeat previous bit length 3-6 times (2 bits of repeat count)  repeat a zero length 3-10 times  (3 bits of repeat count)  repeat a zero length 11-138 times  (7 bits of repeat count)  extra bits for each length code  extra bits for each distance code  extra bits for each bit length code  The lengths of the bit length codes are sent in order of decreasing
+ * probability, to avoid transmitting the lengths for unused bit length codes.
+  Number of bits used within bi_buf. (bi_buf might be implemented on
+ * more than 16 bits on some systems.)
+  ===========================================================================
+ * Local data. These are initialized only once.
+  see definition of array dist_code below  non ANSI compilers may not accept trees.h  The static literal tree. Since the bit lengths are imposed, there is no
+ * need for the L_CODES extra codes used during heap construction. However
+ * The codes 286 and 287 are needed to build a canonical tree (see _tr_init
+ * below).
+  The static distance tree. (Actually a trivial tree since all codes use
+ * 5 bits.)
+  Distance codes. The first 256 values correspond to the distances
+ * 3 .. 258, the last 256 values correspond to the top 8 bits of
+ * the 15 bit distances.
+  length code for each normalized match length (0 == MIN_MATCH)  First normalized length for each code (0 = MIN_MATCH)  First normalized distance for each code (0 = distance of 1)  GEN_TREES_H  static tree or NULL  extra bits for each code or NULL  base index for extra_bits  max number of elements in the tree  max bit length for the codes  ===========================================================================
+ * Local (static) routines in this file.
+  Send a code of the given tree. c and tree must not have side effects  DEBUG  ===========================================================================
+ * Output a short LSB first on the stream.
+ * IN assertion: there is enough room in pendingBuf.
+  ===========================================================================
+ * Send a value on a given number of bits.
+ * IN assertion: length <= 16 and value fits in length bits.
+  value to send  number of bits  If not enough room in bi_buf, use (valid) bits from bi_buf and
+     * (16 - bi_valid) bits from value, leaving (width - (16-bi_valid))
+     * unused bits in value.
+      !DEBUG  DEBUG  the arguments must not have side effects  ===========================================================================
+ * Initialize the various 'constant' tables.
+  iterates over tree elements  bit counter  length value  code value  distance index  number of codes at each bit length for an optimal tree  For some embedded targets, global variables are not initialized:  Initialize the mapping length (0..255) -> length code (0..28)  Note that the length 255 (match length 258) can be represented
+     * in two different ways: code 284 + 5 bits or code 285, so we
+     * overwrite length_code[255] to use the best encoding:
+      Initialize the mapping dist (0..32K) -> dist code (0..29)  from now on, all distances are divided by 128  Construct the codes of the static literal tree  Codes 286 and 287 do not exist, but we must include them in the
+     * tree construction to get a canonical Huffman tree (longest code
+     * all ones)
+      The static distance tree is trivial:  defined(GEN_TREES_H) || !defined(STDC)  ===========================================================================
+ * Genererate the file trees.h describing the static trees.
+  GEN_TREES_H  ===========================================================================
+ * Initialize the tree data structures for a new zlib stream.
+  enough lookahead for inflate  Initialize the first block of the first file:  ===========================================================================
+ * Initialize a new block.
+  iterates over tree elements  Initialize the trees.  Index within the heap array of least frequent node in the Huffman tree  ===========================================================================
+ * Remove the smallest element from the heap and recreate the heap with
+ * one less element. Updates heap and heap_len.
+  ===========================================================================
+ * Compares to subtrees, using the tree depth as tie breaker when
+ * the subtrees have equal frequency. This minimizes the worst case length.
+  ===========================================================================
+ * Restore the heap property by moving down the tree starting at node k,
+ * exchanging a node with the smallest of its two sons if necessary, stopping
+ * when the heap property is re-established (each father smaller than its
+ * two sons).
+  the tree to restore  node to move down  left son of k  Set j to the smallest of the two sons:  Exit if v is smaller than both sons  Exchange v with the smallest son  And continue down the tree, setting j to the left son of k  ===========================================================================
+ * Compute the optimal bit lengths for a tree and update the total bit length
+ * for the current block.
+ * IN assertion: the fields freq and dad are set, heap[heap_max] and
+ *    above are the tree nodes sorted by increasing frequency.
+ * OUT assertions: the field len is set to the optimal bit length, the
+ *     array bl_count contains the frequencies for each bit length.
+ *     The length opt_len is updated; static_len is also updated if stree is
+ *     not null.
+  the tree descriptor  heap index  iterate over the tree elements  bit length  extra bits  frequency  number of elements with bit length too large  In a first pass, compute the optimal bit lengths (which may
+     * overflow in the case of the bit length tree).
+      root of the heap  We overwrite tree[n].Dad which is no longer needed  not a leaf node  This happens for example on obj2 and pic of the Calgary corpus  Find the first bit length which could increase:  move one leaf down the tree  move one overflow item as its brother  The brother of the overflow item also moves one step up,
+         * but this does not affect bl_count[max_length]
+          Now recompute all bit lengths, scanning in increasing frequency.
+     * h is still equal to HEAP_SIZE. (It is simpler to reconstruct all
+     * lengths instead of fixing only the wrong ones. This idea is taken
+     * from 'ar' written by Haruhiko Okumura.)
+      ===========================================================================
+ * Generate the codes for a given tree and bit counts (which need not be
+ * optimal).
+ * IN assertion: the array bl_count contains the bit length statistics for
+ * the given tree and the field len is set for all tree elements.
+ * OUT assertion: the field code is set for all tree elements of non
+ *     zero code length.
+  the tree to decorate  largest code with non zero frequency  number of codes at each bit length  next code value for each bit length  running code value  bit index  code index  The distribution counts are first used to generate the code values
+     * without bit reversal.
+      Check that the bit counts in bl_count are consistent. The last code
+     * must be all ones.
+      Now reverse the bits  ===========================================================================
+ * Construct one Huffman tree and assigns the code bit strings and lengths.
+ * Update the total bit length for the current block.
+ * IN assertion: the field freq is set for all tree elements.
+ * OUT assertions: the fields len and code are set to the optimal bit length
+ *     and corresponding code. The length opt_len is updated; static_len is
+ *     also updated if stree is not null. The field max_code is set.
+  the tree descriptor  iterate over heap elements  largest code with non zero frequency  new node being created  Construct the initial heap, with least frequent element in
+     * heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
+     * heap[0] is not used.
+      The pkzip format requires that at least one distance code exists,
+     * and that at least one bit should be sent even if there is only one
+     * possible code. So to avoid special checks later on we force at least
+     * two codes of non zero frequency.
+      node is 0 or 1 so it does not have extra bits  The elements heap[heap_len/2+1 .. heap_len] are leaves of the tree,
+     * establish sub-heaps of increasing lengths:
+      Construct the Huffman tree by repeatedly combining the least two
+     * frequent nodes.
+      next internal node of the tree  n = node of least frequency  m = node of next least frequency  keep the nodes sorted by frequency  Create a new node father of n and m  and insert the new node in the heap  At this point, the fields freq and dad are set. We can now
+     * generate the bit lengths.
+      The field len is now set, we can generate the bit codes  ===========================================================================
+ * Scan a literal or distance tree to determine the frequencies of the codes
+ * in the bit length tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  guard  ===========================================================================
+ * Send a literal or distance tree in compressed form, using the codes in
+ * bl_tree.
+  the tree to be scanned  and its largest code of non zero frequency  iterates over all tree elements  last emitted length  length of current code  length of next code  repeat count of the current code  max repeat count  min repeat count  tree[max_code+1].Len = -1;  guard already set  ===========================================================================
+ * Construct the Huffman tree for the bit lengths and return the index in
+ * bl_order of the last bit length code to send.
+  index of last bit length code of non zero freq  Determine the bit length frequencies for literal and distance trees  Build the bit length tree:  opt_len now includes the length of the tree representations, except
+     * the lengths of the bit lengths codes and the 5+5+4 bits for the counts.
+      Determine the number of bit length codes to send. The pkzip format
+     * requires that at least 4 bit length codes be sent. (appnote.txt says
+     * 3 but the actual value used is 4.)
+      Update opt_len to include the bit length tree and counts  ===========================================================================
+ * Send the header for a block using dynamic Huffman trees: the counts, the
+ * lengths of the bit length codes, the literal tree and the distance tree.
+ * IN assertion: lcodes >= 257, dcodes >= 1, blcodes >= 4.
+  number of codes for each tree  index in bl_order  not +255 as stated in appnote.txt  not -3 as stated in appnote.txt  literal tree  distance tree  ===========================================================================
+ * Send a stored block
+  input block  length of input block  true if this is the last block for a file  send block type  with header  ===========================================================================
+ * Send one empty static block to give enough lookahead for inflate.
+ * This takes 10 bits, of which 7 may remain in the bit buffer.
+ * The current inflate code requires 9 bits of lookahead. If the
+ * last two codes for the previous block (real code plus EOB) were coded
+ * on 5 bits or less, inflate may have only 5+3 bits of lookahead to decode
+ * the last real code. In this case we send two empty static blocks instead
+ * of one. (There are no problems if the previous block is stored or fixed.)
+ * To simplify the code, we assume the worst case of last real code encoded
+ * on one bit only.
+  3 for block type, 7 for EOB  Of the 10 bits for the empty block, we have already sent
+     * (10 - bi_valid) bits. The lookahead for the last real code (before
+     * the EOB of the previous block) was thus at least one plus the length
+     * of the EOB plus what we have just sent of the empty static block.
+      ===========================================================================
+ * Determine the best encoding for the current block: dynamic trees, static
+ * trees or store, and output the encoded block to the zip file.
+  input block, or NULL if too old  length of input block  true if this is the last block for a file  opt_len and static_len in bytes  index of last bit length code of non zero freq  Build the Huffman trees unless a stored block is forced  Check if the file is binary or text  Construct the literal and distance trees  At this point, opt_len and static_len are the total bit lengths of
+         * the compressed block data, excluding the tree representations.
+          Build the bit length tree for the above two trees, and get the index
+         * in bl_order of the last bit length code to send.
+          Determine the best encoding. Compute the block lengths in bytes.  force a stored block  force stored block  4: two words for the lengths  The test buf != NULL is only necessary if LIT_BUFSIZE > WSIZE.
+         * Otherwise we can't have processed more than WSIZE input bytes since
+         * the last block flush, because compression would have been
+         * successful. If LIT_BUFSIZE <= WSIZE, it is never too late to
+         * transform a block into a stored block.
+          force static trees  The above check is made mod 2^32, for files larger than 512 MB
+     * and uLong implemented on 32 bits.
+      align on byte boundary  ===========================================================================
+ * Save the match info and tally the frequency counts. Return true if
+ * the current block must be flushed.
+  distance of matched string  match length-MIN_MATCH or unmatched char (if dist==0)  lc is the unmatched char  Here, lc is the match length - MIN_MATCH  dist = match distance - 1  Try to guess if it is profitable to stop the current block here  Compute an upper bound for the compressed length  We avoid equality with lit_bufsize because of wraparound at 64K
+     * on 16 bit machines and because stored blocks are restricted to
+     * 64K-1 bytes.
+      ===========================================================================
+ * Send the block data compressed using the given Huffman trees
+  literal tree  distance tree  distance of matched string  match length or unmatched char (if dist == 0)  running index in l_buf  the code to send  number of extra bits to send  send a literal byte  Here, lc is the match length - MIN_MATCH  send the length code  send the extra length bits  dist is now the match distance - 1  send the distance code  send the extra distance bits  literal or match pair ?  Check that the overlay between pending_buf and d_buf+l_buf is ok:  ===========================================================================
+ * Set the data type to BINARY or TEXT, using a crude approximation:
+ * set it to Z_TEXT if all symbols are either printable characters (33 to 255)
+ * or white spaces (9 to 13, or 32); or set it to Z_BINARY otherwise.
+ * IN assertion: the fields Freq of dyn_ltree are set.
+  ===========================================================================
+ * Reverse the first len bits of a code, using straightforward code (a faster
+ * method would use a table)
+ * IN assertion: 1 <= len <= 15
+  the value to invert  its bit length  ===========================================================================
+ * Flush the bit buffer, keeping at most 7 bits in it.
+  ===========================================================================
+ * Flush the bit buffer and align the output on a byte boundary
+  ===========================================================================
+ * Copy a stored block, storing first the length and its
+ * one's complement if requested.
+  the input data  its length  true if block header must be written  align on byte boundary  enough lookahead for inflate 

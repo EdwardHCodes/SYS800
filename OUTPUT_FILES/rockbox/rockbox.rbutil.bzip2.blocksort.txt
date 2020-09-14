@@ -1,0 +1,448 @@
+---------------------------------------------------------------- Block sorting machinery                               ------                                           blocksort.c ---------------------------------------------------------------- ------------------------------------------------------------------
+   This file is part of bzip2/libbzip2, a program and library for
+   lossless, block-sorting data compression.
+
+   bzip2/libbzip2 version 1.0.6 of 6 September 2010
+   Copyright (C) 1996-2010 Julian Seward <jseward@bzip.org>
+
+   Please read the WARNING, DISCLAIMER and PATENTS sections in the 
+   README file.
+
+   This program is released under the terms of the license contained
+   in the file LICENSE.
+   ------------------------------------------------------------------ ------------------------------------------------ Fallback O(N log(N)^2) sorting        ------ algorithm, for repetitive blocks      ------------------------------------------------------------------------------------------------------------------------------------------ Random partitioning.  Median of 3 sometimes fails to
+         avoid bad cases.  Median of 9 seems to help but 
+         looks rather expensive.  This too seems to work but
+         is cheaper.  Guidance for the magic constants 
+         7621 and 32768 is taken from Sedgewick's algorithms
+         book, chapter 35.
+      --------------------------------------------- Pre:
+      nblock > 0
+      eclass exists for [0 .. nblock-1]
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      All other areas of eclass destroyed
+      fmap [0 .. nblock-1] holds sorted order
+      bhtab [ 0 .. 2+(nblock/32) ] destroyed
+--
+      Initial 1-char radix sort to generate
+      initial fmap and initial BH bits.
+   ----
+      Inductively refine the buckets.  Kind-of an
+      "exponential radix sort" (!), inspired by the
+      Manber-Myers suffix array construction algorithm.
+   ---- set sentinel bits for block-end detection ---- the log(N) loop ---- find the next non-singleton bucket ---- now [l, r] bracket current bucket ---- scan bucket and generate header bits-- -- 
+      Reconstruct the original block in
+      eclass8 [0 .. nblock-1], since the
+      previous phase destroyed it.
+   -------------------------------------------------- The main, O(N^2 log(N)) sorting       ------ algorithm.  Faster for "normal"       ------ non-repetitive blocks.                --------------------------------------------------------------------------------------------- 1  2  3  4  5  6  7  8  9  10  11  12  1  2  3  4  5  6  7  8 -----------------------------------------------
+   Knuth's increments seem to work better
+   than Incerpi-Sedgewick here.  Possibly
+   because the number of elems to sort is
+   usually small, typically <= 20.
+---- copy 1 ---- copy 2 ---- copy 3 -------------------------------------------------
+   The following is an implementation of
+   an elegant 3-way quicksort for strings,
+   described in a paper "Fast Algorithms for
+   Sorting and Searching Strings", by Robert
+   Sedgewick and Jon L. Bentley.
+----------------------------------------------- Pre:
+      nblock > N_OVERSHOOT
+      block32 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      All other areas of block32 destroyed
+      ftab [0 .. 65536 ] destroyed
+      ptr [0 .. nblock-1] holds sorted order
+      if (*budget < 0), sorting was abandoned
+-- set up the 2-byte frequency table ---- (emphasises close relationship of block & quadrant) ---- Complete the initial radix sort ----
+      Now ftab contains the first loc of every small bucket.
+      Calculate the running order, from smallest to largest
+      big bucket.
+   ----
+      The main sorting loop.
+   ----
+         Process big buckets, starting with the least full.
+         Basically this is a 3-step process in which we call
+         mainQSort3 to sort the small buckets [ss, j], but
+         also make a big effort to avoid the calls if we can.
+      ----
+         Step 1:
+         Complete the big bucket [ss] by quicksorting
+         any unsorted small buckets [ss, j], for j != ss.  
+         Hopefully previous pointer-scanning phases have already
+         completed many of the small buckets [ss, j], so
+         we don't have to sort them at all.
+      ----
+         Step 2:
+         Now scan this big bucket [ss] so as to synthesise the
+         sorted order for small buckets [t, ss] for all t,
+         including, magically, the bucket [ss,ss] too.
+         This will avoid doing Real Work in subsequent Step 1's.
+      -- Extremely rare case missing in bzip2-1.0.0 and 1.0.1.
+                   Necessity for this case is demonstrated by compressing 
+                   a sequence of approximately 48.5 million of character 
+                   251; 1.0.0/1.0.1 will then die here. --
+         Step 3:
+         The [ss] big bucket is now done.  Record this fact,
+         and update the quadrant descriptors.  Remember to
+         update quadrants in the overshoot area too, if
+         necessary.  The "if (i < 255)" test merely skips
+         this updating for the last bucket processed, since
+         updating for the last bucket is pointless.
+
+         The quadrant array provides a way to incrementally
+         cache sort orderings, as they appear, so as to 
+         make subsequent comparisons in fullGtU() complete
+         faster.  For repetitive blocks this makes a big
+         difference (but not big enough to be able to avoid
+         the fallback sorting mechanism, exponential radix sort).
+
+         The precise meaning is: at all times:
+
+            for 0 <= i < nblock and 0 <= j <= nblock
+
+            if block[i] != block[j], 
+
+               then the relative values of quadrant[i] and 
+                    quadrant[j] are meaningless.
+
+               else {
+                  if quadrant[i] < quadrant[j]
+                     then the string starting at i lexicographically
+                     precedes the string starting at j
+
+                  else if quadrant[i] > quadrant[j]
+                     then the string starting at j lexicographically
+                     precedes the string starting at i
+
+                  else
+                     the relative ordering of the strings starting
+                     at i and j has not yet been determined.
+               }
+      ----------------------------------------------- Pre:
+      nblock > 0
+      arr2 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)arr2)  [0 .. nblock-1] holds block
+      arr1 exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)arr2) [0 .. nblock-1] holds block
+      All other areas of block destroyed
+      ftab [ 0 .. 65536 ] destroyed
+      arr1 [0 .. nblock-1] holds sorted order
+ Calculate the location for quadrant, remembering to get
+         the alignment right.  Assumes that &(block[0]) is at least
+         2-byte aligned -- this should be ok since block is really
+         the first section of arr2.
+       (wfact-1) / 3 puts the default-factor-30
+         transition point at very roughly the same place as 
+         with v0.1 and v0.9.0.  
+         Not that it particularly matters any more, since the
+         resulting compressed stream is now the same regardless
+         of whether or not we use the main sort or fallback sort.
+      ---------------------------------------------------------------- end                                       blocksort.c -------------------------------------------------------------------------------------------------------------------------------- Block sorting machinery                               ------                                           blocksort.c ---------------------------------------------------------------- ------------------------------------------------------------------
+   This file is part of bzip2/libbzip2, a program and library for
+   lossless, block-sorting data compression.
+
+   bzip2/libbzip2 version 1.0.6 of 6 September 2010
+   Copyright (C) 1996-2010 Julian Seward <jseward@bzip.org>
+
+   Please read the WARNING, DISCLAIMER and PATENTS sections in the 
+   README file.
+
+   This program is released under the terms of the license contained
+   in the file LICENSE.
+   ------------------------------------------------------------------ ------------------------------------------------ Fallback O(N log(N)^2) sorting        ------ algorithm, for repetitive blocks      ------------------------------------------------------------------------------------------------------------------------------------------ Random partitioning.  Median of 3 sometimes fails to
+         avoid bad cases.  Median of 9 seems to help but 
+         looks rather expensive.  This too seems to work but
+         is cheaper.  Guidance for the magic constants 
+         7621 and 32768 is taken from Sedgewick's algorithms
+         book, chapter 35.
+      --------------------------------------------- Pre:
+      nblock > 0
+      eclass exists for [0 .. nblock-1]
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      All other areas of eclass destroyed
+      fmap [0 .. nblock-1] holds sorted order
+      bhtab [ 0 .. 2+(nblock/32) ] destroyed
+--
+      Initial 1-char radix sort to generate
+      initial fmap and initial BH bits.
+   ----
+      Inductively refine the buckets.  Kind-of an
+      "exponential radix sort" (!), inspired by the
+      Manber-Myers suffix array construction algorithm.
+   ---- set sentinel bits for block-end detection ---- the log(N) loop ---- find the next non-singleton bucket ---- now [l, r] bracket current bucket ---- scan bucket and generate header bits-- -- 
+      Reconstruct the original block in
+      eclass8 [0 .. nblock-1], since the
+      previous phase destroyed it.
+   -------------------------------------------------- The main, O(N^2 log(N)) sorting       ------ algorithm.  Faster for "normal"       ------ non-repetitive blocks.                --------------------------------------------------------------------------------------------- 1  2  3  4  5  6  7  8  9  10  11  12  1  2  3  4  5  6  7  8 -----------------------------------------------
+   Knuth's increments seem to work better
+   than Incerpi-Sedgewick here.  Possibly
+   because the number of elems to sort is
+   usually small, typically <= 20.
+---- copy 1 ---- copy 2 ---- copy 3 -------------------------------------------------
+   The following is an implementation of
+   an elegant 3-way quicksort for strings,
+   described in a paper "Fast Algorithms for
+   Sorting and Searching Strings", by Robert
+   Sedgewick and Jon L. Bentley.
+----------------------------------------------- Pre:
+      nblock > N_OVERSHOOT
+      block32 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      All other areas of block32 destroyed
+      ftab [0 .. 65536 ] destroyed
+      ptr [0 .. nblock-1] holds sorted order
+      if (*budget < 0), sorting was abandoned
+-- set up the 2-byte frequency table ---- (emphasises close relationship of block & quadrant) ---- Complete the initial radix sort ----
+      Now ftab contains the first loc of every small bucket.
+      Calculate the running order, from smallest to largest
+      big bucket.
+   ----
+      The main sorting loop.
+   ----
+         Process big buckets, starting with the least full.
+         Basically this is a 3-step process in which we call
+         mainQSort3 to sort the small buckets [ss, j], but
+         also make a big effort to avoid the calls if we can.
+      ----
+         Step 1:
+         Complete the big bucket [ss] by quicksorting
+         any unsorted small buckets [ss, j], for j != ss.  
+         Hopefully previous pointer-scanning phases have already
+         completed many of the small buckets [ss, j], so
+         we don't have to sort them at all.
+      ----
+         Step 2:
+         Now scan this big bucket [ss] so as to synthesise the
+         sorted order for small buckets [t, ss] for all t,
+         including, magically, the bucket [ss,ss] too.
+         This will avoid doing Real Work in subsequent Step 1's.
+      -- Extremely rare case missing in bzip2-1.0.0 and 1.0.1.
+                   Necessity for this case is demonstrated by compressing 
+                   a sequence of approximately 48.5 million of character 
+                   251; 1.0.0/1.0.1 will then die here. --
+         Step 3:
+         The [ss] big bucket is now done.  Record this fact,
+         and update the quadrant descriptors.  Remember to
+         update quadrants in the overshoot area too, if
+         necessary.  The "if (i < 255)" test merely skips
+         this updating for the last bucket processed, since
+         updating for the last bucket is pointless.
+
+         The quadrant array provides a way to incrementally
+         cache sort orderings, as they appear, so as to 
+         make subsequent comparisons in fullGtU() complete
+         faster.  For repetitive blocks this makes a big
+         difference (but not big enough to be able to avoid
+         the fallback sorting mechanism, exponential radix sort).
+
+         The precise meaning is: at all times:
+
+            for 0 <= i < nblock and 0 <= j <= nblock
+
+            if block[i] != block[j], 
+
+               then the relative values of quadrant[i] and 
+                    quadrant[j] are meaningless.
+
+               else {
+                  if quadrant[i] < quadrant[j]
+                     then the string starting at i lexicographically
+                     precedes the string starting at j
+
+                  else if quadrant[i] > quadrant[j]
+                     then the string starting at j lexicographically
+                     precedes the string starting at i
+
+                  else
+                     the relative ordering of the strings starting
+                     at i and j has not yet been determined.
+               }
+      ----------------------------------------------- Pre:
+      nblock > 0
+      arr2 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)arr2)  [0 .. nblock-1] holds block
+      arr1 exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)arr2) [0 .. nblock-1] holds block
+      All other areas of block destroyed
+      ftab [ 0 .. 65536 ] destroyed
+      arr1 [0 .. nblock-1] holds sorted order
+ Calculate the location for quadrant, remembering to get
+         the alignment right.  Assumes that &(block[0]) is at least
+         2-byte aligned -- this should be ok since block is really
+         the first section of arr2.
+       (wfact-1) / 3 puts the default-factor-30
+         transition point at very roughly the same place as 
+         with v0.1 and v0.9.0.  
+         Not that it particularly matters any more, since the
+         resulting compressed stream is now the same regardless
+         of whether or not we use the main sort or fallback sort.
+      ---------------------------------------------------------------- end                                       blocksort.c -------------------------------------------------------------------------------------------------------------------------------- Block sorting machinery                               ------                                           blocksort.c ---------------------------------------------------------------- ------------------------------------------------------------------
+   This file is part of bzip2/libbzip2, a program and library for
+   lossless, block-sorting data compression.
+
+   bzip2/libbzip2 version 1.0.6 of 6 September 2010
+   Copyright (C) 1996-2010 Julian Seward <jseward@bzip.org>
+
+   Please read the WARNING, DISCLAIMER and PATENTS sections in the 
+   README file.
+
+   This program is released under the terms of the license contained
+   in the file LICENSE.
+   ------------------------------------------------------------------ ------------------------------------------------ Fallback O(N log(N)^2) sorting        ------ algorithm, for repetitive blocks      ------------------------------------------------------------------------------------------------------------------------------------------ Random partitioning.  Median of 3 sometimes fails to
+         avoid bad cases.  Median of 9 seems to help but 
+         looks rather expensive.  This too seems to work but
+         is cheaper.  Guidance for the magic constants 
+         7621 and 32768 is taken from Sedgewick's algorithms
+         book, chapter 35.
+      --------------------------------------------- Pre:
+      nblock > 0
+      eclass exists for [0 .. nblock-1]
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)eclass) [0 .. nblock-1] holds block
+      All other areas of eclass destroyed
+      fmap [0 .. nblock-1] holds sorted order
+      bhtab [ 0 .. 2+(nblock/32) ] destroyed
+--
+      Initial 1-char radix sort to generate
+      initial fmap and initial BH bits.
+   ----
+      Inductively refine the buckets.  Kind-of an
+      "exponential radix sort" (!), inspired by the
+      Manber-Myers suffix array construction algorithm.
+   ---- set sentinel bits for block-end detection ---- the log(N) loop ---- find the next non-singleton bucket ---- now [l, r] bracket current bucket ---- scan bucket and generate header bits-- -- 
+      Reconstruct the original block in
+      eclass8 [0 .. nblock-1], since the
+      previous phase destroyed it.
+   -------------------------------------------------- The main, O(N^2 log(N)) sorting       ------ algorithm.  Faster for "normal"       ------ non-repetitive blocks.                --------------------------------------------------------------------------------------------- 1  2  3  4  5  6  7  8  9  10  11  12  1  2  3  4  5  6  7  8 -----------------------------------------------
+   Knuth's increments seem to work better
+   than Incerpi-Sedgewick here.  Possibly
+   because the number of elems to sort is
+   usually small, typically <= 20.
+---- copy 1 ---- copy 2 ---- copy 3 -------------------------------------------------
+   The following is an implementation of
+   an elegant 3-way quicksort for strings,
+   described in a paper "Fast Algorithms for
+   Sorting and Searching Strings", by Robert
+   Sedgewick and Jon L. Bentley.
+----------------------------------------------- Pre:
+      nblock > N_OVERSHOOT
+      block32 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      ptr exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)block32) [0 .. nblock-1] holds block
+      All other areas of block32 destroyed
+      ftab [0 .. 65536 ] destroyed
+      ptr [0 .. nblock-1] holds sorted order
+      if (*budget < 0), sorting was abandoned
+-- set up the 2-byte frequency table ---- (emphasises close relationship of block & quadrant) ---- Complete the initial radix sort ----
+      Now ftab contains the first loc of every small bucket.
+      Calculate the running order, from smallest to largest
+      big bucket.
+   ----
+      The main sorting loop.
+   ----
+         Process big buckets, starting with the least full.
+         Basically this is a 3-step process in which we call
+         mainQSort3 to sort the small buckets [ss, j], but
+         also make a big effort to avoid the calls if we can.
+      ----
+         Step 1:
+         Complete the big bucket [ss] by quicksorting
+         any unsorted small buckets [ss, j], for j != ss.  
+         Hopefully previous pointer-scanning phases have already
+         completed many of the small buckets [ss, j], so
+         we don't have to sort them at all.
+      ----
+         Step 2:
+         Now scan this big bucket [ss] so as to synthesise the
+         sorted order for small buckets [t, ss] for all t,
+         including, magically, the bucket [ss,ss] too.
+         This will avoid doing Real Work in subsequent Step 1's.
+      -- Extremely rare case missing in bzip2-1.0.0 and 1.0.1.
+                   Necessity for this case is demonstrated by compressing 
+                   a sequence of approximately 48.5 million of character 
+                   251; 1.0.0/1.0.1 will then die here. --
+         Step 3:
+         The [ss] big bucket is now done.  Record this fact,
+         and update the quadrant descriptors.  Remember to
+         update quadrants in the overshoot area too, if
+         necessary.  The "if (i < 255)" test merely skips
+         this updating for the last bucket processed, since
+         updating for the last bucket is pointless.
+
+         The quadrant array provides a way to incrementally
+         cache sort orderings, as they appear, so as to 
+         make subsequent comparisons in fullGtU() complete
+         faster.  For repetitive blocks this makes a big
+         difference (but not big enough to be able to avoid
+         the fallback sorting mechanism, exponential radix sort).
+
+         The precise meaning is: at all times:
+
+            for 0 <= i < nblock and 0 <= j <= nblock
+
+            if block[i] != block[j], 
+
+               then the relative values of quadrant[i] and 
+                    quadrant[j] are meaningless.
+
+               else {
+                  if quadrant[i] < quadrant[j]
+                     then the string starting at i lexicographically
+                     precedes the string starting at j
+
+                  else if quadrant[i] > quadrant[j]
+                     then the string starting at j lexicographically
+                     precedes the string starting at i
+
+                  else
+                     the relative ordering of the strings starting
+                     at i and j has not yet been determined.
+               }
+      ----------------------------------------------- Pre:
+      nblock > 0
+      arr2 exists for [0 .. nblock-1 +N_OVERSHOOT]
+      ((UChar*)arr2)  [0 .. nblock-1] holds block
+      arr1 exists for [0 .. nblock-1]
+
+   Post:
+      ((UChar*)arr2) [0 .. nblock-1] holds block
+      All other areas of block destroyed
+      ftab [ 0 .. 65536 ] destroyed
+      arr1 [0 .. nblock-1] holds sorted order
+ Calculate the location for quadrant, remembering to get
+         the alignment right.  Assumes that &(block[0]) is at least
+         2-byte aligned -- this should be ok since block is really
+         the first section of arr2.
+       (wfact-1) / 3 puts the default-factor-30
+         transition point at very roughly the same place as 
+         with v0.1 and v0.9.0.  
+         Not that it particularly matters any more, since the
+         resulting compressed stream is now the same regardless
+         of whether or not we use the main sort or fallback sort.
+      ---------------------------------------------------------------- end                                       blocksort.c ----------------------------------------------------------------

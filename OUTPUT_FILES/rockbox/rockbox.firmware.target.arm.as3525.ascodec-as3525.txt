@@ -1,0 +1,265 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Bertrik Sikken
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Provides access to the codec/charger/rtc/adc part of the as3525.
+    This part is on address 0x46 of the internal i2c bus in the as3525.
+    Registers in the codec part seem to be nearly identical to the registers
+    in the AS3514 (used in the "v1" versions of the sansa c200 and e200).
+
+    I2C register description:
+    * I2C2_CNTRL needs to be set to 0x51 for transfers to work at all.
+      bit 0: ? possibly related to using ACKs during transfers
+      bit 1: direction of transfer (0 = write, 1 = read)
+      bit 2: use 2-byte slave address
+    * I2C2_IMR, I2C2_RIS, I2C2_MIS, I2C2_INT_CLR interrupt bits:
+      bit 2: byte read interrupt
+      bit 3: byte write interrupt
+      bit 4: ? possibly some kind of error status
+      bit 7: ACK error
+    * I2C2_SR (status register) indicates in bit 0 if a transfer is busy.
+    * I2C2_SLAD0 contains the i2c slave address to read from / write to.
+    * I2C2_CPSR0/1 is the divider from the peripheral clock to the i2c clock.
+    * I2C2_DACNT sets the number of bytes to transfer and actually starts it.
+
+    When a transfer is attempted to a non-existing i2c slave address,
+    interrupt bit 7 is raised and DACNT is not decremented after the transfer.
+ 
+ * How many bytes we using in struct ascodec_request for the data buffer.
+ * 4 fits the alignment best right now.
+ * We don't actually use more than 3 at the moment (when reading interrupts)
+ * Upper limit would be 255 since DACNT is 8 bits!
+  standard request members  request list link (first!)  reqest type (read or write)  initial i2c sub address  bytes remaining  actual I/O data  members relevant when a callback is specified (callback != NULL)  pointer to callback function  data for callback function  amount actually transferred  I2C driver data  INT_AUDIO interrupt data  RTC interrupt and status
+ * Caution: To avoid an extra variable, IRQ_RTC is used as a flag for
+ * ascodec_enrd0_shadow, which conflicts with RVDD_WASLOW, but we're not using
+ * that right now  !CONFIG_RTC  CONFIG_RTC * --debugging help-- * counters for debugging INT_AUDIO  DEBUG * --stock request and callback functionality -- * init for common request data (call before submitting)  stock no-wait init for request (use any callback and data)  cbdata is unused if no callback is used  initialize the stock completion callback  caller waits here when using ascodec_wait_cb to do synchronous transfers  poll semaphore, no block  pump the i2c interrupts ourselves (only waiting can do this!)  stock callback used in order to wait for a transfer to complete *-- I2C2 interrupt handling --* start the controller on the next transfer  enable clock  start transfer  enable interrupts  send the next bytes or read bytes received  some error occured, restart the request  complete the request and call the completion callback, if any 
+     * Wait if still busy, unfortunately this happens since
+     * the controller is running at a low divisor, so it's
+     * still busy when we serviced the interrupt.
+     * I tried upping the i2c speed to 4MHz which
+     * made the number of busywait cycles much smaller
+     * (none for reads and only a few for writes),
+     * but who knows if it's reliable at that frequency. ;)
+     * For one thing, 8MHz doesn't work, so 4MHz is likely
+     * borderline.
+     * In general writes need much more wait cycles than reads
+     * for some reason, possibly because we read the data register
+     * for reads, which will likely block the processor while
+     * the i2c controller responds to the register read.
+      ISR for I2C2  clear interrupt status  mask rx/tx interrupts  IRQs are stacked 
+         * If status == REQ_RETRY, this will restart the request from where
+         * it left off because we didn't remove it from the request list
+          disable clock * --Routines for reading and writing data on the bus-- * add the request to the queue  first on list? start driver 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_write from different places, each
+ * call needs it's own request struct.
+  prevent setting of the LREG_CP_not bit 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_read from different places, each
+ * call needs it's own request struct.
+ * If len is bigger than ASCODEC_REQ_MAXLEN it will be
+ * set to ASCODEC_REQ_MAXLEN.
+  can't fit more in one request  read data synchronously   read an array of bytes  index and cnt will be filled in later, just use 0  write special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and writing to it  Wait for second request to finish  read special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and reading it  Wait for second request to finish  CONFIG_CPU == AS3525v2  callback that receives results of reading INT_AUDIO status register  some error happened?  chg finished  chg status changed  usb status changed  rtc irq  CONFIG_RTC  adc finished  ISR for all various ascodec events  wait for ADC to finish conversion  read sticky end-of-charge bit and clear it  read the presence state of the charger  end of charge status interrupt already enabled  write charger control register  read charger control register  CONFIG_CHARGING  read sticky rtc dirty status  CONFIG_RTC 
+ * NOTE:
+ * After the conversion to interrupts, ascodec_(lock|unlock) are only used by
+ * adc-as3514.c to protect against other threads corrupting the result by using
+ * the ADC at the same time.
+ * Concurrent ascodec_(async_)?(read|write) calls are instead protected
+ * because ascodec_submit() is atomic and concurrent requests will wait
+ * in the queue until the current request is finished.
+ * --Startup initialization-- * required function but called too late for our needs  must be on to write regs  8 lsb  2 msb  put it back how we found it  initialises the internal i2c bus and prepares for transfers to the codec  enable clock  prescaler for i2c clock  set i2c slave address of codec part  disable interrupts  clear interrupt status  detect if USB was connected at startup since there is no transition;
+       force an initial read of the clock (if CONFIG_RTC)  Generate irq for usb+charge status change  m200v4 can't charge  XIRQ = IRQ, active low reset signal, 6mA push-pull output  1A-3 = Out_Cntr3 register  Generate irq on (rtc,) adc change  Generate irq for push-pull, active high, irq on rtc+adc change  must be on to read regs  put it back how we found it **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Bertrik Sikken
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Provides access to the codec/charger/rtc/adc part of the as3525.
+    This part is on address 0x46 of the internal i2c bus in the as3525.
+    Registers in the codec part seem to be nearly identical to the registers
+    in the AS3514 (used in the "v1" versions of the sansa c200 and e200).
+
+    I2C register description:
+    * I2C2_CNTRL needs to be set to 0x51 for transfers to work at all.
+      bit 0: ? possibly related to using ACKs during transfers
+      bit 1: direction of transfer (0 = write, 1 = read)
+      bit 2: use 2-byte slave address
+    * I2C2_IMR, I2C2_RIS, I2C2_MIS, I2C2_INT_CLR interrupt bits:
+      bit 2: byte read interrupt
+      bit 3: byte write interrupt
+      bit 4: ? possibly some kind of error status
+      bit 7: ACK error
+    * I2C2_SR (status register) indicates in bit 0 if a transfer is busy.
+    * I2C2_SLAD0 contains the i2c slave address to read from / write to.
+    * I2C2_CPSR0/1 is the divider from the peripheral clock to the i2c clock.
+    * I2C2_DACNT sets the number of bytes to transfer and actually starts it.
+
+    When a transfer is attempted to a non-existing i2c slave address,
+    interrupt bit 7 is raised and DACNT is not decremented after the transfer.
+ 
+ * How many bytes we using in struct ascodec_request for the data buffer.
+ * 4 fits the alignment best right now.
+ * We don't actually use more than 3 at the moment (when reading interrupts)
+ * Upper limit would be 255 since DACNT is 8 bits!
+  standard request members  request list link (first!)  reqest type (read or write)  initial i2c sub address  bytes remaining  actual I/O data  members relevant when a callback is specified (callback != NULL)  pointer to callback function  data for callback function  amount actually transferred  I2C driver data  INT_AUDIO interrupt data  RTC interrupt and status
+ * Caution: To avoid an extra variable, IRQ_RTC is used as a flag for
+ * ascodec_enrd0_shadow, which conflicts with RVDD_WASLOW, but we're not using
+ * that right now  !CONFIG_RTC  CONFIG_RTC * --debugging help-- * counters for debugging INT_AUDIO  DEBUG * --stock request and callback functionality -- * init for common request data (call before submitting)  stock no-wait init for request (use any callback and data)  cbdata is unused if no callback is used  initialize the stock completion callback  caller waits here when using ascodec_wait_cb to do synchronous transfers  poll semaphore, no block  pump the i2c interrupts ourselves (only waiting can do this!)  stock callback used in order to wait for a transfer to complete *-- I2C2 interrupt handling --* start the controller on the next transfer  enable clock  start transfer  enable interrupts  send the next bytes or read bytes received  some error occured, restart the request  complete the request and call the completion callback, if any 
+     * Wait if still busy, unfortunately this happens since
+     * the controller is running at a low divisor, so it's
+     * still busy when we serviced the interrupt.
+     * I tried upping the i2c speed to 4MHz which
+     * made the number of busywait cycles much smaller
+     * (none for reads and only a few for writes),
+     * but who knows if it's reliable at that frequency. ;)
+     * For one thing, 8MHz doesn't work, so 4MHz is likely
+     * borderline.
+     * In general writes need much more wait cycles than reads
+     * for some reason, possibly because we read the data register
+     * for reads, which will likely block the processor while
+     * the i2c controller responds to the register read.
+      ISR for I2C2  clear interrupt status  mask rx/tx interrupts  IRQs are stacked 
+         * If status == REQ_RETRY, this will restart the request from where
+         * it left off because we didn't remove it from the request list
+          disable clock * --Routines for reading and writing data on the bus-- * add the request to the queue  first on list? start driver 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_write from different places, each
+ * call needs it's own request struct.
+  prevent setting of the LREG_CP_not bit 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_read from different places, each
+ * call needs it's own request struct.
+ * If len is bigger than ASCODEC_REQ_MAXLEN it will be
+ * set to ASCODEC_REQ_MAXLEN.
+  can't fit more in one request  read data synchronously   read an array of bytes  index and cnt will be filled in later, just use 0  write special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and writing to it  Wait for second request to finish  read special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and reading it  Wait for second request to finish  CONFIG_CPU == AS3525v2  callback that receives results of reading INT_AUDIO status register  some error happened?  chg finished  chg status changed  usb status changed  rtc irq  CONFIG_RTC  adc finished  ISR for all various ascodec events  wait for ADC to finish conversion  read sticky end-of-charge bit and clear it  read the presence state of the charger  end of charge status interrupt already enabled  write charger control register  read charger control register  CONFIG_CHARGING  read sticky rtc dirty status  CONFIG_RTC 
+ * NOTE:
+ * After the conversion to interrupts, ascodec_(lock|unlock) are only used by
+ * adc-as3514.c to protect against other threads corrupting the result by using
+ * the ADC at the same time.
+ * Concurrent ascodec_(async_)?(read|write) calls are instead protected
+ * because ascodec_submit() is atomic and concurrent requests will wait
+ * in the queue until the current request is finished.
+ * --Startup initialization-- * required function but called too late for our needs  must be on to write regs  8 lsb  2 msb  put it back how we found it  initialises the internal i2c bus and prepares for transfers to the codec  enable clock  prescaler for i2c clock  set i2c slave address of codec part  disable interrupts  clear interrupt status  detect if USB was connected at startup since there is no transition;
+       force an initial read of the clock (if CONFIG_RTC)  Generate irq for usb+charge status change  m200v4 can't charge  XIRQ = IRQ, active low reset signal, 6mA push-pull output  1A-3 = Out_Cntr3 register  Generate irq on (rtc,) adc change  Generate irq for push-pull, active high, irq on rtc+adc change  must be on to read regs  put it back how we found it **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2008 by Bertrik Sikken
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************
+    Provides access to the codec/charger/rtc/adc part of the as3525.
+    This part is on address 0x46 of the internal i2c bus in the as3525.
+    Registers in the codec part seem to be nearly identical to the registers
+    in the AS3514 (used in the "v1" versions of the sansa c200 and e200).
+
+    I2C register description:
+    * I2C2_CNTRL needs to be set to 0x51 for transfers to work at all.
+      bit 0: ? possibly related to using ACKs during transfers
+      bit 1: direction of transfer (0 = write, 1 = read)
+      bit 2: use 2-byte slave address
+    * I2C2_IMR, I2C2_RIS, I2C2_MIS, I2C2_INT_CLR interrupt bits:
+      bit 2: byte read interrupt
+      bit 3: byte write interrupt
+      bit 4: ? possibly some kind of error status
+      bit 7: ACK error
+    * I2C2_SR (status register) indicates in bit 0 if a transfer is busy.
+    * I2C2_SLAD0 contains the i2c slave address to read from / write to.
+    * I2C2_CPSR0/1 is the divider from the peripheral clock to the i2c clock.
+    * I2C2_DACNT sets the number of bytes to transfer and actually starts it.
+
+    When a transfer is attempted to a non-existing i2c slave address,
+    interrupt bit 7 is raised and DACNT is not decremented after the transfer.
+ 
+ * How many bytes we using in struct ascodec_request for the data buffer.
+ * 4 fits the alignment best right now.
+ * We don't actually use more than 3 at the moment (when reading interrupts)
+ * Upper limit would be 255 since DACNT is 8 bits!
+  standard request members  request list link (first!)  reqest type (read or write)  initial i2c sub address  bytes remaining  actual I/O data  members relevant when a callback is specified (callback != NULL)  pointer to callback function  data for callback function  amount actually transferred  I2C driver data  INT_AUDIO interrupt data  RTC interrupt and status
+ * Caution: To avoid an extra variable, IRQ_RTC is used as a flag for
+ * ascodec_enrd0_shadow, which conflicts with RVDD_WASLOW, but we're not using
+ * that right now  !CONFIG_RTC  CONFIG_RTC * --debugging help-- * counters for debugging INT_AUDIO  DEBUG * --stock request and callback functionality -- * init for common request data (call before submitting)  stock no-wait init for request (use any callback and data)  cbdata is unused if no callback is used  initialize the stock completion callback  caller waits here when using ascodec_wait_cb to do synchronous transfers  poll semaphore, no block  pump the i2c interrupts ourselves (only waiting can do this!)  stock callback used in order to wait for a transfer to complete *-- I2C2 interrupt handling --* start the controller on the next transfer  enable clock  start transfer  enable interrupts  send the next bytes or read bytes received  some error occured, restart the request  complete the request and call the completion callback, if any 
+     * Wait if still busy, unfortunately this happens since
+     * the controller is running at a low divisor, so it's
+     * still busy when we serviced the interrupt.
+     * I tried upping the i2c speed to 4MHz which
+     * made the number of busywait cycles much smaller
+     * (none for reads and only a few for writes),
+     * but who knows if it's reliable at that frequency. ;)
+     * For one thing, 8MHz doesn't work, so 4MHz is likely
+     * borderline.
+     * In general writes need much more wait cycles than reads
+     * for some reason, possibly because we read the data register
+     * for reads, which will likely block the processor while
+     * the i2c controller responds to the register read.
+      ISR for I2C2  clear interrupt status  mask rx/tx interrupts  IRQs are stacked 
+         * If status == REQ_RETRY, this will restart the request from where
+         * it left off because we didn't remove it from the request list
+          disable clock * --Routines for reading and writing data on the bus-- * add the request to the queue  first on list? start driver 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_write from different places, each
+ * call needs it's own request struct.
+  prevent setting of the LREG_CP_not bit 
+ * The request struct passed in must be allocated statically.
+ * If you call ascodec_async_read from different places, each
+ * call needs it's own request struct.
+ * If len is bigger than ASCODEC_REQ_MAXLEN it will be
+ * set to ASCODEC_REQ_MAXLEN.
+  can't fit more in one request  read data synchronously   read an array of bytes  index and cnt will be filled in later, just use 0  write special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and writing to it  Wait for second request to finish  read special PMU subregisters  we submit consecutive requests to make sure no operations happen on the
+     * i2c bus between selecting the sub register and reading it  Wait for second request to finish  CONFIG_CPU == AS3525v2  callback that receives results of reading INT_AUDIO status register  some error happened?  chg finished  chg status changed  usb status changed  rtc irq  CONFIG_RTC  adc finished  ISR for all various ascodec events  wait for ADC to finish conversion  read sticky end-of-charge bit and clear it  read the presence state of the charger  end of charge status interrupt already enabled  write charger control register  read charger control register  CONFIG_CHARGING  read sticky rtc dirty status  CONFIG_RTC 
+ * NOTE:
+ * After the conversion to interrupts, ascodec_(lock|unlock) are only used by
+ * adc-as3514.c to protect against other threads corrupting the result by using
+ * the ADC at the same time.
+ * Concurrent ascodec_(async_)?(read|write) calls are instead protected
+ * because ascodec_submit() is atomic and concurrent requests will wait
+ * in the queue until the current request is finished.
+ * --Startup initialization-- * required function but called too late for our needs  must be on to write regs  8 lsb  2 msb  put it back how we found it  initialises the internal i2c bus and prepares for transfers to the codec  enable clock  prescaler for i2c clock  set i2c slave address of codec part  disable interrupts  clear interrupt status  detect if USB was connected at startup since there is no transition;
+       force an initial read of the clock (if CONFIG_RTC)  Generate irq for usb+charge status change  m200v4 can't charge  XIRQ = IRQ, active low reset signal, 6mA push-pull output  1A-3 = Out_Cntr3 register  Generate irq on (rtc,) adc change  Generate irq for push-pull, active high, irq on rtc+adc change  must be on to read regs  put it back how we found it 

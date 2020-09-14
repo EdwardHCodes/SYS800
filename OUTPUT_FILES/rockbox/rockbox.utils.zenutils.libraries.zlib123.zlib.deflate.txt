@@ -1,0 +1,907 @@
+ deflate.c -- compress data using the deflation algorithm
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process depends on being able to identify portions
+ *      of the input text which are identical to earlier input (within a
+ *      sliding window trailing behind the input currently being processed).
+ *
+ *      The most straightforward technique turns out to be the fastest for
+ *      most input files: try all possible matches and select the longest.
+ *      The key feature of this algorithm is that insertions into the string
+ *      dictionary are very simple and thus fast, and deletions are avoided
+ *      completely. Insertions are performed at each input character, whereas
+ *      string matches are performed only when the previous match ends. So it
+ *      is preferable to spend more time in matches to allow very fast string
+ *      insertions and avoid deletions. The matching algorithm for small
+ *      strings is inspired from that of Rabin & Karp. A brute force approach
+ *      is used to find longer strings when a small match has been found.
+ *      A similar algorithm is used in comic (by Jan-Mark Wams) and freeze
+ *      (by Leonid Broukhis).
+ *         A previous version of this file used a more sophisticated algorithm
+ *      (by Fiala and Greene) which is guaranteed to run in linear amortized
+ *      time, but has a larger average cost, uses more memory and is patented.
+ *      However the F&G algorithm may be faster for some highly redundant
+ *      files if the parameter max_chain_length (described below) is too large.
+ *
+ *  ACKNOWLEDGEMENTS
+ *
+ *      The idea of lazy evaluation of matches is due to Jan-Mark Wams, and
+ *      I found it in 'freeze' written by Leonid Broukhis.
+ *      Thanks to many people for bug reports and testing.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"DEFLATE Compressed Data Format Specification".
+ *      Available in http://www.ietf.org/rfc/rfc1951.txt
+ *
+ *      A description of the Rabin and Karp algorithm is given in the book
+ *         "Algorithms" by R. Sedgewick, Addison-Wesley, p252.
+ *
+ *      Fiala,E.R., and Greene,D.H.
+ *         Data Compression with Finite Windows, Comm.ACM, 32,4 (1989) 490-595
+ *
+  @(#) $Id$ 
+  If you use the zlib library in a product, an acknowledgment is welcome
+  in the documentation of your product. If for some reason you cannot
+  include such an acknowledgment, I would appreciate that you keep this
+  copyright string in the executable of your product.
+  ===========================================================================
+ *  Function prototypes.
+  block not completed, need more input or more output  block flush performed  finish started, need only more output at next deflate  finish done, accept no more input or output  Compression function. Returns the block state after the call.  asm code initialization  ===========================================================================
+ * Local data
+  Tail of hash chains  Matches of length 3 are discarded if their distance exceeds TOO_FAR  Minimum amount of lookahead, except at the end of the input file.
+ * See deflate.c for comments about the MIN_MATCH+1.
+  Values for max_lazy_match, good_match and max_chain_length, depending on
+ * the desired pack level (0..9). The values given below have been tuned to
+ * exclude worst case performance for pathological files. Better values may be
+ * found for specific files.
+  reduce lazy search above this match length  do not perform lazy search above this match length  quit search above this match length       good lazy nice chain  0  store only  1  max speed, no lazy matches       good lazy nice chain  0  store only  1  max speed, no lazy matches  2  3  4  lazy matches  5  6  7  8  9  max compression  Note: the deflate() code requires max_lazy >= MIN_MATCH and max_chain >= 4
+ * For deflate_fast() (levels <= 3) good is ignored and lazy has a different
+ * meaning.
+  result of memcmp for equal strings  for buggy compilers  ===========================================================================
+ * Update a hash value with the given input byte
+ * IN  assertion: all calls to to UPDATE_HASH are made with consecutive
+ *    input characters, so that a running hash key can be computed from the
+ *    previous key instead of complete recalculation each time.
+  ===========================================================================
+ * Insert string str in the dictionary and set match_head to the previous head
+ * of the hash chain (the most recent string with same hash key). Return
+ * the previous length of the hash chain.
+ * If this file is compiled with -DFASTEST, the compression level is forced
+ * to 1, and no hash chains are maintained.
+ * IN  assertion: all calls to to INSERT_STRING are made with consecutive
+ *    input characters and the first MIN_MATCH bytes of str are valid
+ *    (except for the last MIN_MATCH-1 bytes of the input file).
+  ===========================================================================
+ * Initialize the hash table (avoiding 64K overflow for 16 bit systems).
+ * prev[] will be initialized on the fly.
+  =========================================================================  To do: ignore strm->next_in if we use it as window  =========================================================================  We overlay pending_buf and d_buf+l_buf. This works since the average
+     * output size for (length,distance) codes is <= 24 bits.
+      suppress zlib wrapper  write gzip wrapper instead  until 256-byte window bug fixed  16K elements by default  =========================================================================  use the tail of the dictionary  Insert all strings in the hash table (except for the last two bytes).
+     * s->lookahead stays null, so s->ins_h will be recomputed at the next
+     * call of fill_window.
+      =========================================================================  use zfree if we ever allocate msg dynamically  was made negative by deflate(..., Z_FINISH);  =========================================================================  =========================================================================  =========================================================================  Flush the last buffer:  =========================================================================  =========================================================================
+ * For the default windowBits of 15 and memLevel of 8, this function returns
+ * a close to exact, as well as small, upper bound on the compressed size.
+ * They are coded as constants here for a reason--if the #define's are
+ * changed, then this function needs to be changed as well.  The return
+ * value for 15 and 8 only works for those exact settings.
+ *
+ * For any setting other than those defaults for windowBits and memLevel,
+ * the value returned is a conservative worst case for the maximum expansion
+ * resulting from using fixed blocks instead of stored blocks, which deflate
+ * can emit on compressed data for some combinations of the parameters.
+ *
+ * This function could be more sophisticated to provide closer upper bounds
+ * for every combination of windowBits and memLevel, as well as wrap.
+ * But even the conservative upper bound of about 14% expansion does not
+ * seem onerous for output buffer allocation.
+  conservative upper bound  if can't get parameters, return conservative bound  if not default parameters, return conservative bound  default settings: return tight bound for that case  =========================================================================
+ * Put a short in the pending buffer. The 16-bit value is put in MSB order.
+ * IN assertion: the stream state is correct and there is enough room in
+ * pending_buf.
+  =========================================================================
+ * Flush as much pending output as possible. All deflate() output goes
+ * through this function so some applications may wish to modify it
+ * to avoid allocating a large strm->next_out buffer and copying into it.
+ * (See also read_buf()).
+  =========================================================================  value of flush param for previous deflate call  just in case  Write the header  Save the adler32 of the preset dictionary:  start of bytes to update crc  start of bytes to update crc  start of bytes to update crc  Flush as much pending output as possible  Since avail_out is 0, deflate will be called again with
+             * more output space, but possibly with both pending and
+             * avail_in equal to zero. There won't be anything to do,
+             * but this is not an error situation so make sure we
+             * return OK instead of BUF_ERROR at next call of deflate:
+              Make sure there is something to do and avoid duplicate consecutive
+     * flushes. For repeated and useless calls with Z_FINISH, we keep
+     * returning Z_STREAM_END instead of Z_BUF_ERROR.
+      User must not provide more input after the first FINISH:  Start a new block or continue the current one.
+      avoid BUF_ERROR next call, see above  If flush != Z_NO_FLUSH && avail_out == 0, the next call
+             * of deflate should use the same flush parameter to make sure
+             * that the flush is complete. So we don't have to output an
+             * empty block here, this will be done at next call. This also
+             * ensures that for a very small output buffer, we emit at most
+             * one empty block.
+              FULL_FLUSH or SYNC_FLUSH  For a full flush, this empty block will be recognized
+                 * as a special marker by inflate_sync().
+                  forget history  avoid BUF_ERROR at next call, see above  Write the trailer  If avail_out is zero, the application will call deflate again
+     * to flush the rest.
+      write the trailer only once!  =========================================================================  Deallocate in reverse order of allocations:  =========================================================================
+ * Copy the source state to the destination state.
+ * To simplify the source, this is not supported for 16-bit MSDOS (which
+ * doesn't have enough memory anyway to duplicate compression states).
+  following zmemcpy do not work for 16-bit MSDOS  MAXSEG_64K  ===========================================================================
+ * Read a new buffer from the current input stream, update the adler32
+ * and total number of bytes read.  All deflate() input goes through
+ * this function so some applications may wish to modify it to avoid
+ * allocating a large strm->next_in buffer and copying from it.
+ * (See also flush_pending()).
+  ===========================================================================
+ * Initialize the "longest match" routines for a new zlib stream
+  Set the default configuration parameters:
+      initialize the asm code  ===========================================================================
+ * Set match_start to the longest match starting at the given string and
+ * return its length. Matches shorter or equal to prev_length are discarded,
+ * in which case the result is equal to prev_length and match_start is
+ * garbage.
+ * IN assertions: cur_match is the head of the hash chain for the current
+ *   string (strstart) and its distance is <= MAX_DIST, and prev_length >= 1
+ * OUT assertion: the match length is not greater than s->lookahead.
+  For 80x86 and 680x0, an optimized version will be provided in match.asm or
+ * match.S. The code will be functionally equivalent.
+  current match  max hash chain length  current string  matched string  length of current match  best match length so far  stop if match long enough  Stop when cur_match becomes <= limit. To simplify the code,
+     * we prevent matches with the string of window index 0.
+      Compare two bytes at a time. Note: this is not always beneficial.
+     * Try with and without -DUNALIGNED_OK to check.
+      The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Do not waste too much time if we already have a good match:  Do not look for matches beyond the end of the input. This is necessary
+     * to make deflate deterministic.
+      Skip to next match if the match length cannot increase
+         * or if the match length is less than 2.  Note that the checks below
+         * for insufficient lookahead only occur occasionally for performance
+         * reasons.  Therefore uninitialized memory will be accessed, and
+         * conditional jumps will be made that depend on those values.
+         * However the length of the match is limited to the lookahead, so
+         * the output of deflate is not affected by the uninitialized values.
+          This code assumes sizeof(unsigned short) == 2. Do not use
+         * UNALIGNED_OK if your compiler uses a different size.
+          It is not necessary to compare scan[2] and match[2] since they are
+         * always equal when the other bytes match, given that the hash keys
+         * are equal and that HASH_BITS >= 8. Compare 2 bytes at a time at
+         * strstart+3, +5, ... up to strstart+257. We check for insufficient
+         * lookahead only every 4th comparison; the 128th check will be made
+         * at strstart+257. If MAX_MATCH-2 is not a multiple of 8, it is
+         * necessary to put more guard bytes at the end of the window, or
+         * to check more often for insufficient lookahead.
+          The funny "do {}" generates better code on most compilers  Here, scan <= window+strstart+257  UNALIGNED_OK  The check at best_len-1 can be removed because it will be made
+         * again later. (This heuristic is not always a win.)
+         * It is not necessary to compare scan[2] and match[2] since they
+         * are always equal when the other bytes match, given that
+         * the hash keys are equal and that HASH_BITS >= 8.
+          We check for insufficient lookahead only every 8th comparison;
+         * the 256th check will be made at strstart+258.
+          UNALIGNED_OK  ASMV  FASTEST  ---------------------------------------------------------------------------
+ * Optimized version for level == 1 or strategy == Z_RLE only
+  current match  current string  matched string  length of current match  The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Return failure if the match length is less than 2:
+      The check at best_len-1 can be removed because it will be made
+     * again later. (This heuristic is not always a win.)
+     * It is not necessary to compare scan[2] and match[2] since they
+     * are always equal when the other bytes match, given that
+     * the hash keys are equal and that HASH_BITS >= 8.
+      We check for insufficient lookahead only every 8th comparison;
+     * the 256th check will be made at strstart+258.
+      ===========================================================================
+ * Check that the match at match_start is indeed a match.
+  check that the match is indeed a match  DEBUG  ===========================================================================
+ * Fill the window when the lookahead becomes insufficient.
+ * Updates strstart and lookahead.
+ *
+ * IN assertion: lookahead < MIN_LOOKAHEAD
+ * OUT assertions: strstart <= window_size-MIN_LOOKAHEAD
+ *    At least one byte has been read, or avail_in == 0; reads are
+ *    performed for at least two bytes (required for the zip translate_eol
+ *    option -- not supported here).
+  Amount of free space at the end of the window.  Deal with !@#$% 64K limit:  Very unlikely, but possible on 16 bit machine if
+                 * strstart == 0 && lookahead == 1 (input done a byte at time)
+                  If the window is almost full and there is insufficient lookahead,
+         * move the upper half to the lower one to make room in the upper half.
+          we now have strstart >= MAX_DIST  Slide the hash table (could be avoided with 32 bit values
+               at the expense of memory usage). We slide even when level == 0
+               to keep the hash table consistent if we switch back to level > 0
+               later. (Using level 0 permanently is not an optimal usage of
+               zlib, so we don't care about this pathological case.)
+              %%% avoid this when Z_RLE  If n is not on any hash chain, prev[n] is garbage but
+                 * its value will never be used.
+                  If there was no sliding:
+         *    strstart <= WSIZE+MAX_DIST-1 && lookahead <= MIN_LOOKAHEAD - 1 &&
+         *    more == window_size - lookahead - strstart
+         * => more >= window_size - (MIN_LOOKAHEAD-1 + WSIZE + MAX_DIST-1)
+         * => more >= window_size - 2*WSIZE + 2
+         * In the BIG_MEM or MMAP case (not yet supported),
+         *   window_size == input_size + MIN_LOOKAHEAD  &&
+         *   strstart + s->lookahead <= input_size => more >= MIN_LOOKAHEAD.
+         * Otherwise, window_size == 2*WSIZE so more >= 2.
+         * If there was sliding, more >= WSIZE. So in all cases, more >= 2.
+          Initialize the hash value now that we have some input:  If the whole input has less than MIN_MATCH bytes, ins_h is garbage,
+         * but this is not important since only literal bytes will be emitted.
+          ===========================================================================
+ * Flush the current block, with given end-of-file flag.
+ * IN assertion: strstart is set to the end of the current match.
+  Same but force premature exit if necessary.  ===========================================================================
+ * Copy without compression as much as possible from the input stream, return
+ * the current block state.
+ * This function does not insert new strings in the dictionary since
+ * uncompressible data is probably not useful. This function is used
+ * only for the level=0 compression option.
+ * NOTE: this function should be optimized to avoid extra copying from
+ * window to pending_buf.
+  Stored blocks are limited to 0xffff bytes, pending_buf is limited
+     * to pending_buf_size, and each stored block has a 5 byte header:
+      Copy as much as possible from input to output:  Fill the window as much as possible:  flush the current block  Emit a stored block if pending_buf will be full:  strstart == 0 is possible when wraparound on 16-bit machine  Flush if we may have to slide, otherwise block_start may become
+         * negative and the data will be gone:
+          ===========================================================================
+ * Compress as much as possible from the input stream, return the current
+ * block state.
+ * This function does not perform lazy evaluation of matches and inserts
+ * new strings in the dictionary only for unmatched strings or for short
+ * matches. It is used only for the fast compression options.
+  head of the hash chain  set if current block must be flushed  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+         * At this point we have always match_length < MIN_MATCH
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  Insert new strings in the hash table only if the match length
+             * is not too large. This saves time but degrades compression.
+              string at strstart already in table  strstart never exceeds WSIZE-MAX_MATCH, so there are
+                     * always MIN_MATCH bytes ahead.
+                      If lookahead < MIN_MATCH, ins_h is garbage, but it does not
+                 * matter since it will be recomputed at next deflate call.
+                  No match, output a literal byte  ===========================================================================
+ * Same as above, but achieves better compression. We use a lazy
+ * evaluation for matches: a match is finally adopted only if there is
+ * no better match at the next window position.
+  head of hash chain  set if current block must be flushed  Process the input block.  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  If prev_match is also MIN_MATCH, match_start is garbage
+                 * but we will ignore the current match anyway.
+                  If there was a match at the previous step and the current
+         * match is not better, output the previous match:
+          Do not insert strings in hash table beyond this.  Insert in hash table all strings up to the end of the match.
+             * strstart-1 and strstart are already inserted. If there is not
+             * enough lookahead, the last two strings are not inserted in
+             * the hash table.
+              If there was no match at the previous position, output a
+             * single literal. If there was a match but the current match
+             * is longer, truncate the previous match to a single literal.
+              There is no previous match to compare with, wait for
+             * the next step to decide.
+              FASTEST  ===========================================================================
+ * For Z_RLE, simply look for runs of bytes, generate matches only of distance
+ * one.  Do not maintain a hash table.  (It will be regenerated if this run of
+ * deflate switches away from Z_RLE.)
+  set if current block must be flushed  length of run  maximum length of run  byte at distance one to match  scan for end of run  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the longest encodable run.
+          flush the current block  See how many times the previous byte repeats  if there is a previous byte, that is  Emit match if have run of MIN_MATCH or longer, else emit literal  No match, output a literal byte  deflate.c -- compress data using the deflation algorithm
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process depends on being able to identify portions
+ *      of the input text which are identical to earlier input (within a
+ *      sliding window trailing behind the input currently being processed).
+ *
+ *      The most straightforward technique turns out to be the fastest for
+ *      most input files: try all possible matches and select the longest.
+ *      The key feature of this algorithm is that insertions into the string
+ *      dictionary are very simple and thus fast, and deletions are avoided
+ *      completely. Insertions are performed at each input character, whereas
+ *      string matches are performed only when the previous match ends. So it
+ *      is preferable to spend more time in matches to allow very fast string
+ *      insertions and avoid deletions. The matching algorithm for small
+ *      strings is inspired from that of Rabin & Karp. A brute force approach
+ *      is used to find longer strings when a small match has been found.
+ *      A similar algorithm is used in comic (by Jan-Mark Wams) and freeze
+ *      (by Leonid Broukhis).
+ *         A previous version of this file used a more sophisticated algorithm
+ *      (by Fiala and Greene) which is guaranteed to run in linear amortized
+ *      time, but has a larger average cost, uses more memory and is patented.
+ *      However the F&G algorithm may be faster for some highly redundant
+ *      files if the parameter max_chain_length (described below) is too large.
+ *
+ *  ACKNOWLEDGEMENTS
+ *
+ *      The idea of lazy evaluation of matches is due to Jan-Mark Wams, and
+ *      I found it in 'freeze' written by Leonid Broukhis.
+ *      Thanks to many people for bug reports and testing.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"DEFLATE Compressed Data Format Specification".
+ *      Available in http://www.ietf.org/rfc/rfc1951.txt
+ *
+ *      A description of the Rabin and Karp algorithm is given in the book
+ *         "Algorithms" by R. Sedgewick, Addison-Wesley, p252.
+ *
+ *      Fiala,E.R., and Greene,D.H.
+ *         Data Compression with Finite Windows, Comm.ACM, 32,4 (1989) 490-595
+ *
+  @(#) $Id$ 
+  If you use the zlib library in a product, an acknowledgment is welcome
+  in the documentation of your product. If for some reason you cannot
+  include such an acknowledgment, I would appreciate that you keep this
+  copyright string in the executable of your product.
+  ===========================================================================
+ *  Function prototypes.
+  block not completed, need more input or more output  block flush performed  finish started, need only more output at next deflate  finish done, accept no more input or output  Compression function. Returns the block state after the call.  asm code initialization  ===========================================================================
+ * Local data
+  Tail of hash chains  Matches of length 3 are discarded if their distance exceeds TOO_FAR  Minimum amount of lookahead, except at the end of the input file.
+ * See deflate.c for comments about the MIN_MATCH+1.
+  Values for max_lazy_match, good_match and max_chain_length, depending on
+ * the desired pack level (0..9). The values given below have been tuned to
+ * exclude worst case performance for pathological files. Better values may be
+ * found for specific files.
+  reduce lazy search above this match length  do not perform lazy search above this match length  quit search above this match length       good lazy nice chain  0  store only  1  max speed, no lazy matches       good lazy nice chain  0  store only  1  max speed, no lazy matches  2  3  4  lazy matches  5  6  7  8  9  max compression  Note: the deflate() code requires max_lazy >= MIN_MATCH and max_chain >= 4
+ * For deflate_fast() (levels <= 3) good is ignored and lazy has a different
+ * meaning.
+  result of memcmp for equal strings  for buggy compilers  ===========================================================================
+ * Update a hash value with the given input byte
+ * IN  assertion: all calls to to UPDATE_HASH are made with consecutive
+ *    input characters, so that a running hash key can be computed from the
+ *    previous key instead of complete recalculation each time.
+  ===========================================================================
+ * Insert string str in the dictionary and set match_head to the previous head
+ * of the hash chain (the most recent string with same hash key). Return
+ * the previous length of the hash chain.
+ * If this file is compiled with -DFASTEST, the compression level is forced
+ * to 1, and no hash chains are maintained.
+ * IN  assertion: all calls to to INSERT_STRING are made with consecutive
+ *    input characters and the first MIN_MATCH bytes of str are valid
+ *    (except for the last MIN_MATCH-1 bytes of the input file).
+  ===========================================================================
+ * Initialize the hash table (avoiding 64K overflow for 16 bit systems).
+ * prev[] will be initialized on the fly.
+  =========================================================================  To do: ignore strm->next_in if we use it as window  =========================================================================  We overlay pending_buf and d_buf+l_buf. This works since the average
+     * output size for (length,distance) codes is <= 24 bits.
+      suppress zlib wrapper  write gzip wrapper instead  until 256-byte window bug fixed  16K elements by default  =========================================================================  use the tail of the dictionary  Insert all strings in the hash table (except for the last two bytes).
+     * s->lookahead stays null, so s->ins_h will be recomputed at the next
+     * call of fill_window.
+      =========================================================================  use zfree if we ever allocate msg dynamically  was made negative by deflate(..., Z_FINISH);  =========================================================================  =========================================================================  =========================================================================  Flush the last buffer:  =========================================================================  =========================================================================
+ * For the default windowBits of 15 and memLevel of 8, this function returns
+ * a close to exact, as well as small, upper bound on the compressed size.
+ * They are coded as constants here for a reason--if the #define's are
+ * changed, then this function needs to be changed as well.  The return
+ * value for 15 and 8 only works for those exact settings.
+ *
+ * For any setting other than those defaults for windowBits and memLevel,
+ * the value returned is a conservative worst case for the maximum expansion
+ * resulting from using fixed blocks instead of stored blocks, which deflate
+ * can emit on compressed data for some combinations of the parameters.
+ *
+ * This function could be more sophisticated to provide closer upper bounds
+ * for every combination of windowBits and memLevel, as well as wrap.
+ * But even the conservative upper bound of about 14% expansion does not
+ * seem onerous for output buffer allocation.
+  conservative upper bound  if can't get parameters, return conservative bound  if not default parameters, return conservative bound  default settings: return tight bound for that case  =========================================================================
+ * Put a short in the pending buffer. The 16-bit value is put in MSB order.
+ * IN assertion: the stream state is correct and there is enough room in
+ * pending_buf.
+  =========================================================================
+ * Flush as much pending output as possible. All deflate() output goes
+ * through this function so some applications may wish to modify it
+ * to avoid allocating a large strm->next_out buffer and copying into it.
+ * (See also read_buf()).
+  =========================================================================  value of flush param for previous deflate call  just in case  Write the header  Save the adler32 of the preset dictionary:  start of bytes to update crc  start of bytes to update crc  start of bytes to update crc  Flush as much pending output as possible  Since avail_out is 0, deflate will be called again with
+             * more output space, but possibly with both pending and
+             * avail_in equal to zero. There won't be anything to do,
+             * but this is not an error situation so make sure we
+             * return OK instead of BUF_ERROR at next call of deflate:
+              Make sure there is something to do and avoid duplicate consecutive
+     * flushes. For repeated and useless calls with Z_FINISH, we keep
+     * returning Z_STREAM_END instead of Z_BUF_ERROR.
+      User must not provide more input after the first FINISH:  Start a new block or continue the current one.
+      avoid BUF_ERROR next call, see above  If flush != Z_NO_FLUSH && avail_out == 0, the next call
+             * of deflate should use the same flush parameter to make sure
+             * that the flush is complete. So we don't have to output an
+             * empty block here, this will be done at next call. This also
+             * ensures that for a very small output buffer, we emit at most
+             * one empty block.
+              FULL_FLUSH or SYNC_FLUSH  For a full flush, this empty block will be recognized
+                 * as a special marker by inflate_sync().
+                  forget history  avoid BUF_ERROR at next call, see above  Write the trailer  If avail_out is zero, the application will call deflate again
+     * to flush the rest.
+      write the trailer only once!  =========================================================================  Deallocate in reverse order of allocations:  =========================================================================
+ * Copy the source state to the destination state.
+ * To simplify the source, this is not supported for 16-bit MSDOS (which
+ * doesn't have enough memory anyway to duplicate compression states).
+  following zmemcpy do not work for 16-bit MSDOS  MAXSEG_64K  ===========================================================================
+ * Read a new buffer from the current input stream, update the adler32
+ * and total number of bytes read.  All deflate() input goes through
+ * this function so some applications may wish to modify it to avoid
+ * allocating a large strm->next_in buffer and copying from it.
+ * (See also flush_pending()).
+  ===========================================================================
+ * Initialize the "longest match" routines for a new zlib stream
+  Set the default configuration parameters:
+      initialize the asm code  ===========================================================================
+ * Set match_start to the longest match starting at the given string and
+ * return its length. Matches shorter or equal to prev_length are discarded,
+ * in which case the result is equal to prev_length and match_start is
+ * garbage.
+ * IN assertions: cur_match is the head of the hash chain for the current
+ *   string (strstart) and its distance is <= MAX_DIST, and prev_length >= 1
+ * OUT assertion: the match length is not greater than s->lookahead.
+  For 80x86 and 680x0, an optimized version will be provided in match.asm or
+ * match.S. The code will be functionally equivalent.
+  current match  max hash chain length  current string  matched string  length of current match  best match length so far  stop if match long enough  Stop when cur_match becomes <= limit. To simplify the code,
+     * we prevent matches with the string of window index 0.
+      Compare two bytes at a time. Note: this is not always beneficial.
+     * Try with and without -DUNALIGNED_OK to check.
+      The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Do not waste too much time if we already have a good match:  Do not look for matches beyond the end of the input. This is necessary
+     * to make deflate deterministic.
+      Skip to next match if the match length cannot increase
+         * or if the match length is less than 2.  Note that the checks below
+         * for insufficient lookahead only occur occasionally for performance
+         * reasons.  Therefore uninitialized memory will be accessed, and
+         * conditional jumps will be made that depend on those values.
+         * However the length of the match is limited to the lookahead, so
+         * the output of deflate is not affected by the uninitialized values.
+          This code assumes sizeof(unsigned short) == 2. Do not use
+         * UNALIGNED_OK if your compiler uses a different size.
+          It is not necessary to compare scan[2] and match[2] since they are
+         * always equal when the other bytes match, given that the hash keys
+         * are equal and that HASH_BITS >= 8. Compare 2 bytes at a time at
+         * strstart+3, +5, ... up to strstart+257. We check for insufficient
+         * lookahead only every 4th comparison; the 128th check will be made
+         * at strstart+257. If MAX_MATCH-2 is not a multiple of 8, it is
+         * necessary to put more guard bytes at the end of the window, or
+         * to check more often for insufficient lookahead.
+          The funny "do {}" generates better code on most compilers  Here, scan <= window+strstart+257  UNALIGNED_OK  The check at best_len-1 can be removed because it will be made
+         * again later. (This heuristic is not always a win.)
+         * It is not necessary to compare scan[2] and match[2] since they
+         * are always equal when the other bytes match, given that
+         * the hash keys are equal and that HASH_BITS >= 8.
+          We check for insufficient lookahead only every 8th comparison;
+         * the 256th check will be made at strstart+258.
+          UNALIGNED_OK  ASMV  FASTEST  ---------------------------------------------------------------------------
+ * Optimized version for level == 1 or strategy == Z_RLE only
+  current match  current string  matched string  length of current match  The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Return failure if the match length is less than 2:
+      The check at best_len-1 can be removed because it will be made
+     * again later. (This heuristic is not always a win.)
+     * It is not necessary to compare scan[2] and match[2] since they
+     * are always equal when the other bytes match, given that
+     * the hash keys are equal and that HASH_BITS >= 8.
+      We check for insufficient lookahead only every 8th comparison;
+     * the 256th check will be made at strstart+258.
+      ===========================================================================
+ * Check that the match at match_start is indeed a match.
+  check that the match is indeed a match  DEBUG  ===========================================================================
+ * Fill the window when the lookahead becomes insufficient.
+ * Updates strstart and lookahead.
+ *
+ * IN assertion: lookahead < MIN_LOOKAHEAD
+ * OUT assertions: strstart <= window_size-MIN_LOOKAHEAD
+ *    At least one byte has been read, or avail_in == 0; reads are
+ *    performed for at least two bytes (required for the zip translate_eol
+ *    option -- not supported here).
+  Amount of free space at the end of the window.  Deal with !@#$% 64K limit:  Very unlikely, but possible on 16 bit machine if
+                 * strstart == 0 && lookahead == 1 (input done a byte at time)
+                  If the window is almost full and there is insufficient lookahead,
+         * move the upper half to the lower one to make room in the upper half.
+          we now have strstart >= MAX_DIST  Slide the hash table (could be avoided with 32 bit values
+               at the expense of memory usage). We slide even when level == 0
+               to keep the hash table consistent if we switch back to level > 0
+               later. (Using level 0 permanently is not an optimal usage of
+               zlib, so we don't care about this pathological case.)
+              %%% avoid this when Z_RLE  If n is not on any hash chain, prev[n] is garbage but
+                 * its value will never be used.
+                  If there was no sliding:
+         *    strstart <= WSIZE+MAX_DIST-1 && lookahead <= MIN_LOOKAHEAD - 1 &&
+         *    more == window_size - lookahead - strstart
+         * => more >= window_size - (MIN_LOOKAHEAD-1 + WSIZE + MAX_DIST-1)
+         * => more >= window_size - 2*WSIZE + 2
+         * In the BIG_MEM or MMAP case (not yet supported),
+         *   window_size == input_size + MIN_LOOKAHEAD  &&
+         *   strstart + s->lookahead <= input_size => more >= MIN_LOOKAHEAD.
+         * Otherwise, window_size == 2*WSIZE so more >= 2.
+         * If there was sliding, more >= WSIZE. So in all cases, more >= 2.
+          Initialize the hash value now that we have some input:  If the whole input has less than MIN_MATCH bytes, ins_h is garbage,
+         * but this is not important since only literal bytes will be emitted.
+          ===========================================================================
+ * Flush the current block, with given end-of-file flag.
+ * IN assertion: strstart is set to the end of the current match.
+  Same but force premature exit if necessary.  ===========================================================================
+ * Copy without compression as much as possible from the input stream, return
+ * the current block state.
+ * This function does not insert new strings in the dictionary since
+ * uncompressible data is probably not useful. This function is used
+ * only for the level=0 compression option.
+ * NOTE: this function should be optimized to avoid extra copying from
+ * window to pending_buf.
+  Stored blocks are limited to 0xffff bytes, pending_buf is limited
+     * to pending_buf_size, and each stored block has a 5 byte header:
+      Copy as much as possible from input to output:  Fill the window as much as possible:  flush the current block  Emit a stored block if pending_buf will be full:  strstart == 0 is possible when wraparound on 16-bit machine  Flush if we may have to slide, otherwise block_start may become
+         * negative and the data will be gone:
+          ===========================================================================
+ * Compress as much as possible from the input stream, return the current
+ * block state.
+ * This function does not perform lazy evaluation of matches and inserts
+ * new strings in the dictionary only for unmatched strings or for short
+ * matches. It is used only for the fast compression options.
+  head of the hash chain  set if current block must be flushed  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+         * At this point we have always match_length < MIN_MATCH
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  Insert new strings in the hash table only if the match length
+             * is not too large. This saves time but degrades compression.
+              string at strstart already in table  strstart never exceeds WSIZE-MAX_MATCH, so there are
+                     * always MIN_MATCH bytes ahead.
+                      If lookahead < MIN_MATCH, ins_h is garbage, but it does not
+                 * matter since it will be recomputed at next deflate call.
+                  No match, output a literal byte  ===========================================================================
+ * Same as above, but achieves better compression. We use a lazy
+ * evaluation for matches: a match is finally adopted only if there is
+ * no better match at the next window position.
+  head of hash chain  set if current block must be flushed  Process the input block.  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  If prev_match is also MIN_MATCH, match_start is garbage
+                 * but we will ignore the current match anyway.
+                  If there was a match at the previous step and the current
+         * match is not better, output the previous match:
+          Do not insert strings in hash table beyond this.  Insert in hash table all strings up to the end of the match.
+             * strstart-1 and strstart are already inserted. If there is not
+             * enough lookahead, the last two strings are not inserted in
+             * the hash table.
+              If there was no match at the previous position, output a
+             * single literal. If there was a match but the current match
+             * is longer, truncate the previous match to a single literal.
+              There is no previous match to compare with, wait for
+             * the next step to decide.
+              FASTEST  ===========================================================================
+ * For Z_RLE, simply look for runs of bytes, generate matches only of distance
+ * one.  Do not maintain a hash table.  (It will be regenerated if this run of
+ * deflate switches away from Z_RLE.)
+  set if current block must be flushed  length of run  maximum length of run  byte at distance one to match  scan for end of run  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the longest encodable run.
+          flush the current block  See how many times the previous byte repeats  if there is a previous byte, that is  Emit match if have run of MIN_MATCH or longer, else emit literal  No match, output a literal byte  deflate.c -- compress data using the deflation algorithm
+ * Copyright (C) 1995-2005 Jean-loup Gailly.
+ * For conditions of distribution and use, see copyright notice in zlib.h
+ 
+ *  ALGORITHM
+ *
+ *      The "deflation" process depends on being able to identify portions
+ *      of the input text which are identical to earlier input (within a
+ *      sliding window trailing behind the input currently being processed).
+ *
+ *      The most straightforward technique turns out to be the fastest for
+ *      most input files: try all possible matches and select the longest.
+ *      The key feature of this algorithm is that insertions into the string
+ *      dictionary are very simple and thus fast, and deletions are avoided
+ *      completely. Insertions are performed at each input character, whereas
+ *      string matches are performed only when the previous match ends. So it
+ *      is preferable to spend more time in matches to allow very fast string
+ *      insertions and avoid deletions. The matching algorithm for small
+ *      strings is inspired from that of Rabin & Karp. A brute force approach
+ *      is used to find longer strings when a small match has been found.
+ *      A similar algorithm is used in comic (by Jan-Mark Wams) and freeze
+ *      (by Leonid Broukhis).
+ *         A previous version of this file used a more sophisticated algorithm
+ *      (by Fiala and Greene) which is guaranteed to run in linear amortized
+ *      time, but has a larger average cost, uses more memory and is patented.
+ *      However the F&G algorithm may be faster for some highly redundant
+ *      files if the parameter max_chain_length (described below) is too large.
+ *
+ *  ACKNOWLEDGEMENTS
+ *
+ *      The idea of lazy evaluation of matches is due to Jan-Mark Wams, and
+ *      I found it in 'freeze' written by Leonid Broukhis.
+ *      Thanks to many people for bug reports and testing.
+ *
+ *  REFERENCES
+ *
+ *      Deutsch, L.P.,"DEFLATE Compressed Data Format Specification".
+ *      Available in http://www.ietf.org/rfc/rfc1951.txt
+ *
+ *      A description of the Rabin and Karp algorithm is given in the book
+ *         "Algorithms" by R. Sedgewick, Addison-Wesley, p252.
+ *
+ *      Fiala,E.R., and Greene,D.H.
+ *         Data Compression with Finite Windows, Comm.ACM, 32,4 (1989) 490-595
+ *
+  @(#) $Id$ 
+  If you use the zlib library in a product, an acknowledgment is welcome
+  in the documentation of your product. If for some reason you cannot
+  include such an acknowledgment, I would appreciate that you keep this
+  copyright string in the executable of your product.
+  ===========================================================================
+ *  Function prototypes.
+  block not completed, need more input or more output  block flush performed  finish started, need only more output at next deflate  finish done, accept no more input or output  Compression function. Returns the block state after the call.  asm code initialization  ===========================================================================
+ * Local data
+  Tail of hash chains  Matches of length 3 are discarded if their distance exceeds TOO_FAR  Minimum amount of lookahead, except at the end of the input file.
+ * See deflate.c for comments about the MIN_MATCH+1.
+  Values for max_lazy_match, good_match and max_chain_length, depending on
+ * the desired pack level (0..9). The values given below have been tuned to
+ * exclude worst case performance for pathological files. Better values may be
+ * found for specific files.
+  reduce lazy search above this match length  do not perform lazy search above this match length  quit search above this match length       good lazy nice chain  0  store only  1  max speed, no lazy matches       good lazy nice chain  0  store only  1  max speed, no lazy matches  2  3  4  lazy matches  5  6  7  8  9  max compression  Note: the deflate() code requires max_lazy >= MIN_MATCH and max_chain >= 4
+ * For deflate_fast() (levels <= 3) good is ignored and lazy has a different
+ * meaning.
+  result of memcmp for equal strings  for buggy compilers  ===========================================================================
+ * Update a hash value with the given input byte
+ * IN  assertion: all calls to to UPDATE_HASH are made with consecutive
+ *    input characters, so that a running hash key can be computed from the
+ *    previous key instead of complete recalculation each time.
+  ===========================================================================
+ * Insert string str in the dictionary and set match_head to the previous head
+ * of the hash chain (the most recent string with same hash key). Return
+ * the previous length of the hash chain.
+ * If this file is compiled with -DFASTEST, the compression level is forced
+ * to 1, and no hash chains are maintained.
+ * IN  assertion: all calls to to INSERT_STRING are made with consecutive
+ *    input characters and the first MIN_MATCH bytes of str are valid
+ *    (except for the last MIN_MATCH-1 bytes of the input file).
+  ===========================================================================
+ * Initialize the hash table (avoiding 64K overflow for 16 bit systems).
+ * prev[] will be initialized on the fly.
+  =========================================================================  To do: ignore strm->next_in if we use it as window  =========================================================================  We overlay pending_buf and d_buf+l_buf. This works since the average
+     * output size for (length,distance) codes is <= 24 bits.
+      suppress zlib wrapper  write gzip wrapper instead  until 256-byte window bug fixed  16K elements by default  =========================================================================  use the tail of the dictionary  Insert all strings in the hash table (except for the last two bytes).
+     * s->lookahead stays null, so s->ins_h will be recomputed at the next
+     * call of fill_window.
+      =========================================================================  use zfree if we ever allocate msg dynamically  was made negative by deflate(..., Z_FINISH);  =========================================================================  =========================================================================  =========================================================================  Flush the last buffer:  =========================================================================  =========================================================================
+ * For the default windowBits of 15 and memLevel of 8, this function returns
+ * a close to exact, as well as small, upper bound on the compressed size.
+ * They are coded as constants here for a reason--if the #define's are
+ * changed, then this function needs to be changed as well.  The return
+ * value for 15 and 8 only works for those exact settings.
+ *
+ * For any setting other than those defaults for windowBits and memLevel,
+ * the value returned is a conservative worst case for the maximum expansion
+ * resulting from using fixed blocks instead of stored blocks, which deflate
+ * can emit on compressed data for some combinations of the parameters.
+ *
+ * This function could be more sophisticated to provide closer upper bounds
+ * for every combination of windowBits and memLevel, as well as wrap.
+ * But even the conservative upper bound of about 14% expansion does not
+ * seem onerous for output buffer allocation.
+  conservative upper bound  if can't get parameters, return conservative bound  if not default parameters, return conservative bound  default settings: return tight bound for that case  =========================================================================
+ * Put a short in the pending buffer. The 16-bit value is put in MSB order.
+ * IN assertion: the stream state is correct and there is enough room in
+ * pending_buf.
+  =========================================================================
+ * Flush as much pending output as possible. All deflate() output goes
+ * through this function so some applications may wish to modify it
+ * to avoid allocating a large strm->next_out buffer and copying into it.
+ * (See also read_buf()).
+  =========================================================================  value of flush param for previous deflate call  just in case  Write the header  Save the adler32 of the preset dictionary:  start of bytes to update crc  start of bytes to update crc  start of bytes to update crc  Flush as much pending output as possible  Since avail_out is 0, deflate will be called again with
+             * more output space, but possibly with both pending and
+             * avail_in equal to zero. There won't be anything to do,
+             * but this is not an error situation so make sure we
+             * return OK instead of BUF_ERROR at next call of deflate:
+              Make sure there is something to do and avoid duplicate consecutive
+     * flushes. For repeated and useless calls with Z_FINISH, we keep
+     * returning Z_STREAM_END instead of Z_BUF_ERROR.
+      User must not provide more input after the first FINISH:  Start a new block or continue the current one.
+      avoid BUF_ERROR next call, see above  If flush != Z_NO_FLUSH && avail_out == 0, the next call
+             * of deflate should use the same flush parameter to make sure
+             * that the flush is complete. So we don't have to output an
+             * empty block here, this will be done at next call. This also
+             * ensures that for a very small output buffer, we emit at most
+             * one empty block.
+              FULL_FLUSH or SYNC_FLUSH  For a full flush, this empty block will be recognized
+                 * as a special marker by inflate_sync().
+                  forget history  avoid BUF_ERROR at next call, see above  Write the trailer  If avail_out is zero, the application will call deflate again
+     * to flush the rest.
+      write the trailer only once!  =========================================================================  Deallocate in reverse order of allocations:  =========================================================================
+ * Copy the source state to the destination state.
+ * To simplify the source, this is not supported for 16-bit MSDOS (which
+ * doesn't have enough memory anyway to duplicate compression states).
+  following zmemcpy do not work for 16-bit MSDOS  MAXSEG_64K  ===========================================================================
+ * Read a new buffer from the current input stream, update the adler32
+ * and total number of bytes read.  All deflate() input goes through
+ * this function so some applications may wish to modify it to avoid
+ * allocating a large strm->next_in buffer and copying from it.
+ * (See also flush_pending()).
+  ===========================================================================
+ * Initialize the "longest match" routines for a new zlib stream
+  Set the default configuration parameters:
+      initialize the asm code  ===========================================================================
+ * Set match_start to the longest match starting at the given string and
+ * return its length. Matches shorter or equal to prev_length are discarded,
+ * in which case the result is equal to prev_length and match_start is
+ * garbage.
+ * IN assertions: cur_match is the head of the hash chain for the current
+ *   string (strstart) and its distance is <= MAX_DIST, and prev_length >= 1
+ * OUT assertion: the match length is not greater than s->lookahead.
+  For 80x86 and 680x0, an optimized version will be provided in match.asm or
+ * match.S. The code will be functionally equivalent.
+  current match  max hash chain length  current string  matched string  length of current match  best match length so far  stop if match long enough  Stop when cur_match becomes <= limit. To simplify the code,
+     * we prevent matches with the string of window index 0.
+      Compare two bytes at a time. Note: this is not always beneficial.
+     * Try with and without -DUNALIGNED_OK to check.
+      The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Do not waste too much time if we already have a good match:  Do not look for matches beyond the end of the input. This is necessary
+     * to make deflate deterministic.
+      Skip to next match if the match length cannot increase
+         * or if the match length is less than 2.  Note that the checks below
+         * for insufficient lookahead only occur occasionally for performance
+         * reasons.  Therefore uninitialized memory will be accessed, and
+         * conditional jumps will be made that depend on those values.
+         * However the length of the match is limited to the lookahead, so
+         * the output of deflate is not affected by the uninitialized values.
+          This code assumes sizeof(unsigned short) == 2. Do not use
+         * UNALIGNED_OK if your compiler uses a different size.
+          It is not necessary to compare scan[2] and match[2] since they are
+         * always equal when the other bytes match, given that the hash keys
+         * are equal and that HASH_BITS >= 8. Compare 2 bytes at a time at
+         * strstart+3, +5, ... up to strstart+257. We check for insufficient
+         * lookahead only every 4th comparison; the 128th check will be made
+         * at strstart+257. If MAX_MATCH-2 is not a multiple of 8, it is
+         * necessary to put more guard bytes at the end of the window, or
+         * to check more often for insufficient lookahead.
+          The funny "do {}" generates better code on most compilers  Here, scan <= window+strstart+257  UNALIGNED_OK  The check at best_len-1 can be removed because it will be made
+         * again later. (This heuristic is not always a win.)
+         * It is not necessary to compare scan[2] and match[2] since they
+         * are always equal when the other bytes match, given that
+         * the hash keys are equal and that HASH_BITS >= 8.
+          We check for insufficient lookahead only every 8th comparison;
+         * the 256th check will be made at strstart+258.
+          UNALIGNED_OK  ASMV  FASTEST  ---------------------------------------------------------------------------
+ * Optimized version for level == 1 or strategy == Z_RLE only
+  current match  current string  matched string  length of current match  The code is optimized for HASH_BITS >= 8 and MAX_MATCH-2 multiple of 16.
+     * It is easy to get rid of this optimization if necessary.
+      Return failure if the match length is less than 2:
+      The check at best_len-1 can be removed because it will be made
+     * again later. (This heuristic is not always a win.)
+     * It is not necessary to compare scan[2] and match[2] since they
+     * are always equal when the other bytes match, given that
+     * the hash keys are equal and that HASH_BITS >= 8.
+      We check for insufficient lookahead only every 8th comparison;
+     * the 256th check will be made at strstart+258.
+      ===========================================================================
+ * Check that the match at match_start is indeed a match.
+  check that the match is indeed a match  DEBUG  ===========================================================================
+ * Fill the window when the lookahead becomes insufficient.
+ * Updates strstart and lookahead.
+ *
+ * IN assertion: lookahead < MIN_LOOKAHEAD
+ * OUT assertions: strstart <= window_size-MIN_LOOKAHEAD
+ *    At least one byte has been read, or avail_in == 0; reads are
+ *    performed for at least two bytes (required for the zip translate_eol
+ *    option -- not supported here).
+  Amount of free space at the end of the window.  Deal with !@#$% 64K limit:  Very unlikely, but possible on 16 bit machine if
+                 * strstart == 0 && lookahead == 1 (input done a byte at time)
+                  If the window is almost full and there is insufficient lookahead,
+         * move the upper half to the lower one to make room in the upper half.
+          we now have strstart >= MAX_DIST  Slide the hash table (could be avoided with 32 bit values
+               at the expense of memory usage). We slide even when level == 0
+               to keep the hash table consistent if we switch back to level > 0
+               later. (Using level 0 permanently is not an optimal usage of
+               zlib, so we don't care about this pathological case.)
+              %%% avoid this when Z_RLE  If n is not on any hash chain, prev[n] is garbage but
+                 * its value will never be used.
+                  If there was no sliding:
+         *    strstart <= WSIZE+MAX_DIST-1 && lookahead <= MIN_LOOKAHEAD - 1 &&
+         *    more == window_size - lookahead - strstart
+         * => more >= window_size - (MIN_LOOKAHEAD-1 + WSIZE + MAX_DIST-1)
+         * => more >= window_size - 2*WSIZE + 2
+         * In the BIG_MEM or MMAP case (not yet supported),
+         *   window_size == input_size + MIN_LOOKAHEAD  &&
+         *   strstart + s->lookahead <= input_size => more >= MIN_LOOKAHEAD.
+         * Otherwise, window_size == 2*WSIZE so more >= 2.
+         * If there was sliding, more >= WSIZE. So in all cases, more >= 2.
+          Initialize the hash value now that we have some input:  If the whole input has less than MIN_MATCH bytes, ins_h is garbage,
+         * but this is not important since only literal bytes will be emitted.
+          ===========================================================================
+ * Flush the current block, with given end-of-file flag.
+ * IN assertion: strstart is set to the end of the current match.
+  Same but force premature exit if necessary.  ===========================================================================
+ * Copy without compression as much as possible from the input stream, return
+ * the current block state.
+ * This function does not insert new strings in the dictionary since
+ * uncompressible data is probably not useful. This function is used
+ * only for the level=0 compression option.
+ * NOTE: this function should be optimized to avoid extra copying from
+ * window to pending_buf.
+  Stored blocks are limited to 0xffff bytes, pending_buf is limited
+     * to pending_buf_size, and each stored block has a 5 byte header:
+      Copy as much as possible from input to output:  Fill the window as much as possible:  flush the current block  Emit a stored block if pending_buf will be full:  strstart == 0 is possible when wraparound on 16-bit machine  Flush if we may have to slide, otherwise block_start may become
+         * negative and the data will be gone:
+          ===========================================================================
+ * Compress as much as possible from the input stream, return the current
+ * block state.
+ * This function does not perform lazy evaluation of matches and inserts
+ * new strings in the dictionary only for unmatched strings or for short
+ * matches. It is used only for the fast compression options.
+  head of the hash chain  set if current block must be flushed  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+         * At this point we have always match_length < MIN_MATCH
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  Insert new strings in the hash table only if the match length
+             * is not too large. This saves time but degrades compression.
+              string at strstart already in table  strstart never exceeds WSIZE-MAX_MATCH, so there are
+                     * always MIN_MATCH bytes ahead.
+                      If lookahead < MIN_MATCH, ins_h is garbage, but it does not
+                 * matter since it will be recomputed at next deflate call.
+                  No match, output a literal byte  ===========================================================================
+ * Same as above, but achieves better compression. We use a lazy
+ * evaluation for matches: a match is finally adopted only if there is
+ * no better match at the next window position.
+  head of hash chain  set if current block must be flushed  Process the input block.  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the next match, plus MIN_MATCH bytes to insert the
+         * string following the next match.
+          flush the current block  Insert the string window[strstart .. strstart+2] in the
+         * dictionary, and set hash_head to the head of the hash chain:
+          Find the longest match, discarding those <= prev_length.
+          To simplify the code, we prevent matches with the string
+             * of window index 0 (in particular we have to avoid a match
+             * of the string with itself at the start of the input file).
+              longest_match() or longest_match_fast() sets match_start  If prev_match is also MIN_MATCH, match_start is garbage
+                 * but we will ignore the current match anyway.
+                  If there was a match at the previous step and the current
+         * match is not better, output the previous match:
+          Do not insert strings in hash table beyond this.  Insert in hash table all strings up to the end of the match.
+             * strstart-1 and strstart are already inserted. If there is not
+             * enough lookahead, the last two strings are not inserted in
+             * the hash table.
+              If there was no match at the previous position, output a
+             * single literal. If there was a match but the current match
+             * is longer, truncate the previous match to a single literal.
+              There is no previous match to compare with, wait for
+             * the next step to decide.
+              FASTEST  ===========================================================================
+ * For Z_RLE, simply look for runs of bytes, generate matches only of distance
+ * one.  Do not maintain a hash table.  (It will be regenerated if this run of
+ * deflate switches away from Z_RLE.)
+  set if current block must be flushed  length of run  maximum length of run  byte at distance one to match  scan for end of run  Make sure that we always have enough lookahead, except
+         * at the end of the input file. We need MAX_MATCH bytes
+         * for the longest encodable run.
+          flush the current block  See how many times the previous byte repeats  if there is a previous byte, that is  Emit match if have run of MIN_MATCH or longer, else emit literal  No match, output a literal byte 

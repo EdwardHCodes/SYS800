@@ -1,0 +1,919 @@
+
+ * sokoban.c: An implementation of the well-known Sokoban barrel-
+ * pushing game. Random generation is too simplistic to be
+ * credible, but the rest of the gameplay works well enough to use
+ * it with hand-written level descriptions.
+ 
+ * TODO:
+ * 
+ *  - I think it would be better to ditch the `prev' array, and
+ *    instead make the `dist' array strictly monotonic (by having
+ *    each distance be something like I*A+S, where A is the grid
+ *    area, I the number of INITIAL squares trampled on, and S the
+ *    number of harmless spaces moved through). This would permit
+ *    the path-tracing when a pull is actually made to choose
+ *    randomly from all the possible shortest routes, which would
+ *    be superior in terms of eliminating directional bias.
+ *     + So when tracing the path back to the current px,py, we
+ * 	 look at all four adjacent squares, find the minimum
+ * 	 distance, check that it's _strictly smaller_ than that of
+ * 	 the current square, and restrict our choice to precisely
+ * 	 those squares with that minimum distance.
+ *     + The other place `prev' is currently used is in the check
+ * 	 for consistency of a pull. We would have to replace the
+ * 	 check for whether prev[ny*w+nx]==oy*w+ox with a check that
+ * 	 made sure there was at least one adjacent square with a
+ * 	 smaller distance which _wasn't_ oy*w+ox. Then when we did
+ * 	 the path-tracing we'd also have to take this special case
+ * 	 into account.
+ * 
+ *  - More discriminating choice of pull. (Snigger.)
+ *     + favour putting targets in clumps
+ *     + try to shoot for a reasonably consistent number of barrels
+ * 	 (adjust willingness to generate a new barrel depending on
+ * 	 how many are already present)
+ *     + adjust willingness to break new ground depending on how
+ * 	 much is already broken
+ * 
+ *  - generation time parameters:
+ *     + enable NetHack mode (and find a better place for the hole)
+ *     + decide how many of the remaining Is should be walls
+ * 
+ *  - at the end of generation, randomly position the starting
+ *    player coordinates, probably by (somehow) reusing the same
+ *    bfs currently inside the loop.
+ * 
+ *  - possible backtracking?
+ * 
+ *  - IWBNI we could spot completely unreachable bits of level at
+ *    the outside, and not bother drawing grid lines for them. The
+ *    NH levels currently look a bit weird with grid lines on the
+ *    outside of the boundary.
+ 
+ * Various subsets of these constants are used during game
+ * generation, game play, game IDs and the game_drawstate.
+  used only in game generation  target is 'f'illed  yo'u'; used in game IDs  bad letter: v is to u as t is to s  used in drawstate to force redraw 
+ * We also support the use of any capital letter as a barrel, which
+ * will be displayed with that letter as a label. (This facilitates
+ * people distributing annotated game IDs for particular Sokoban
+ * levels, so they can accompany them with verbal instructions
+ * about pushing particular barrels in particular ways.) Therefore,
+ * to find out whether something is a barrel, we need a test
+ * function which does a bit more than just comparing to BARREL.
+ * 
+ * When resting on target squares, capital-letter barrels are
+ * replaced with their control-character value (A -> ^A).
+ 
+     * FIXME: a parameter involving degree of filling in?
+      structure copy  ----------------------------------------------------------------------
+ * Game generation mechanism.
+ * 
+ * To generate a Sokoban level, we begin with a completely blank
+ * grid and make valid inverse moves. Grid squares can be in a
+ * number of states. The states are:
+ * 
+ *  - INITIAL: this square has not as yet been touched by any
+ *    inverse move, which essentially means we haven't decided what
+ *    it is yet.
+ * 
+ *  - SPACE: this square is a space.
+ * 
+ *  - TARGET: this square is a space which is also the target for a
+ *    barrel.
+ * 
+ *  - BARREL: this square contains a barrel.
+ * 
+ *  - BARRELTARGET: this square contains a barrel _on_ a target.
+ * 
+ *  - WALL: this square is a wall.
+ * 
+ *  - PLAYER: this square contains the player.
+ * 
+ *  - PLAYERTARGET: this square contains the player on a target.
+ * 
+ * We begin with every square of the in state INITIAL, apart from a
+ * solid ring of WALLs around the edge. We randomly position the
+ * PLAYER somewhere. Thereafter our valid moves are:
+ * 
+ *  - to move the PLAYER in one direction _pulling_ a barrel after
+ *    us. For this to work, we must have SPACE or INITIAL in the
+ *    direction we're moving, and BARREL or BARRELTARGET in the
+ *    direction we're moving away from. We leave SPACE or TARGET
+ *    respectively in the vacated square.
+ * 
+ *  - to create a new barrel by transforming an INITIAL square into
+ *    BARRELTARGET.
+ * 
+ *  - to move the PLAYER freely through SPACE and TARGET squares,
+ *    leaving SPACE or TARGET where it started.
+ * 
+ *  - to move the player through INITIAL squares, carving a tunnel
+ *    of SPACEs as it goes.
+ * 
+ * We try to avoid destroying INITIAL squares wherever possible (if
+ * there's a path to where we want to be using only SPACE, then we
+ * should always use that). At the end of generation, every square
+ * still in state INITIAL is one which was not required at any
+ * point during generation, which means we can randomly choose
+ * whether to make it SPACE or WALL.
+ * 
+ * It's unclear as yet what the right strategy for wall placement
+ * should be. Too few WALLs will yield many alternative solutions
+ * to the puzzle, whereas too many might rule out so many
+ * possibilities that the intended solution becomes obvious.
+ 
+     * Configure the initial grid.
+     
+     * Place the player.
+     
+     * Now loop around making random inverse Sokoban moves. In this
+     * loop we aim to make one actual barrel-pull per iteration,
+     * plus as many free moves as are necessary to get into
+     * position for that pull.
+     
+	 * First enumerate all the viable barrel-pulls we can
+	 * possibly make, counting two pulls of the same barrel in
+	 * different directions as different. We also include pulls
+	 * we can perform by creating a new barrel. Each pull is
+	 * marked with the amount of violence it would have to do
+	 * to the grid.
+	 
+		     * The candidate move is to put the player at
+		     * (nx,ny), and move him to (npx,npy), pulling
+		     * a barrel at (x,y) to (nx,ny). So first we
+		     * must check that all those squares are within
+		     * the boundaries of the grid. For this it is
+		     * sufficient to check npx,npy.
+		     
+		     * (x,y) must either be a barrel, or a square
+		     * which we can convert into a barrel.
+		      new_barrel_score 
+		     * (nx,ny) must either be a space, or a square
+		     * which we can convert into a space.
+		      new_space_score 
+		     * (npx,npy) must also either be a space, or a
+		     * square which we can convert into a space.
+		      new_space_score 
+		     * That's sufficient to tag this as a possible
+		     * pull right now. We still don't know if we
+		     * can reach the required player position, but
+		     * that's a job for the subsequent BFS phase to
+		     * tell us.
+		     
+	 * If there are no pulls available at all, we give up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now we do a BFS from our current position, to find all
+	 * the squares we can get the player into.
+	 * 
+	 * This BFS is unusually tricky. We want to give a positive
+	 * distance only to squares which we have to carve through
+	 * INITIALs to get to, which means we can't just stick
+	 * every square we reach on the end of our to-do list.
+	 * Instead, we must maintain our list as a proper priority
+	 * queue.
+	 
+	     * Pull the smallest element off the heap: it's at
+	     * position 0. Move the arbitrary element from the very
+	     * end of the heap into position 0.
+	     
+	     * Now repeatedly move that arbitrary element down the
+	     * heap by swapping it with the more suitable of its
+	     * children.
+	      we've hit bottom 
+		     * Special case: there is only one child to
+		     * check.
+		      _Now_ we've hit bottom. 
+		     * The common case: there are two children and
+		     * we must check them both.
+		     
+			 * Pick the more appropriate child to swap with
+			 * (i.e. the one which would want to be the
+			 * parent if one were above the other - as one
+			 * is about to be).
+			  This element is in the right place; we're done. 
+	     * OK, that's given us (x,y) for this phase of the
+	     * search. Now try all directions from here.
+	     
+		     * Now insert ny*w+nx at the end of the heap,
+		     * and move it down to its appropriate resting
+		     * place.
+		     
+		     * Swap element n with its parent repeatedly to
+		     * preserve the heap property.
+		     
+	 * Now we can go back through the `pulls' array, adjusting
+	 * the score for each pull depending on how hard it is to
+	 * reach its starting point, and also throwing out any
+	 * whose starting points are genuinely unreachable even
+	 * with the possibility of carving through INITIAL squares.
+	  this pull isn't feasible at all 
+		 * Another nasty special case we have to check is
+		 * whether the initial barrel location (ox,oy) is
+		 * on the path used to reach the square. This can
+		 * occur if that square is in state INITIAL: the
+		 * pull is initially considered valid on the basis
+		 * that the INITIAL can become BARRELTARGET, and
+		 * it's also considered reachable on the basis that
+		 * INITIAL can be turned into SPACE, but it can't
+		 * be both at once.
+		 * 
+		 * Fortunately, if (ox,oy) is on the path at all,
+		 * it must be only one space from the end, so this
+		 * is easy to spot and rule out.
+		  this pull isn't feasible at all  structure copy  new_space_score 
+	 * Again, if there are no pulls available at all, we give
+	 * up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now choose which pull to make. On the one hand we should
+	 * prefer pulls which do less damage to the INITIAL squares
+	 * (thus, ones for which we can already get into position
+	 * via existing SPACEs, and for which the barrel already
+	 * exists and doesn't have to be invented); on the other,
+	 * we want to avoid _always_ preferring such pulls, on the
+	 * grounds that that will lead to levels without very much
+	 * stuff in.
+	 * 
+	 * When creating new barrels, we prefer creations which are
+	 * next to existing TARGET squares.
+	 * 
+	 * FIXME: for the moment I'll make this very simple indeed.
+	 
+	 * Actually make the pull, including carving a path to get
+	 * to the site if necessary.
+	 
+     * FIXME: perhaps some more interesting means of choosing how
+     * many moves to try?
+      FIXME: make some of these 's'?  ok  structure copy  structure copy 
+ * I'm going to need to do most of the move-type analysis in both
+ * interpret_move and execute_move, so I'll abstract it out into a
+ * subfunction. move_type() returns -1 for an illegal move, 0 for a
+ * movement, and 1 for a push.
+ 
+     * Disallow any move that goes off the grid.
+     
+     * Examine the target square of the move to see whether it's a
+     * space, a barrel, or a wall.
+      this one's easy; just disallow it 
+         * This is a push move. For a start, that means it must not
+         * be diagonal.
+         
+         * Now find the location of the third square involved in
+         * the push, and stop if it's off the edge.
+         
+         * That third square must be able to accept a barrel.
+         
+             * The push is valid.
+             
+         * This is just an ordinary move. We've already checked the
+         * target square, so the only thing left to check is that a
+         * diagonal move has a space on one side to have notionally
+         * gone through.
+         
+         * Otherwise, the move is valid.
+         
+     * Diagonal movement is supported as it is in NetHack: it's
+     * for movement only (never pushing), and one of the two
+     * squares adjacent to both the source and destination
+     * squares must be free to move through. In other words, it
+     * is only a shorthand for two orthogonal moves and cannot
+     * change the nature of the actual puzzle game.
+      invalid move string 
+         * Push.
+          do nothing - the pit eats the barrel and remains there 
+     * Check for completion. This is surprisingly complicated,
+     * given the presence of pits and deep pits, and also the fact
+     * that some Sokoban levels with pits have fewer pits than
+     * barrels (due to providing spares, e.g. NetHack's). I think
+     * the completion condition in fact must be that the game
+     * cannot become any _more_ complete. That is, _either_ there
+     * are no remaining barrels not on targets, _or_ there is a
+     * good reason why any such barrels cannot be placed. The only
+     * available good reason is that there are no remaining pits,
+     * no free target squares, and no deep pits at all.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  structure copy , wh = w*h 
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * Draw the grid contents.
+      game_request_keys  wants_statusbar  flags 
+ * sokoban.c: An implementation of the well-known Sokoban barrel-
+ * pushing game. Random generation is too simplistic to be
+ * credible, but the rest of the gameplay works well enough to use
+ * it with hand-written level descriptions.
+ 
+ * TODO:
+ * 
+ *  - I think it would be better to ditch the `prev' array, and
+ *    instead make the `dist' array strictly monotonic (by having
+ *    each distance be something like I*A+S, where A is the grid
+ *    area, I the number of INITIAL squares trampled on, and S the
+ *    number of harmless spaces moved through). This would permit
+ *    the path-tracing when a pull is actually made to choose
+ *    randomly from all the possible shortest routes, which would
+ *    be superior in terms of eliminating directional bias.
+ *     + So when tracing the path back to the current px,py, we
+ * 	 look at all four adjacent squares, find the minimum
+ * 	 distance, check that it's _strictly smaller_ than that of
+ * 	 the current square, and restrict our choice to precisely
+ * 	 those squares with that minimum distance.
+ *     + The other place `prev' is currently used is in the check
+ * 	 for consistency of a pull. We would have to replace the
+ * 	 check for whether prev[ny*w+nx]==oy*w+ox with a check that
+ * 	 made sure there was at least one adjacent square with a
+ * 	 smaller distance which _wasn't_ oy*w+ox. Then when we did
+ * 	 the path-tracing we'd also have to take this special case
+ * 	 into account.
+ * 
+ *  - More discriminating choice of pull. (Snigger.)
+ *     + favour putting targets in clumps
+ *     + try to shoot for a reasonably consistent number of barrels
+ * 	 (adjust willingness to generate a new barrel depending on
+ * 	 how many are already present)
+ *     + adjust willingness to break new ground depending on how
+ * 	 much is already broken
+ * 
+ *  - generation time parameters:
+ *     + enable NetHack mode (and find a better place for the hole)
+ *     + decide how many of the remaining Is should be walls
+ * 
+ *  - at the end of generation, randomly position the starting
+ *    player coordinates, probably by (somehow) reusing the same
+ *    bfs currently inside the loop.
+ * 
+ *  - possible backtracking?
+ * 
+ *  - IWBNI we could spot completely unreachable bits of level at
+ *    the outside, and not bother drawing grid lines for them. The
+ *    NH levels currently look a bit weird with grid lines on the
+ *    outside of the boundary.
+ 
+ * Various subsets of these constants are used during game
+ * generation, game play, game IDs and the game_drawstate.
+  used only in game generation  target is 'f'illed  yo'u'; used in game IDs  bad letter: v is to u as t is to s  used in drawstate to force redraw 
+ * We also support the use of any capital letter as a barrel, which
+ * will be displayed with that letter as a label. (This facilitates
+ * people distributing annotated game IDs for particular Sokoban
+ * levels, so they can accompany them with verbal instructions
+ * about pushing particular barrels in particular ways.) Therefore,
+ * to find out whether something is a barrel, we need a test
+ * function which does a bit more than just comparing to BARREL.
+ * 
+ * When resting on target squares, capital-letter barrels are
+ * replaced with their control-character value (A -> ^A).
+ 
+     * FIXME: a parameter involving degree of filling in?
+      structure copy  ----------------------------------------------------------------------
+ * Game generation mechanism.
+ * 
+ * To generate a Sokoban level, we begin with a completely blank
+ * grid and make valid inverse moves. Grid squares can be in a
+ * number of states. The states are:
+ * 
+ *  - INITIAL: this square has not as yet been touched by any
+ *    inverse move, which essentially means we haven't decided what
+ *    it is yet.
+ * 
+ *  - SPACE: this square is a space.
+ * 
+ *  - TARGET: this square is a space which is also the target for a
+ *    barrel.
+ * 
+ *  - BARREL: this square contains a barrel.
+ * 
+ *  - BARRELTARGET: this square contains a barrel _on_ a target.
+ * 
+ *  - WALL: this square is a wall.
+ * 
+ *  - PLAYER: this square contains the player.
+ * 
+ *  - PLAYERTARGET: this square contains the player on a target.
+ * 
+ * We begin with every square of the in state INITIAL, apart from a
+ * solid ring of WALLs around the edge. We randomly position the
+ * PLAYER somewhere. Thereafter our valid moves are:
+ * 
+ *  - to move the PLAYER in one direction _pulling_ a barrel after
+ *    us. For this to work, we must have SPACE or INITIAL in the
+ *    direction we're moving, and BARREL or BARRELTARGET in the
+ *    direction we're moving away from. We leave SPACE or TARGET
+ *    respectively in the vacated square.
+ * 
+ *  - to create a new barrel by transforming an INITIAL square into
+ *    BARRELTARGET.
+ * 
+ *  - to move the PLAYER freely through SPACE and TARGET squares,
+ *    leaving SPACE or TARGET where it started.
+ * 
+ *  - to move the player through INITIAL squares, carving a tunnel
+ *    of SPACEs as it goes.
+ * 
+ * We try to avoid destroying INITIAL squares wherever possible (if
+ * there's a path to where we want to be using only SPACE, then we
+ * should always use that). At the end of generation, every square
+ * still in state INITIAL is one which was not required at any
+ * point during generation, which means we can randomly choose
+ * whether to make it SPACE or WALL.
+ * 
+ * It's unclear as yet what the right strategy for wall placement
+ * should be. Too few WALLs will yield many alternative solutions
+ * to the puzzle, whereas too many might rule out so many
+ * possibilities that the intended solution becomes obvious.
+ 
+     * Configure the initial grid.
+     
+     * Place the player.
+     
+     * Now loop around making random inverse Sokoban moves. In this
+     * loop we aim to make one actual barrel-pull per iteration,
+     * plus as many free moves as are necessary to get into
+     * position for that pull.
+     
+	 * First enumerate all the viable barrel-pulls we can
+	 * possibly make, counting two pulls of the same barrel in
+	 * different directions as different. We also include pulls
+	 * we can perform by creating a new barrel. Each pull is
+	 * marked with the amount of violence it would have to do
+	 * to the grid.
+	 
+		     * The candidate move is to put the player at
+		     * (nx,ny), and move him to (npx,npy), pulling
+		     * a barrel at (x,y) to (nx,ny). So first we
+		     * must check that all those squares are within
+		     * the boundaries of the grid. For this it is
+		     * sufficient to check npx,npy.
+		     
+		     * (x,y) must either be a barrel, or a square
+		     * which we can convert into a barrel.
+		      new_barrel_score 
+		     * (nx,ny) must either be a space, or a square
+		     * which we can convert into a space.
+		      new_space_score 
+		     * (npx,npy) must also either be a space, or a
+		     * square which we can convert into a space.
+		      new_space_score 
+		     * That's sufficient to tag this as a possible
+		     * pull right now. We still don't know if we
+		     * can reach the required player position, but
+		     * that's a job for the subsequent BFS phase to
+		     * tell us.
+		     
+	 * If there are no pulls available at all, we give up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now we do a BFS from our current position, to find all
+	 * the squares we can get the player into.
+	 * 
+	 * This BFS is unusually tricky. We want to give a positive
+	 * distance only to squares which we have to carve through
+	 * INITIALs to get to, which means we can't just stick
+	 * every square we reach on the end of our to-do list.
+	 * Instead, we must maintain our list as a proper priority
+	 * queue.
+	 
+	     * Pull the smallest element off the heap: it's at
+	     * position 0. Move the arbitrary element from the very
+	     * end of the heap into position 0.
+	     
+	     * Now repeatedly move that arbitrary element down the
+	     * heap by swapping it with the more suitable of its
+	     * children.
+	      we've hit bottom 
+		     * Special case: there is only one child to
+		     * check.
+		      _Now_ we've hit bottom. 
+		     * The common case: there are two children and
+		     * we must check them both.
+		     
+			 * Pick the more appropriate child to swap with
+			 * (i.e. the one which would want to be the
+			 * parent if one were above the other - as one
+			 * is about to be).
+			  This element is in the right place; we're done. 
+	     * OK, that's given us (x,y) for this phase of the
+	     * search. Now try all directions from here.
+	     
+		     * Now insert ny*w+nx at the end of the heap,
+		     * and move it down to its appropriate resting
+		     * place.
+		     
+		     * Swap element n with its parent repeatedly to
+		     * preserve the heap property.
+		     
+	 * Now we can go back through the `pulls' array, adjusting
+	 * the score for each pull depending on how hard it is to
+	 * reach its starting point, and also throwing out any
+	 * whose starting points are genuinely unreachable even
+	 * with the possibility of carving through INITIAL squares.
+	  this pull isn't feasible at all 
+		 * Another nasty special case we have to check is
+		 * whether the initial barrel location (ox,oy) is
+		 * on the path used to reach the square. This can
+		 * occur if that square is in state INITIAL: the
+		 * pull is initially considered valid on the basis
+		 * that the INITIAL can become BARRELTARGET, and
+		 * it's also considered reachable on the basis that
+		 * INITIAL can be turned into SPACE, but it can't
+		 * be both at once.
+		 * 
+		 * Fortunately, if (ox,oy) is on the path at all,
+		 * it must be only one space from the end, so this
+		 * is easy to spot and rule out.
+		  this pull isn't feasible at all  structure copy  new_space_score 
+	 * Again, if there are no pulls available at all, we give
+	 * up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now choose which pull to make. On the one hand we should
+	 * prefer pulls which do less damage to the INITIAL squares
+	 * (thus, ones for which we can already get into position
+	 * via existing SPACEs, and for which the barrel already
+	 * exists and doesn't have to be invented); on the other,
+	 * we want to avoid _always_ preferring such pulls, on the
+	 * grounds that that will lead to levels without very much
+	 * stuff in.
+	 * 
+	 * When creating new barrels, we prefer creations which are
+	 * next to existing TARGET squares.
+	 * 
+	 * FIXME: for the moment I'll make this very simple indeed.
+	 
+	 * Actually make the pull, including carving a path to get
+	 * to the site if necessary.
+	 
+     * FIXME: perhaps some more interesting means of choosing how
+     * many moves to try?
+      FIXME: make some of these 's'?  ok  structure copy  structure copy 
+ * I'm going to need to do most of the move-type analysis in both
+ * interpret_move and execute_move, so I'll abstract it out into a
+ * subfunction. move_type() returns -1 for an illegal move, 0 for a
+ * movement, and 1 for a push.
+ 
+     * Disallow any move that goes off the grid.
+     
+     * Examine the target square of the move to see whether it's a
+     * space, a barrel, or a wall.
+      this one's easy; just disallow it 
+         * This is a push move. For a start, that means it must not
+         * be diagonal.
+         
+         * Now find the location of the third square involved in
+         * the push, and stop if it's off the edge.
+         
+         * That third square must be able to accept a barrel.
+         
+             * The push is valid.
+             
+         * This is just an ordinary move. We've already checked the
+         * target square, so the only thing left to check is that a
+         * diagonal move has a space on one side to have notionally
+         * gone through.
+         
+         * Otherwise, the move is valid.
+         
+     * Diagonal movement is supported as it is in NetHack: it's
+     * for movement only (never pushing), and one of the two
+     * squares adjacent to both the source and destination
+     * squares must be free to move through. In other words, it
+     * is only a shorthand for two orthogonal moves and cannot
+     * change the nature of the actual puzzle game.
+      invalid move string 
+         * Push.
+          do nothing - the pit eats the barrel and remains there 
+     * Check for completion. This is surprisingly complicated,
+     * given the presence of pits and deep pits, and also the fact
+     * that some Sokoban levels with pits have fewer pits than
+     * barrels (due to providing spares, e.g. NetHack's). I think
+     * the completion condition in fact must be that the game
+     * cannot become any _more_ complete. That is, _either_ there
+     * are no remaining barrels not on targets, _or_ there is a
+     * good reason why any such barrels cannot be placed. The only
+     * available good reason is that there are no remaining pits,
+     * no free target squares, and no deep pits at all.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  structure copy , wh = w*h 
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * Draw the grid contents.
+      game_request_keys  wants_statusbar  flags 
+ * sokoban.c: An implementation of the well-known Sokoban barrel-
+ * pushing game. Random generation is too simplistic to be
+ * credible, but the rest of the gameplay works well enough to use
+ * it with hand-written level descriptions.
+ 
+ * TODO:
+ * 
+ *  - I think it would be better to ditch the `prev' array, and
+ *    instead make the `dist' array strictly monotonic (by having
+ *    each distance be something like I*A+S, where A is the grid
+ *    area, I the number of INITIAL squares trampled on, and S the
+ *    number of harmless spaces moved through). This would permit
+ *    the path-tracing when a pull is actually made to choose
+ *    randomly from all the possible shortest routes, which would
+ *    be superior in terms of eliminating directional bias.
+ *     + So when tracing the path back to the current px,py, we
+ * 	 look at all four adjacent squares, find the minimum
+ * 	 distance, check that it's _strictly smaller_ than that of
+ * 	 the current square, and restrict our choice to precisely
+ * 	 those squares with that minimum distance.
+ *     + The other place `prev' is currently used is in the check
+ * 	 for consistency of a pull. We would have to replace the
+ * 	 check for whether prev[ny*w+nx]==oy*w+ox with a check that
+ * 	 made sure there was at least one adjacent square with a
+ * 	 smaller distance which _wasn't_ oy*w+ox. Then when we did
+ * 	 the path-tracing we'd also have to take this special case
+ * 	 into account.
+ * 
+ *  - More discriminating choice of pull. (Snigger.)
+ *     + favour putting targets in clumps
+ *     + try to shoot for a reasonably consistent number of barrels
+ * 	 (adjust willingness to generate a new barrel depending on
+ * 	 how many are already present)
+ *     + adjust willingness to break new ground depending on how
+ * 	 much is already broken
+ * 
+ *  - generation time parameters:
+ *     + enable NetHack mode (and find a better place for the hole)
+ *     + decide how many of the remaining Is should be walls
+ * 
+ *  - at the end of generation, randomly position the starting
+ *    player coordinates, probably by (somehow) reusing the same
+ *    bfs currently inside the loop.
+ * 
+ *  - possible backtracking?
+ * 
+ *  - IWBNI we could spot completely unreachable bits of level at
+ *    the outside, and not bother drawing grid lines for them. The
+ *    NH levels currently look a bit weird with grid lines on the
+ *    outside of the boundary.
+ 
+ * Various subsets of these constants are used during game
+ * generation, game play, game IDs and the game_drawstate.
+  used only in game generation  target is 'f'illed  yo'u'; used in game IDs  bad letter: v is to u as t is to s  used in drawstate to force redraw 
+ * We also support the use of any capital letter as a barrel, which
+ * will be displayed with that letter as a label. (This facilitates
+ * people distributing annotated game IDs for particular Sokoban
+ * levels, so they can accompany them with verbal instructions
+ * about pushing particular barrels in particular ways.) Therefore,
+ * to find out whether something is a barrel, we need a test
+ * function which does a bit more than just comparing to BARREL.
+ * 
+ * When resting on target squares, capital-letter barrels are
+ * replaced with their control-character value (A -> ^A).
+ 
+     * FIXME: a parameter involving degree of filling in?
+      structure copy  ----------------------------------------------------------------------
+ * Game generation mechanism.
+ * 
+ * To generate a Sokoban level, we begin with a completely blank
+ * grid and make valid inverse moves. Grid squares can be in a
+ * number of states. The states are:
+ * 
+ *  - INITIAL: this square has not as yet been touched by any
+ *    inverse move, which essentially means we haven't decided what
+ *    it is yet.
+ * 
+ *  - SPACE: this square is a space.
+ * 
+ *  - TARGET: this square is a space which is also the target for a
+ *    barrel.
+ * 
+ *  - BARREL: this square contains a barrel.
+ * 
+ *  - BARRELTARGET: this square contains a barrel _on_ a target.
+ * 
+ *  - WALL: this square is a wall.
+ * 
+ *  - PLAYER: this square contains the player.
+ * 
+ *  - PLAYERTARGET: this square contains the player on a target.
+ * 
+ * We begin with every square of the in state INITIAL, apart from a
+ * solid ring of WALLs around the edge. We randomly position the
+ * PLAYER somewhere. Thereafter our valid moves are:
+ * 
+ *  - to move the PLAYER in one direction _pulling_ a barrel after
+ *    us. For this to work, we must have SPACE or INITIAL in the
+ *    direction we're moving, and BARREL or BARRELTARGET in the
+ *    direction we're moving away from. We leave SPACE or TARGET
+ *    respectively in the vacated square.
+ * 
+ *  - to create a new barrel by transforming an INITIAL square into
+ *    BARRELTARGET.
+ * 
+ *  - to move the PLAYER freely through SPACE and TARGET squares,
+ *    leaving SPACE or TARGET where it started.
+ * 
+ *  - to move the player through INITIAL squares, carving a tunnel
+ *    of SPACEs as it goes.
+ * 
+ * We try to avoid destroying INITIAL squares wherever possible (if
+ * there's a path to where we want to be using only SPACE, then we
+ * should always use that). At the end of generation, every square
+ * still in state INITIAL is one which was not required at any
+ * point during generation, which means we can randomly choose
+ * whether to make it SPACE or WALL.
+ * 
+ * It's unclear as yet what the right strategy for wall placement
+ * should be. Too few WALLs will yield many alternative solutions
+ * to the puzzle, whereas too many might rule out so many
+ * possibilities that the intended solution becomes obvious.
+ 
+     * Configure the initial grid.
+     
+     * Place the player.
+     
+     * Now loop around making random inverse Sokoban moves. In this
+     * loop we aim to make one actual barrel-pull per iteration,
+     * plus as many free moves as are necessary to get into
+     * position for that pull.
+     
+	 * First enumerate all the viable barrel-pulls we can
+	 * possibly make, counting two pulls of the same barrel in
+	 * different directions as different. We also include pulls
+	 * we can perform by creating a new barrel. Each pull is
+	 * marked with the amount of violence it would have to do
+	 * to the grid.
+	 
+		     * The candidate move is to put the player at
+		     * (nx,ny), and move him to (npx,npy), pulling
+		     * a barrel at (x,y) to (nx,ny). So first we
+		     * must check that all those squares are within
+		     * the boundaries of the grid. For this it is
+		     * sufficient to check npx,npy.
+		     
+		     * (x,y) must either be a barrel, or a square
+		     * which we can convert into a barrel.
+		      new_barrel_score 
+		     * (nx,ny) must either be a space, or a square
+		     * which we can convert into a space.
+		      new_space_score 
+		     * (npx,npy) must also either be a space, or a
+		     * square which we can convert into a space.
+		      new_space_score 
+		     * That's sufficient to tag this as a possible
+		     * pull right now. We still don't know if we
+		     * can reach the required player position, but
+		     * that's a job for the subsequent BFS phase to
+		     * tell us.
+		     
+	 * If there are no pulls available at all, we give up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now we do a BFS from our current position, to find all
+	 * the squares we can get the player into.
+	 * 
+	 * This BFS is unusually tricky. We want to give a positive
+	 * distance only to squares which we have to carve through
+	 * INITIALs to get to, which means we can't just stick
+	 * every square we reach on the end of our to-do list.
+	 * Instead, we must maintain our list as a proper priority
+	 * queue.
+	 
+	     * Pull the smallest element off the heap: it's at
+	     * position 0. Move the arbitrary element from the very
+	     * end of the heap into position 0.
+	     
+	     * Now repeatedly move that arbitrary element down the
+	     * heap by swapping it with the more suitable of its
+	     * children.
+	      we've hit bottom 
+		     * Special case: there is only one child to
+		     * check.
+		      _Now_ we've hit bottom. 
+		     * The common case: there are two children and
+		     * we must check them both.
+		     
+			 * Pick the more appropriate child to swap with
+			 * (i.e. the one which would want to be the
+			 * parent if one were above the other - as one
+			 * is about to be).
+			  This element is in the right place; we're done. 
+	     * OK, that's given us (x,y) for this phase of the
+	     * search. Now try all directions from here.
+	     
+		     * Now insert ny*w+nx at the end of the heap,
+		     * and move it down to its appropriate resting
+		     * place.
+		     
+		     * Swap element n with its parent repeatedly to
+		     * preserve the heap property.
+		     
+	 * Now we can go back through the `pulls' array, adjusting
+	 * the score for each pull depending on how hard it is to
+	 * reach its starting point, and also throwing out any
+	 * whose starting points are genuinely unreachable even
+	 * with the possibility of carving through INITIAL squares.
+	  this pull isn't feasible at all 
+		 * Another nasty special case we have to check is
+		 * whether the initial barrel location (ox,oy) is
+		 * on the path used to reach the square. This can
+		 * occur if that square is in state INITIAL: the
+		 * pull is initially considered valid on the basis
+		 * that the INITIAL can become BARRELTARGET, and
+		 * it's also considered reachable on the basis that
+		 * INITIAL can be turned into SPACE, but it can't
+		 * be both at once.
+		 * 
+		 * Fortunately, if (ox,oy) is on the path at all,
+		 * it must be only one space from the end, so this
+		 * is easy to spot and rule out.
+		  this pull isn't feasible at all  structure copy  new_space_score 
+	 * Again, if there are no pulls available at all, we give
+	 * up.
+	 * 
+	 * (FIXME: or perhaps backtrack?)
+	 
+	 * Now choose which pull to make. On the one hand we should
+	 * prefer pulls which do less damage to the INITIAL squares
+	 * (thus, ones for which we can already get into position
+	 * via existing SPACEs, and for which the barrel already
+	 * exists and doesn't have to be invented); on the other,
+	 * we want to avoid _always_ preferring such pulls, on the
+	 * grounds that that will lead to levels without very much
+	 * stuff in.
+	 * 
+	 * When creating new barrels, we prefer creations which are
+	 * next to existing TARGET squares.
+	 * 
+	 * FIXME: for the moment I'll make this very simple indeed.
+	 
+	 * Actually make the pull, including carving a path to get
+	 * to the site if necessary.
+	 
+     * FIXME: perhaps some more interesting means of choosing how
+     * many moves to try?
+      FIXME: make some of these 's'?  ok  structure copy  structure copy 
+ * I'm going to need to do most of the move-type analysis in both
+ * interpret_move and execute_move, so I'll abstract it out into a
+ * subfunction. move_type() returns -1 for an illegal move, 0 for a
+ * movement, and 1 for a push.
+ 
+     * Disallow any move that goes off the grid.
+     
+     * Examine the target square of the move to see whether it's a
+     * space, a barrel, or a wall.
+      this one's easy; just disallow it 
+         * This is a push move. For a start, that means it must not
+         * be diagonal.
+         
+         * Now find the location of the third square involved in
+         * the push, and stop if it's off the edge.
+         
+         * That third square must be able to accept a barrel.
+         
+             * The push is valid.
+             
+         * This is just an ordinary move. We've already checked the
+         * target square, so the only thing left to check is that a
+         * diagonal move has a space on one side to have notionally
+         * gone through.
+         
+         * Otherwise, the move is valid.
+         
+     * Diagonal movement is supported as it is in NetHack: it's
+     * for movement only (never pushing), and one of the two
+     * squares adjacent to both the source and destination
+     * squares must be free to move through. In other words, it
+     * is only a shorthand for two orthogonal moves and cannot
+     * change the nature of the actual puzzle game.
+      invalid move string 
+         * Push.
+          do nothing - the pit eats the barrel and remains there 
+     * Check for completion. This is surprisingly complicated,
+     * given the presence of pits and deep pits, and also the fact
+     * that some Sokoban levels with pits have fewer pits than
+     * barrels (due to providing spares, e.g. NetHack's). I think
+     * the completion condition in fact must be that the game
+     * cannot become any _more_ complete. That is, _either_ there
+     * are no remaining barrels not on targets, _or_ there is a
+     * good reason why any such barrels cannot be placed. The only
+     * available good reason is that there are no remaining pits,
+     * no free target squares, and no deep pits at all.
+      ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up `ds->tilesize' for macro expansion purposes  structure copy , wh = w*h 
+     * Initialise a fresh drawstate.
+     
+	 * Blank out the window initially.
+	 
+	 * Draw the grid lines.
+	 
+     * Draw the grid contents.
+      game_request_keys  wants_statusbar  flags 

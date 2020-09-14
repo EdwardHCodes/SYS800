@@ -1,0 +1,238 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for WM8751 audio codec
+ *
+ * Based on code from the ipodlinux project - http://ipodlinux.org/
+ * Adapted for Rockbox in December 2005
+ *
+ * Original file: linux/arch/armnommu/mach-ipod/audio.c
+ *
+ * Copyright (c) 2003-2005 Bernard Leach (leachbj@bouncycastle.org)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** set invalid data in gaps   [RESET]  global prescaler vars  invalid register  convert tenth of dB volume (-730..60) to master volume register value  +6 to -73dB 1dB steps (plus mute == 80levels) 7bits  1111111 ==  +6dB  (0x7f)                             1111001 ==   0dB  (0x79)                             0110000 == -73dB  (0x30)                             0101111..0000000 == mute  (<= 0x2f)                  -6.0db..+0db..+9.0db step 1.5db - translate -60..+0..+90 step 15
+        to 10..6..0 step -1.
+     0db -> off  Mute:   Set DACMU = 1 to soft-mute the audio DACs.  Unmute: Set DACMU = 0 to soft-un-mute the audio DACs.  Reset and power up the WM8751  controls headphone ouput  disable  control headphone output
+     * disabled on startup
+     
+     * 1. Switch on power supplies.
+     *    By default the WM8751 is in Standby Mode, the DAC is
+     *    digitally muted and the Audio Interface, Line outputs
+     *    and Headphone outputs are all OFF (DACMU = 1 Power
+     *    Management registers 1 and 2 are all zeros).
+     Reset 2. Enable Vmid and VREF.  BCLKINV=0(Dont invert BCLK) MS=1(Enable Master) LRSWAP=0 LRP=0  IWL=00(16 bit) FORMAT=10(I2S format)  Set default samplerate  Enable DACs and audio output after a short delay  From app notes: allow Vref to stabilize to reduce clicks  3. Enable DACs as required.  4. Enable line and / or headphone output buffers as required.  headphones + line-out  headphones  Full -0dB on the DACS  Enable Thermal shutdown, Timeout when zero-crossing in use,
+     * set analog bias for 3.3V, monomix to DACR
+      Enable zero-crossing in out stage  route signal from DAC to mixers  Single-ended mono input  Route mono input to both outputs at 0dB  lower power consumption  enable headphone output  enable headphone output  AUDIOHW_HAVE_LINEOUT  attenuate in 0.5dB steps (0dB - -127dB)  value in tdB  Nice shutdown of WM8751 codec  1. Set DACMU = 1 to soft-mute the audio DACs.  disable headphone out  2. Disable all output buffers.  3. Switch off the power supplies.  According to datasheet of WM8750
+ * clocking setup is needed in both slave and master mode
+  Set the depth of the 3D effect
+ * value in 0 .. 15, corresponds to 0% .. 100% in 6.66% steps  -4 dB @ full setting
+     * this gives approximately constant volume on setting change
+     * and prevents clipping (at least on my HD300)
+      This function controls Noise gate function
+     * of the codec. This can only run in conjunction
+     * with ALC
+      signal level at ADC  zero cross detection  hold time  decay time  attack time  hw function on/off  INPUT1 - FM radio
+     * INPUT2 - Line-in
+     * INPUT3 - MIC
+     *
+     * if recording == false we use analog bypass from input
+     * turn off ADC, PGA to save power
+     * turn on output buffer(s)
+     * 
+     * if recording == true we route input signal to PGA
+     * and monitoring picks up signal after PGA and ADC
+     * turn on ADC, PGA, DAC, output buffer(s)
+      mute PGA, disable all audio paths but DAC and output stage Mute  Mute  route DAC signal to output mixer, disable INPUT routing  unmute DAC  Turn on PGA and ADC  Setup input source for PGA as INPUT1  turn off ALC and NGAT as OF do 
+           audiohw_set_alc(0x00, false, 0x00, 0x00, 0x00, false);
+           audiohw_set_ngat(0x00, 0x00, false);
+            setup output digital data
+             * default is LADC -> LDATA, RADC -> RDATA
+             * so we don't touch this
+              skip: power up DAC and output stage as its never powered down
+            wmcodec_set_bits(PWRMGMT2, PWRMGMT2_DACL | PWRMGMT2_DACR |
+                          PWRMGMT2_LOUT1 | PWRMGMT2_ROUT1);
+             route DAC signal to output mixer, disable INPUT routing  turn off ADC, PGA  setup monitor mode by routing input signal to outmix 
+             * at 0dB volume
+              Turn on PGA, ADC  Setup input source for PGA as INPUT2 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable   audiohw_set_alc(0x0b, true, 0x00, 0x03, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x08, 0x02, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  HD300 uses the same socket for headphones and line-in  Turn on PGA and ADC  Setup input source for PGA as INPUT3 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable  audiohw_set_alc(0x0f, false, 0x00, 0x05, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x1f, 0x00, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  switch(source)  -9700 to 3000 => 0 ... 195 ... 255  -1725 to 3000 => 0 ... 23 ... 63  volume in hundredth of dB in -1725 .. 6000  PGA left gain  digital left gain set  PGA right gain = PGA left gain digital right gain = digital left gain PGA right gain  digital right gain  HAVE_RECORDING  HAVE_WM8750 **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for WM8751 audio codec
+ *
+ * Based on code from the ipodlinux project - http://ipodlinux.org/
+ * Adapted for Rockbox in December 2005
+ *
+ * Original file: linux/arch/armnommu/mach-ipod/audio.c
+ *
+ * Copyright (c) 2003-2005 Bernard Leach (leachbj@bouncycastle.org)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** set invalid data in gaps   [RESET]  global prescaler vars  invalid register  convert tenth of dB volume (-730..60) to master volume register value  +6 to -73dB 1dB steps (plus mute == 80levels) 7bits  1111111 ==  +6dB  (0x7f)                             1111001 ==   0dB  (0x79)                             0110000 == -73dB  (0x30)                             0101111..0000000 == mute  (<= 0x2f)                  -6.0db..+0db..+9.0db step 1.5db - translate -60..+0..+90 step 15
+        to 10..6..0 step -1.
+     0db -> off  Mute:   Set DACMU = 1 to soft-mute the audio DACs.  Unmute: Set DACMU = 0 to soft-un-mute the audio DACs.  Reset and power up the WM8751  controls headphone ouput  disable  control headphone output
+     * disabled on startup
+     
+     * 1. Switch on power supplies.
+     *    By default the WM8751 is in Standby Mode, the DAC is
+     *    digitally muted and the Audio Interface, Line outputs
+     *    and Headphone outputs are all OFF (DACMU = 1 Power
+     *    Management registers 1 and 2 are all zeros).
+     Reset 2. Enable Vmid and VREF.  BCLKINV=0(Dont invert BCLK) MS=1(Enable Master) LRSWAP=0 LRP=0  IWL=00(16 bit) FORMAT=10(I2S format)  Set default samplerate  Enable DACs and audio output after a short delay  From app notes: allow Vref to stabilize to reduce clicks  3. Enable DACs as required.  4. Enable line and / or headphone output buffers as required.  headphones + line-out  headphones  Full -0dB on the DACS  Enable Thermal shutdown, Timeout when zero-crossing in use,
+     * set analog bias for 3.3V, monomix to DACR
+      Enable zero-crossing in out stage  route signal from DAC to mixers  Single-ended mono input  Route mono input to both outputs at 0dB  lower power consumption  enable headphone output  enable headphone output  AUDIOHW_HAVE_LINEOUT  attenuate in 0.5dB steps (0dB - -127dB)  value in tdB  Nice shutdown of WM8751 codec  1. Set DACMU = 1 to soft-mute the audio DACs.  disable headphone out  2. Disable all output buffers.  3. Switch off the power supplies.  According to datasheet of WM8750
+ * clocking setup is needed in both slave and master mode
+  Set the depth of the 3D effect
+ * value in 0 .. 15, corresponds to 0% .. 100% in 6.66% steps  -4 dB @ full setting
+     * this gives approximately constant volume on setting change
+     * and prevents clipping (at least on my HD300)
+      This function controls Noise gate function
+     * of the codec. This can only run in conjunction
+     * with ALC
+      signal level at ADC  zero cross detection  hold time  decay time  attack time  hw function on/off  INPUT1 - FM radio
+     * INPUT2 - Line-in
+     * INPUT3 - MIC
+     *
+     * if recording == false we use analog bypass from input
+     * turn off ADC, PGA to save power
+     * turn on output buffer(s)
+     * 
+     * if recording == true we route input signal to PGA
+     * and monitoring picks up signal after PGA and ADC
+     * turn on ADC, PGA, DAC, output buffer(s)
+      mute PGA, disable all audio paths but DAC and output stage Mute  Mute  route DAC signal to output mixer, disable INPUT routing  unmute DAC  Turn on PGA and ADC  Setup input source for PGA as INPUT1  turn off ALC and NGAT as OF do 
+           audiohw_set_alc(0x00, false, 0x00, 0x00, 0x00, false);
+           audiohw_set_ngat(0x00, 0x00, false);
+            setup output digital data
+             * default is LADC -> LDATA, RADC -> RDATA
+             * so we don't touch this
+              skip: power up DAC and output stage as its never powered down
+            wmcodec_set_bits(PWRMGMT2, PWRMGMT2_DACL | PWRMGMT2_DACR |
+                          PWRMGMT2_LOUT1 | PWRMGMT2_ROUT1);
+             route DAC signal to output mixer, disable INPUT routing  turn off ADC, PGA  setup monitor mode by routing input signal to outmix 
+             * at 0dB volume
+              Turn on PGA, ADC  Setup input source for PGA as INPUT2 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable   audiohw_set_alc(0x0b, true, 0x00, 0x03, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x08, 0x02, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  HD300 uses the same socket for headphones and line-in  Turn on PGA and ADC  Setup input source for PGA as INPUT3 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable  audiohw_set_alc(0x0f, false, 0x00, 0x05, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x1f, 0x00, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  switch(source)  -9700 to 3000 => 0 ... 195 ... 255  -1725 to 3000 => 0 ... 23 ... 63  volume in hundredth of dB in -1725 .. 6000  PGA left gain  digital left gain set  PGA right gain = PGA left gain digital right gain = digital left gain PGA right gain  digital right gain  HAVE_RECORDING  HAVE_WM8750 **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Driver for WM8751 audio codec
+ *
+ * Based on code from the ipodlinux project - http://ipodlinux.org/
+ * Adapted for Rockbox in December 2005
+ *
+ * Original file: linux/arch/armnommu/mach-ipod/audio.c
+ *
+ * Copyright (c) 2003-2005 Bernard Leach (leachbj@bouncycastle.org)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** set invalid data in gaps   [RESET]  global prescaler vars  invalid register  convert tenth of dB volume (-730..60) to master volume register value  +6 to -73dB 1dB steps (plus mute == 80levels) 7bits  1111111 ==  +6dB  (0x7f)                             1111001 ==   0dB  (0x79)                             0110000 == -73dB  (0x30)                             0101111..0000000 == mute  (<= 0x2f)                  -6.0db..+0db..+9.0db step 1.5db - translate -60..+0..+90 step 15
+        to 10..6..0 step -1.
+     0db -> off  Mute:   Set DACMU = 1 to soft-mute the audio DACs.  Unmute: Set DACMU = 0 to soft-un-mute the audio DACs.  Reset and power up the WM8751  controls headphone ouput  disable  control headphone output
+     * disabled on startup
+     
+     * 1. Switch on power supplies.
+     *    By default the WM8751 is in Standby Mode, the DAC is
+     *    digitally muted and the Audio Interface, Line outputs
+     *    and Headphone outputs are all OFF (DACMU = 1 Power
+     *    Management registers 1 and 2 are all zeros).
+     Reset 2. Enable Vmid and VREF.  BCLKINV=0(Dont invert BCLK) MS=1(Enable Master) LRSWAP=0 LRP=0  IWL=00(16 bit) FORMAT=10(I2S format)  Set default samplerate  Enable DACs and audio output after a short delay  From app notes: allow Vref to stabilize to reduce clicks  3. Enable DACs as required.  4. Enable line and / or headphone output buffers as required.  headphones + line-out  headphones  Full -0dB on the DACS  Enable Thermal shutdown, Timeout when zero-crossing in use,
+     * set analog bias for 3.3V, monomix to DACR
+      Enable zero-crossing in out stage  route signal from DAC to mixers  Single-ended mono input  Route mono input to both outputs at 0dB  lower power consumption  enable headphone output  enable headphone output  AUDIOHW_HAVE_LINEOUT  attenuate in 0.5dB steps (0dB - -127dB)  value in tdB  Nice shutdown of WM8751 codec  1. Set DACMU = 1 to soft-mute the audio DACs.  disable headphone out  2. Disable all output buffers.  3. Switch off the power supplies.  According to datasheet of WM8750
+ * clocking setup is needed in both slave and master mode
+  Set the depth of the 3D effect
+ * value in 0 .. 15, corresponds to 0% .. 100% in 6.66% steps  -4 dB @ full setting
+     * this gives approximately constant volume on setting change
+     * and prevents clipping (at least on my HD300)
+      This function controls Noise gate function
+     * of the codec. This can only run in conjunction
+     * with ALC
+      signal level at ADC  zero cross detection  hold time  decay time  attack time  hw function on/off  INPUT1 - FM radio
+     * INPUT2 - Line-in
+     * INPUT3 - MIC
+     *
+     * if recording == false we use analog bypass from input
+     * turn off ADC, PGA to save power
+     * turn on output buffer(s)
+     * 
+     * if recording == true we route input signal to PGA
+     * and monitoring picks up signal after PGA and ADC
+     * turn on ADC, PGA, DAC, output buffer(s)
+      mute PGA, disable all audio paths but DAC and output stage Mute  Mute  route DAC signal to output mixer, disable INPUT routing  unmute DAC  Turn on PGA and ADC  Setup input source for PGA as INPUT1  turn off ALC and NGAT as OF do 
+           audiohw_set_alc(0x00, false, 0x00, 0x00, 0x00, false);
+           audiohw_set_ngat(0x00, 0x00, false);
+            setup output digital data
+             * default is LADC -> LDATA, RADC -> RDATA
+             * so we don't touch this
+              skip: power up DAC and output stage as its never powered down
+            wmcodec_set_bits(PWRMGMT2, PWRMGMT2_DACL | PWRMGMT2_DACR |
+                          PWRMGMT2_LOUT1 | PWRMGMT2_ROUT1);
+             route DAC signal to output mixer, disable INPUT routing  turn off ADC, PGA  setup monitor mode by routing input signal to outmix 
+             * at 0dB volume
+              Turn on PGA, ADC  Setup input source for PGA as INPUT2 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable   audiohw_set_alc(0x0b, true, 0x00, 0x03, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x08, 0x02, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  HD300 uses the same socket for headphones and line-in  Turn on PGA and ADC  Setup input source for PGA as INPUT3 
+         * MICBOOST disabled
+          setup ALC and NGAT as OF do  level, zc, hold, decay, attack, enable  audiohw_set_alc(0x0f, false, 0x00, 0x05, 0x02, true);  ngath, type, enable  audiohw_set_ngat(0x1f, 0x00, true);  setup output digital data
+         * default is LADC -> LDATA, RADC -> RDATA
+         * so we don't touch this
+          route DAC signal to output mixer, disable INPUT routing  switch(source)  -9700 to 3000 => 0 ... 195 ... 255  -1725 to 3000 => 0 ... 23 ... 63  volume in hundredth of dB in -1725 .. 6000  PGA left gain  digital left gain set  PGA right gain = PGA left gain digital right gain = digital left gain PGA right gain  digital right gain  HAVE_RECORDING  HAVE_WM8750 

@@ -1,0 +1,652 @@
+
+ * 'same game' -- try to remove all the coloured squares by
+ *                selecting regions of contiguous colours.
+ 
+ * TODO on grid generation:
+ * 
+ *  - Generation speed could still be improved.
+ *     * 15x10c3 is the only really difficult one of the existing
+ *       presets. The others are all either small enough, or have
+ *       the great flexibility given by four colours, that they
+ *       don't take long at all.
+ *     * I still suspect many problems arise from separate
+ * 	 subareas. I wonder if we can also somehow prioritise left-
+ * 	 or rightmost insertions so as to avoid area splitting at
+ * 	 all where feasible? It's not easy, though, because the
+ * 	 current shuffle-then-try-all-options approach to move
+ * 	 choice doesn't leave room for `soft' probabilistic
+ * 	 prioritisation: we either try all class A moves before any
+ * 	 class B ones, or we don't.
+ *
+ *  - The current generation algorithm inserts exactly two squares
+ *    at a time, with a single exception at the beginning of
+ *    generation for grids of odd overall size. An obvious
+ *    extension would be to permit larger inverse moves during
+ *    generation.
+ *     * this might reduce the number of failed generations by
+ *       making the insertion algorithm more flexible
+ *     * on the other hand, it would be significantly more complex
+ *     * if I do this I'll need to take out the odd-subarea
+ *       avoidance
+ *     * a nice feature of the current algorithm is that the
+ *       computer's `intended' solution always receives the minimum
+ *       possible score, so that pretty much the player's entire
+ *       score represents how much better they did than the
+ *       computer.
+ *
+ *  - Is it possible we can _temporarily_ tolerate neighbouring
+ *    squares of the same colour, until we've finished setting up
+ *    our inverse move?
+ *     * or perhaps even not choose the colour of our inserted
+ *       region until we have finished placing it, and _then_ look
+ *       at what colours border on it?
+ *     * I don't think this is currently meaningful unless we're
+ *       placing more than a domino at a time.
+ *
+ *  - possibly write out a full solution so that Solve can somehow
+ *    show it step by step?
+ *     * aux_info would have to encode the click points
+ *     * solve_game() would have to encode not only those click
+ * 	 points but also give a move string which reconstructed the
+ * 	 initial state
+ *     * the game_state would include a pointer to a solution move
+ * 	 list, plus an index into that list
+ *     * game_changed_state would auto-select the next move if
+ * 	 handed a new state which had a solution move list active
+ *     * execute_move, if passed such a state as input, would check
+ * 	 to see whether the move being made was the same as the one
+ * 	 stated by the solution, and if so would advance the move
+ * 	 index. Failing that it would return a game_state without a
+ * 	 solution move list active at all.
+  scoresub is 1 or 2 (for (n-1)^2 or (n-2)^2)  choose generation algorithm  These flags must be unique across all uses; in the game_state,
+ * the game_ui, and the drawstate (as they all get combined in the
+ * drawstate).  used in ui and drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  colour only  structure copy  ...and we must make sure we can generate at least 2 squares
+	 * of each colour so it's theoretically soluble. 
+ * Guaranteed-soluble grid generator.
+ 
+     * We'll use `list' to track the possible places to put our
+     * next insertion. There are up to h places to insert in each
+     * column: in a column of height n there are n+1 places because
+     * we can insert at the very bottom or the very top, but a
+     * column of height h can't have anything at all inserted in it
+     * so we have up to h in each column. Likewise, with n columns
+     * present there are n+1 places to fit a new one in between but
+     * we can't insert a column if there are already w; so there
+     * are a maximum of w new columns too. Total is wh + w.
+     
+         * Start with two or three squares - depending on parity of w*h
+         * - of a random colour.
+         
+         * Now repeatedly insert a two-square blob in the grid, of
+         * whatever colour will go at the position we chose.
+         
+             * Build up a list of insertion points. Each point is
+             * encoded as y*w+x; insertion points between columns are
+             * encoded as h*w+x.
+             
+                 * The final column is empty, so we can insert new
+                 * columns.
+                 
+             * Now look for places to insert within columns.
+              no more columns  this column is full  this column is exhausted  we're done 
+             * Now go through the list one element at a time in
+             * random order, and actually attempt to insert
+             * something there.
+             
+                     * Insert a column at position x.
+                     
+                     * Clear the new column.
+                     
+                     * Decrement y so that our first square is actually
+                     * inserted _in_ the grid rather than just below it.
+                     
+                 * Insert a square within column x at position y.
+                 
+                 * Pick our square colour so that it doesn't match any
+                 * of its neighbours.
+                 
+                     * List the neighbouring colours.
+                     
+                     * Eliminate duplicates. We can afford a shoddy
+                     * algorithm here because the problem size is
+                     * bounded.
+                     
+                     * If no colour will go here, stop trying.
+                     
+                     * Otherwise, pick a colour from the remaining
+                     * ones.
+                     
+                 * Place the new square.
+                 * 
+                 * Although I've _chosen_ the new region's colour
+                 * (so that we can check adjacency), I'm going to
+                 * actually place it as an invalid colour (tc)
+                 * until I'm sure it's viable. This is so that I
+                 * can conveniently check that I really have made a
+                 * _valid_ inverse move later on.
+                 
+                 * Now attempt to extend it in one of three ways: left,
+                 * right or up.
+                  left  right 
+                     * We add this possibility _twice_, so that the
+                     * probability of placing a vertical domino is
+                     * about the same as that of a horizontal. This
+                     * should yield less bias in the generated
+                     * grids.
+                      up  up 
+                 * Insert a square within column (x+dir) at position y.
+                 
+                 * See if we've divided the remaining grid squares
+                 * into sub-areas. If so, we need every sub-area to
+                 * have an even area or we won't be able to
+                 * complete generation.
+                 * 
+                 * If the height is odd and not all columns are
+                 * present, we can increase the area of a subarea
+                 * by adding a new column in it, so in that
+                 * situation we don't mind having as many odd
+                 * subareas as there are spare columns.
+                 * 
+                 * If the height is even, we can't fix it at all.
+                  current subarea size 
+                             * End of previous subarea.
+                              try a different placement 
+                 * We've made a move. Verify that it is a valid
+                 * move and that if made it would indeed yield the
+                 * previous grid state. The criteria are:
+                 * 
+                 *  (a) removing all the squares of colour tc (and
+                 *      shuffling the columns up etc) from grid2
+                 *      would yield grid
+                 *  (b) no square of colour tc is adjacent to one
+                 *      of colour c
+                 *  (c) all the squares of colour tc form a single
+                 *      connected component
+                 * 
+                 * We verify the latter property at the same time
+                 * as checking that removing all the tc squares
+                 * would yield the previous grid. Then we colour
+                 * the tc squares in colour c by breadth-first
+                 * search, which conveniently permits us to test
+                 * that they're all connected.
+                 
+                         * If we've reached the top of the column
+                         * in grid2, verify that we've also reached
+                         * the top of the column in `grid'.
+                         
+                         * If this game is compiled NDEBUG so that
+                         * the assertion doesn't bring it to a
+                         * crashing halt, the only thing we can do
+                         * is to give up, loop round again, and
+                         * hope to randomly avoid making whatever
+                         * type of move just caused this failure.
+                         
+                     * Now use bfs to fill in the tc section as
+                     * colour c. We use `list' to store the set of
+                     * squares we have to process.
+                     
+                     * Check that we've filled the same number of
+                     * tc squares as we originally found.
+                      done it! 
+ * Not-guaranteed-soluble grid generator; kept as a legacy, and in
+ * case someone finds the slightly odd quality of the guaranteed-
+ * soluble grids to be aesthetically displeasing or finds its CPU
+ * utilisation to be excessive.
+ 
+     * Our sole concession to not gratuitously generating insoluble
+     * grids is to ensure we have at least two of every colour.
+     
+     * Fill in the rest of the grid at random.
+      delete last comma  eat comma  struct copy  eat comma  structure copy, except...  selected-ness only  structure copy 
+     * If the game state has just changed into an unplayable one
+     * (either completed or impossible), we vanish the keyboard-
+     * control cursor.
+      make all unsupported tiles fall down.  shuffle all columns as far left as they can go.  contains colour and SELECTED.  might be no-op  shifts blanks down and to the left  checks for completeness or impossibility  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up tile size variables for macro expansion purposes  not decided yet  Drawing routing for the tile at (x,y) is responsible for drawing
+ * itself and the gaps to its right and below. If we're the same colour
+ * as the tile to our right, then we fill in the gap; ditto below, and if
+ * both then we fill the teeny tiny square in the corner as well.
+  This was entirely cloned from fifteen.c; it should probably be
+     * moved into some generic 'draw-recessed-rectangle' utility fn. 
+	 * Recessed area containing the whole puzzle.
+	  For now we're never expecting oldstate at all (because we have
+	     * no animation); when we do we might well want to be looking
+	     * at the tile colours from oldstate, not state. 
+     * Dead-end situations are assumed to be rescuable by Undo, so we
+     * don't bother to identify them and return -1.
+      game_request_keys  wants_statusbar  flags 
+ * 'same game' -- try to remove all the coloured squares by
+ *                selecting regions of contiguous colours.
+ 
+ * TODO on grid generation:
+ * 
+ *  - Generation speed could still be improved.
+ *     * 15x10c3 is the only really difficult one of the existing
+ *       presets. The others are all either small enough, or have
+ *       the great flexibility given by four colours, that they
+ *       don't take long at all.
+ *     * I still suspect many problems arise from separate
+ * 	 subareas. I wonder if we can also somehow prioritise left-
+ * 	 or rightmost insertions so as to avoid area splitting at
+ * 	 all where feasible? It's not easy, though, because the
+ * 	 current shuffle-then-try-all-options approach to move
+ * 	 choice doesn't leave room for `soft' probabilistic
+ * 	 prioritisation: we either try all class A moves before any
+ * 	 class B ones, or we don't.
+ *
+ *  - The current generation algorithm inserts exactly two squares
+ *    at a time, with a single exception at the beginning of
+ *    generation for grids of odd overall size. An obvious
+ *    extension would be to permit larger inverse moves during
+ *    generation.
+ *     * this might reduce the number of failed generations by
+ *       making the insertion algorithm more flexible
+ *     * on the other hand, it would be significantly more complex
+ *     * if I do this I'll need to take out the odd-subarea
+ *       avoidance
+ *     * a nice feature of the current algorithm is that the
+ *       computer's `intended' solution always receives the minimum
+ *       possible score, so that pretty much the player's entire
+ *       score represents how much better they did than the
+ *       computer.
+ *
+ *  - Is it possible we can _temporarily_ tolerate neighbouring
+ *    squares of the same colour, until we've finished setting up
+ *    our inverse move?
+ *     * or perhaps even not choose the colour of our inserted
+ *       region until we have finished placing it, and _then_ look
+ *       at what colours border on it?
+ *     * I don't think this is currently meaningful unless we're
+ *       placing more than a domino at a time.
+ *
+ *  - possibly write out a full solution so that Solve can somehow
+ *    show it step by step?
+ *     * aux_info would have to encode the click points
+ *     * solve_game() would have to encode not only those click
+ * 	 points but also give a move string which reconstructed the
+ * 	 initial state
+ *     * the game_state would include a pointer to a solution move
+ * 	 list, plus an index into that list
+ *     * game_changed_state would auto-select the next move if
+ * 	 handed a new state which had a solution move list active
+ *     * execute_move, if passed such a state as input, would check
+ * 	 to see whether the move being made was the same as the one
+ * 	 stated by the solution, and if so would advance the move
+ * 	 index. Failing that it would return a game_state without a
+ * 	 solution move list active at all.
+  scoresub is 1 or 2 (for (n-1)^2 or (n-2)^2)  choose generation algorithm  These flags must be unique across all uses; in the game_state,
+ * the game_ui, and the drawstate (as they all get combined in the
+ * drawstate).  used in ui and drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  colour only  structure copy  ...and we must make sure we can generate at least 2 squares
+	 * of each colour so it's theoretically soluble. 
+ * Guaranteed-soluble grid generator.
+ 
+     * We'll use `list' to track the possible places to put our
+     * next insertion. There are up to h places to insert in each
+     * column: in a column of height n there are n+1 places because
+     * we can insert at the very bottom or the very top, but a
+     * column of height h can't have anything at all inserted in it
+     * so we have up to h in each column. Likewise, with n columns
+     * present there are n+1 places to fit a new one in between but
+     * we can't insert a column if there are already w; so there
+     * are a maximum of w new columns too. Total is wh + w.
+     
+         * Start with two or three squares - depending on parity of w*h
+         * - of a random colour.
+         
+         * Now repeatedly insert a two-square blob in the grid, of
+         * whatever colour will go at the position we chose.
+         
+             * Build up a list of insertion points. Each point is
+             * encoded as y*w+x; insertion points between columns are
+             * encoded as h*w+x.
+             
+                 * The final column is empty, so we can insert new
+                 * columns.
+                 
+             * Now look for places to insert within columns.
+              no more columns  this column is full  this column is exhausted  we're done 
+             * Now go through the list one element at a time in
+             * random order, and actually attempt to insert
+             * something there.
+             
+                     * Insert a column at position x.
+                     
+                     * Clear the new column.
+                     
+                     * Decrement y so that our first square is actually
+                     * inserted _in_ the grid rather than just below it.
+                     
+                 * Insert a square within column x at position y.
+                 
+                 * Pick our square colour so that it doesn't match any
+                 * of its neighbours.
+                 
+                     * List the neighbouring colours.
+                     
+                     * Eliminate duplicates. We can afford a shoddy
+                     * algorithm here because the problem size is
+                     * bounded.
+                     
+                     * If no colour will go here, stop trying.
+                     
+                     * Otherwise, pick a colour from the remaining
+                     * ones.
+                     
+                 * Place the new square.
+                 * 
+                 * Although I've _chosen_ the new region's colour
+                 * (so that we can check adjacency), I'm going to
+                 * actually place it as an invalid colour (tc)
+                 * until I'm sure it's viable. This is so that I
+                 * can conveniently check that I really have made a
+                 * _valid_ inverse move later on.
+                 
+                 * Now attempt to extend it in one of three ways: left,
+                 * right or up.
+                  left  right 
+                     * We add this possibility _twice_, so that the
+                     * probability of placing a vertical domino is
+                     * about the same as that of a horizontal. This
+                     * should yield less bias in the generated
+                     * grids.
+                      up  up 
+                 * Insert a square within column (x+dir) at position y.
+                 
+                 * See if we've divided the remaining grid squares
+                 * into sub-areas. If so, we need every sub-area to
+                 * have an even area or we won't be able to
+                 * complete generation.
+                 * 
+                 * If the height is odd and not all columns are
+                 * present, we can increase the area of a subarea
+                 * by adding a new column in it, so in that
+                 * situation we don't mind having as many odd
+                 * subareas as there are spare columns.
+                 * 
+                 * If the height is even, we can't fix it at all.
+                  current subarea size 
+                             * End of previous subarea.
+                              try a different placement 
+                 * We've made a move. Verify that it is a valid
+                 * move and that if made it would indeed yield the
+                 * previous grid state. The criteria are:
+                 * 
+                 *  (a) removing all the squares of colour tc (and
+                 *      shuffling the columns up etc) from grid2
+                 *      would yield grid
+                 *  (b) no square of colour tc is adjacent to one
+                 *      of colour c
+                 *  (c) all the squares of colour tc form a single
+                 *      connected component
+                 * 
+                 * We verify the latter property at the same time
+                 * as checking that removing all the tc squares
+                 * would yield the previous grid. Then we colour
+                 * the tc squares in colour c by breadth-first
+                 * search, which conveniently permits us to test
+                 * that they're all connected.
+                 
+                         * If we've reached the top of the column
+                         * in grid2, verify that we've also reached
+                         * the top of the column in `grid'.
+                         
+                         * If this game is compiled NDEBUG so that
+                         * the assertion doesn't bring it to a
+                         * crashing halt, the only thing we can do
+                         * is to give up, loop round again, and
+                         * hope to randomly avoid making whatever
+                         * type of move just caused this failure.
+                         
+                     * Now use bfs to fill in the tc section as
+                     * colour c. We use `list' to store the set of
+                     * squares we have to process.
+                     
+                     * Check that we've filled the same number of
+                     * tc squares as we originally found.
+                      done it! 
+ * Not-guaranteed-soluble grid generator; kept as a legacy, and in
+ * case someone finds the slightly odd quality of the guaranteed-
+ * soluble grids to be aesthetically displeasing or finds its CPU
+ * utilisation to be excessive.
+ 
+     * Our sole concession to not gratuitously generating insoluble
+     * grids is to ensure we have at least two of every colour.
+     
+     * Fill in the rest of the grid at random.
+      delete last comma  eat comma  struct copy  eat comma  structure copy, except...  selected-ness only  structure copy 
+     * If the game state has just changed into an unplayable one
+     * (either completed or impossible), we vanish the keyboard-
+     * control cursor.
+      make all unsupported tiles fall down.  shuffle all columns as far left as they can go.  contains colour and SELECTED.  might be no-op  shifts blanks down and to the left  checks for completeness or impossibility  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up tile size variables for macro expansion purposes  not decided yet  Drawing routing for the tile at (x,y) is responsible for drawing
+ * itself and the gaps to its right and below. If we're the same colour
+ * as the tile to our right, then we fill in the gap; ditto below, and if
+ * both then we fill the teeny tiny square in the corner as well.
+  This was entirely cloned from fifteen.c; it should probably be
+     * moved into some generic 'draw-recessed-rectangle' utility fn. 
+	 * Recessed area containing the whole puzzle.
+	  For now we're never expecting oldstate at all (because we have
+	     * no animation); when we do we might well want to be looking
+	     * at the tile colours from oldstate, not state. 
+     * Dead-end situations are assumed to be rescuable by Undo, so we
+     * don't bother to identify them and return -1.
+      game_request_keys  wants_statusbar  flags 
+ * 'same game' -- try to remove all the coloured squares by
+ *                selecting regions of contiguous colours.
+ 
+ * TODO on grid generation:
+ * 
+ *  - Generation speed could still be improved.
+ *     * 15x10c3 is the only really difficult one of the existing
+ *       presets. The others are all either small enough, or have
+ *       the great flexibility given by four colours, that they
+ *       don't take long at all.
+ *     * I still suspect many problems arise from separate
+ * 	 subareas. I wonder if we can also somehow prioritise left-
+ * 	 or rightmost insertions so as to avoid area splitting at
+ * 	 all where feasible? It's not easy, though, because the
+ * 	 current shuffle-then-try-all-options approach to move
+ * 	 choice doesn't leave room for `soft' probabilistic
+ * 	 prioritisation: we either try all class A moves before any
+ * 	 class B ones, or we don't.
+ *
+ *  - The current generation algorithm inserts exactly two squares
+ *    at a time, with a single exception at the beginning of
+ *    generation for grids of odd overall size. An obvious
+ *    extension would be to permit larger inverse moves during
+ *    generation.
+ *     * this might reduce the number of failed generations by
+ *       making the insertion algorithm more flexible
+ *     * on the other hand, it would be significantly more complex
+ *     * if I do this I'll need to take out the odd-subarea
+ *       avoidance
+ *     * a nice feature of the current algorithm is that the
+ *       computer's `intended' solution always receives the minimum
+ *       possible score, so that pretty much the player's entire
+ *       score represents how much better they did than the
+ *       computer.
+ *
+ *  - Is it possible we can _temporarily_ tolerate neighbouring
+ *    squares of the same colour, until we've finished setting up
+ *    our inverse move?
+ *     * or perhaps even not choose the colour of our inserted
+ *       region until we have finished placing it, and _then_ look
+ *       at what colours border on it?
+ *     * I don't think this is currently meaningful unless we're
+ *       placing more than a domino at a time.
+ *
+ *  - possibly write out a full solution so that Solve can somehow
+ *    show it step by step?
+ *     * aux_info would have to encode the click points
+ *     * solve_game() would have to encode not only those click
+ * 	 points but also give a move string which reconstructed the
+ * 	 initial state
+ *     * the game_state would include a pointer to a solution move
+ * 	 list, plus an index into that list
+ *     * game_changed_state would auto-select the next move if
+ * 	 handed a new state which had a solution move list active
+ *     * execute_move, if passed such a state as input, would check
+ * 	 to see whether the move being made was the same as the one
+ * 	 stated by the solution, and if so would advance the move
+ * 	 index. Failing that it would return a game_state without a
+ * 	 solution move list active at all.
+  scoresub is 1 or 2 (for (n-1)^2 or (n-2)^2)  choose generation algorithm  These flags must be unique across all uses; in the game_state,
+ * the game_ui, and the drawstate (as they all get combined in the
+ * drawstate).  used in ui and drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  used in drawstate  colour only  structure copy  ...and we must make sure we can generate at least 2 squares
+	 * of each colour so it's theoretically soluble. 
+ * Guaranteed-soluble grid generator.
+ 
+     * We'll use `list' to track the possible places to put our
+     * next insertion. There are up to h places to insert in each
+     * column: in a column of height n there are n+1 places because
+     * we can insert at the very bottom or the very top, but a
+     * column of height h can't have anything at all inserted in it
+     * so we have up to h in each column. Likewise, with n columns
+     * present there are n+1 places to fit a new one in between but
+     * we can't insert a column if there are already w; so there
+     * are a maximum of w new columns too. Total is wh + w.
+     
+         * Start with two or three squares - depending on parity of w*h
+         * - of a random colour.
+         
+         * Now repeatedly insert a two-square blob in the grid, of
+         * whatever colour will go at the position we chose.
+         
+             * Build up a list of insertion points. Each point is
+             * encoded as y*w+x; insertion points between columns are
+             * encoded as h*w+x.
+             
+                 * The final column is empty, so we can insert new
+                 * columns.
+                 
+             * Now look for places to insert within columns.
+              no more columns  this column is full  this column is exhausted  we're done 
+             * Now go through the list one element at a time in
+             * random order, and actually attempt to insert
+             * something there.
+             
+                     * Insert a column at position x.
+                     
+                     * Clear the new column.
+                     
+                     * Decrement y so that our first square is actually
+                     * inserted _in_ the grid rather than just below it.
+                     
+                 * Insert a square within column x at position y.
+                 
+                 * Pick our square colour so that it doesn't match any
+                 * of its neighbours.
+                 
+                     * List the neighbouring colours.
+                     
+                     * Eliminate duplicates. We can afford a shoddy
+                     * algorithm here because the problem size is
+                     * bounded.
+                     
+                     * If no colour will go here, stop trying.
+                     
+                     * Otherwise, pick a colour from the remaining
+                     * ones.
+                     
+                 * Place the new square.
+                 * 
+                 * Although I've _chosen_ the new region's colour
+                 * (so that we can check adjacency), I'm going to
+                 * actually place it as an invalid colour (tc)
+                 * until I'm sure it's viable. This is so that I
+                 * can conveniently check that I really have made a
+                 * _valid_ inverse move later on.
+                 
+                 * Now attempt to extend it in one of three ways: left,
+                 * right or up.
+                  left  right 
+                     * We add this possibility _twice_, so that the
+                     * probability of placing a vertical domino is
+                     * about the same as that of a horizontal. This
+                     * should yield less bias in the generated
+                     * grids.
+                      up  up 
+                 * Insert a square within column (x+dir) at position y.
+                 
+                 * See if we've divided the remaining grid squares
+                 * into sub-areas. If so, we need every sub-area to
+                 * have an even area or we won't be able to
+                 * complete generation.
+                 * 
+                 * If the height is odd and not all columns are
+                 * present, we can increase the area of a subarea
+                 * by adding a new column in it, so in that
+                 * situation we don't mind having as many odd
+                 * subareas as there are spare columns.
+                 * 
+                 * If the height is even, we can't fix it at all.
+                  current subarea size 
+                             * End of previous subarea.
+                              try a different placement 
+                 * We've made a move. Verify that it is a valid
+                 * move and that if made it would indeed yield the
+                 * previous grid state. The criteria are:
+                 * 
+                 *  (a) removing all the squares of colour tc (and
+                 *      shuffling the columns up etc) from grid2
+                 *      would yield grid
+                 *  (b) no square of colour tc is adjacent to one
+                 *      of colour c
+                 *  (c) all the squares of colour tc form a single
+                 *      connected component
+                 * 
+                 * We verify the latter property at the same time
+                 * as checking that removing all the tc squares
+                 * would yield the previous grid. Then we colour
+                 * the tc squares in colour c by breadth-first
+                 * search, which conveniently permits us to test
+                 * that they're all connected.
+                 
+                         * If we've reached the top of the column
+                         * in grid2, verify that we've also reached
+                         * the top of the column in `grid'.
+                         
+                         * If this game is compiled NDEBUG so that
+                         * the assertion doesn't bring it to a
+                         * crashing halt, the only thing we can do
+                         * is to give up, loop round again, and
+                         * hope to randomly avoid making whatever
+                         * type of move just caused this failure.
+                         
+                     * Now use bfs to fill in the tc section as
+                     * colour c. We use `list' to store the set of
+                     * squares we have to process.
+                     
+                     * Check that we've filled the same number of
+                     * tc squares as we originally found.
+                      done it! 
+ * Not-guaranteed-soluble grid generator; kept as a legacy, and in
+ * case someone finds the slightly odd quality of the guaranteed-
+ * soluble grids to be aesthetically displeasing or finds its CPU
+ * utilisation to be excessive.
+ 
+     * Our sole concession to not gratuitously generating insoluble
+     * grids is to ensure we have at least two of every colour.
+     
+     * Fill in the rest of the grid at random.
+      delete last comma  eat comma  struct copy  eat comma  structure copy, except...  selected-ness only  structure copy 
+     * If the game state has just changed into an unplayable one
+     * (either completed or impossible), we vanish the keyboard-
+     * control cursor.
+      make all unsupported tiles fall down.  shuffle all columns as far left as they can go.  contains colour and SELECTED.  might be no-op  shifts blanks down and to the left  checks for completeness or impossibility  couldn't parse move string  ----------------------------------------------------------------------
+ * Drawing routines.
+  Ick: fake up tile size variables for macro expansion purposes  not decided yet  Drawing routing for the tile at (x,y) is responsible for drawing
+ * itself and the gaps to its right and below. If we're the same colour
+ * as the tile to our right, then we fill in the gap; ditto below, and if
+ * both then we fill the teeny tiny square in the corner as well.
+  This was entirely cloned from fifteen.c; it should probably be
+     * moved into some generic 'draw-recessed-rectangle' utility fn. 
+	 * Recessed area containing the whole puzzle.
+	  For now we're never expecting oldstate at all (because we have
+	     * no animation); when we do we might well want to be looking
+	     * at the tile colours from oldstate, not state. 
+     * Dead-end situations are assumed to be rescuable by Undo, so we
+     * don't bother to identify them and return -1.
+      game_request_keys  wants_statusbar  flags 

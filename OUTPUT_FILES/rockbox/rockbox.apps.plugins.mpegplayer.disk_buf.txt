@@ -1,0 +1,121 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer buffering routines
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Data window available?  Margins past end-of-file can still return true  Mark as invalid  Check if the data is already ready already  It was - don't register  Be sure it's not listed though if multiple requests were made  Remove from list then post notification - post because send
+         * could result in a wait for each thread to finish resulting
+         * in deadlock  Check registered streams and notify them if their data is available  Clear all registered notifications - do not post them  Background buffering when streaming  Get remaining minimum data based upon the stream closest to the
+         * right edge of the window  Fast attack, slow decay  default:  Fall-through  Limit buffering up to the stream with the least progress  Wrap pointer  Free space is less than one page  Error or end of stream  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry for this page  Skipping a read  Keep left edge moving forward  Advance right edge in temp variable first, then move
+         * left edge if overflow would occur. This avoids a stream
+         * thinking its data might be available when it actually
+         * may not end up that way after a slide of the window.  Continue buffering until filled or file end  TSTATE_BUFFERING:  end switch  Anchor on page immediately following the one containing final
+         * data  Collect all valid data already buffered that is contiguous with the
+     * current position - probe to left, then to right  Next read position is at right edge  Force buffer filling to top  If not filling already, simply monitor  else end of stream - no buffering to do  Check if a seek is required  Page not cached - load it  Read error  End of file  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry  Skipping a disk read - must seek on next one  Poll buffer status and messages  Sit idle and wait for commands  Check for any due notifications if any are pending  Still more data left?  Nope - end of stream  Caches some data from the current file  Can't read past end of file  Can't cache more than the whole buffer size  Zero-length probes permitted  Prepare the range probe  If the end is on a page boundary, check one less or an extra
+     * one will be probed  Obtain initial load point. If all data was cached, no message is sent
+     * otherwise begin on the first page that is not cached. Since we have to
+     * send the message anyway, the buffering thread will determine what else
+     * requires loading on its end in order to cache the specified range.  Attempt to get a pointer to size bytes on the buffer. Returns real amount of
+ * data available as well as the size of non-wrapped data after *p.  Return pointer to wraparound and the size of same  Shouldn't have to check this normally  Asking for too much; just go through L1  Other calls keep this within bounds  Data is in the local buffer  Keep size within file limits  Have to probe main buffer  2nd half is a guard buffer  Keep size within file limits  Read size bytes of data into a buffer - advances the buffer pointer
+ * and returns the real size read.  Read wraps  Read wasn't wrapped or guardbuffer holds it  The offset returned is the result of the current thread's action and
+     * may be invalidated so a local result is returned and not the value
+     * of disk_buf.offset directly  offset is just the offset  Invalid request  Prepare the buffer to enter the streaming state. Evaluates the available
+ * streaming window.  Set the streaming window to an arbitrary position within the file. Makes no
+ * probes to validate data. Use after calling another function to cause data
+ * to be cached and correct values are known.  Invalidate entire cache  Number of file pages rounded up toward +inf  Fit it as tightly as possible  Wait for thread to initialize **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer buffering routines
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Data window available?  Margins past end-of-file can still return true  Mark as invalid  Check if the data is already ready already  It was - don't register  Be sure it's not listed though if multiple requests were made  Remove from list then post notification - post because send
+         * could result in a wait for each thread to finish resulting
+         * in deadlock  Check registered streams and notify them if their data is available  Clear all registered notifications - do not post them  Background buffering when streaming  Get remaining minimum data based upon the stream closest to the
+         * right edge of the window  Fast attack, slow decay  default:  Fall-through  Limit buffering up to the stream with the least progress  Wrap pointer  Free space is less than one page  Error or end of stream  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry for this page  Skipping a read  Keep left edge moving forward  Advance right edge in temp variable first, then move
+         * left edge if overflow would occur. This avoids a stream
+         * thinking its data might be available when it actually
+         * may not end up that way after a slide of the window.  Continue buffering until filled or file end  TSTATE_BUFFERING:  end switch  Anchor on page immediately following the one containing final
+         * data  Collect all valid data already buffered that is contiguous with the
+     * current position - probe to left, then to right  Next read position is at right edge  Force buffer filling to top  If not filling already, simply monitor  else end of stream - no buffering to do  Check if a seek is required  Page not cached - load it  Read error  End of file  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry  Skipping a disk read - must seek on next one  Poll buffer status and messages  Sit idle and wait for commands  Check for any due notifications if any are pending  Still more data left?  Nope - end of stream  Caches some data from the current file  Can't read past end of file  Can't cache more than the whole buffer size  Zero-length probes permitted  Prepare the range probe  If the end is on a page boundary, check one less or an extra
+     * one will be probed  Obtain initial load point. If all data was cached, no message is sent
+     * otherwise begin on the first page that is not cached. Since we have to
+     * send the message anyway, the buffering thread will determine what else
+     * requires loading on its end in order to cache the specified range.  Attempt to get a pointer to size bytes on the buffer. Returns real amount of
+ * data available as well as the size of non-wrapped data after *p.  Return pointer to wraparound and the size of same  Shouldn't have to check this normally  Asking for too much; just go through L1  Other calls keep this within bounds  Data is in the local buffer  Keep size within file limits  Have to probe main buffer  2nd half is a guard buffer  Keep size within file limits  Read size bytes of data into a buffer - advances the buffer pointer
+ * and returns the real size read.  Read wraps  Read wasn't wrapped or guardbuffer holds it  The offset returned is the result of the current thread's action and
+     * may be invalidated so a local result is returned and not the value
+     * of disk_buf.offset directly  offset is just the offset  Invalid request  Prepare the buffer to enter the streaming state. Evaluates the available
+ * streaming window.  Set the streaming window to an arbitrary position within the file. Makes no
+ * probes to validate data. Use after calling another function to cause data
+ * to be cached and correct values are known.  Invalidate entire cache  Number of file pages rounded up toward +inf  Fit it as tightly as possible  Wait for thread to initialize **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * mpegplayer buffering routines
+ *
+ * Copyright (c) 2007 Michael Sevakis
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Data window available?  Margins past end-of-file can still return true  Mark as invalid  Check if the data is already ready already  It was - don't register  Be sure it's not listed though if multiple requests were made  Remove from list then post notification - post because send
+         * could result in a wait for each thread to finish resulting
+         * in deadlock  Check registered streams and notify them if their data is available  Clear all registered notifications - do not post them  Background buffering when streaming  Get remaining minimum data based upon the stream closest to the
+         * right edge of the window  Fast attack, slow decay  default:  Fall-through  Limit buffering up to the stream with the least progress  Wrap pointer  Free space is less than one page  Error or end of stream  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry for this page  Skipping a read  Keep left edge moving forward  Advance right edge in temp variable first, then move
+         * left edge if overflow would occur. This avoids a stream
+         * thinking its data might be available when it actually
+         * may not end up that way after a slide of the window.  Continue buffering until filled or file end  TSTATE_BUFFERING:  end switch  Anchor on page immediately following the one containing final
+         * data  Collect all valid data already buffered that is contiguous with the
+     * current position - probe to left, then to right  Next read position is at right edge  Force buffer filling to top  If not filling already, simply monitor  else end of stream - no buffering to do  Check if a seek is required  Page not cached - load it  Read error  End of file  Autoguard guard-o-rama - maintain guardbuffer coherency  Update the cache entry  Skipping a disk read - must seek on next one  Poll buffer status and messages  Sit idle and wait for commands  Check for any due notifications if any are pending  Still more data left?  Nope - end of stream  Caches some data from the current file  Can't read past end of file  Can't cache more than the whole buffer size  Zero-length probes permitted  Prepare the range probe  If the end is on a page boundary, check one less or an extra
+     * one will be probed  Obtain initial load point. If all data was cached, no message is sent
+     * otherwise begin on the first page that is not cached. Since we have to
+     * send the message anyway, the buffering thread will determine what else
+     * requires loading on its end in order to cache the specified range.  Attempt to get a pointer to size bytes on the buffer. Returns real amount of
+ * data available as well as the size of non-wrapped data after *p.  Return pointer to wraparound and the size of same  Shouldn't have to check this normally  Asking for too much; just go through L1  Other calls keep this within bounds  Data is in the local buffer  Keep size within file limits  Have to probe main buffer  2nd half is a guard buffer  Keep size within file limits  Read size bytes of data into a buffer - advances the buffer pointer
+ * and returns the real size read.  Read wraps  Read wasn't wrapped or guardbuffer holds it  The offset returned is the result of the current thread's action and
+     * may be invalidated so a local result is returned and not the value
+     * of disk_buf.offset directly  offset is just the offset  Invalid request  Prepare the buffer to enter the streaming state. Evaluates the available
+ * streaming window.  Set the streaming window to an arbitrary position within the file. Makes no
+ * probes to validate data. Use after calling another function to cause data
+ * to be cached and correct values are known.  Invalidate entire cache  Number of file pages rounded up toward +inf  Fit it as tightly as possible  Wait for thread to initialize 

@@ -1,0 +1,1231 @@
+
+ * (c) Lambros Lambrou 2008
+ *
+ * Code for working with general grids, which can be any planar graph
+ * with faces, edges and vertices (dots).  Includes generators for a few
+ * types of grid, including square, hexagonal, triangular and others.
+  Debugging options 
+#define DEBUG_GRID
+ ----------------------------------------------------------------------
+ * Deallocate or dereference a grid
+  Used by the other grid generators.  Create a brand new grid with nothing
+ * initialised (all lists are NULL)  Helper function to calculate perpendicular distance from
+ * a point P to a line AB.  A and B mustn't be equal here.
+ *
+ * Well-known formula for area A of a triangle:
+ *                             /  1   1   1 \
+ * 2A = determinant of matrix  | px  ax  bx |
+ *                             \ py  ay  by /
+ *
+ * Also well-known: 2A = base * height
+ *                     = perpendicular distance * line-length.
+ *
+ * Combining gives: distance = determinant / line-length(a,b)
+  Determine nearest edge to where the user clicked.
+ * (x, y) is the clicked location, converted to grid coordinates.
+ * Returns the nearest edge, or NULL if no edge is reasonably
+ * near the position.
+ *
+ * Just judging edges by perpendicular distance is not quite right -
+ * the edge might be "off to one side". So we insist that the triangle
+ * with (x,y) has acute angles at the edge's dots.
+ *
+ *     edge1
+ *  *---------*------
+ *            |
+ *            |      *(x,y)
+ *      edge2 |
+ *            |   edge2 is OK, but edge1 is not, even though
+ *            |   edge1 is perpendicularly closer to (x,y)
+ *            *
+ *
+  squared length of edge  squared lengths of other sides  See if edge e is eligible - the triangle must have acute angles
+         * at the edge's dots.
+         * Pythagoras formula h^2 = a^2 + b^2 detects right-angles,
+         * so detect acute angles by testing for h^2 < a^2 + b^2  e is eligible so far.  Now check the edge is reasonably close
+         * to where the user clicked.  Don't want to toggle an edge if the
+         * click was way off the grid.
+         * There is room for experimentation here.  We could check the
+         * perpendicular distance is within a certain fraction of the length
+         * of the edge.  That amounts to testing a rectangular region around
+         * the edge.
+         * Alternatively, we could check that the angle at the point is obtuse.
+         * That would amount to testing a circular region with the edge as
+         * diameter.  Is dist more than half edge length ?  ----------------------------------------------------------------------
+ * Grid generation
+  Show the basic grid information, before doing grid_make_consistent  TODO: Maybe we should generate an SVG image of the dots and lines
+     * of the grid here, before grid_make_consistent.
+     * Would help with debugging grid generation.  Show the derived grid information, computed by grid_make_consistent  edges  faces  dots  Helper function for building incomplete-edges list in
+ * grid_make_consistent()  Pointer subtraction is valid here, because all dots point into the
+     * same dot-list (g->dots).
+     * Edges are not "normalised" - the 2 dots could be stored in any order,
+     * so we need to take this into account when comparing edges.  Compare first dots  Compare last dots 
+ * 'Vigorously trim' a grid, by which I mean deleting any isolated or
+ * uninteresting faces. By which, in turn, I mean: ensure that the
+ * grid is composed solely of faces adjacent to at least one
+ * 'landlocked' dot (i.e. one not in contact with the infinite
+ * exterior face), and that all those dots are in a single connected
+ * component.
+ *
+ * This function operates on, and returns, a grid satisfying the
+ * preconditions to grid_make_consistent() rather than the
+ * postconditions. (So call it first.)
+ 
+     * First construct a matrix in which each ordered pair of dots is
+     * mapped to the index of the face in which those dots occur in
+     * that order.
+     
+     * Now we can identify landlocked dots: they're the ones all of
+     * whose edges have a mirror-image counterpart in this matrix.
+      non-duplicated edge: coastal dot 
+     * Now identify connected pairs of landlocked dots, and form a dsf
+     * unifying them.
+     
+     * Now look for the largest component.
+     
+     * Work out which faces we're going to keep (precisely those with
+     * at least one dot in the same connected component as j) and
+     * which dots (those required by any face we're keeping).
+     *
+     * At this point we reuse the 'dots' array to indicate the dots
+     * we're keeping, rather than the ones that are landlocked.
+     
+     * Work out the new indices of those faces and dots, when we
+     * compact the arrays containing them.
+     
+     * Free the dynamically allocated 'dots' pointer lists in faces
+     * we're going to discard.
+     
+     * Go through and compact the arrays.
+      structure copy  structure copy 
+                 * Reindex the dots in this face.
+                  Input: grid has its dots and faces initialised:
+ * - dots have (optionally) x and y coordinates, but no edges or faces
+ * (pointers are NULL).
+ * - edges not initialised at all
+ * - faces initialised and know which dots they have (but no edges yet).  The
+ * dots around each face are assumed to be clockwise.
+ *
+ * Output: grid is complete and valid with all relationships defined.
+  Where new edge will go into g->edges  ====== Stage 1 ======
+     * Generate edges
+      We know how many dots and faces there are, so we can find the exact
+     * number of edges from Euler's polyhedral formula: F + V = E + 2 .
+     * We use "-1", not "-2" here, because Euler's formula includes the
+     * infinite face, which we don't count.  Iterate over faces, and over each face's dots, generating edges as we
+     * go.  As we find each new edge, we can immediately fill in the edge's
+     * dots, but only one of the edge's faces.  Later on in the iteration, we
+     * will find the same edge again (unless it's on the border), but we will
+     * know the other face.
+     * For efficiency, maintain a list of the incomplete edges, sorted by
+     * their dots.  fake edge for searching  Use del234 instead of find234, because we always want to
+             * remove the edge if found  This edge already added, so fill out missing face.
+                 * Edge is already removed from incomplete_edges.  potentially infinite face  ====== Stage 2 ======
+     * For each face, build its edge list.
+      Allocate space for each edge list.  Can do this, because each face's
+     * edge-list is the same size as its dot-list.  Preload with NULLs, to help detect potential bugs.  Iterate over each edge, and over both its faces.  Add this edge to
+     * the face's edge-list, after finding where it should go in the
+     * sequence.  Find one of the dots around the face  found dot1  Must find the dot around this face  Labelling scheme: as we walk clockwise around the face,
+             * starting at dot0 (f->dots[0]), we hit:
+             * (dot0), edge0, dot1, edge1, dot2,...
+             *
+             *     0
+             *  0-----1
+             *        |
+             *        |1
+             *        |
+             *  3-----2
+             *     2
+             *
+             * Therefore, edgeK joins dotK and dot{K+1}
+              Around this face, either the next dot or the previous dot
+             * must be e->dot2.  Otherwise the edge is wrong.  dot1(k) and dot2(k2) go clockwise around this face, so add
+                 * this edge at position k (see diagram).  Try previous dot  dot1(k) and dot2(k2) go anticlockwise around this face.  ====== Stage 3 ======
+     * For each dot, build its edge-list and face-list.
+      We don't know how many edges/faces go around each dot, so we can't
+     * allocate the right space for these lists.  Pre-compute the sizes by
+     * iterating over each edge and recording a tally against each dot.  Now we have the sizes, pre-allocate the edge and face lists.  sanity check  For each dot, need to find a face that touches it, so we can seed
+     * the edge-face-edge-face process around each dot.  Each dot now has a face in its first slot.  Generate the remaining
+     * faces and edges around the dot, by searching both clockwise and
+     * anticlockwise from the first face.  Need to do both directions,
+     * because of the possibility of hitting the infinite face, which
+     * blocks progress.  But there's only one such face, so we will
+     * succeed in finding every edge and face this way.  ascends clockwise  descends anticlockwise  Labelling scheme: as we walk clockwise around the dot, starting
+         * at face0 (d->faces[0]), we hit:
+         * (face0), edge0, face1, edge1, face2,...
+         *
+         *       0
+         *       |
+         *    0  |  1
+         *       |
+         *  -----d-----1
+         *       |
+         *       |  2
+         *       |
+         *       2
+         *
+         * So, for example, face1 should be joined to edge0 and edge1,
+         * and those edges should appear in an anticlockwise sense around
+         * that face (see diagram).  clockwise search  find dot around this face  must find dot  Around f, required edge is anticlockwise from the dot.  See
+             * the other labelling scheme higher up, for why we subtract 1
+             * from j.  set edge  set face  cannot progress beyond infinite face  If the clockwise search made it all the way round, don't need to
+         * bother with the anticlockwise search.  this dot is complete, move on to next dot  anticlockwise search  find dot around this face  must find dot  Around f, required edge is clockwise from the dot.  set edge  set face  There's only 1 infinite face, so we must get all the way
+             * to current_face1 before we hit it.  ====== Stage 4 ======
+     * Compute other grid settings
+      Bounding rectangle  Helpers for making grid-generation easier.  These functions are only
+ * intended for use during grid generation.  Comparison function for the (tree234) sorted dot list  Add a new face to the grid, with its dot list allocated.
+ * Assumes there's enough space allocated for the new face in grid->faces  Assumes dot list has enough space  Retrieve a dot with these (x,y) coordinates.  Either return an existing dot
+ * in the dot_list, or add a new dot to the grid (and the dot_list) and
+ * return that.
+ * Assumes g->dots has enough capacity allocated  Sets the last face of the grid to include this dot, at this position
+ * around the face. Assumes num_faces is at least 1 (a new face has
+ * previously been added, with the required number of dots allocated) 
+ * Helper routines for grid_find_incentre.
+ 
+     * Find the point in the polygon with the maximum distance to any
+     * edge or corner.
+     *
+     * Such a point must exist which is in contact with at least three
+     * edges and/or vertices. (Proof: if it's only in contact with two
+     * edges and/or vertices, it can't even be at a _local_ maximum -
+     * any such circle can always be expanded in some direction.) So
+     * we iterate through all 3-subsets of the combined set of edges
+     * and vertices; for each subset we generate one or two candidate
+     * points that might be the incentre, and then we vet each one to
+     * see if it's inside the polygon and what its maximum radius is.
+     *
+     * (There's one case which this algorithm will get noticeably
+     * wrong, and that's when a continuum of equally good answers
+     * exists due to parallel edges. Consider a long thin rectangle,
+     * for instance, or a parallelogram. This algorithm will pick a
+     * point near one end, and choose the end arbitrarily; obviously a
+     * nicer point to choose would be in the centre. To fix this I
+     * would have to introduce a special-case system which detected
+     * parallel edges in advance, set aside all candidate points
+     * generated using both edges in a parallel pair, and generated
+     * some additional candidate points half way between them. Also,
+     * of course, I'd have to cope with rounding error making such a
+     * point look worse than one of its endpoints. So I haven't done
+     * this for the moment, and will cross it if necessary when I come
+     * to it.)
+     *
+     * We don't actually iterate literally over _edges_, in the sense
+     * of grid_edge structures. Instead, we fill in edgedot1[] and
+     * edgedot2[] with a pair of dots adjacent in the face's list of
+     * vertices. This ensures that we get the edges in consistent
+     * orientation, which we could not do from the grid structure
+     * alone. (A moment's consideration of an order-3 vertex should
+     * make it clear that if a notional arrow was written on each
+     * edge, _at least one_ of the three faces bordering that vertex
+     * would have to have the two arrows tip-to-tip or tail-to-tail
+     * rather than tip-to-tail.)
+      candidate positions  number of candidates 
+                 * Find a point, or pair of points, equidistant from
+                 * all the specified edges and/or vertices.
+                 
+                     * Three edges. This is a linear matrix equation:
+                     * each row of the matrix represents the fact that
+                     * the point (x,y) we seek is at distance r from
+                     * that edge, and we solve three of those
+                     * simultaneously to obtain x,y,r. (We ignore r.)
+                     
+                         * ((x,y) - (x1,y1)) . (dy,-dx) = r |(dx,dy)|
+                         *
+                         * => x dy - y dx - r |(dx,dy)| = (x1 dy - y1 dx)
+                         
+                     * Two edges and a dot. This will end up in a
+                     * quadratic equation.
+                     *
+                     * First, look at the two edges. Having our point
+                     * be some distance r from both of them gives rise
+                     * to a pair of linear equations in x,y,r of the
+                     * form
+                     *
+                     *   (x-x1) dy - (y-y1) dx = r sqrt(dx^2+dy^2)
+                     *
+                     * We eliminate r between those equations to give
+                     * us a single linear equation in x,y describing
+                     * the locus of points equidistant from both lines
+                     * - i.e. the angle bisector. 
+                     *
+                     * We then choose one of x,y to be a parameter t,
+                     * and derive linear formulae for x,y,r in terms
+                     * of t. This enables us to write down the
+                     * circular equation (x-xd)^2+(y-yd)^2=r^2 as a
+                     * quadratic in t; solving that and substituting
+                     * in for x,y gives us two candidate points.
+                      a,b,c,d : ax+by+cr=d  a,b,c: ax+by=c  a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find equations of the two input lines.  Derive the angle bisector by eliminating r.  Parametrise x and y in terms of some t.  Parameter is x.  Parameter is y.  Find a linear representation of r using eqs[0].  Construct the quadratic equation.  And solve it. 
+                     * Two dots and an edge. This one's another
+                     * quadratic equation.
+                     *
+                     * The point we want must lie on the perpendicular
+                     * bisector of the two dots; that much is obvious.
+                     * So we can construct a parametrisation of that
+                     * bisecting line, giving linear formulae for x,y
+                     * in terms of t. We can also express the distance
+                     * from the edge as such a linear formula.
+                     *
+                     * Then we set that equal to the radius of the
+                     * circle passing through the two points, which is
+                     * a Pythagoras exercise; that gives rise to a
+                     * quadratic in t, which we solve.
+                      a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find parametric formulae for x,y.  It's convenient if we have t at standard scale.  Also note down half the separation between
+                         * the dots, for use in computing the circle radius.  Find a parametric formula for r.  Construct the quadratic equation.  And solve it. 
+                     * Three dots. This is another linear matrix
+                     * equation, this time with each row of the matrix
+                     * representing the perpendicular bisector between
+                     * two of the points. Of course we only need two
+                     * such lines to find their intersection, so we
+                     * need only solve a 2x2 matrix equation.
+                     
+                         * ((x,y) - (x1,y1)) . (dx,dy) = 1/2 |(dx,dy)|^2
+                         *
+                         * => 2x dx + 2y dy = dx^2+dy^2 + (2 x1 dx + 2 y1 dy)
+                         
+                 * Now go through our candidate points and see if any
+                 * of them are better than what we've got so far.
+                 
+                     * First, disqualify the point if it's not inside
+                     * the polygon, which we work out by counting the
+                     * edges to the right of the point. (For
+                     * tiebreaking purposes when edges start or end on
+                     * our y-coordinate or go right through it, we
+                     * consider our point to be offset by a small
+                     * _positive_ epsilon in both the x- and
+                     * y-direction.)
+                     
+                             * The line goes past our y-position. Now we need
+                             * to know if its x-coordinate when it does so is
+                             * to our right.
+                             *
+                             * The x-coordinate in question is mathematically
+                             * (y - ys) * (xe - xs) / (ye - ys), and we want
+                             * to know whether (x - xs) >= that. Of course we
+                             * avoid the division, so we can work in integers;
+                             * to do this we must multiply both sides of the
+                             * inequality by ye - ys, which means we must
+                             * first check that's not negative.
+                             
+                         * This point is inside the polygon, so now we check
+                         * its minimum distance to every edge and corner.
+                         * First the corners ...
+                         
+                         * ... and now also check the perpendicular distance
+                         * to every edge, if the perpendicular lies between
+                         * the edge's endpoints.
+                         
+                             * If s and e are our endpoints, and p our
+                             * candidate circle centre, the foot of a
+                             * perpendicular from p to the line se lies
+                             * between s and e if and only if (p-s).(e-s) lies
+                             * strictly between 0 and (e-s).(e-s).
+                             
+                                 * Yes, the nearest point on this edge is
+                                 * closer than either endpoint, so we must
+                                 * take it into account by measuring the
+                                 * perpendicular distance to the edge and
+                                 * checking its square against mindist.
+                                 
+                         * Right. Now we know the biggest circle around this
+                         * point, so we can check it against bestdist.
+                          round to nearest  ------ Generate various types of grid ------  General method is to generate faces, by calculating their dot coordinates.
+ * As new faces are added, we keep track of all the dots so we can tell when
+ * a new face reuses an existing dot.  For example, two squares touching at an
+ * edge would generate six unique dots: four dots from the first face, then
+ * two additional dots for the second face, because we detect the other two
+ * dots have already been taken up.  This list is stored in a tree234
+ * called "points".  No extra memory-allocation needed here - we store the
+ * actual grid_dot* pointers, which all point into the g->dots list.
+ * For this reason, we have to calculate coordinates in such a way as to
+ * eliminate any rounding errors, so we can detect when a dot on one
+ * face precisely lands on a dot of a different face.  No floating-point
+ * arithmetic here!
+  Side length  Upper bounds - don't have to be exact  generate square faces  face position  Vector for side of hexagon - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  generate hexagonal faces  face centre  Vector for side of triangle - ratio is close to sqrt(3) 
+     * Triangular grids: an absent description is valid (indicating
+     * the old-style approach which had 'ears', i.e. triangles
+     * connected to only one other face, at some grid corners), and so
+     * is a description reading just "0" (indicating the new-style
+     * approach in which those ears are trimmed off). Anything else is
+     * illegal.
+      Doesn't use the previous method of generation, it pre-dates it!
+ * A triangular grid is just about simple enough to do by "brute force"  Vector for side of triangle - ratio is close to sqrt(3)  convenient alias 
+         * Old-style triangular grid generation, preserved as-is for
+         * backwards compatibility with old game ids, in which it's
+         * just a little asymmetric and there are 'ears' (faces linked
+         * to only one other face) at two grid corners.
+         *
+         * Example old-style game ids, which should still work, and in
+         * which you should see the ears in the TL/BR corners on the
+         * first one and in the TL/BL corners on the second:
+         *
+         *   5x5t1:2c2a1a2a201a1a1a1112a1a2b1211f0b21a2a2a0a
+         *   5x6t1:a022a212h1a1d1a12c2b11a012b1a20d1a0a12e
+          generate dots  odd rows are offset to the right  generate faces  initialise two faces for this (x,y)  face descriptions depend on whether the row-number is
+                 * odd or even 
+         * New-style approach, in which there are never any 'ears',
+         * and if height is even then the grid is nicely 4-way
+         * symmetric.
+         *
+         * Example new-style grids:
+         *
+         *   5x5t1:0_21120b11a1a01a1a00c1a0b211021c1h1a2a1a0a
+         *   5x6t1:0_a1212c22c2a02a2f22a0c12a110d0e1c0c0a101121a1
+          Upper bounds - don't have to be exact 
+             * Each row contains (width+1) triangles one way up, and
+             * (width) triangles the other way up. Which way up is
+             * which varies with parity of y. Also, the dots around
+             * each face will flip direction with parity of y, so we
+             * set up n1 and n2 to cope with that easily.
+             
+                 * If the grid has odd height, then we skip the first
+                 * and last triangles on this row, otherwise they'll
+                 * end up as ears.
+                  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  face position  generate square faces  generate up/down triangles  generate left/right triangles  Vector for side of pentagon - ratio is close to (4+sqrt(7))/3  a unused in determining grid size.  Upper bounds - don't have to be exact  cell position  horizontal pentagons  vertical pentagons  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  square below hexagon  square below right  square below left  Triangle below right  Triangle below left  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  Triangle above right  Triangle below right  Left triangles  Triangle above left  Triangle below left  b/a approx sqrt(2)  Upper bounds - don't have to be exact  cell position  octagon  diamond  b/a approx sqrt(3)  Upper bounds - don't have to be exact  position of order-6 dot  kite pointing up-left  kite pointing up  kite pointing up-right  kite pointing down-right  kite pointing down  kite pointing down-left  -py/px is close to tan(30 - atan(sqrt(3)/9))
+ * using py=26 makes everything lean to the left, rather than right
+  |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  rx unused in determining grid size.  Vectors for sides; weird numbers needed to keep puzzle aligned with window
+     * -py/px is close to tan(30 - atan(sqrt(3)/9))
+     * using py=26 makes everything lean to the left, rather than right
+      |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  |(-15,  78)| = 79.38  Upper bounds - don't have to be exact  generate pentagonal faces  face centre  make better looking grids?  try 3x3 for instance  DODEC_* are used for dodecagonal and great-dodecagonal grids.  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  triangle below dodecagon  triangle above dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon below dodecagon  hexagon above dodecagon  square on right of dodecagon  square on top right of dodecagon  square on top left of dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon on top right of dodecagon  hexagon on right of dodecagon hexagon on bottom right  of dodecagon  square on top right of dodecagon  square on bottom right of dodecagon  square below dodecagon  square on bottom left of dodecagon  square on top left of dodecagon  square above dodecagon  upper triangle (v)  lower triangle (^)  triangles are sent as debugging.  forward reference  We want to produce a random bit of penrose tiling, so we
+         * calculate a random offset (within the patch that penrose.c
+         * calculates for us) and an angle (multiple of 36) to rotate
+         * the patch.  Calculate radius of (circumcircle of) patch, subtract from
+         * radius calculated.  Pick a random offset (the easy way: choose within outer
+         * square, discarding while it's outside the circle) 
+         * Now test-generate our grid, to make sure it actually
+         * produces something.
+          If not, go back to the top of this while loop and try again
+         * with a different random offset. 
+     * Test-generate to ensure these parameters don't end us up with
+     * no grid at all.
+     
+ * We're asked for a grid of a particular size, and we generate enough
+ * of the tiling so we can be sure to have enough random grid from which
+ * to pick.
+  somewhat paranoid...  ditto... 
+     * Return NULL if we ended up with an empty grid, either because
+     * the initial generation was over too small a rectangle to
+     * encompass any face or because grid_trim_vigorously ended up
+     * removing absolutely everything.
+     
+     * Centre the grid in its originally promised rectangle.
+      ----------- End of grid generators -------------  up-to-date version of triangular grid  ----------- End of grid helpers -------------  vim: set shiftwidth=4 tabstop=8: 
+ * (c) Lambros Lambrou 2008
+ *
+ * Code for working with general grids, which can be any planar graph
+ * with faces, edges and vertices (dots).  Includes generators for a few
+ * types of grid, including square, hexagonal, triangular and others.
+  Debugging options 
+#define DEBUG_GRID
+ ----------------------------------------------------------------------
+ * Deallocate or dereference a grid
+  Used by the other grid generators.  Create a brand new grid with nothing
+ * initialised (all lists are NULL)  Helper function to calculate perpendicular distance from
+ * a point P to a line AB.  A and B mustn't be equal here.
+ *
+ * Well-known formula for area A of a triangle:
+ *                             /  1   1   1 \
+ * 2A = determinant of matrix  | px  ax  bx |
+ *                             \ py  ay  by /
+ *
+ * Also well-known: 2A = base * height
+ *                     = perpendicular distance * line-length.
+ *
+ * Combining gives: distance = determinant / line-length(a,b)
+  Determine nearest edge to where the user clicked.
+ * (x, y) is the clicked location, converted to grid coordinates.
+ * Returns the nearest edge, or NULL if no edge is reasonably
+ * near the position.
+ *
+ * Just judging edges by perpendicular distance is not quite right -
+ * the edge might be "off to one side". So we insist that the triangle
+ * with (x,y) has acute angles at the edge's dots.
+ *
+ *     edge1
+ *  *---------*------
+ *            |
+ *            |      *(x,y)
+ *      edge2 |
+ *            |   edge2 is OK, but edge1 is not, even though
+ *            |   edge1 is perpendicularly closer to (x,y)
+ *            *
+ *
+  squared length of edge  squared lengths of other sides  See if edge e is eligible - the triangle must have acute angles
+         * at the edge's dots.
+         * Pythagoras formula h^2 = a^2 + b^2 detects right-angles,
+         * so detect acute angles by testing for h^2 < a^2 + b^2  e is eligible so far.  Now check the edge is reasonably close
+         * to where the user clicked.  Don't want to toggle an edge if the
+         * click was way off the grid.
+         * There is room for experimentation here.  We could check the
+         * perpendicular distance is within a certain fraction of the length
+         * of the edge.  That amounts to testing a rectangular region around
+         * the edge.
+         * Alternatively, we could check that the angle at the point is obtuse.
+         * That would amount to testing a circular region with the edge as
+         * diameter.  Is dist more than half edge length ?  ----------------------------------------------------------------------
+ * Grid generation
+  Show the basic grid information, before doing grid_make_consistent  TODO: Maybe we should generate an SVG image of the dots and lines
+     * of the grid here, before grid_make_consistent.
+     * Would help with debugging grid generation.  Show the derived grid information, computed by grid_make_consistent  edges  faces  dots  Helper function for building incomplete-edges list in
+ * grid_make_consistent()  Pointer subtraction is valid here, because all dots point into the
+     * same dot-list (g->dots).
+     * Edges are not "normalised" - the 2 dots could be stored in any order,
+     * so we need to take this into account when comparing edges.  Compare first dots  Compare last dots 
+ * 'Vigorously trim' a grid, by which I mean deleting any isolated or
+ * uninteresting faces. By which, in turn, I mean: ensure that the
+ * grid is composed solely of faces adjacent to at least one
+ * 'landlocked' dot (i.e. one not in contact with the infinite
+ * exterior face), and that all those dots are in a single connected
+ * component.
+ *
+ * This function operates on, and returns, a grid satisfying the
+ * preconditions to grid_make_consistent() rather than the
+ * postconditions. (So call it first.)
+ 
+     * First construct a matrix in which each ordered pair of dots is
+     * mapped to the index of the face in which those dots occur in
+     * that order.
+     
+     * Now we can identify landlocked dots: they're the ones all of
+     * whose edges have a mirror-image counterpart in this matrix.
+      non-duplicated edge: coastal dot 
+     * Now identify connected pairs of landlocked dots, and form a dsf
+     * unifying them.
+     
+     * Now look for the largest component.
+     
+     * Work out which faces we're going to keep (precisely those with
+     * at least one dot in the same connected component as j) and
+     * which dots (those required by any face we're keeping).
+     *
+     * At this point we reuse the 'dots' array to indicate the dots
+     * we're keeping, rather than the ones that are landlocked.
+     
+     * Work out the new indices of those faces and dots, when we
+     * compact the arrays containing them.
+     
+     * Free the dynamically allocated 'dots' pointer lists in faces
+     * we're going to discard.
+     
+     * Go through and compact the arrays.
+      structure copy  structure copy 
+                 * Reindex the dots in this face.
+                  Input: grid has its dots and faces initialised:
+ * - dots have (optionally) x and y coordinates, but no edges or faces
+ * (pointers are NULL).
+ * - edges not initialised at all
+ * - faces initialised and know which dots they have (but no edges yet).  The
+ * dots around each face are assumed to be clockwise.
+ *
+ * Output: grid is complete and valid with all relationships defined.
+  Where new edge will go into g->edges  ====== Stage 1 ======
+     * Generate edges
+      We know how many dots and faces there are, so we can find the exact
+     * number of edges from Euler's polyhedral formula: F + V = E + 2 .
+     * We use "-1", not "-2" here, because Euler's formula includes the
+     * infinite face, which we don't count.  Iterate over faces, and over each face's dots, generating edges as we
+     * go.  As we find each new edge, we can immediately fill in the edge's
+     * dots, but only one of the edge's faces.  Later on in the iteration, we
+     * will find the same edge again (unless it's on the border), but we will
+     * know the other face.
+     * For efficiency, maintain a list of the incomplete edges, sorted by
+     * their dots.  fake edge for searching  Use del234 instead of find234, because we always want to
+             * remove the edge if found  This edge already added, so fill out missing face.
+                 * Edge is already removed from incomplete_edges.  potentially infinite face  ====== Stage 2 ======
+     * For each face, build its edge list.
+      Allocate space for each edge list.  Can do this, because each face's
+     * edge-list is the same size as its dot-list.  Preload with NULLs, to help detect potential bugs.  Iterate over each edge, and over both its faces.  Add this edge to
+     * the face's edge-list, after finding where it should go in the
+     * sequence.  Find one of the dots around the face  found dot1  Must find the dot around this face  Labelling scheme: as we walk clockwise around the face,
+             * starting at dot0 (f->dots[0]), we hit:
+             * (dot0), edge0, dot1, edge1, dot2,...
+             *
+             *     0
+             *  0-----1
+             *        |
+             *        |1
+             *        |
+             *  3-----2
+             *     2
+             *
+             * Therefore, edgeK joins dotK and dot{K+1}
+              Around this face, either the next dot or the previous dot
+             * must be e->dot2.  Otherwise the edge is wrong.  dot1(k) and dot2(k2) go clockwise around this face, so add
+                 * this edge at position k (see diagram).  Try previous dot  dot1(k) and dot2(k2) go anticlockwise around this face.  ====== Stage 3 ======
+     * For each dot, build its edge-list and face-list.
+      We don't know how many edges/faces go around each dot, so we can't
+     * allocate the right space for these lists.  Pre-compute the sizes by
+     * iterating over each edge and recording a tally against each dot.  Now we have the sizes, pre-allocate the edge and face lists.  sanity check  For each dot, need to find a face that touches it, so we can seed
+     * the edge-face-edge-face process around each dot.  Each dot now has a face in its first slot.  Generate the remaining
+     * faces and edges around the dot, by searching both clockwise and
+     * anticlockwise from the first face.  Need to do both directions,
+     * because of the possibility of hitting the infinite face, which
+     * blocks progress.  But there's only one such face, so we will
+     * succeed in finding every edge and face this way.  ascends clockwise  descends anticlockwise  Labelling scheme: as we walk clockwise around the dot, starting
+         * at face0 (d->faces[0]), we hit:
+         * (face0), edge0, face1, edge1, face2,...
+         *
+         *       0
+         *       |
+         *    0  |  1
+         *       |
+         *  -----d-----1
+         *       |
+         *       |  2
+         *       |
+         *       2
+         *
+         * So, for example, face1 should be joined to edge0 and edge1,
+         * and those edges should appear in an anticlockwise sense around
+         * that face (see diagram).  clockwise search  find dot around this face  must find dot  Around f, required edge is anticlockwise from the dot.  See
+             * the other labelling scheme higher up, for why we subtract 1
+             * from j.  set edge  set face  cannot progress beyond infinite face  If the clockwise search made it all the way round, don't need to
+         * bother with the anticlockwise search.  this dot is complete, move on to next dot  anticlockwise search  find dot around this face  must find dot  Around f, required edge is clockwise from the dot.  set edge  set face  There's only 1 infinite face, so we must get all the way
+             * to current_face1 before we hit it.  ====== Stage 4 ======
+     * Compute other grid settings
+      Bounding rectangle  Helpers for making grid-generation easier.  These functions are only
+ * intended for use during grid generation.  Comparison function for the (tree234) sorted dot list  Add a new face to the grid, with its dot list allocated.
+ * Assumes there's enough space allocated for the new face in grid->faces  Assumes dot list has enough space  Retrieve a dot with these (x,y) coordinates.  Either return an existing dot
+ * in the dot_list, or add a new dot to the grid (and the dot_list) and
+ * return that.
+ * Assumes g->dots has enough capacity allocated  Sets the last face of the grid to include this dot, at this position
+ * around the face. Assumes num_faces is at least 1 (a new face has
+ * previously been added, with the required number of dots allocated) 
+ * Helper routines for grid_find_incentre.
+ 
+     * Find the point in the polygon with the maximum distance to any
+     * edge or corner.
+     *
+     * Such a point must exist which is in contact with at least three
+     * edges and/or vertices. (Proof: if it's only in contact with two
+     * edges and/or vertices, it can't even be at a _local_ maximum -
+     * any such circle can always be expanded in some direction.) So
+     * we iterate through all 3-subsets of the combined set of edges
+     * and vertices; for each subset we generate one or two candidate
+     * points that might be the incentre, and then we vet each one to
+     * see if it's inside the polygon and what its maximum radius is.
+     *
+     * (There's one case which this algorithm will get noticeably
+     * wrong, and that's when a continuum of equally good answers
+     * exists due to parallel edges. Consider a long thin rectangle,
+     * for instance, or a parallelogram. This algorithm will pick a
+     * point near one end, and choose the end arbitrarily; obviously a
+     * nicer point to choose would be in the centre. To fix this I
+     * would have to introduce a special-case system which detected
+     * parallel edges in advance, set aside all candidate points
+     * generated using both edges in a parallel pair, and generated
+     * some additional candidate points half way between them. Also,
+     * of course, I'd have to cope with rounding error making such a
+     * point look worse than one of its endpoints. So I haven't done
+     * this for the moment, and will cross it if necessary when I come
+     * to it.)
+     *
+     * We don't actually iterate literally over _edges_, in the sense
+     * of grid_edge structures. Instead, we fill in edgedot1[] and
+     * edgedot2[] with a pair of dots adjacent in the face's list of
+     * vertices. This ensures that we get the edges in consistent
+     * orientation, which we could not do from the grid structure
+     * alone. (A moment's consideration of an order-3 vertex should
+     * make it clear that if a notional arrow was written on each
+     * edge, _at least one_ of the three faces bordering that vertex
+     * would have to have the two arrows tip-to-tip or tail-to-tail
+     * rather than tip-to-tail.)
+      candidate positions  number of candidates 
+                 * Find a point, or pair of points, equidistant from
+                 * all the specified edges and/or vertices.
+                 
+                     * Three edges. This is a linear matrix equation:
+                     * each row of the matrix represents the fact that
+                     * the point (x,y) we seek is at distance r from
+                     * that edge, and we solve three of those
+                     * simultaneously to obtain x,y,r. (We ignore r.)
+                     
+                         * ((x,y) - (x1,y1)) . (dy,-dx) = r |(dx,dy)|
+                         *
+                         * => x dy - y dx - r |(dx,dy)| = (x1 dy - y1 dx)
+                         
+                     * Two edges and a dot. This will end up in a
+                     * quadratic equation.
+                     *
+                     * First, look at the two edges. Having our point
+                     * be some distance r from both of them gives rise
+                     * to a pair of linear equations in x,y,r of the
+                     * form
+                     *
+                     *   (x-x1) dy - (y-y1) dx = r sqrt(dx^2+dy^2)
+                     *
+                     * We eliminate r between those equations to give
+                     * us a single linear equation in x,y describing
+                     * the locus of points equidistant from both lines
+                     * - i.e. the angle bisector. 
+                     *
+                     * We then choose one of x,y to be a parameter t,
+                     * and derive linear formulae for x,y,r in terms
+                     * of t. This enables us to write down the
+                     * circular equation (x-xd)^2+(y-yd)^2=r^2 as a
+                     * quadratic in t; solving that and substituting
+                     * in for x,y gives us two candidate points.
+                      a,b,c,d : ax+by+cr=d  a,b,c: ax+by=c  a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find equations of the two input lines.  Derive the angle bisector by eliminating r.  Parametrise x and y in terms of some t.  Parameter is x.  Parameter is y.  Find a linear representation of r using eqs[0].  Construct the quadratic equation.  And solve it. 
+                     * Two dots and an edge. This one's another
+                     * quadratic equation.
+                     *
+                     * The point we want must lie on the perpendicular
+                     * bisector of the two dots; that much is obvious.
+                     * So we can construct a parametrisation of that
+                     * bisecting line, giving linear formulae for x,y
+                     * in terms of t. We can also express the distance
+                     * from the edge as such a linear formula.
+                     *
+                     * Then we set that equal to the radius of the
+                     * circle passing through the two points, which is
+                     * a Pythagoras exercise; that gives rise to a
+                     * quadratic in t, which we solve.
+                      a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find parametric formulae for x,y.  It's convenient if we have t at standard scale.  Also note down half the separation between
+                         * the dots, for use in computing the circle radius.  Find a parametric formula for r.  Construct the quadratic equation.  And solve it. 
+                     * Three dots. This is another linear matrix
+                     * equation, this time with each row of the matrix
+                     * representing the perpendicular bisector between
+                     * two of the points. Of course we only need two
+                     * such lines to find their intersection, so we
+                     * need only solve a 2x2 matrix equation.
+                     
+                         * ((x,y) - (x1,y1)) . (dx,dy) = 1/2 |(dx,dy)|^2
+                         *
+                         * => 2x dx + 2y dy = dx^2+dy^2 + (2 x1 dx + 2 y1 dy)
+                         
+                 * Now go through our candidate points and see if any
+                 * of them are better than what we've got so far.
+                 
+                     * First, disqualify the point if it's not inside
+                     * the polygon, which we work out by counting the
+                     * edges to the right of the point. (For
+                     * tiebreaking purposes when edges start or end on
+                     * our y-coordinate or go right through it, we
+                     * consider our point to be offset by a small
+                     * _positive_ epsilon in both the x- and
+                     * y-direction.)
+                     
+                             * The line goes past our y-position. Now we need
+                             * to know if its x-coordinate when it does so is
+                             * to our right.
+                             *
+                             * The x-coordinate in question is mathematically
+                             * (y - ys) * (xe - xs) / (ye - ys), and we want
+                             * to know whether (x - xs) >= that. Of course we
+                             * avoid the division, so we can work in integers;
+                             * to do this we must multiply both sides of the
+                             * inequality by ye - ys, which means we must
+                             * first check that's not negative.
+                             
+                         * This point is inside the polygon, so now we check
+                         * its minimum distance to every edge and corner.
+                         * First the corners ...
+                         
+                         * ... and now also check the perpendicular distance
+                         * to every edge, if the perpendicular lies between
+                         * the edge's endpoints.
+                         
+                             * If s and e are our endpoints, and p our
+                             * candidate circle centre, the foot of a
+                             * perpendicular from p to the line se lies
+                             * between s and e if and only if (p-s).(e-s) lies
+                             * strictly between 0 and (e-s).(e-s).
+                             
+                                 * Yes, the nearest point on this edge is
+                                 * closer than either endpoint, so we must
+                                 * take it into account by measuring the
+                                 * perpendicular distance to the edge and
+                                 * checking its square against mindist.
+                                 
+                         * Right. Now we know the biggest circle around this
+                         * point, so we can check it against bestdist.
+                          round to nearest  ------ Generate various types of grid ------  General method is to generate faces, by calculating their dot coordinates.
+ * As new faces are added, we keep track of all the dots so we can tell when
+ * a new face reuses an existing dot.  For example, two squares touching at an
+ * edge would generate six unique dots: four dots from the first face, then
+ * two additional dots for the second face, because we detect the other two
+ * dots have already been taken up.  This list is stored in a tree234
+ * called "points".  No extra memory-allocation needed here - we store the
+ * actual grid_dot* pointers, which all point into the g->dots list.
+ * For this reason, we have to calculate coordinates in such a way as to
+ * eliminate any rounding errors, so we can detect when a dot on one
+ * face precisely lands on a dot of a different face.  No floating-point
+ * arithmetic here!
+  Side length  Upper bounds - don't have to be exact  generate square faces  face position  Vector for side of hexagon - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  generate hexagonal faces  face centre  Vector for side of triangle - ratio is close to sqrt(3) 
+     * Triangular grids: an absent description is valid (indicating
+     * the old-style approach which had 'ears', i.e. triangles
+     * connected to only one other face, at some grid corners), and so
+     * is a description reading just "0" (indicating the new-style
+     * approach in which those ears are trimmed off). Anything else is
+     * illegal.
+      Doesn't use the previous method of generation, it pre-dates it!
+ * A triangular grid is just about simple enough to do by "brute force"  Vector for side of triangle - ratio is close to sqrt(3)  convenient alias 
+         * Old-style triangular grid generation, preserved as-is for
+         * backwards compatibility with old game ids, in which it's
+         * just a little asymmetric and there are 'ears' (faces linked
+         * to only one other face) at two grid corners.
+         *
+         * Example old-style game ids, which should still work, and in
+         * which you should see the ears in the TL/BR corners on the
+         * first one and in the TL/BL corners on the second:
+         *
+         *   5x5t1:2c2a1a2a201a1a1a1112a1a2b1211f0b21a2a2a0a
+         *   5x6t1:a022a212h1a1d1a12c2b11a012b1a20d1a0a12e
+          generate dots  odd rows are offset to the right  generate faces  initialise two faces for this (x,y)  face descriptions depend on whether the row-number is
+                 * odd or even 
+         * New-style approach, in which there are never any 'ears',
+         * and if height is even then the grid is nicely 4-way
+         * symmetric.
+         *
+         * Example new-style grids:
+         *
+         *   5x5t1:0_21120b11a1a01a1a00c1a0b211021c1h1a2a1a0a
+         *   5x6t1:0_a1212c22c2a02a2f22a0c12a110d0e1c0c0a101121a1
+          Upper bounds - don't have to be exact 
+             * Each row contains (width+1) triangles one way up, and
+             * (width) triangles the other way up. Which way up is
+             * which varies with parity of y. Also, the dots around
+             * each face will flip direction with parity of y, so we
+             * set up n1 and n2 to cope with that easily.
+             
+                 * If the grid has odd height, then we skip the first
+                 * and last triangles on this row, otherwise they'll
+                 * end up as ears.
+                  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  face position  generate square faces  generate up/down triangles  generate left/right triangles  Vector for side of pentagon - ratio is close to (4+sqrt(7))/3  a unused in determining grid size.  Upper bounds - don't have to be exact  cell position  horizontal pentagons  vertical pentagons  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  square below hexagon  square below right  square below left  Triangle below right  Triangle below left  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  Triangle above right  Triangle below right  Left triangles  Triangle above left  Triangle below left  b/a approx sqrt(2)  Upper bounds - don't have to be exact  cell position  octagon  diamond  b/a approx sqrt(3)  Upper bounds - don't have to be exact  position of order-6 dot  kite pointing up-left  kite pointing up  kite pointing up-right  kite pointing down-right  kite pointing down  kite pointing down-left  -py/px is close to tan(30 - atan(sqrt(3)/9))
+ * using py=26 makes everything lean to the left, rather than right
+  |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  rx unused in determining grid size.  Vectors for sides; weird numbers needed to keep puzzle aligned with window
+     * -py/px is close to tan(30 - atan(sqrt(3)/9))
+     * using py=26 makes everything lean to the left, rather than right
+      |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  |(-15,  78)| = 79.38  Upper bounds - don't have to be exact  generate pentagonal faces  face centre  make better looking grids?  try 3x3 for instance  DODEC_* are used for dodecagonal and great-dodecagonal grids.  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  triangle below dodecagon  triangle above dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon below dodecagon  hexagon above dodecagon  square on right of dodecagon  square on top right of dodecagon  square on top left of dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon on top right of dodecagon  hexagon on right of dodecagon hexagon on bottom right  of dodecagon  square on top right of dodecagon  square on bottom right of dodecagon  square below dodecagon  square on bottom left of dodecagon  square on top left of dodecagon  square above dodecagon  upper triangle (v)  lower triangle (^)  triangles are sent as debugging.  forward reference  We want to produce a random bit of penrose tiling, so we
+         * calculate a random offset (within the patch that penrose.c
+         * calculates for us) and an angle (multiple of 36) to rotate
+         * the patch.  Calculate radius of (circumcircle of) patch, subtract from
+         * radius calculated.  Pick a random offset (the easy way: choose within outer
+         * square, discarding while it's outside the circle) 
+         * Now test-generate our grid, to make sure it actually
+         * produces something.
+          If not, go back to the top of this while loop and try again
+         * with a different random offset. 
+     * Test-generate to ensure these parameters don't end us up with
+     * no grid at all.
+     
+ * We're asked for a grid of a particular size, and we generate enough
+ * of the tiling so we can be sure to have enough random grid from which
+ * to pick.
+  somewhat paranoid...  ditto... 
+     * Return NULL if we ended up with an empty grid, either because
+     * the initial generation was over too small a rectangle to
+     * encompass any face or because grid_trim_vigorously ended up
+     * removing absolutely everything.
+     
+     * Centre the grid in its originally promised rectangle.
+      ----------- End of grid generators -------------  up-to-date version of triangular grid  ----------- End of grid helpers -------------  vim: set shiftwidth=4 tabstop=8: 
+ * (c) Lambros Lambrou 2008
+ *
+ * Code for working with general grids, which can be any planar graph
+ * with faces, edges and vertices (dots).  Includes generators for a few
+ * types of grid, including square, hexagonal, triangular and others.
+  Debugging options 
+#define DEBUG_GRID
+ ----------------------------------------------------------------------
+ * Deallocate or dereference a grid
+  Used by the other grid generators.  Create a brand new grid with nothing
+ * initialised (all lists are NULL)  Helper function to calculate perpendicular distance from
+ * a point P to a line AB.  A and B mustn't be equal here.
+ *
+ * Well-known formula for area A of a triangle:
+ *                             /  1   1   1 \
+ * 2A = determinant of matrix  | px  ax  bx |
+ *                             \ py  ay  by /
+ *
+ * Also well-known: 2A = base * height
+ *                     = perpendicular distance * line-length.
+ *
+ * Combining gives: distance = determinant / line-length(a,b)
+  Determine nearest edge to where the user clicked.
+ * (x, y) is the clicked location, converted to grid coordinates.
+ * Returns the nearest edge, or NULL if no edge is reasonably
+ * near the position.
+ *
+ * Just judging edges by perpendicular distance is not quite right -
+ * the edge might be "off to one side". So we insist that the triangle
+ * with (x,y) has acute angles at the edge's dots.
+ *
+ *     edge1
+ *  *---------*------
+ *            |
+ *            |      *(x,y)
+ *      edge2 |
+ *            |   edge2 is OK, but edge1 is not, even though
+ *            |   edge1 is perpendicularly closer to (x,y)
+ *            *
+ *
+  squared length of edge  squared lengths of other sides  See if edge e is eligible - the triangle must have acute angles
+         * at the edge's dots.
+         * Pythagoras formula h^2 = a^2 + b^2 detects right-angles,
+         * so detect acute angles by testing for h^2 < a^2 + b^2  e is eligible so far.  Now check the edge is reasonably close
+         * to where the user clicked.  Don't want to toggle an edge if the
+         * click was way off the grid.
+         * There is room for experimentation here.  We could check the
+         * perpendicular distance is within a certain fraction of the length
+         * of the edge.  That amounts to testing a rectangular region around
+         * the edge.
+         * Alternatively, we could check that the angle at the point is obtuse.
+         * That would amount to testing a circular region with the edge as
+         * diameter.  Is dist more than half edge length ?  ----------------------------------------------------------------------
+ * Grid generation
+  Show the basic grid information, before doing grid_make_consistent  TODO: Maybe we should generate an SVG image of the dots and lines
+     * of the grid here, before grid_make_consistent.
+     * Would help with debugging grid generation.  Show the derived grid information, computed by grid_make_consistent  edges  faces  dots  Helper function for building incomplete-edges list in
+ * grid_make_consistent()  Pointer subtraction is valid here, because all dots point into the
+     * same dot-list (g->dots).
+     * Edges are not "normalised" - the 2 dots could be stored in any order,
+     * so we need to take this into account when comparing edges.  Compare first dots  Compare last dots 
+ * 'Vigorously trim' a grid, by which I mean deleting any isolated or
+ * uninteresting faces. By which, in turn, I mean: ensure that the
+ * grid is composed solely of faces adjacent to at least one
+ * 'landlocked' dot (i.e. one not in contact with the infinite
+ * exterior face), and that all those dots are in a single connected
+ * component.
+ *
+ * This function operates on, and returns, a grid satisfying the
+ * preconditions to grid_make_consistent() rather than the
+ * postconditions. (So call it first.)
+ 
+     * First construct a matrix in which each ordered pair of dots is
+     * mapped to the index of the face in which those dots occur in
+     * that order.
+     
+     * Now we can identify landlocked dots: they're the ones all of
+     * whose edges have a mirror-image counterpart in this matrix.
+      non-duplicated edge: coastal dot 
+     * Now identify connected pairs of landlocked dots, and form a dsf
+     * unifying them.
+     
+     * Now look for the largest component.
+     
+     * Work out which faces we're going to keep (precisely those with
+     * at least one dot in the same connected component as j) and
+     * which dots (those required by any face we're keeping).
+     *
+     * At this point we reuse the 'dots' array to indicate the dots
+     * we're keeping, rather than the ones that are landlocked.
+     
+     * Work out the new indices of those faces and dots, when we
+     * compact the arrays containing them.
+     
+     * Free the dynamically allocated 'dots' pointer lists in faces
+     * we're going to discard.
+     
+     * Go through and compact the arrays.
+      structure copy  structure copy 
+                 * Reindex the dots in this face.
+                  Input: grid has its dots and faces initialised:
+ * - dots have (optionally) x and y coordinates, but no edges or faces
+ * (pointers are NULL).
+ * - edges not initialised at all
+ * - faces initialised and know which dots they have (but no edges yet).  The
+ * dots around each face are assumed to be clockwise.
+ *
+ * Output: grid is complete and valid with all relationships defined.
+  Where new edge will go into g->edges  ====== Stage 1 ======
+     * Generate edges
+      We know how many dots and faces there are, so we can find the exact
+     * number of edges from Euler's polyhedral formula: F + V = E + 2 .
+     * We use "-1", not "-2" here, because Euler's formula includes the
+     * infinite face, which we don't count.  Iterate over faces, and over each face's dots, generating edges as we
+     * go.  As we find each new edge, we can immediately fill in the edge's
+     * dots, but only one of the edge's faces.  Later on in the iteration, we
+     * will find the same edge again (unless it's on the border), but we will
+     * know the other face.
+     * For efficiency, maintain a list of the incomplete edges, sorted by
+     * their dots.  fake edge for searching  Use del234 instead of find234, because we always want to
+             * remove the edge if found  This edge already added, so fill out missing face.
+                 * Edge is already removed from incomplete_edges.  potentially infinite face  ====== Stage 2 ======
+     * For each face, build its edge list.
+      Allocate space for each edge list.  Can do this, because each face's
+     * edge-list is the same size as its dot-list.  Preload with NULLs, to help detect potential bugs.  Iterate over each edge, and over both its faces.  Add this edge to
+     * the face's edge-list, after finding where it should go in the
+     * sequence.  Find one of the dots around the face  found dot1  Must find the dot around this face  Labelling scheme: as we walk clockwise around the face,
+             * starting at dot0 (f->dots[0]), we hit:
+             * (dot0), edge0, dot1, edge1, dot2,...
+             *
+             *     0
+             *  0-----1
+             *        |
+             *        |1
+             *        |
+             *  3-----2
+             *     2
+             *
+             * Therefore, edgeK joins dotK and dot{K+1}
+              Around this face, either the next dot or the previous dot
+             * must be e->dot2.  Otherwise the edge is wrong.  dot1(k) and dot2(k2) go clockwise around this face, so add
+                 * this edge at position k (see diagram).  Try previous dot  dot1(k) and dot2(k2) go anticlockwise around this face.  ====== Stage 3 ======
+     * For each dot, build its edge-list and face-list.
+      We don't know how many edges/faces go around each dot, so we can't
+     * allocate the right space for these lists.  Pre-compute the sizes by
+     * iterating over each edge and recording a tally against each dot.  Now we have the sizes, pre-allocate the edge and face lists.  sanity check  For each dot, need to find a face that touches it, so we can seed
+     * the edge-face-edge-face process around each dot.  Each dot now has a face in its first slot.  Generate the remaining
+     * faces and edges around the dot, by searching both clockwise and
+     * anticlockwise from the first face.  Need to do both directions,
+     * because of the possibility of hitting the infinite face, which
+     * blocks progress.  But there's only one such face, so we will
+     * succeed in finding every edge and face this way.  ascends clockwise  descends anticlockwise  Labelling scheme: as we walk clockwise around the dot, starting
+         * at face0 (d->faces[0]), we hit:
+         * (face0), edge0, face1, edge1, face2,...
+         *
+         *       0
+         *       |
+         *    0  |  1
+         *       |
+         *  -----d-----1
+         *       |
+         *       |  2
+         *       |
+         *       2
+         *
+         * So, for example, face1 should be joined to edge0 and edge1,
+         * and those edges should appear in an anticlockwise sense around
+         * that face (see diagram).  clockwise search  find dot around this face  must find dot  Around f, required edge is anticlockwise from the dot.  See
+             * the other labelling scheme higher up, for why we subtract 1
+             * from j.  set edge  set face  cannot progress beyond infinite face  If the clockwise search made it all the way round, don't need to
+         * bother with the anticlockwise search.  this dot is complete, move on to next dot  anticlockwise search  find dot around this face  must find dot  Around f, required edge is clockwise from the dot.  set edge  set face  There's only 1 infinite face, so we must get all the way
+             * to current_face1 before we hit it.  ====== Stage 4 ======
+     * Compute other grid settings
+      Bounding rectangle  Helpers for making grid-generation easier.  These functions are only
+ * intended for use during grid generation.  Comparison function for the (tree234) sorted dot list  Add a new face to the grid, with its dot list allocated.
+ * Assumes there's enough space allocated for the new face in grid->faces  Assumes dot list has enough space  Retrieve a dot with these (x,y) coordinates.  Either return an existing dot
+ * in the dot_list, or add a new dot to the grid (and the dot_list) and
+ * return that.
+ * Assumes g->dots has enough capacity allocated  Sets the last face of the grid to include this dot, at this position
+ * around the face. Assumes num_faces is at least 1 (a new face has
+ * previously been added, with the required number of dots allocated) 
+ * Helper routines for grid_find_incentre.
+ 
+     * Find the point in the polygon with the maximum distance to any
+     * edge or corner.
+     *
+     * Such a point must exist which is in contact with at least three
+     * edges and/or vertices. (Proof: if it's only in contact with two
+     * edges and/or vertices, it can't even be at a _local_ maximum -
+     * any such circle can always be expanded in some direction.) So
+     * we iterate through all 3-subsets of the combined set of edges
+     * and vertices; for each subset we generate one or two candidate
+     * points that might be the incentre, and then we vet each one to
+     * see if it's inside the polygon and what its maximum radius is.
+     *
+     * (There's one case which this algorithm will get noticeably
+     * wrong, and that's when a continuum of equally good answers
+     * exists due to parallel edges. Consider a long thin rectangle,
+     * for instance, or a parallelogram. This algorithm will pick a
+     * point near one end, and choose the end arbitrarily; obviously a
+     * nicer point to choose would be in the centre. To fix this I
+     * would have to introduce a special-case system which detected
+     * parallel edges in advance, set aside all candidate points
+     * generated using both edges in a parallel pair, and generated
+     * some additional candidate points half way between them. Also,
+     * of course, I'd have to cope with rounding error making such a
+     * point look worse than one of its endpoints. So I haven't done
+     * this for the moment, and will cross it if necessary when I come
+     * to it.)
+     *
+     * We don't actually iterate literally over _edges_, in the sense
+     * of grid_edge structures. Instead, we fill in edgedot1[] and
+     * edgedot2[] with a pair of dots adjacent in the face's list of
+     * vertices. This ensures that we get the edges in consistent
+     * orientation, which we could not do from the grid structure
+     * alone. (A moment's consideration of an order-3 vertex should
+     * make it clear that if a notional arrow was written on each
+     * edge, _at least one_ of the three faces bordering that vertex
+     * would have to have the two arrows tip-to-tip or tail-to-tail
+     * rather than tip-to-tail.)
+      candidate positions  number of candidates 
+                 * Find a point, or pair of points, equidistant from
+                 * all the specified edges and/or vertices.
+                 
+                     * Three edges. This is a linear matrix equation:
+                     * each row of the matrix represents the fact that
+                     * the point (x,y) we seek is at distance r from
+                     * that edge, and we solve three of those
+                     * simultaneously to obtain x,y,r. (We ignore r.)
+                     
+                         * ((x,y) - (x1,y1)) . (dy,-dx) = r |(dx,dy)|
+                         *
+                         * => x dy - y dx - r |(dx,dy)| = (x1 dy - y1 dx)
+                         
+                     * Two edges and a dot. This will end up in a
+                     * quadratic equation.
+                     *
+                     * First, look at the two edges. Having our point
+                     * be some distance r from both of them gives rise
+                     * to a pair of linear equations in x,y,r of the
+                     * form
+                     *
+                     *   (x-x1) dy - (y-y1) dx = r sqrt(dx^2+dy^2)
+                     *
+                     * We eliminate r between those equations to give
+                     * us a single linear equation in x,y describing
+                     * the locus of points equidistant from both lines
+                     * - i.e. the angle bisector. 
+                     *
+                     * We then choose one of x,y to be a parameter t,
+                     * and derive linear formulae for x,y,r in terms
+                     * of t. This enables us to write down the
+                     * circular equation (x-xd)^2+(y-yd)^2=r^2 as a
+                     * quadratic in t; solving that and substituting
+                     * in for x,y gives us two candidate points.
+                      a,b,c,d : ax+by+cr=d  a,b,c: ax+by=c  a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find equations of the two input lines.  Derive the angle bisector by eliminating r.  Parametrise x and y in terms of some t.  Parameter is x.  Parameter is y.  Find a linear representation of r using eqs[0].  Construct the quadratic equation.  And solve it. 
+                     * Two dots and an edge. This one's another
+                     * quadratic equation.
+                     *
+                     * The point we want must lie on the perpendicular
+                     * bisector of the two dots; that much is obvious.
+                     * So we can construct a parametrisation of that
+                     * bisecting line, giving linear formulae for x,y
+                     * in terms of t. We can also express the distance
+                     * from the edge as such a linear formula.
+                     *
+                     * Then we set that equal to the radius of the
+                     * circle passing through the two points, which is
+                     * a Pythagoras exercise; that gives rise to a
+                     * quadratic in t, which we solve.
+                      a,b: {x,y,r}=at+b  a,b,c: at^2+bt+c=0  Find parametric formulae for x,y.  It's convenient if we have t at standard scale.  Also note down half the separation between
+                         * the dots, for use in computing the circle radius.  Find a parametric formula for r.  Construct the quadratic equation.  And solve it. 
+                     * Three dots. This is another linear matrix
+                     * equation, this time with each row of the matrix
+                     * representing the perpendicular bisector between
+                     * two of the points. Of course we only need two
+                     * such lines to find their intersection, so we
+                     * need only solve a 2x2 matrix equation.
+                     
+                         * ((x,y) - (x1,y1)) . (dx,dy) = 1/2 |(dx,dy)|^2
+                         *
+                         * => 2x dx + 2y dy = dx^2+dy^2 + (2 x1 dx + 2 y1 dy)
+                         
+                 * Now go through our candidate points and see if any
+                 * of them are better than what we've got so far.
+                 
+                     * First, disqualify the point if it's not inside
+                     * the polygon, which we work out by counting the
+                     * edges to the right of the point. (For
+                     * tiebreaking purposes when edges start or end on
+                     * our y-coordinate or go right through it, we
+                     * consider our point to be offset by a small
+                     * _positive_ epsilon in both the x- and
+                     * y-direction.)
+                     
+                             * The line goes past our y-position. Now we need
+                             * to know if its x-coordinate when it does so is
+                             * to our right.
+                             *
+                             * The x-coordinate in question is mathematically
+                             * (y - ys) * (xe - xs) / (ye - ys), and we want
+                             * to know whether (x - xs) >= that. Of course we
+                             * avoid the division, so we can work in integers;
+                             * to do this we must multiply both sides of the
+                             * inequality by ye - ys, which means we must
+                             * first check that's not negative.
+                             
+                         * This point is inside the polygon, so now we check
+                         * its minimum distance to every edge and corner.
+                         * First the corners ...
+                         
+                         * ... and now also check the perpendicular distance
+                         * to every edge, if the perpendicular lies between
+                         * the edge's endpoints.
+                         
+                             * If s and e are our endpoints, and p our
+                             * candidate circle centre, the foot of a
+                             * perpendicular from p to the line se lies
+                             * between s and e if and only if (p-s).(e-s) lies
+                             * strictly between 0 and (e-s).(e-s).
+                             
+                                 * Yes, the nearest point on this edge is
+                                 * closer than either endpoint, so we must
+                                 * take it into account by measuring the
+                                 * perpendicular distance to the edge and
+                                 * checking its square against mindist.
+                                 
+                         * Right. Now we know the biggest circle around this
+                         * point, so we can check it against bestdist.
+                          round to nearest  ------ Generate various types of grid ------  General method is to generate faces, by calculating their dot coordinates.
+ * As new faces are added, we keep track of all the dots so we can tell when
+ * a new face reuses an existing dot.  For example, two squares touching at an
+ * edge would generate six unique dots: four dots from the first face, then
+ * two additional dots for the second face, because we detect the other two
+ * dots have already been taken up.  This list is stored in a tree234
+ * called "points".  No extra memory-allocation needed here - we store the
+ * actual grid_dot* pointers, which all point into the g->dots list.
+ * For this reason, we have to calculate coordinates in such a way as to
+ * eliminate any rounding errors, so we can detect when a dot on one
+ * face precisely lands on a dot of a different face.  No floating-point
+ * arithmetic here!
+  Side length  Upper bounds - don't have to be exact  generate square faces  face position  Vector for side of hexagon - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  generate hexagonal faces  face centre  Vector for side of triangle - ratio is close to sqrt(3) 
+     * Triangular grids: an absent description is valid (indicating
+     * the old-style approach which had 'ears', i.e. triangles
+     * connected to only one other face, at some grid corners), and so
+     * is a description reading just "0" (indicating the new-style
+     * approach in which those ears are trimmed off). Anything else is
+     * illegal.
+      Doesn't use the previous method of generation, it pre-dates it!
+ * A triangular grid is just about simple enough to do by "brute force"  Vector for side of triangle - ratio is close to sqrt(3)  convenient alias 
+         * Old-style triangular grid generation, preserved as-is for
+         * backwards compatibility with old game ids, in which it's
+         * just a little asymmetric and there are 'ears' (faces linked
+         * to only one other face) at two grid corners.
+         *
+         * Example old-style game ids, which should still work, and in
+         * which you should see the ears in the TL/BR corners on the
+         * first one and in the TL/BL corners on the second:
+         *
+         *   5x5t1:2c2a1a2a201a1a1a1112a1a2b1211f0b21a2a2a0a
+         *   5x6t1:a022a212h1a1d1a12c2b11a012b1a20d1a0a12e
+          generate dots  odd rows are offset to the right  generate faces  initialise two faces for this (x,y)  face descriptions depend on whether the row-number is
+                 * odd or even 
+         * New-style approach, in which there are never any 'ears',
+         * and if height is even then the grid is nicely 4-way
+         * symmetric.
+         *
+         * Example new-style grids:
+         *
+         *   5x5t1:0_21120b11a1a01a1a00c1a0b211021c1h1a2a1a0a
+         *   5x6t1:0_a1212c22c2a02a2f22a0c12a110d0e1c0c0a101121a1
+          Upper bounds - don't have to be exact 
+             * Each row contains (width+1) triangles one way up, and
+             * (width) triangles the other way up. Which way up is
+             * which varies with parity of y. Also, the dots around
+             * each face will flip direction with parity of y, so we
+             * set up n1 and n2 to cope with that easily.
+             
+                 * If the grid has odd height, then we skip the first
+                 * and last triangles on this row, otherwise they'll
+                 * end up as ears.
+                  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  face position  generate square faces  generate up/down triangles  generate left/right triangles  Vector for side of pentagon - ratio is close to (4+sqrt(7))/3  a unused in determining grid size.  Upper bounds - don't have to be exact  cell position  horizontal pentagons  vertical pentagons  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  square below hexagon  square below right  square below left  Triangle below right  Triangle below left  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of hexagon  hexagon  Triangle above right  Triangle below right  Left triangles  Triangle above left  Triangle below left  b/a approx sqrt(2)  Upper bounds - don't have to be exact  cell position  octagon  diamond  b/a approx sqrt(3)  Upper bounds - don't have to be exact  position of order-6 dot  kite pointing up-left  kite pointing up  kite pointing up-right  kite pointing down-right  kite pointing down  kite pointing down-left  -py/px is close to tan(30 - atan(sqrt(3)/9))
+ * using py=26 makes everything lean to the left, rather than right
+  |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  rx unused in determining grid size.  Vectors for sides; weird numbers needed to keep puzzle aligned with window
+     * -py/px is close to tan(30 - atan(sqrt(3)/9))
+     * using py=26 makes everything lean to the left, rather than right
+      |( 75, -26)| = 79.43  |( 60,  52)| = 79.40  |(-15,  78)| = 79.38  Upper bounds - don't have to be exact  generate pentagonal faces  face centre  make better looking grids?  try 3x3 for instance  DODEC_* are used for dodecagonal and great-dodecagonal grids.  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  triangle below dodecagon  triangle above dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon below dodecagon  hexagon above dodecagon  square on right of dodecagon  square on top right of dodecagon  square on top left of dodecagon  Vector for side of triangle - ratio is close to sqrt(3)  Upper bounds - don't have to be exact  centre of dodecagon  dodecagon  hexagon on top right of dodecagon  hexagon on right of dodecagon hexagon on bottom right  of dodecagon  square on top right of dodecagon  square on bottom right of dodecagon  square below dodecagon  square on bottom left of dodecagon  square on top left of dodecagon  square above dodecagon  upper triangle (v)  lower triangle (^)  triangles are sent as debugging.  forward reference  We want to produce a random bit of penrose tiling, so we
+         * calculate a random offset (within the patch that penrose.c
+         * calculates for us) and an angle (multiple of 36) to rotate
+         * the patch.  Calculate radius of (circumcircle of) patch, subtract from
+         * radius calculated.  Pick a random offset (the easy way: choose within outer
+         * square, discarding while it's outside the circle) 
+         * Now test-generate our grid, to make sure it actually
+         * produces something.
+          If not, go back to the top of this while loop and try again
+         * with a different random offset. 
+     * Test-generate to ensure these parameters don't end us up with
+     * no grid at all.
+     
+ * We're asked for a grid of a particular size, and we generate enough
+ * of the tiling so we can be sure to have enough random grid from which
+ * to pick.
+  somewhat paranoid...  ditto... 
+     * Return NULL if we ended up with an empty grid, either because
+     * the initial generation was over too small a rectangle to
+     * encompass any face or because grid_trim_vigorously ended up
+     * removing absolutely everything.
+     
+     * Centre the grid in its originally promised rectangle.
+      ----------- End of grid generators -------------  up-to-date version of triangular grid  ----------- End of grid helpers -------------  vim: set shiftwidth=4 tabstop=8: 

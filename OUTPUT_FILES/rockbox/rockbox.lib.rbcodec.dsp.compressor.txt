@@ -1,0 +1,316 @@
+**************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 Jeffrey Goode
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file
+ * #define LOGF_ENABLE
+  unity gain in S7.24 format  Max number of samples to delay
+                                               output (960 = 5ms @ 192 kHz)
+                                             Is there a good malloc() or equal
+                                               for rockbox?
+                                             milliseconds  Cached settings  S7.24 format  S7.24 format  S7.24 format  S7.24 format  1-pole filter coefficients for exponential attack/release times  Release 'alpha'  Release 'beta'  Attack 'alpha'  Attack 'beta'   Limiter Attack 'alpha'  1-pole filter coefficients for sidechain pre-emphasis filters  hpf1 'alpha'  hpf2 'beta'   1-pole hp filter state variables for pre-emphasis filters  hpf1 and hpf2 x[n-1]  hpf2 y[n-1]   hpf2 y[n-1]   Delay Line for look-ahead compression  look-ahead buffer * 1-Pole LP Filter first coefficient computation
+ *  Returns S7.24 format integer used for "a" coefficient
+ *  rc: "RC Time Constant", or time to decay to 1/e
+ *  fs: Sampling Rate
+ *  Interpret attack and release time as an RC time constant
+ *    (time to decay to 1/e)
+ *  1-pole filters use approximation
+ *      a0 = 1/(fs*rc + 1)
+ *      b1 = 1.0 - a0
+ *      fs = Sampling Rate
+ *      rc = Time to decay to 1/e
+ *  y[n] = a0*x[n] + b1*y[n-1]
+ *
+ *  According to simulation on Intel hardware
+ *  this algorithm produces < 2% error for rc < ~100ms
+ *  For rc 100ms - 1000ms, error approaches 0%
+ *  For compressor attack/release times, this is more than adequate.
+ *
+ *  Error was measured against the more rigorous computation:
+ *  a0 = 1.0 - e^(-1.0/(fs*rc))
+ * Coefficients to get 10dB change per time period "rc"
+ *  from 1-pole LP filter topology
+ *  This function is better used to match behavior of
+ *  linear release which was implemented prior to implementation
+ *  of exponential attack/release function
+  1000 * 10/( 20*log10( 1/e ) ) * COMPRESSOR UPDATE
+ *  Called via the menu system to configure the compressor process
+  make settings values useful  Compute Attack and Release Coefficients  Release  Attack  Sidechain pre-emphasis filter coefficients * The "magic" constant is 1/RC.  This filter
+                           *  cut-off is approximately 237 Hz
+                            The "magic" constant is 1/RC.  This filter
+                           * cut-off is approximately 2.18 kHz
+                            If frequency changes  Compressor settings have changed since last call  configure variables for compressor operation  positive db equivalents in S15.16 format  S15.16 format  S15.16 format * Set up the shape of the compression curve first as decibel values
+     *  db_curve[0] = bottom of knee
+     *          [1] = threshold
+     *          [2] = top of knee
+     *          [3] = 0 db input
+     *          [4] = ~+12db input (2 bits clipping overhead)
+      bottom of knee is 3dB below the threshold for soft knee  top of knee is 3dB above the threshold for soft knee  offset = -3db * (ratio - 1) / ratio  offset = -3db for hard limit  bottom of knee is at the threshold for hard knee  top of knee is at the threshold for hard knee  Calculate 0db and ~+12db offsets  db of 2 bits clipping  offset = threshold * (ratio - 1) / ratio  offset = threshold for hard limit * Now set up the comp_curve table with compression offsets in the
+     * form of gain factors in S7.24 format
+     * comp_curve[0] is 0 (-infinity db) input
+     * comp_curve[1 to 63] are intermediate compression values 
+     * corresponding to the 6 MSB of the input values of a non-clipped
+     * signal
+     * db constants are stored as positive numbers;
+         * make them negative here
+          no compression below the knee * if soft knee and below top of knee,
+         * interpolate along soft knee slope
+          interpolate along ratio slope above the knee * comp_curve[64] is the compression level of a maximum level,
+     * non-clipped signal
+     * comp_curve[65] is the compression level of a maximum level,
+     * clipped signal
+     * if using auto peak, then makeup gain is max offset -
+     * 3dB headroom
+      some settings for display only, not used in calculations * GET COMPRESSION GAIN
+ *  Returns the required gain factor in S7.24 format in order to compress the
+ *  sample in accordance with the compression curve.  Always 1 or less.
+  sample must be positive  shift sample into 15 frac bit range  normal case: sample isn't clipped  index is 6 MSB, rem is 9 LSB * interpolate from the compression curve:
+         * higher gain - ((rem / (1 << 31)) * (higher gain - lower gain))
+          sample is somewhat clipped, up to 2 bits of overhead * straight interpolation:
+         *  higher gain - ((clipped portion of sample * 4/3
+         *  / (1 << 31)) * (higher gain - lower gain))
+          sample is too clipped, return invalid value * DSP interface ** SET COMPRESSOR
+ *  Enable or disable the compressor based upon the settings
+  enable/disable the compressor depending upon settings * COMPRESSOR PROCESS
+ *  Changes the gain of the samples according to the compressor curve
+  Use the average of the channels  Limiter detection * Divide it by the number of channels, roughly
+         *  It will be exact if the number of channels a power of 2
+         *  it will be imperfect otherwise.  Real division costs too
+         *  much here, and most of the time it will be 2 channels (stereo)
+         * 1p HP Filters: y[n] = a*(y[n-1] + x - x[n-1])
+         *  Zero and Pole in the same place to reduce computation
+         *  Run the first pre-emphasis filter
+          Run the second pre-emphasis filter  Apply weighted sum to the pre-emphasis network  x/2 + hp1 + 2*hp2  Exponential Attack and Release  Attack * reset it to delay time so it cannot release before the
+            *  delayed signal releases
+             Reverse exponential decay to current gain value  Don't start release while output is still above thresh  Release * total gain factor is the product of release gain and makeup gain,
+         *  but avoid computation if possible
+          Look-ahead limiter * Implement the compressor: apply total gain factor (if any) to the
+         *  output buffer sample pair/mono sample
+          DSP message hook  Already enabled  Won't have been getting frequency updates  Fall-through  All Silence  Delay Line Read/Write Pointers  Limit to the max allocated buffer * Attack time for
+                                                    *  look-ahead limiter
+                                                     Database entry **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 Jeffrey Goode
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file
+ * #define LOGF_ENABLE
+  unity gain in S7.24 format  Max number of samples to delay
+                                               output (960 = 5ms @ 192 kHz)
+                                             Is there a good malloc() or equal
+                                               for rockbox?
+                                             milliseconds  Cached settings  S7.24 format  S7.24 format  S7.24 format  S7.24 format  1-pole filter coefficients for exponential attack/release times  Release 'alpha'  Release 'beta'  Attack 'alpha'  Attack 'beta'   Limiter Attack 'alpha'  1-pole filter coefficients for sidechain pre-emphasis filters  hpf1 'alpha'  hpf2 'beta'   1-pole hp filter state variables for pre-emphasis filters  hpf1 and hpf2 x[n-1]  hpf2 y[n-1]   hpf2 y[n-1]   Delay Line for look-ahead compression  look-ahead buffer * 1-Pole LP Filter first coefficient computation
+ *  Returns S7.24 format integer used for "a" coefficient
+ *  rc: "RC Time Constant", or time to decay to 1/e
+ *  fs: Sampling Rate
+ *  Interpret attack and release time as an RC time constant
+ *    (time to decay to 1/e)
+ *  1-pole filters use approximation
+ *      a0 = 1/(fs*rc + 1)
+ *      b1 = 1.0 - a0
+ *      fs = Sampling Rate
+ *      rc = Time to decay to 1/e
+ *  y[n] = a0*x[n] + b1*y[n-1]
+ *
+ *  According to simulation on Intel hardware
+ *  this algorithm produces < 2% error for rc < ~100ms
+ *  For rc 100ms - 1000ms, error approaches 0%
+ *  For compressor attack/release times, this is more than adequate.
+ *
+ *  Error was measured against the more rigorous computation:
+ *  a0 = 1.0 - e^(-1.0/(fs*rc))
+ * Coefficients to get 10dB change per time period "rc"
+ *  from 1-pole LP filter topology
+ *  This function is better used to match behavior of
+ *  linear release which was implemented prior to implementation
+ *  of exponential attack/release function
+  1000 * 10/( 20*log10( 1/e ) ) * COMPRESSOR UPDATE
+ *  Called via the menu system to configure the compressor process
+  make settings values useful  Compute Attack and Release Coefficients  Release  Attack  Sidechain pre-emphasis filter coefficients * The "magic" constant is 1/RC.  This filter
+                           *  cut-off is approximately 237 Hz
+                            The "magic" constant is 1/RC.  This filter
+                           * cut-off is approximately 2.18 kHz
+                            If frequency changes  Compressor settings have changed since last call  configure variables for compressor operation  positive db equivalents in S15.16 format  S15.16 format  S15.16 format * Set up the shape of the compression curve first as decibel values
+     *  db_curve[0] = bottom of knee
+     *          [1] = threshold
+     *          [2] = top of knee
+     *          [3] = 0 db input
+     *          [4] = ~+12db input (2 bits clipping overhead)
+      bottom of knee is 3dB below the threshold for soft knee  top of knee is 3dB above the threshold for soft knee  offset = -3db * (ratio - 1) / ratio  offset = -3db for hard limit  bottom of knee is at the threshold for hard knee  top of knee is at the threshold for hard knee  Calculate 0db and ~+12db offsets  db of 2 bits clipping  offset = threshold * (ratio - 1) / ratio  offset = threshold for hard limit * Now set up the comp_curve table with compression offsets in the
+     * form of gain factors in S7.24 format
+     * comp_curve[0] is 0 (-infinity db) input
+     * comp_curve[1 to 63] are intermediate compression values 
+     * corresponding to the 6 MSB of the input values of a non-clipped
+     * signal
+     * db constants are stored as positive numbers;
+         * make them negative here
+          no compression below the knee * if soft knee and below top of knee,
+         * interpolate along soft knee slope
+          interpolate along ratio slope above the knee * comp_curve[64] is the compression level of a maximum level,
+     * non-clipped signal
+     * comp_curve[65] is the compression level of a maximum level,
+     * clipped signal
+     * if using auto peak, then makeup gain is max offset -
+     * 3dB headroom
+      some settings for display only, not used in calculations * GET COMPRESSION GAIN
+ *  Returns the required gain factor in S7.24 format in order to compress the
+ *  sample in accordance with the compression curve.  Always 1 or less.
+  sample must be positive  shift sample into 15 frac bit range  normal case: sample isn't clipped  index is 6 MSB, rem is 9 LSB * interpolate from the compression curve:
+         * higher gain - ((rem / (1 << 31)) * (higher gain - lower gain))
+          sample is somewhat clipped, up to 2 bits of overhead * straight interpolation:
+         *  higher gain - ((clipped portion of sample * 4/3
+         *  / (1 << 31)) * (higher gain - lower gain))
+          sample is too clipped, return invalid value * DSP interface ** SET COMPRESSOR
+ *  Enable or disable the compressor based upon the settings
+  enable/disable the compressor depending upon settings * COMPRESSOR PROCESS
+ *  Changes the gain of the samples according to the compressor curve
+  Use the average of the channels  Limiter detection * Divide it by the number of channels, roughly
+         *  It will be exact if the number of channels a power of 2
+         *  it will be imperfect otherwise.  Real division costs too
+         *  much here, and most of the time it will be 2 channels (stereo)
+         * 1p HP Filters: y[n] = a*(y[n-1] + x - x[n-1])
+         *  Zero and Pole in the same place to reduce computation
+         *  Run the first pre-emphasis filter
+          Run the second pre-emphasis filter  Apply weighted sum to the pre-emphasis network  x/2 + hp1 + 2*hp2  Exponential Attack and Release  Attack * reset it to delay time so it cannot release before the
+            *  delayed signal releases
+             Reverse exponential decay to current gain value  Don't start release while output is still above thresh  Release * total gain factor is the product of release gain and makeup gain,
+         *  but avoid computation if possible
+          Look-ahead limiter * Implement the compressor: apply total gain factor (if any) to the
+         *  output buffer sample pair/mono sample
+          DSP message hook  Already enabled  Won't have been getting frequency updates  Fall-through  All Silence  Delay Line Read/Write Pointers  Limit to the max allocated buffer * Attack time for
+                                                    *  look-ahead limiter
+                                                     Database entry **************************************************************************
+ *             __________               __   ___.
+ *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+ *   Source     |       _//  _ \_/ ___\|  |/ /| __ \ /  _ \  \/  /
+ *   Jukebox    |    |   (  <_> )  \___|    < | \_\ (  <_> > <  <
+ *   Firmware   |____|_  /\____/ \___  >__|_ \|___  /\____/__/\_ \
+ *                     \/            \/     \/    \/            \/
+ * $Id$
+ *
+ * Copyright (C) 2009 Jeffrey Goode
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ *************************************************************************** Define LOGF_ENABLE to enable logf output in this file
+ * #define LOGF_ENABLE
+  unity gain in S7.24 format  Max number of samples to delay
+                                               output (960 = 5ms @ 192 kHz)
+                                             Is there a good malloc() or equal
+                                               for rockbox?
+                                             milliseconds  Cached settings  S7.24 format  S7.24 format  S7.24 format  S7.24 format  1-pole filter coefficients for exponential attack/release times  Release 'alpha'  Release 'beta'  Attack 'alpha'  Attack 'beta'   Limiter Attack 'alpha'  1-pole filter coefficients for sidechain pre-emphasis filters  hpf1 'alpha'  hpf2 'beta'   1-pole hp filter state variables for pre-emphasis filters  hpf1 and hpf2 x[n-1]  hpf2 y[n-1]   hpf2 y[n-1]   Delay Line for look-ahead compression  look-ahead buffer * 1-Pole LP Filter first coefficient computation
+ *  Returns S7.24 format integer used for "a" coefficient
+ *  rc: "RC Time Constant", or time to decay to 1/e
+ *  fs: Sampling Rate
+ *  Interpret attack and release time as an RC time constant
+ *    (time to decay to 1/e)
+ *  1-pole filters use approximation
+ *      a0 = 1/(fs*rc + 1)
+ *      b1 = 1.0 - a0
+ *      fs = Sampling Rate
+ *      rc = Time to decay to 1/e
+ *  y[n] = a0*x[n] + b1*y[n-1]
+ *
+ *  According to simulation on Intel hardware
+ *  this algorithm produces < 2% error for rc < ~100ms
+ *  For rc 100ms - 1000ms, error approaches 0%
+ *  For compressor attack/release times, this is more than adequate.
+ *
+ *  Error was measured against the more rigorous computation:
+ *  a0 = 1.0 - e^(-1.0/(fs*rc))
+ * Coefficients to get 10dB change per time period "rc"
+ *  from 1-pole LP filter topology
+ *  This function is better used to match behavior of
+ *  linear release which was implemented prior to implementation
+ *  of exponential attack/release function
+  1000 * 10/( 20*log10( 1/e ) ) * COMPRESSOR UPDATE
+ *  Called via the menu system to configure the compressor process
+  make settings values useful  Compute Attack and Release Coefficients  Release  Attack  Sidechain pre-emphasis filter coefficients * The "magic" constant is 1/RC.  This filter
+                           *  cut-off is approximately 237 Hz
+                            The "magic" constant is 1/RC.  This filter
+                           * cut-off is approximately 2.18 kHz
+                            If frequency changes  Compressor settings have changed since last call  configure variables for compressor operation  positive db equivalents in S15.16 format  S15.16 format  S15.16 format * Set up the shape of the compression curve first as decibel values
+     *  db_curve[0] = bottom of knee
+     *          [1] = threshold
+     *          [2] = top of knee
+     *          [3] = 0 db input
+     *          [4] = ~+12db input (2 bits clipping overhead)
+      bottom of knee is 3dB below the threshold for soft knee  top of knee is 3dB above the threshold for soft knee  offset = -3db * (ratio - 1) / ratio  offset = -3db for hard limit  bottom of knee is at the threshold for hard knee  top of knee is at the threshold for hard knee  Calculate 0db and ~+12db offsets  db of 2 bits clipping  offset = threshold * (ratio - 1) / ratio  offset = threshold for hard limit * Now set up the comp_curve table with compression offsets in the
+     * form of gain factors in S7.24 format
+     * comp_curve[0] is 0 (-infinity db) input
+     * comp_curve[1 to 63] are intermediate compression values 
+     * corresponding to the 6 MSB of the input values of a non-clipped
+     * signal
+     * db constants are stored as positive numbers;
+         * make them negative here
+          no compression below the knee * if soft knee and below top of knee,
+         * interpolate along soft knee slope
+          interpolate along ratio slope above the knee * comp_curve[64] is the compression level of a maximum level,
+     * non-clipped signal
+     * comp_curve[65] is the compression level of a maximum level,
+     * clipped signal
+     * if using auto peak, then makeup gain is max offset -
+     * 3dB headroom
+      some settings for display only, not used in calculations * GET COMPRESSION GAIN
+ *  Returns the required gain factor in S7.24 format in order to compress the
+ *  sample in accordance with the compression curve.  Always 1 or less.
+  sample must be positive  shift sample into 15 frac bit range  normal case: sample isn't clipped  index is 6 MSB, rem is 9 LSB * interpolate from the compression curve:
+         * higher gain - ((rem / (1 << 31)) * (higher gain - lower gain))
+          sample is somewhat clipped, up to 2 bits of overhead * straight interpolation:
+         *  higher gain - ((clipped portion of sample * 4/3
+         *  / (1 << 31)) * (higher gain - lower gain))
+          sample is too clipped, return invalid value * DSP interface ** SET COMPRESSOR
+ *  Enable or disable the compressor based upon the settings
+  enable/disable the compressor depending upon settings * COMPRESSOR PROCESS
+ *  Changes the gain of the samples according to the compressor curve
+  Use the average of the channels  Limiter detection * Divide it by the number of channels, roughly
+         *  It will be exact if the number of channels a power of 2
+         *  it will be imperfect otherwise.  Real division costs too
+         *  much here, and most of the time it will be 2 channels (stereo)
+         * 1p HP Filters: y[n] = a*(y[n-1] + x - x[n-1])
+         *  Zero and Pole in the same place to reduce computation
+         *  Run the first pre-emphasis filter
+          Run the second pre-emphasis filter  Apply weighted sum to the pre-emphasis network  x/2 + hp1 + 2*hp2  Exponential Attack and Release  Attack * reset it to delay time so it cannot release before the
+            *  delayed signal releases
+             Reverse exponential decay to current gain value  Don't start release while output is still above thresh  Release * total gain factor is the product of release gain and makeup gain,
+         *  but avoid computation if possible
+          Look-ahead limiter * Implement the compressor: apply total gain factor (if any) to the
+         *  output buffer sample pair/mono sample
+          DSP message hook  Already enabled  Won't have been getting frequency updates  Fall-through  All Silence  Delay Line Read/Write Pointers  Limit to the max allocated buffer * Attack time for
+                                                    *  look-ahead limiter
+                                                     Database entry 

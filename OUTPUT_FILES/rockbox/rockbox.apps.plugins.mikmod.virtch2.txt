@@ -1,0 +1,196 @@
+	MikMod sound library
+	(c) 1998, 1999, 2000 Miodrag Vallat and others - see file AUTHORS for
+	complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  High-quality sample mixing routines, using a 32 bits mixing buffer,
+  interpolation, and sample smoothing to improve sound quality and remove
+  clicks.
+
+==============================================================================
+
+  Future Additions:
+	Low-Pass filter to remove annoying staticy buzz.
+
+
+   Constant Definitions
+   ====================
+
+	MAXVOL_FACTOR (was BITSHIFT in virtch.c)
+		Controls the maximum volume of the output data. All mixed data is
+		divided by this number after mixing, so larger numbers result in
+		quieter mixing.  Smaller numbers will increase the likeliness of
+		distortion on loud modules.
+
+	REVERBERATION
+		Larger numbers result in shorter reverb duration. Longer reverb
+		durations can cause unwanted static and make the reverb sound more
+		like a crappy echo.
+
+	SAMPLING_SHIFT
+		Specified the shift multiplier which controls by how much the mixing
+		rate is multiplied while mixing.  Higher values can improve quality by
+		smoothing the sound and reducing pops and clicks. Note, this is a shift
+		value, so a value of 2 becomes a mixing-rate multiplier of 4, and a
+		value of 3 = 8, etc.
+
+	FRACBITS
+		The number of bits per integer devoted to the fractional part of the
+		number. Generally, this number should not be changed for any reason.
+
+	!!! IMPORTANT !!! All values below MUST ALWAYS be greater than 0
+
+ =1 -> sample has to be restarted  =1 -> sample is playing  16/8 bits looping/one-shot  identifies the sample  start index  samplesize  loop start  loop end  current frequency  current volume  current panning position  Volume factor in range 0-255  current index in the sample  increment value  Weird bug in compiler  FIXME is this still needed?  Reverb control variables  For Mono or Left Channel  For Stereo only (Right Channel) ========== 32 bit sample mixers - only for 32 bit platforms ========== 64 bit mixers  Slowest part...  Dest can be misaligned  Srce is always aligned  l  l  r  r  l  l  r  r  Load constants  s0  0   s0  0   s1  0   s1  0   s2  0   s2  0   s3  0   s3  0   HAVE_ALTIVEC  Remaining bits  HAVE_SSE2 || HAVE_ALTIVEC  HAVE_SSE2 || HAVE_ALTIVEC  Reverb macros  Compute the left channel echo buffers  Prepare to compute actual finalized data  left channel  Compute the left channel echo buffers  Compute the right channel echo buffers  Prepare to compute actual finalized data  left channel  right channel  Mixing macros  Mixing macros  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  count / 2 for 1 sample  Load 32bit sample. 1st average  v0: s0.l+s2.l | s0.r+s2.r | s1.l+s3.l | s1.r+s3.r  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  v1: s0.l+s2.l / 4 | s0.r+s2.r / 4 | s1.l+s3.l+s0.l+s2.l / 4 | s1.r+s3.r+s0.r+s2.r / 4  v2: s4.l+s6.l | s4.r+s6.r | s5.l+s7.l | s5.r+s7.r  Upper 64bit is unused  v3: s4.l+s6.l /4 | s4.r+s6.r / 4| s5.l+s7.l+s4.l+s6.l / 4 | s5.r+s7.r+s4.r+s6.l / 4  pack two stereo samples in one  v4 = avg(s0,s1,s2,s3) | avg(s4,s5,s6,s7)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v6 = avg(s8,s9,s10,s11) | avg(s12,s13,s14,s15)  4 interpolated stereo sample 32bit to 4  32 = 4 * 8   FIXME: THIS PART WRITES PAST DST !!  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v4 = lo64(v1) | lo64(v3)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  4 interpolated stereo sample 32bit to 4 interpolated stereo sample 16bit + saturation  32 = 4 * 8   update the 'current' index so the sample loops, or stops playing if it
+	   reached the end of the sample  The sample is playing in reverse  the sample is looping and has reached the loopstart index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlpos  normal backwards looping, so set the current position to
+					   loopend index  the sample is not looping, so check if it reached index 0  playing index reached 0, so stop playing this sample  The sample is playing forward  the sample is looping, check the loopend index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlend  normal backwards looping, so set the current position
+					   to loopend index  sample is not looping, so check if it reached the last
+				   position  yes, so stop playing this sample  if the sample is not blocked...  use the 32 bit mixers as often as we can (they're much faster)  update sample position  allocate reverb buffers for the right channel if in stereo mode only.  ! NO_HQMIXER  ex:set ts=4: 	MikMod sound library
+	(c) 1998, 1999, 2000 Miodrag Vallat and others - see file AUTHORS for
+	complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  High-quality sample mixing routines, using a 32 bits mixing buffer,
+  interpolation, and sample smoothing to improve sound quality and remove
+  clicks.
+
+==============================================================================
+
+  Future Additions:
+	Low-Pass filter to remove annoying staticy buzz.
+
+
+   Constant Definitions
+   ====================
+
+	MAXVOL_FACTOR (was BITSHIFT in virtch.c)
+		Controls the maximum volume of the output data. All mixed data is
+		divided by this number after mixing, so larger numbers result in
+		quieter mixing.  Smaller numbers will increase the likeliness of
+		distortion on loud modules.
+
+	REVERBERATION
+		Larger numbers result in shorter reverb duration. Longer reverb
+		durations can cause unwanted static and make the reverb sound more
+		like a crappy echo.
+
+	SAMPLING_SHIFT
+		Specified the shift multiplier which controls by how much the mixing
+		rate is multiplied while mixing.  Higher values can improve quality by
+		smoothing the sound and reducing pops and clicks. Note, this is a shift
+		value, so a value of 2 becomes a mixing-rate multiplier of 4, and a
+		value of 3 = 8, etc.
+
+	FRACBITS
+		The number of bits per integer devoted to the fractional part of the
+		number. Generally, this number should not be changed for any reason.
+
+	!!! IMPORTANT !!! All values below MUST ALWAYS be greater than 0
+
+ =1 -> sample has to be restarted  =1 -> sample is playing  16/8 bits looping/one-shot  identifies the sample  start index  samplesize  loop start  loop end  current frequency  current volume  current panning position  Volume factor in range 0-255  current index in the sample  increment value  Weird bug in compiler  FIXME is this still needed?  Reverb control variables  For Mono or Left Channel  For Stereo only (Right Channel) ========== 32 bit sample mixers - only for 32 bit platforms ========== 64 bit mixers  Slowest part...  Dest can be misaligned  Srce is always aligned  l  l  r  r  l  l  r  r  Load constants  s0  0   s0  0   s1  0   s1  0   s2  0   s2  0   s3  0   s3  0   HAVE_ALTIVEC  Remaining bits  HAVE_SSE2 || HAVE_ALTIVEC  HAVE_SSE2 || HAVE_ALTIVEC  Reverb macros  Compute the left channel echo buffers  Prepare to compute actual finalized data  left channel  Compute the left channel echo buffers  Compute the right channel echo buffers  Prepare to compute actual finalized data  left channel  right channel  Mixing macros  Mixing macros  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  count / 2 for 1 sample  Load 32bit sample. 1st average  v0: s0.l+s2.l | s0.r+s2.r | s1.l+s3.l | s1.r+s3.r  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  v1: s0.l+s2.l / 4 | s0.r+s2.r / 4 | s1.l+s3.l+s0.l+s2.l / 4 | s1.r+s3.r+s0.r+s2.r / 4  v2: s4.l+s6.l | s4.r+s6.r | s5.l+s7.l | s5.r+s7.r  Upper 64bit is unused  v3: s4.l+s6.l /4 | s4.r+s6.r / 4| s5.l+s7.l+s4.l+s6.l / 4 | s5.r+s7.r+s4.r+s6.l / 4  pack two stereo samples in one  v4 = avg(s0,s1,s2,s3) | avg(s4,s5,s6,s7)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v6 = avg(s8,s9,s10,s11) | avg(s12,s13,s14,s15)  4 interpolated stereo sample 32bit to 4  32 = 4 * 8   FIXME: THIS PART WRITES PAST DST !!  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v4 = lo64(v1) | lo64(v3)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  4 interpolated stereo sample 32bit to 4 interpolated stereo sample 16bit + saturation  32 = 4 * 8   update the 'current' index so the sample loops, or stops playing if it
+	   reached the end of the sample  The sample is playing in reverse  the sample is looping and has reached the loopstart index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlpos  normal backwards looping, so set the current position to
+					   loopend index  the sample is not looping, so check if it reached index 0  playing index reached 0, so stop playing this sample  The sample is playing forward  the sample is looping, check the loopend index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlend  normal backwards looping, so set the current position
+					   to loopend index  sample is not looping, so check if it reached the last
+				   position  yes, so stop playing this sample  if the sample is not blocked...  use the 32 bit mixers as often as we can (they're much faster)  update sample position  allocate reverb buffers for the right channel if in stereo mode only.  ! NO_HQMIXER  ex:set ts=4: 	MikMod sound library
+	(c) 1998, 1999, 2000 Miodrag Vallat and others - see file AUTHORS for
+	complete list.
+
+	This library is free software; you can redistribute it and/or modify
+	it under the terms of the GNU Library General Public License as
+	published by the Free Software Foundation; either version 2 of
+	the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Library General Public License for more details.
+
+	You should have received a copy of the GNU Library General Public
+	License along with this library; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+	02111-1307, USA.
+==============================================================================
+
+  $Id$
+
+  High-quality sample mixing routines, using a 32 bits mixing buffer,
+  interpolation, and sample smoothing to improve sound quality and remove
+  clicks.
+
+==============================================================================
+
+  Future Additions:
+	Low-Pass filter to remove annoying staticy buzz.
+
+
+   Constant Definitions
+   ====================
+
+	MAXVOL_FACTOR (was BITSHIFT in virtch.c)
+		Controls the maximum volume of the output data. All mixed data is
+		divided by this number after mixing, so larger numbers result in
+		quieter mixing.  Smaller numbers will increase the likeliness of
+		distortion on loud modules.
+
+	REVERBERATION
+		Larger numbers result in shorter reverb duration. Longer reverb
+		durations can cause unwanted static and make the reverb sound more
+		like a crappy echo.
+
+	SAMPLING_SHIFT
+		Specified the shift multiplier which controls by how much the mixing
+		rate is multiplied while mixing.  Higher values can improve quality by
+		smoothing the sound and reducing pops and clicks. Note, this is a shift
+		value, so a value of 2 becomes a mixing-rate multiplier of 4, and a
+		value of 3 = 8, etc.
+
+	FRACBITS
+		The number of bits per integer devoted to the fractional part of the
+		number. Generally, this number should not be changed for any reason.
+
+	!!! IMPORTANT !!! All values below MUST ALWAYS be greater than 0
+
+ =1 -> sample has to be restarted  =1 -> sample is playing  16/8 bits looping/one-shot  identifies the sample  start index  samplesize  loop start  loop end  current frequency  current volume  current panning position  Volume factor in range 0-255  current index in the sample  increment value  Weird bug in compiler  FIXME is this still needed?  Reverb control variables  For Mono or Left Channel  For Stereo only (Right Channel) ========== 32 bit sample mixers - only for 32 bit platforms ========== 64 bit mixers  Slowest part...  Dest can be misaligned  Srce is always aligned  l  l  r  r  l  l  r  r  Load constants  s0  0   s0  0   s1  0   s1  0   s2  0   s2  0   s3  0   s3  0   HAVE_ALTIVEC  Remaining bits  HAVE_SSE2 || HAVE_ALTIVEC  HAVE_SSE2 || HAVE_ALTIVEC  Reverb macros  Compute the left channel echo buffers  Prepare to compute actual finalized data  left channel  Compute the left channel echo buffers  Compute the right channel echo buffers  Prepare to compute actual finalized data  left channel  right channel  Mixing macros  Mixing macros  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  count / 2 for 1 sample  Load 32bit sample. 1st average  v0: s0.l+s2.l | s0.r+s2.r | s1.l+s3.l | s1.r+s3.r  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  v1: s0.l+s2.l / 4 | s0.r+s2.r / 4 | s1.l+s3.l+s0.l+s2.l / 4 | s1.r+s3.r+s0.r+s2.r / 4  v2: s4.l+s6.l | s4.r+s6.r | s5.l+s7.l | s5.r+s7.r  Upper 64bit is unused  v3: s4.l+s6.l /4 | s4.r+s6.r / 4| s5.l+s7.l+s4.l+s6.l / 4 | s5.r+s7.r+s4.r+s6.l / 4  pack two stereo samples in one  v4 = avg(s0,s1,s2,s3) | avg(s4,s5,s6,s7)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v6 = avg(s8,s9,s10,s11) | avg(s12,s13,s14,s15)  4 interpolated stereo sample 32bit to 4  32 = 4 * 8   FIXME: THIS PART WRITES PAST DST !!  TEST: Ok  Check unaligned dste buffer. srce is always aligned.  dste and srce aligned. srce is always aligned.  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  v4 = lo64(v1) | lo64(v3)  Load 32bit sample. 1st average (s0.l+s2.l, s0.r+s2.r, s1.l+s3.l, s1.r+s3.r)  128bit = 2 stereo samples  128bit = 2 stereo samples  2nd average (s0.l+s2.l+s1.l+s3.l / 4, s0.r+s2.r+s1.r+s3.r / 4). Upper 64bit is unused  (1 stereo sample)  Upper 64bit is unused  pack two stereo samples in one  4 interpolated stereo sample 32bit to 4 interpolated stereo sample 16bit + saturation  32 = 4 * 8   update the 'current' index so the sample loops, or stops playing if it
+	   reached the end of the sample  The sample is playing in reverse  the sample is looping and has reached the loopstart index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlpos  normal backwards looping, so set the current position to
+					   loopend index  the sample is not looping, so check if it reached index 0  playing index reached 0, so stop playing this sample  The sample is playing forward  the sample is looping, check the loopend index  sample is doing bidirectional loops, so 'bounce' the
+					   current index against the idxlend  normal backwards looping, so set the current position
+					   to loopend index  sample is not looping, so check if it reached the last
+				   position  yes, so stop playing this sample  if the sample is not blocked...  use the 32 bit mixers as often as we can (they're much faster)  update sample position  allocate reverb buffers for the right channel if in stereo mode only.  ! NO_HQMIXER  ex:set ts=4: 

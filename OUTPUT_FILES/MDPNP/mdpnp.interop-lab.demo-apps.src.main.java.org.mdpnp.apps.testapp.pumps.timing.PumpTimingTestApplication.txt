@@ -598,4 +598,454 @@
 		 * How long to sleep before asking for the given rate
 		 *
 		 * The rate to ask for.
+		 @FXML private ComboBox<Device> bpsources;@FXML private TextField systolic;@FXML private TextField diastolic;@FXML private TextField mean;*
+	 * The "current" patient, used to determine if the patient has changed
+	 TODO: Stop listening to the BP waveform for efficiency?Rely on addition of metrics to add devices...Flow rate published - add to panel.  addPumpToMainPanel avoids duplication of devices anyway,so just call it here....and removal of devices to remove devices.Similarly, rely on metrics to add BP devices.
+		samples.addListener(new ListChangeListener<SampleArrayFx>() {
+			@Override
+			public void onChanged(Change<? extends SampleArrayFx> change) {
+				while(change.next()) {
+					change.getAddedSubList().forEach( n -> {
+						if(n.getMetric_id().equals(ARTERIAL)) {
+							bpsources.getItems().add(dlm.getByUniqueDeviceIdentifier(n.getUnique_device_identifier()));
+						}
+					});
+				}
+				
+			}
+		});
+		
+		bpsources.getSelectionModel().selectedItemProperty().addListener(bpDeviceChangeListener);
+		listenerPresent=true;
+		
+		bpsources.setCellFactory(new Callback<ListView<Device>,ListCell<Device>>() {
+
+			@Override
+			public ListCell<Device> call(ListView<Device> device) {
+				return new DeviceListCell();
+			}
+			
+		});
+		
+		bpsources.setConverter(new StringConverter<Device>() {
+
+			@Override
+			public Device fromString(String arg0) {
+				// TODO Auto-generated method stub
+				return null;
+			}
+
+			@Override
+			public String toString(Device arg0) {
+				// TODO Auto-generated method stub
+				return arg0.getModel();
+			}
+			
+		});
+		log.info("udi " + c.unique_device_identifier + " is MRN=" + mrnPartition);
+		            	 * The patient has definitely changed - even if the selected patient is "Unassigned",
+		            	 * then that "Patient" has an ID
+		            	 Nothing else to do.Patient has changeddeviceUdiToPatientMRN.put(c.unique_device_identifier, p);*
+	 * Use this to allow access to the numeric sample that has a listener attached.
+	 * Then if the pump is changed, the listener can be detached from the previous numeric
+	 
+	class SampleValuesChangeListener implements ChangeListener<Number[]> {
+
+		@Override
+		public void changed(ObservableValue<? extends Number[]> observable, Number[] oldValue, Number[] newValue) {
+			//Ignore the old values.  Just get new ones.
+			float[] minMax=getMinAndMax(newValue);
+			//System.err.println("got minMax as "+minMax[0]+ " and "+minMax[1]);
+			diastolic.setText(Integer.toString((int)minMax[0]));
+			systolic.setText(Integer.toString((int)minMax[1]));
+			/*
+			 * https://nursingcenter.com/ncblog/december-2011/calculating-the-map
+			 
+			float meanCalc=(minMax[1]+(2*minMax[0]))/3;
+			mean.setText(Integer.toString((int)meanCalc));
+		}
+	}
+	
+	SampleValuesChangeListener bpArrayListener=new SampleValuesChangeListener();
+	*
+	 * Use this to allow access to the array sample that has a listener attached.
+	 * Then if the BP monitor is changed, the listener can be detached from the previous sample
+	 
+		if(currentBPSample!=null) {
+			currentBPSample.valuesProperty().removeListener(bpArrayListener);
+		}
+		No device selected and/or available - can happen when patient is changed and no devices for that patient
+		samples.forEach( s-> {
+			if (! s.getUnique_device_identifier().contentEquals(newDevice.getUDI())) return;	//Some other device.
+			//This sample is from the current device.
+			if(s.getMetric_id().equals(ARTERIAL)) {
+				s.valuesProperty().addListener(bpArrayListener);
+				currentBPSample=s;
+			}
+		});
+		
+	public void chooseFile() {
+		JFileChooser chooser=new JFileChooser();
+		if(chooser.showOpenDialog(null)==JFileChooser.APPROVE_OPTION) {
+			try {
+				startSettingSpeeds(chooser.getSelectedFile());
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	private void startSettingSpeeds(File inputFile) throws IOException {
+		BufferedReader br=new BufferedReader(new FileReader(inputFile));
+		String nextLine;
+		while( (nextLine=br.readLine())!=null) {
+			String[] parts=nextLine.split(",");
+			TimeAndRate tr=new TimeAndRate();
+			tr.interval=Long.parseLong(parts[0]);
+			tr.rate=Float.parseFloat(parts[1]);
+			timesAndRates.add(tr);
+		}
+		br.close();
+		//Now we have a full ArrayList of times and rates.
+		//We need to make this a separate runnable, because
+		//otherwise the sleeps cause the GUI to hang.
+		Thread setterThread=new Thread() {
+			public void run() {
+				for(int i=0;i<timesAndRates.size();i++) {
+					TimeAndRate tr=timesAndRates.get(i);
+					try {
+						Thread.sleep(tr.interval);
+					} catch (InterruptedException ie) {
+						ie.printStackTrace();
+					}
+					//Now we've slept that long, set the rate...
+					setRateOnSelectedPumps(tr.rate);
+				}
+			}
+		};
+		setterThread.start();
+		
+	}
+		FXMLLoader loader = new FXMLLoader(PumpWithListener.class.getResource("PumpWithListener.fxml"));	try {        final Parent ui = loader.load();                final PumpWithListener controller = ((PumpWithListener) loader.getController());        controller.setPump(d,numeric,writer, dbconn);        pumps.getChildren().add(ui);        udiToPump.put(d.getUDI(), ui);
+	private void setRateOnSelectedPumps(float rate) {
+		pumps.getChildren().forEach(n -> {
+			PumpWithListener pwl=(PumpWithListener)n.getUserData();
+			if(pwl.selected.isSelected()) {
+				pwl.setTheFlowRate(rate);
+			} else {
+				System.err.println("The current pump is not selected");
+			}
+			
+			
+		});
+	}
+	*
+	 * It barely seems worth a class, but it is one...
+	 * @author Simon
+	 *
+	 *
+		 * How long to sleep before asking for the given rate
+		 *
+		 * The rate to ask for.
+		 @FXML private ComboBox<Device> bpsources;@FXML private TextField systolic;@FXML private TextField diastolic;@FXML private TextField mean;*
+	 * The "current" patient, used to determine if the patient has changed
+	 TODO: Stop listening to the BP waveform for efficiency?Rely on addition of metrics to add devices...Flow rate published - add to panel.  addPumpToMainPanel avoids duplication of devices anyway,so just call it here....and removal of devices to remove devices.Similarly, rely on metrics to add BP devices.
+		samples.addListener(new ListChangeListener<SampleArrayFx>() {
+			@Override
+			public void onChanged(Change<? extends SampleArrayFx> change) {
+				while(change.next()) {
+					change.getAddedSubList().forEach( n -> {
+						if(n.getMetric_id().equals(ARTERIAL)) {
+							bpsources.getItems().add(dlm.getByUniqueDeviceIdentifier(n.getUnique_device_identifier()));
+						}
+					});
+				}
+				
+			}
+		});
+		
+		bpsources.getSelectionModel().selectedItemProperty().addListener(bpDeviceChangeListener);
+		listenerPresent=true;
+		
+		bpsources.setCellFactory(new Callback<ListView<Device>,ListCell<Device>>() {
+
+			@Override
+			public ListCell<Device> call(ListView<Device> device) {
+				return new DeviceListCell();
+			}
+			
+		});
+		
+		bpsources.setConverter(new StringConverter<Device>() {
+
+			@Override
+			public Device fromString(String arg0) {
+				// TODO Auto-generated method stub
+				return null;
+			}
+
+			@Override
+			public String toString(Device arg0) {
+				// TODO Auto-generated method stub
+				return arg0.getModel();
+			}
+			
+		});
+		log.info("udi " + c.unique_device_identifier + " is MRN=" + mrnPartition);
+		            	 * The patient has definitely changed - even if the selected patient is "Unassigned",
+		            	 * then that "Patient" has an ID
+		            	 Nothing else to do.Patient has changeddeviceUdiToPatientMRN.put(c.unique_device_identifier, p);*
+	 * Use this to allow access to the numeric sample that has a listener attached.
+	 * Then if the pump is changed, the listener can be detached from the previous numeric
+	 
+	class SampleValuesChangeListener implements ChangeListener<Number[]> {
+
+		@Override
+		public void changed(ObservableValue<? extends Number[]> observable, Number[] oldValue, Number[] newValue) {
+			//Ignore the old values.  Just get new ones.
+			float[] minMax=getMinAndMax(newValue);
+			//System.err.println("got minMax as "+minMax[0]+ " and "+minMax[1]);
+			diastolic.setText(Integer.toString((int)minMax[0]));
+			systolic.setText(Integer.toString((int)minMax[1]));
+			/*
+			 * https://nursingcenter.com/ncblog/december-2011/calculating-the-map
+			 
+			float meanCalc=(minMax[1]+(2*minMax[0]))/3;
+			mean.setText(Integer.toString((int)meanCalc));
+		}
+	}
+	
+	SampleValuesChangeListener bpArrayListener=new SampleValuesChangeListener();
+	*
+	 * Use this to allow access to the array sample that has a listener attached.
+	 * Then if the BP monitor is changed, the listener can be detached from the previous sample
+	 
+		if(currentBPSample!=null) {
+			currentBPSample.valuesProperty().removeListener(bpArrayListener);
+		}
+		No device selected and/or available - can happen when patient is changed and no devices for that patient
+		samples.forEach( s-> {
+			if (! s.getUnique_device_identifier().contentEquals(newDevice.getUDI())) return;	//Some other device.
+			//This sample is from the current device.
+			if(s.getMetric_id().equals(ARTERIAL)) {
+				s.valuesProperty().addListener(bpArrayListener);
+				currentBPSample=s;
+			}
+		});
+		
+	public void chooseFile() {
+		JFileChooser chooser=new JFileChooser();
+		if(chooser.showOpenDialog(null)==JFileChooser.APPROVE_OPTION) {
+			try {
+				startSettingSpeeds(chooser.getSelectedFile());
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	private void startSettingSpeeds(File inputFile) throws IOException {
+		BufferedReader br=new BufferedReader(new FileReader(inputFile));
+		String nextLine;
+		while( (nextLine=br.readLine())!=null) {
+			String[] parts=nextLine.split(",");
+			TimeAndRate tr=new TimeAndRate();
+			tr.interval=Long.parseLong(parts[0]);
+			tr.rate=Float.parseFloat(parts[1]);
+			timesAndRates.add(tr);
+		}
+		br.close();
+		//Now we have a full ArrayList of times and rates.
+		//We need to make this a separate runnable, because
+		//otherwise the sleeps cause the GUI to hang.
+		Thread setterThread=new Thread() {
+			public void run() {
+				for(int i=0;i<timesAndRates.size();i++) {
+					TimeAndRate tr=timesAndRates.get(i);
+					try {
+						Thread.sleep(tr.interval);
+					} catch (InterruptedException ie) {
+						ie.printStackTrace();
+					}
+					//Now we've slept that long, set the rate...
+					setRateOnSelectedPumps(tr.rate);
+				}
+			}
+		};
+		setterThread.start();
+		
+	}
+		FXMLLoader loader = new FXMLLoader(PumpWithListener.class.getResource("PumpWithListener.fxml"));	try {        final Parent ui = loader.load();                final PumpWithListener controller = ((PumpWithListener) loader.getController());        controller.setPump(d,numeric,writer, dbconn);        pumps.getChildren().add(ui);        udiToPump.put(d.getUDI(), ui);
+	private void setRateOnSelectedPumps(float rate) {
+		pumps.getChildren().forEach(n -> {
+			PumpWithListener pwl=(PumpWithListener)n.getUserData();
+			if(pwl.selected.isSelected()) {
+				pwl.setTheFlowRate(rate);
+			} else {
+				System.err.println("The current pump is not selected");
+			}
+			
+			
+		});
+	}
+	*
+	 * It barely seems worth a class, but it is one...
+	 * @author Simon
+	 *
+	 *
+		 * How long to sleep before asking for the given rate
+		 *
+		 * The rate to ask for.
+		 @FXML private ComboBox<Device> bpsources;@FXML private TextField systolic;@FXML private TextField diastolic;@FXML private TextField mean;*
+	 * The "current" patient, used to determine if the patient has changed
+	 TODO: Stop listening to the BP waveform for efficiency?Rely on addition of metrics to add devices...Flow rate published - add to panel.  addPumpToMainPanel avoids duplication of devices anyway,so just call it here....and removal of devices to remove devices.Similarly, rely on metrics to add BP devices.
+		samples.addListener(new ListChangeListener<SampleArrayFx>() {
+			@Override
+			public void onChanged(Change<? extends SampleArrayFx> change) {
+				while(change.next()) {
+					change.getAddedSubList().forEach( n -> {
+						if(n.getMetric_id().equals(ARTERIAL)) {
+							bpsources.getItems().add(dlm.getByUniqueDeviceIdentifier(n.getUnique_device_identifier()));
+						}
+					});
+				}
+				
+			}
+		});
+		
+		bpsources.getSelectionModel().selectedItemProperty().addListener(bpDeviceChangeListener);
+		listenerPresent=true;
+		
+		bpsources.setCellFactory(new Callback<ListView<Device>,ListCell<Device>>() {
+
+			@Override
+			public ListCell<Device> call(ListView<Device> device) {
+				return new DeviceListCell();
+			}
+			
+		});
+		
+		bpsources.setConverter(new StringConverter<Device>() {
+
+			@Override
+			public Device fromString(String arg0) {
+				// TODO Auto-generated method stub
+				return null;
+			}
+
+			@Override
+			public String toString(Device arg0) {
+				// TODO Auto-generated method stub
+				return arg0.getModel();
+			}
+			
+		});
+		log.info("udi " + c.unique_device_identifier + " is MRN=" + mrnPartition);
+		            	 * The patient has definitely changed - even if the selected patient is "Unassigned",
+		            	 * then that "Patient" has an ID
+		            	 Nothing else to do.Patient has changeddeviceUdiToPatientMRN.put(c.unique_device_identifier, p);*
+	 * Use this to allow access to the numeric sample that has a listener attached.
+	 * Then if the pump is changed, the listener can be detached from the previous numeric
+	 
+	class SampleValuesChangeListener implements ChangeListener<Number[]> {
+
+		@Override
+		public void changed(ObservableValue<? extends Number[]> observable, Number[] oldValue, Number[] newValue) {
+			//Ignore the old values.  Just get new ones.
+			float[] minMax=getMinAndMax(newValue);
+			//System.err.println("got minMax as "+minMax[0]+ " and "+minMax[1]);
+			diastolic.setText(Integer.toString((int)minMax[0]));
+			systolic.setText(Integer.toString((int)minMax[1]));
+			/*
+			 * https://nursingcenter.com/ncblog/december-2011/calculating-the-map
+			 
+			float meanCalc=(minMax[1]+(2*minMax[0]))/3;
+			mean.setText(Integer.toString((int)meanCalc));
+		}
+	}
+	
+	SampleValuesChangeListener bpArrayListener=new SampleValuesChangeListener();
+	*
+	 * Use this to allow access to the array sample that has a listener attached.
+	 * Then if the BP monitor is changed, the listener can be detached from the previous sample
+	 
+		if(currentBPSample!=null) {
+			currentBPSample.valuesProperty().removeListener(bpArrayListener);
+		}
+		No device selected and/or available - can happen when patient is changed and no devices for that patient
+		samples.forEach( s-> {
+			if (! s.getUnique_device_identifier().contentEquals(newDevice.getUDI())) return;	//Some other device.
+			//This sample is from the current device.
+			if(s.getMetric_id().equals(ARTERIAL)) {
+				s.valuesProperty().addListener(bpArrayListener);
+				currentBPSample=s;
+			}
+		});
+		
+	public void chooseFile() {
+		JFileChooser chooser=new JFileChooser();
+		if(chooser.showOpenDialog(null)==JFileChooser.APPROVE_OPTION) {
+			try {
+				startSettingSpeeds(chooser.getSelectedFile());
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	private void startSettingSpeeds(File inputFile) throws IOException {
+		BufferedReader br=new BufferedReader(new FileReader(inputFile));
+		String nextLine;
+		while( (nextLine=br.readLine())!=null) {
+			String[] parts=nextLine.split(",");
+			TimeAndRate tr=new TimeAndRate();
+			tr.interval=Long.parseLong(parts[0]);
+			tr.rate=Float.parseFloat(parts[1]);
+			timesAndRates.add(tr);
+		}
+		br.close();
+		//Now we have a full ArrayList of times and rates.
+		//We need to make this a separate runnable, because
+		//otherwise the sleeps cause the GUI to hang.
+		Thread setterThread=new Thread() {
+			public void run() {
+				for(int i=0;i<timesAndRates.size();i++) {
+					TimeAndRate tr=timesAndRates.get(i);
+					try {
+						Thread.sleep(tr.interval);
+					} catch (InterruptedException ie) {
+						ie.printStackTrace();
+					}
+					//Now we've slept that long, set the rate...
+					setRateOnSelectedPumps(tr.rate);
+				}
+			}
+		};
+		setterThread.start();
+		
+	}
+		FXMLLoader loader = new FXMLLoader(PumpWithListener.class.getResource("PumpWithListener.fxml"));	try {        final Parent ui = loader.load();                final PumpWithListener controller = ((PumpWithListener) loader.getController());        controller.setPump(d,numeric,writer, dbconn);        pumps.getChildren().add(ui);        udiToPump.put(d.getUDI(), ui);
+	private void setRateOnSelectedPumps(float rate) {
+		pumps.getChildren().forEach(n -> {
+			PumpWithListener pwl=(PumpWithListener)n.getUserData();
+			if(pwl.selected.isSelected()) {
+				pwl.setTheFlowRate(rate);
+			} else {
+				System.err.println("The current pump is not selected");
+			}
+			
+			
+		});
+	}
+	*
+	 * It barely seems worth a class, but it is one...
+	 * @author Simon
+	 *
+	 *
+		 * How long to sleep before asking for the given rate
+		 *
+		 * The rate to ask for.
 		 

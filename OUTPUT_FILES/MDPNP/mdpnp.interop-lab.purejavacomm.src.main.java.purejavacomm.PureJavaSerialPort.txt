@@ -351,3 +351,267 @@
 	 * This is not part of the PureJavaComm API, this is purely for testing, do
 	 * not depend on this
 	 
+ * Copyright (c) 2011, Kustaa Nyholm / SpareTimeLabs
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * Redistributions of source code must retain the above copyright notice, this list
+ * of conditions and the following disclaimer.
+ *
+ * Redistributions in binary form must reproduce the above copyright notice, this
+ * list of conditions and the following disclaimer in the documentation and/or other
+ * materials provided with the distribution.
+ *
+ * Neither the name of the Kustaa Nyholm or SpareTimeLabs nor the names of its
+ * contributors may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+ * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+ * OF SUCH DAMAGE.
+  FIXME move javadoc comments for input stream to SerialPort.java we cache termios in m_Termios because we don't rely on reading it back with tcgetattr() which for Mac OS X / CRTSCTS does not work, it is also more efficient FIXME decide what to with errors in the background thread FIXME POSIX does not specify how duration is interpreted Opengroup POSIX says: If the terminal is using asynchronous serial data transmission, tcsendbreak() shall cause transmission of a continuous stream of zero-valued bits for a specific duration. If duration is 0, it shall cause transmission of zero-valued bits for at least 0.25 seconds, and not more than 0.5 seconds. If duration is not 0, it shall send zero-valued bits for an implementation-defined period of time. From the man page for Linux tcsendbreak: The effect of a non-zero duration with tcsendbreak() varies. SunOS specifies a break of duration*N seconds, where N is at least 0.25, and not more than 0.5. Linux, AIX, DU, Tru64 send a break of duration milliseconds. FreeBSD and NetBSD and HP-UX and MacOS ignore the value of duration. Under Solaris and Unixware, tcsendbreak() with non-zero duration behaves like tcdrain(). Not supported only call if you hold the lock precalculate this so we don't need the division in read Not supported Not supported (termios); save a copy in case we need to restore it This setting must have been copied from the Win32 API and hasn't been properly thought through. 1.5 stop bits are only valid with 5 data bits and replace the 2 stop bits in this mode. This is a feature of the 16550 and even documented on MSDN As nobody is aware of course, we silently use 1.5 and 2 stop bits interchangeably (just as the hardware does) Many linux drivers follow this convention and termios can't even differ between 1.5 and 2 stop bits  update the hardware Mask the character size bits  Set data bits  Even if termios(3) tells us that tcsetattr succeeds if any change has been made, not necessary all of them  we cannot check them by reading back and checking the result as not every driver/OS playes by the rules finally everything went ok, so we can update our settings*
+	 * Gets the native file descriptor used by this port.
+	 * <p>
+	 * The file descriptor can be used in calls to JTermios functions. This
+	 * maybe useful in extreme cases where performance is more important than
+	 * convenience, for example using <code>JTermios.read(...)</code> instead of
+	 * <code>SerialPort.getInputStream().read(...)</code>.
+	 * <p>
+	 * Note that mixing direct JTermios read/write calls with SerialPort stream
+	 * read/write calls is at best fragile and likely to fail, which also
+	 * implies that when using JTermios directly then configuring the port,
+	 * especially termios.cc[VMIN] and termios.cc[VTIME] is the users
+	 * responsibility.
+	 * <p>
+	 * Below is a sketch of minimum necessary to perform a read using raw
+	 * JTermios functionality.
+	 * 
+	 * <pre>
+	 * 		// import the JTermios functionality like this
+	 * 		import jtermios.*;
+	 * 		import static jtermios.JTermios.*;
+	 * 
+	 * 		SerialPort port = ...;
+	 * 
+	 * 		// cast the port to PureJavaSerialPort to get access to getNativeFileDescriptor
+	 * 		int FD = ((PureJavaSerialPort) port).getNativeFileDescriptor();
+	 * 
+	 * 		// timeout and threshold values
+	 * 		int messageLength = 25; // bytes
+	 * 		int timeout = 200; // msec
+	 * 
+	 * 		// to initialize timeout and threshold first read current termios
+	 * 		Termios termios = new Termios();
+	 * 
+	 * 		if (0 != tcgetattr(FD, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		// then set VTIME and VMIN, note VTIME in 1/10th of sec and both max 255
+	 * 		termios.c_cc[VTIME] = (byte) ((timeout+99) / 100);
+	 * 		termios.c_cc[VMIN] = (byte) messageLength;
+	 * 
+	 * 		// update termios
+	 * 		if (0 != tcsetattr(FD, TCSANOW, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		...
+	 * 		// allocate read buffer
+	 * 		byte[] readBuffer = new byte[messageLength];
+	 * 	...
+	 * 
+	 * 		// then perform raw read, not this may block indefinitely
+	 * 		int n = read(FD, readBuffer, messageLength);
+	 * 		if (n &lt; 0)
+	 * 			errorHandling();
+	 * </pre>
+	 * 
+	 * @return the native OS file descriptor as int
+	  im_ for inner class member NOTE: Windows and unixes are so different that it actually might make sense to have the backend (ie JTermiosImpl) to provide an InputStream that is optimal for the platform, instead of trying to share of the InputStream logic here and force Windows backend to conform to the the POSIX select()/ read()/vtim/vtime model. See the amount of code here and in windows.JTermiosImpl for  select() and read(). im_ for inner class members this stuff is just cached/precomputed stuff to make read() faster initialized block instead of construct in anonymous class					loggingBytes=true; does not need the lock if we just check the value End of raw read mode code does not need the lock if we just check the alue capture these here under guard so that we get a coherent picture of the settings Note for optimal performance: message length == receive threshold == read length <= 255 the best case execution path is marked with BEST below loops++; BEST in BEST case 'if' not taken BEST case FIXME someone might change m_ReceiveTimeoutEnabled BEST case in BEST case 'if' not taken more than once for given InputStream instance ioctls++; This needs to be guarded with m_Termios so that these thing don't change on us Now wait for data to be available, except in raw read mode and polling read modes. Following looks a bit longish but  there is actually not that much code to be executed long T0 = System.nanoTime(); do a select()/poll(), just in case this read was called when no data is available so that we will not hang for ever in a read BEST case in Linux but not on Windows or Mac OS X the port closed while we were blocking in poll this is a bit slower but then again it is unlikely this gets executed in a low horsepower system the port closed while we were blocking in select At this point data is either available or we take our chances in raw mode or this polling read which can't block this the BEST case execution path readtime += System.nanoTime() - T0; Now we have read data and try to return as quickly as possibly or we have timed out. an error occured BEST case this if is taken and we  exit we have read the minimum required and will return that Ok, looks like we are in for an other loop, so update the offset and loop for some more Not supported Not supported Not supported Not supported not much we can do if this fails, so just log it package  This really should not happen This really should not happen see: http://daniel.haxx.se/docs/poll-vs-select.html*
+	 * This is not part of the PureJavaComm API, this is purely for testing, do
+	 * not depend on this
+	 
+ * Copyright (c) 2011, Kustaa Nyholm / SpareTimeLabs
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * Redistributions of source code must retain the above copyright notice, this list
+ * of conditions and the following disclaimer.
+ *
+ * Redistributions in binary form must reproduce the above copyright notice, this
+ * list of conditions and the following disclaimer in the documentation and/or other
+ * materials provided with the distribution.
+ *
+ * Neither the name of the Kustaa Nyholm or SpareTimeLabs nor the names of its
+ * contributors may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+ * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+ * OF SUCH DAMAGE.
+  FIXME move javadoc comments for input stream to SerialPort.java we cache termios in m_Termios because we don't rely on reading it back with tcgetattr() which for Mac OS X / CRTSCTS does not work, it is also more efficient FIXME decide what to with errors in the background thread FIXME POSIX does not specify how duration is interpreted Opengroup POSIX says: If the terminal is using asynchronous serial data transmission, tcsendbreak() shall cause transmission of a continuous stream of zero-valued bits for a specific duration. If duration is 0, it shall cause transmission of zero-valued bits for at least 0.25 seconds, and not more than 0.5 seconds. If duration is not 0, it shall send zero-valued bits for an implementation-defined period of time. From the man page for Linux tcsendbreak: The effect of a non-zero duration with tcsendbreak() varies. SunOS specifies a break of duration*N seconds, where N is at least 0.25, and not more than 0.5. Linux, AIX, DU, Tru64 send a break of duration milliseconds. FreeBSD and NetBSD and HP-UX and MacOS ignore the value of duration. Under Solaris and Unixware, tcsendbreak() with non-zero duration behaves like tcdrain(). Not supported only call if you hold the lock precalculate this so we don't need the division in read Not supported Not supported (termios); save a copy in case we need to restore it This setting must have been copied from the Win32 API and hasn't been properly thought through. 1.5 stop bits are only valid with 5 data bits and replace the 2 stop bits in this mode. This is a feature of the 16550 and even documented on MSDN As nobody is aware of course, we silently use 1.5 and 2 stop bits interchangeably (just as the hardware does) Many linux drivers follow this convention and termios can't even differ between 1.5 and 2 stop bits  update the hardware Mask the character size bits  Set data bits  Even if termios(3) tells us that tcsetattr succeeds if any change has been made, not necessary all of them  we cannot check them by reading back and checking the result as not every driver/OS playes by the rules finally everything went ok, so we can update our settings*
+	 * Gets the native file descriptor used by this port.
+	 * <p>
+	 * The file descriptor can be used in calls to JTermios functions. This
+	 * maybe useful in extreme cases where performance is more important than
+	 * convenience, for example using <code>JTermios.read(...)</code> instead of
+	 * <code>SerialPort.getInputStream().read(...)</code>.
+	 * <p>
+	 * Note that mixing direct JTermios read/write calls with SerialPort stream
+	 * read/write calls is at best fragile and likely to fail, which also
+	 * implies that when using JTermios directly then configuring the port,
+	 * especially termios.cc[VMIN] and termios.cc[VTIME] is the users
+	 * responsibility.
+	 * <p>
+	 * Below is a sketch of minimum necessary to perform a read using raw
+	 * JTermios functionality.
+	 * 
+	 * <pre>
+	 * 		// import the JTermios functionality like this
+	 * 		import jtermios.*;
+	 * 		import static jtermios.JTermios.*;
+	 * 
+	 * 		SerialPort port = ...;
+	 * 
+	 * 		// cast the port to PureJavaSerialPort to get access to getNativeFileDescriptor
+	 * 		int FD = ((PureJavaSerialPort) port).getNativeFileDescriptor();
+	 * 
+	 * 		// timeout and threshold values
+	 * 		int messageLength = 25; // bytes
+	 * 		int timeout = 200; // msec
+	 * 
+	 * 		// to initialize timeout and threshold first read current termios
+	 * 		Termios termios = new Termios();
+	 * 
+	 * 		if (0 != tcgetattr(FD, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		// then set VTIME and VMIN, note VTIME in 1/10th of sec and both max 255
+	 * 		termios.c_cc[VTIME] = (byte) ((timeout+99) / 100);
+	 * 		termios.c_cc[VMIN] = (byte) messageLength;
+	 * 
+	 * 		// update termios
+	 * 		if (0 != tcsetattr(FD, TCSANOW, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		...
+	 * 		// allocate read buffer
+	 * 		byte[] readBuffer = new byte[messageLength];
+	 * 	...
+	 * 
+	 * 		// then perform raw read, not this may block indefinitely
+	 * 		int n = read(FD, readBuffer, messageLength);
+	 * 		if (n &lt; 0)
+	 * 			errorHandling();
+	 * </pre>
+	 * 
+	 * @return the native OS file descriptor as int
+	  im_ for inner class member NOTE: Windows and unixes are so different that it actually might make sense to have the backend (ie JTermiosImpl) to provide an InputStream that is optimal for the platform, instead of trying to share of the InputStream logic here and force Windows backend to conform to the the POSIX select()/ read()/vtim/vtime model. See the amount of code here and in windows.JTermiosImpl for  select() and read(). im_ for inner class members this stuff is just cached/precomputed stuff to make read() faster initialized block instead of construct in anonymous class					loggingBytes=true; does not need the lock if we just check the value End of raw read mode code does not need the lock if we just check the alue capture these here under guard so that we get a coherent picture of the settings Note for optimal performance: message length == receive threshold == read length <= 255 the best case execution path is marked with BEST below loops++; BEST in BEST case 'if' not taken BEST case FIXME someone might change m_ReceiveTimeoutEnabled BEST case in BEST case 'if' not taken more than once for given InputStream instance ioctls++; This needs to be guarded with m_Termios so that these thing don't change on us Now wait for data to be available, except in raw read mode and polling read modes. Following looks a bit longish but  there is actually not that much code to be executed long T0 = System.nanoTime(); do a select()/poll(), just in case this read was called when no data is available so that we will not hang for ever in a read BEST case in Linux but not on Windows or Mac OS X the port closed while we were blocking in poll this is a bit slower but then again it is unlikely this gets executed in a low horsepower system the port closed while we were blocking in select At this point data is either available or we take our chances in raw mode or this polling read which can't block this the BEST case execution path readtime += System.nanoTime() - T0; Now we have read data and try to return as quickly as possibly or we have timed out. an error occured BEST case this if is taken and we  exit we have read the minimum required and will return that Ok, looks like we are in for an other loop, so update the offset and loop for some more Not supported Not supported Not supported Not supported not much we can do if this fails, so just log it package  This really should not happen This really should not happen see: http://daniel.haxx.se/docs/poll-vs-select.html*
+	 * This is not part of the PureJavaComm API, this is purely for testing, do
+	 * not depend on this
+	 
+ * Copyright (c) 2011, Kustaa Nyholm / SpareTimeLabs
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * Redistributions of source code must retain the above copyright notice, this list
+ * of conditions and the following disclaimer.
+ *
+ * Redistributions in binary form must reproduce the above copyright notice, this
+ * list of conditions and the following disclaimer in the documentation and/or other
+ * materials provided with the distribution.
+ *
+ * Neither the name of the Kustaa Nyholm or SpareTimeLabs nor the names of its
+ * contributors may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+ * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+ * OF SUCH DAMAGE.
+  FIXME move javadoc comments for input stream to SerialPort.java we cache termios in m_Termios because we don't rely on reading it back with tcgetattr() which for Mac OS X / CRTSCTS does not work, it is also more efficient FIXME decide what to with errors in the background thread FIXME POSIX does not specify how duration is interpreted Opengroup POSIX says: If the terminal is using asynchronous serial data transmission, tcsendbreak() shall cause transmission of a continuous stream of zero-valued bits for a specific duration. If duration is 0, it shall cause transmission of zero-valued bits for at least 0.25 seconds, and not more than 0.5 seconds. If duration is not 0, it shall send zero-valued bits for an implementation-defined period of time. From the man page for Linux tcsendbreak: The effect of a non-zero duration with tcsendbreak() varies. SunOS specifies a break of duration*N seconds, where N is at least 0.25, and not more than 0.5. Linux, AIX, DU, Tru64 send a break of duration milliseconds. FreeBSD and NetBSD and HP-UX and MacOS ignore the value of duration. Under Solaris and Unixware, tcsendbreak() with non-zero duration behaves like tcdrain(). Not supported only call if you hold the lock precalculate this so we don't need the division in read Not supported Not supported (termios); save a copy in case we need to restore it This setting must have been copied from the Win32 API and hasn't been properly thought through. 1.5 stop bits are only valid with 5 data bits and replace the 2 stop bits in this mode. This is a feature of the 16550 and even documented on MSDN As nobody is aware of course, we silently use 1.5 and 2 stop bits interchangeably (just as the hardware does) Many linux drivers follow this convention and termios can't even differ between 1.5 and 2 stop bits  update the hardware Mask the character size bits  Set data bits  Even if termios(3) tells us that tcsetattr succeeds if any change has been made, not necessary all of them  we cannot check them by reading back and checking the result as not every driver/OS playes by the rules finally everything went ok, so we can update our settings*
+	 * Gets the native file descriptor used by this port.
+	 * <p>
+	 * The file descriptor can be used in calls to JTermios functions. This
+	 * maybe useful in extreme cases where performance is more important than
+	 * convenience, for example using <code>JTermios.read(...)</code> instead of
+	 * <code>SerialPort.getInputStream().read(...)</code>.
+	 * <p>
+	 * Note that mixing direct JTermios read/write calls with SerialPort stream
+	 * read/write calls is at best fragile and likely to fail, which also
+	 * implies that when using JTermios directly then configuring the port,
+	 * especially termios.cc[VMIN] and termios.cc[VTIME] is the users
+	 * responsibility.
+	 * <p>
+	 * Below is a sketch of minimum necessary to perform a read using raw
+	 * JTermios functionality.
+	 * 
+	 * <pre>
+	 * 		// import the JTermios functionality like this
+	 * 		import jtermios.*;
+	 * 		import static jtermios.JTermios.*;
+	 * 
+	 * 		SerialPort port = ...;
+	 * 
+	 * 		// cast the port to PureJavaSerialPort to get access to getNativeFileDescriptor
+	 * 		int FD = ((PureJavaSerialPort) port).getNativeFileDescriptor();
+	 * 
+	 * 		// timeout and threshold values
+	 * 		int messageLength = 25; // bytes
+	 * 		int timeout = 200; // msec
+	 * 
+	 * 		// to initialize timeout and threshold first read current termios
+	 * 		Termios termios = new Termios();
+	 * 
+	 * 		if (0 != tcgetattr(FD, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		// then set VTIME and VMIN, note VTIME in 1/10th of sec and both max 255
+	 * 		termios.c_cc[VTIME] = (byte) ((timeout+99) / 100);
+	 * 		termios.c_cc[VMIN] = (byte) messageLength;
+	 * 
+	 * 		// update termios
+	 * 		if (0 != tcsetattr(FD, TCSANOW, termios))
+	 * 			errorHandling();
+	 * 
+	 * 		...
+	 * 		// allocate read buffer
+	 * 		byte[] readBuffer = new byte[messageLength];
+	 * 	...
+	 * 
+	 * 		// then perform raw read, not this may block indefinitely
+	 * 		int n = read(FD, readBuffer, messageLength);
+	 * 		if (n &lt; 0)
+	 * 			errorHandling();
+	 * </pre>
+	 * 
+	 * @return the native OS file descriptor as int
+	  im_ for inner class member NOTE: Windows and unixes are so different that it actually might make sense to have the backend (ie JTermiosImpl) to provide an InputStream that is optimal for the platform, instead of trying to share of the InputStream logic here and force Windows backend to conform to the the POSIX select()/ read()/vtim/vtime model. See the amount of code here and in windows.JTermiosImpl for  select() and read(). im_ for inner class members this stuff is just cached/precomputed stuff to make read() faster initialized block instead of construct in anonymous class					loggingBytes=true; does not need the lock if we just check the value End of raw read mode code does not need the lock if we just check the alue capture these here under guard so that we get a coherent picture of the settings Note for optimal performance: message length == receive threshold == read length <= 255 the best case execution path is marked with BEST below loops++; BEST in BEST case 'if' not taken BEST case FIXME someone might change m_ReceiveTimeoutEnabled BEST case in BEST case 'if' not taken more than once for given InputStream instance ioctls++; This needs to be guarded with m_Termios so that these thing don't change on us Now wait for data to be available, except in raw read mode and polling read modes. Following looks a bit longish but  there is actually not that much code to be executed long T0 = System.nanoTime(); do a select()/poll(), just in case this read was called when no data is available so that we will not hang for ever in a read BEST case in Linux but not on Windows or Mac OS X the port closed while we were blocking in poll this is a bit slower but then again it is unlikely this gets executed in a low horsepower system the port closed while we were blocking in select At this point data is either available or we take our chances in raw mode or this polling read which can't block this the BEST case execution path readtime += System.nanoTime() - T0; Now we have read data and try to return as quickly as possibly or we have timed out. an error occured BEST case this if is taken and we  exit we have read the minimum required and will return that Ok, looks like we are in for an other loop, so update the offset and loop for some more Not supported Not supported Not supported Not supported not much we can do if this fails, so just log it package  This really should not happen This really should not happen see: http://daniel.haxx.se/docs/poll-vs-select.html*
+	 * This is not part of the PureJavaComm API, this is purely for testing, do
+	 * not depend on this
+	 

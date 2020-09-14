@@ -74,7 +74,8 @@ def parse_project(project, allFiles):
 print("MDPNP # of Files" + "= " + str(len(mdpnpFiles)))
 print("OpenWRT # of Files" + "= " + str(len(openwrtFiles)))
 print("Rockbox # of Files" + "= " + str(len(rockboxFiles)))
-parse_project("MDPNP", mdpnpFiles)
-parse_project("OpenWRT", openwrtFiles)
-parse_project("Rockbox", rockboxFiles)
+mdpnp_comments = parse_project("MDPNP", mdpnpFiles)
+#parse_project("OpenWRT", openwrtFiles)
+#parse_project("Rockbox", rockboxFiles)
+
 
